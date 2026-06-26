@@ -1,0 +1,5 @@
+/.env
+/bench-runs/
+/fast-agent-harness
+/gateway.log
+/gateway.pid
