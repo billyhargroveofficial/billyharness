@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"charm.land/bubbles/v2/textarea"
@@ -29,6 +28,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
+	"github.com/billyhargroveofficial/billyharness/internal/toolrender"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
@@ -2764,64 +2764,19 @@ func pretty(value any) string {
 }
 
 func toolName(value any) string {
-	bytes, _ := json.Marshal(value)
-	var call struct {
-		Name string `json:"name"`
-	}
-	_ = json.Unmarshal(bytes, &call)
-	if call.Name != "" {
-		return call.Name
-	}
-	var m map[string]any
-	if err := json.Unmarshal(bytes, &m); err == nil {
-		if name, _ := m["name"].(string); name != "" {
-			return name
-		}
-	}
-	return "call"
+	return toolrender.CallName(value)
 }
 
 func toolTitle(value any) string {
-	name := toolName(value)
-	args := toolArgs(value)
-	switch name {
-	case "shell_exec":
-		if argv := stringSliceArg(args["argv"]); len(argv) > 0 {
-			return "Ran " + oneLinePreview(formatArgv(argv), 120)
-		}
-	case "fs_read_file":
-		return "Read " + firstArg(args, "path", "file")
-	case "fs_list":
-		return "Listed " + firstArgDefault(args, ".", "path")
-	case "fs_search":
-		query := firstArg(args, "query", "pattern")
-		path := firstArgDefault(args, ".", "path")
-		if query != "" {
-			return "Searched " + oneLinePreview(query, 72) + " in " + path
-		}
-	case "fs_write_file":
-		return "Wrote " + firstArg(args, "path", "file")
-	case "fs_make_dir":
-		return "Created dir " + firstArg(args, "path")
-	case "web_fetch":
-		return "Fetched " + firstArg(args, "url")
-	case "web_search":
-		return "Searched web " + oneLinePreview(firstArg(args, "query"), 96)
-	case "web_crawl":
-		return "Crawled " + firstArg(args, "url")
-	case "time_now":
-		return "Checked time"
+	_, line := toolrender.CallKeyAndLine(value, toolrender.StyleTUI)
+	if strings.TrimSpace(line) != "" {
+		return line
 	}
-	for _, key := range []string{"path", "command", "cmd", "query", "url", "pattern", "glob", "file"} {
-		if text, ok := args[key].(string); ok && text != "" {
-			return fmt.Sprintf("Called %s %s", name, oneLinePreview(text, 80))
-		}
-	}
-	return "Called " + name
+	return "Called " + toolName(value)
 }
 
 func toolBody(value any) string {
-	args := toolArgs(value)
+	args := toolrender.CallArgs(value)
 	if len(args) == 0 {
 		return ""
 	}
@@ -2862,94 +2817,6 @@ func toolMetaLines(args map[string]any, keys ...string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
-}
-
-func stringSliceArg(value any) []string {
-	switch typed := value.(type) {
-	case []string:
-		return typed
-	case []any:
-		out := make([]string, 0, len(typed))
-		for _, item := range typed {
-			text, ok := item.(string)
-			if !ok {
-				return nil
-			}
-			out = append(out, text)
-		}
-		return out
-	default:
-		return nil
-	}
-}
-
-func formatArgv(argv []string) string {
-	parts := make([]string, 0, len(argv))
-	for _, arg := range argv {
-		parts = append(parts, shellQuoteArg(arg))
-	}
-	return strings.Join(parts, " ")
-}
-
-func shellQuoteArg(arg string) string {
-	if arg == "" {
-		return "''"
-	}
-	if strings.IndexFunc(arg, func(r rune) bool {
-		return !(unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("-_./:=+,%@", r))
-	}) < 0 {
-		return arg
-	}
-	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
-}
-
-func firstArg(args map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if text, ok := args[key].(string); ok && text != "" {
-			return oneLinePreview(text, 120)
-		}
-	}
-	return ""
-}
-
-func firstArgDefault(args map[string]any, fallback string, keys ...string) string {
-	if value := firstArg(args, keys...); value != "" {
-		return value
-	}
-	return fallback
-}
-
-func toolArgs(value any) map[string]any {
-	bytes, _ := json.Marshal(value)
-	var call struct {
-		Arguments json.RawMessage `json:"arguments"`
-	}
-	if err := json.Unmarshal(bytes, &call); err == nil && len(call.Arguments) > 0 && string(call.Arguments) != "null" {
-		var args map[string]any
-		if err := json.Unmarshal(call.Arguments, &args); err == nil {
-			return args
-		}
-		var raw string
-		if err := json.Unmarshal(call.Arguments, &raw); err == nil && raw != "" {
-			if err := json.Unmarshal([]byte(raw), &args); err == nil {
-				return args
-			}
-		}
-	}
-	var generic map[string]any
-	if err := json.Unmarshal(bytes, &generic); err != nil {
-		return nil
-	}
-	switch args := generic["arguments"].(type) {
-	case map[string]any:
-		return args
-	case string:
-		var parsed map[string]any
-		if err := json.Unmarshal([]byte(args), &parsed); err == nil {
-			return parsed
-		}
-	}
-	return nil
 }
 
 func collapsedPreview(text string, maxLines, maxChars int) string {

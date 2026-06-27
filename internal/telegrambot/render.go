@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
-	"net/url"
 	"strings"
 	"time"
 	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/toolrender"
 )
 
 const telegramLimit = 4096
@@ -287,131 +287,15 @@ func PlainMessageHTML(text string) string {
 }
 
 func toolCallKeyAndSummary(data any) (string, string) {
-	bytes, _ := json.Marshal(data)
-	var call protocol.ToolCall
-	if err := json.Unmarshal(bytes, &call); err != nil || call.Name == "" {
-		return "", resultPreview(string(bytes), 600)
-	}
-	key := call.ID
-	if key == "" {
-		key = call.Name
-	}
-	return key, toolSummary(call)
-}
-
-func toolSummary(data any) string {
-	bytes, _ := json.Marshal(data)
-	var call protocol.ToolCall
-	if err := json.Unmarshal(bytes, &call); err != nil || call.Name == "" {
-		return resultPreview(string(bytes), 600)
-	}
-	args := map[string]any{}
-	_ = json.Unmarshal(call.Arguments, &args)
-	switch call.Name {
-	case "web_search":
-		return "🔎 web_search " + compactArg(args["query"], 96)
-	case "web_fetch":
-		return "🌐 web_fetch " + compactURL(args["url"], 88)
-	case "web_crawl":
-		return "🕸 web_crawl " + compactURL(args["url"], 88)
-	case "fs_read_file":
-		return "📖 read " + compactArg(args["path"], 96)
-	case "fs_list":
-		return "📁 list " + compactArg(args["path"], 96)
-	case "fs_search":
-		return "🔍 search " + compactArg(args["query"], 56) + " in " + compactArg(args["path"], 56)
-	case "fs_write_file":
-		return "✍️ write " + compactArg(args["path"], 96)
-	case "shell_exec":
-		return "⚙️ shell " + compactArg(args["argv"], 120)
-	case "mcp_list_tools":
-		return "🔌 mcp tools " + joinToolParts("server="+compactArg(args["server"], 32), optionalToolPart("query", args["query"], 48))
-	case "mcp_call":
-		return "🔌 mcp call " + compactArg(args["name"], 80)
-	default:
-		return "🛠 " + call.Name + " " + resultPreview(string(call.Arguments), 160)
-	}
+	return toolrender.CallKeyAndLine(data, toolrender.StyleTelegram)
 }
 
 func (r *Renderer) toolResultSummary(data any) (string, string) {
-	bytes, _ := json.Marshal(data)
-	var result protocol.ToolResult
-	if err := json.Unmarshal(bytes, &result); err != nil || result.Name == "" {
+	key, _ := toolrender.ResultKeyAndLine(data, "", toolrender.StyleTelegram)
+	if key == "" {
 		return "", ""
 	}
-	key := result.CallID
-	if key == "" {
-		key = result.Name
-	}
-	base := r.toolSummaries[key]
-	if base == "" {
-		base = result.Name
-	}
-	var parts []string
-	if result.IsError {
-		parts = append(parts, "⛔ "+base)
-		if text := compactText(strings.TrimSpace(result.Content), 96); text != "" && text != "-" {
-			parts = append(parts, text)
-		}
-		return key, strings.Join(parts, " · ")
-	}
-	parts = append(parts, "✅ "+base)
-	if result.Truncated {
-		parts = append(parts, "truncated")
-	}
-	if result.OutputRef != "" {
-		parts = append(parts, "ref "+compactText(filepathBase(result.OutputRef), 56))
-	}
-	if tokens := metadataInt(result.Metadata, "estimated_text_tokens"); tokens > 0 {
-		parts = append(parts, "~"+compactInt(tokens)+" tok")
-	}
-	if original := metadataInt(result.Metadata, "original_output_bytes"); original > 0 {
-		parts = append(parts, compactInt(original)+"B")
-	}
-	return key, strings.Join(parts, " · ")
-}
-
-func metadataInt(metadata map[string]any, key string) int64 {
-	if len(metadata) == 0 {
-		return 0
-	}
-	switch value := metadata[key].(type) {
-	case int:
-		return int64(value)
-	case int64:
-		return value
-	case float64:
-		return int64(value)
-	case json.Number:
-		n, _ := value.Int64()
-		return n
-	default:
-		return 0
-	}
-}
-
-func filepathBase(path string) string {
-	path = strings.TrimRight(path, "/")
-	if path == "" {
-		return ""
-	}
-	if idx := strings.LastIndex(path, "/"); idx >= 0 {
-		return path[idx+1:]
-	}
-	return path
-}
-
-func resultPreview(text string, limit int) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return "empty"
-	}
-	runes := []rune(text)
-	if len(runes) <= limit {
-		return text
-	}
-	head := string(runes[:max(1, limit-80)])
-	return head + "\n...[truncated " + fmt.Sprint(len(runes)) + " chars]"
+	return toolrender.ResultKeyAndLine(data, r.toolSummaries[key], toolrender.StyleTelegram)
 }
 
 func splitTelegramPlain(text string, limit int) []string {
@@ -996,69 +880,6 @@ func titleState(state string) string {
 	default:
 		return "Running"
 	}
-}
-
-func compactArg(value any, limit int) string {
-	text := strings.TrimSpace(fmt.Sprint(value))
-	if text == "" || text == "<nil>" {
-		return "-"
-	}
-	text = strings.Join(strings.Fields(text), " ")
-	return compactText(text, limit)
-}
-
-func compactURL(value any, limit int) string {
-	raw := strings.TrimSpace(fmt.Sprint(value))
-	if raw == "" || raw == "<nil>" {
-		return "-"
-	}
-	parsed, err := url.Parse(raw)
-	if err == nil && parsed.Host != "" {
-		path := parsed.EscapedPath()
-		if path == "" {
-			path = "/"
-		}
-		if parsed.RawQuery != "" {
-			path += "?…"
-		}
-		raw = parsed.Host + path
-	}
-	return compactText(raw, limit)
-}
-
-func compactText(text string, limit int) string {
-	if limit <= 0 {
-		limit = 80
-	}
-	runes := []rune(text)
-	if len(runes) <= limit {
-		return text
-	}
-	if limit < 12 {
-		return string(runes[:limit]) + "…"
-	}
-	head := (limit - 1) * 2 / 3
-	tail := limit - 1 - head
-	return string(runes[:head]) + "…" + string(runes[len(runes)-tail:])
-}
-
-func optionalToolPart(name string, value any, limit int) string {
-	text := compactArg(value, limit)
-	if text == "-" {
-		return ""
-	}
-	return name + "=" + text
-}
-
-func joinToolParts(parts ...string) string {
-	var out []string
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return strings.Join(out, " ")
 }
 
 func telegramUTF16Len(text string) int {

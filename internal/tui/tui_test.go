@@ -335,6 +335,29 @@ func TestToolBlocksAreOneLineByDefault(t *testing.T) {
 	}
 }
 
+func TestToolBlocksCompactLongWebFetchURL(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 160
+	m.applyEvent(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{
+			Name:      "web_fetch",
+			Arguments: json.RawMessage(`{"url":"https://example.com/some/really/long/path/that/should/not/eat/the/whole/tui/line?with=a&lot=of&query=params"}`),
+		},
+	})
+
+	rendered := stripANSITest(m.renderBlock(0, m.blocks[0]))
+	if !strings.Contains(rendered, "Fetched example.com") {
+		t.Fatalf("tool block should show compact host/path: %q", rendered)
+	}
+	if strings.Contains(rendered, "with=a&lot=of&query=params") {
+		t.Fatalf("tool block leaked full query string: %q", rendered)
+	}
+	if len([]rune(rendered)) > 140 {
+		t.Fatalf("tool block title too long: %d %q", len([]rune(rendered)), rendered)
+	}
+}
+
 func TestUserAndAssistantBlocksRenderWithoutRoleLabels(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 100
