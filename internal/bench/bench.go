@@ -20,6 +20,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
+	"github.com/billyhargroveofficial/billyharness/internal/trace"
 )
 
 type Task struct {
@@ -98,8 +99,11 @@ type Summary struct {
 	ContextCompactions    int     `json:"context_compactions,omitempty"`
 	ToolOutputTruncations int     `json:"tool_output_truncations,omitempty"`
 	ToolOutputRefs        int     `json:"tool_output_refs,omitempty"`
+	ManifestJSON          string  `json:"manifest_json,omitempty"`
 	ResultsJSONL          string  `json:"results_jsonl"`
 	EventsJSONL           string  `json:"events_jsonl"`
+	PayloadsDir           string  `json:"payloads_dir,omitempty"`
+	ReplayVerified        bool    `json:"replay_verified,omitempty"`
 }
 
 func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) {
@@ -118,8 +122,10 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 	}
 	cfg = applyRunConfig(cfg, rc)
 	runID := time.Now().UTC().Format("20060102T150405Z")
+	manifestPath := filepath.Join(rc.OutDir, runID+"-manifest.json")
 	resultsPath := filepath.Join(rc.OutDir, runID+"-results.jsonl")
 	eventsPath := filepath.Join(rc.OutDir, runID+"-events.jsonl")
+	payloadsDir := filepath.Join(rc.OutDir, runID+"-payloads")
 	resultsFile, err := createPrivateFile(resultsPath)
 	if err != nil {
 		return Summary{}, err
@@ -131,12 +137,24 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 	}
 	defer eventsFile.Close()
 	resultEnc := json.NewEncoder(resultsFile)
-	eventEnc := json.NewEncoder(eventsFile)
+	if err := ensurePrivateDir(payloadsDir); err != nil {
+		return Summary{}, err
+	}
+	eventWriter := trace.NewEventWriter(runID, eventsFile,
+		trace.WithSanitizer(redactForPersistence),
+		trace.WithPayloadDir(payloadsDir, shouldWritePayloadRef),
+	)
 
-	summary := Summary{Total: len(tasks), ResultsJSONL: resultsPath, EventsJSONL: eventsPath}
+	summary := Summary{
+		Total:        len(tasks),
+		ManifestJSON: manifestPath,
+		ResultsJSONL: resultsPath,
+		EventsJSONL:  eventsPath,
+		PayloadsDir:  payloadsDir,
+	}
 	startAll := time.Now()
 	for _, task := range tasks {
-		result := runTask(ctx, cfg, rc, runID, task, eventEnc)
+		result := runTask(ctx, cfg, rc, runID, task, eventWriter)
 		if err := encodeRedactedJSON(resultEnc, result); err != nil {
 			return summary, err
 		}
@@ -163,6 +181,24 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 	summary.WallTimeMS = time.Since(startAll).Milliseconds()
 	if summary.Total > 0 {
 		summary.PassRate = float64(summary.Passed) / float64(summary.Total)
+	}
+	if replay, err := trace.ReplayEvents(eventsPath); err == nil && replay.Records > 0 {
+		summary.ReplayVerified = true
+	} else if err != nil {
+		return summary, err
+	}
+	if err := trace.WriteManifest(manifestPath, trace.Manifest{
+		RunID:        runID,
+		CreatedAt:    startAll.UTC(),
+		StartedAtMS:  startAll.UTC().UnixMilli(),
+		Harness:      "fast-agent-harness-go",
+		TasksPath:    rc.TasksPath,
+		TaskCount:    len(tasks),
+		ResultsJSONL: resultsPath,
+		EventsJSONL:  eventsPath,
+		PayloadsDir:  payloadsDir,
+	}); err != nil {
+		return summary, err
 	}
 	return summary, nil
 }
@@ -220,7 +256,7 @@ func LoadTasks(path string) ([]Task, error) {
 	return tasks, scanner.Err()
 }
 
-func runTask(parent context.Context, cfg config.Config, rc RunConfig, runID string, task Task, eventEnc *json.Encoder) Result {
+func runTask(parent context.Context, cfg config.Config, rc RunConfig, runID string, task Task, eventWriter *trace.EventWriter) Result {
 	timeout := rc.Timeout
 	if task.TimeoutSeconds > 0 {
 		timeout = time.Duration(task.TimeoutSeconds) * time.Second
@@ -275,15 +311,20 @@ func runTask(parent context.Context, cfg config.Config, rc RunConfig, runID stri
 	}
 	defer registry.Close()
 	a := agent.New(taskCfg, prov, registry)
+	var eventWriteErr error
 	err = a.Run(ctx, task.Prompt, func(event protocol.Event) {
 		observe(&result, event)
-		_ = encodeRedactedJSON(eventEnc, map[string]any{
-			"run_id":  runID,
-			"task_id": task.ID,
-			"ts":      time.Now().UTC().Format(time.RFC3339Nano),
-			"event":   event,
-		})
+		if eventWriteErr != nil {
+			return
+		}
+		_, eventWriteErr = eventWriter.Record(task.ID, event)
 	})
+	if eventWriteErr != nil {
+		result.Outcome = "crash"
+		result.Error = "event trace failed: " + eventWriteErr.Error()
+		result.WallTimeMS = time.Since(start).Milliseconds()
+		return result
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			result.Outcome = "timeout"
@@ -317,6 +358,15 @@ func runTask(parent context.Context, cfg config.Config, rc RunConfig, runID stri
 	}
 	result.WallTimeMS = time.Since(start).Milliseconds()
 	return result
+}
+
+func shouldWritePayloadRef(event protocol.Event) bool {
+	switch event.Type {
+	case protocol.EventToolCallRequested, protocol.EventToolCallFinished, protocol.EventContextCompacted, protocol.EventRunFailed:
+		return true
+	default:
+		return false
+	}
 }
 
 func observe(result *Result, event protocol.Event) {

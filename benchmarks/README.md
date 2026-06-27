@@ -35,10 +35,12 @@ This directory contains local smoke tasks plus notes for wiring external agent b
 
 ## Metrics To Keep
 
-`fast-agent-harness bench run` writes two JSONL files per run:
+`fast-agent-harness bench run` writes a small replayable run bundle:
 
+- manifest JSON: schema version, run metadata, and bundle paths
 - results JSONL: one summarized object per task
-- events JSONL: timestamped agent events for replay and latency analysis
+- events JSONL: sequenced agent events for replay and latency analysis
+- payloads directory: redacted full event payloads for large/sensitive records
 
 Minimum report fields:
 

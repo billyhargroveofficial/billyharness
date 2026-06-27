@@ -10,6 +10,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/trace"
 )
 
 func TestRunMockTaskWritesResults(t *testing.T) {
@@ -33,9 +34,33 @@ func TestRunMockTaskWritesResults(t *testing.T) {
 	if _, err := os.Stat(summary.EventsJSONL); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(summary.ManifestJSON); err != nil {
+		t.Fatal(err)
+	}
+	if !summary.ReplayVerified {
+		t.Fatalf("summary should mark replay verified: %#v", summary)
+	}
 	assertPerm(t, outDir, 0o700)
 	assertPerm(t, summary.ResultsJSONL, 0o600)
 	assertPerm(t, summary.EventsJSONL, 0o600)
+	assertPerm(t, summary.ManifestJSON, 0o600)
+	assertPerm(t, summary.PayloadsDir, 0o700)
+
+	var manifest trace.Manifest
+	bytes, err := os.ReadFile(summary.ManifestJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(bytes, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.SchemaVersion != trace.CurrentManifestVersion ||
+		manifest.RunID == "" ||
+		manifest.ResultsJSONL != summary.ResultsJSONL ||
+		manifest.EventsJSONL != summary.EventsJSONL ||
+		manifest.PayloadsDir != summary.PayloadsDir {
+		t.Fatalf("manifest = %#v summary = %#v", manifest, summary)
+	}
 }
 
 func TestRunEvaluatorFailure(t *testing.T) {
@@ -91,12 +116,89 @@ func TestRunMockScriptedLoopCountsRoundsAndCompactions(t *testing.T) {
 	if !strings.Contains(string(events), string(protocol.EventContextCompacted)) {
 		t.Fatalf("events missing context.compacted: %s", events)
 	}
+	replay, err := trace.ReplayEvents(summary.EventsJSONL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replay.EventTypes[string(protocol.EventContextCompacted)] == 0 ||
+		replay.EventTypes[string(protocol.EventToolCallStarted)] != 5 {
+		t.Fatalf("replay = %#v", replay)
+	}
 	results, err := os.ReadFile(summary.ResultsJSONL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(results), `"context_compactions":`) {
 		t.Fatalf("results missing context compaction count: %s", results)
+	}
+}
+
+func TestRunTraceEventsHaveSeqPayloadRefsAndRedaction(t *testing.T) {
+	root := t.TempDir()
+	tasksPath := filepath.Join(root, "tasks.jsonl")
+	line := `{"id":"secret-tool","suite":"unit","prompt":"run scripted loop","scripted_tool_rounds":1,"scripted_tool_name":"missing_tool","scripted_tool_args":"{\"api_key\":\"super-secret\",\"input_tokens\":12}"}` + "\n"
+	if err := os.WriteFile(tasksPath, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.MaxToolRounds = 3
+	summary, err := Run(context.Background(), cfg, RunConfig{TasksPath: tasksPath, OutDir: filepath.Join(root, "runs"), Mock: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Total != 1 || summary.Failed != 1 {
+		t.Fatalf("summary = %#v", summary)
+	}
+	records := readTraceRecords(t, summary.EventsJSONL)
+	if len(records) == 0 {
+		t.Fatal("no event records")
+	}
+	var payloadRefs []trace.PayloadRef
+	for i, record := range records {
+		if record.SchemaVersion != trace.CurrentManifestVersion {
+			t.Fatalf("record %d schema = %d", i, record.SchemaVersion)
+		}
+		if record.Seq != int64(i+1) {
+			t.Fatalf("record %d seq = %d", i, record.Seq)
+		}
+		if record.RunID == "" || record.TaskID != "secret-tool" || record.EventType == "" {
+			t.Fatalf("record %d = %#v", i, record)
+		}
+		payloadRefs = append(payloadRefs, record.PayloadRefs...)
+	}
+	if len(payloadRefs) == 0 {
+		t.Fatalf("expected payload refs in records: %#v", records)
+	}
+	eventsBytes, err := os.ReadFile(summary.EventsJSONL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(eventsBytes), "super-secret") {
+		t.Fatalf("events leaked secret: %s", eventsBytes)
+	}
+	var sawRedaction bool
+	for _, ref := range payloadRefs {
+		rel, err := filepath.Rel(summary.PayloadsDir, ref.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+			t.Fatalf("payload escaped dir: dir=%q path=%q rel=%q", summary.PayloadsDir, ref.Path, rel)
+		}
+		bytes, err := os.ReadFile(ref.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(bytes), "super-secret") {
+			t.Fatalf("payload leaked secret: %s", bytes)
+		}
+		if strings.Contains(string(bytes), "[REDACTED]") {
+			sawRedaction = true
+		}
+		assertPerm(t, ref.Path, 0o600)
+	}
+	if !sawRedaction {
+		t.Fatalf("no payload contained redaction marker")
 	}
 }
 
@@ -257,6 +359,27 @@ func TestObserveCountsUsageToolErrorsAndNames(t *testing.T) {
 	if result.InputTokens != 10 || result.OutputTokens != 3 || result.CacheHitTokens != 7 || result.CacheMissTokens != 3 {
 		t.Fatalf("usage = %#v", result)
 	}
+}
+
+func readTraceRecords(t *testing.T, path string) []trace.EventRecord {
+	t.Helper()
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(bytes)), "\n")
+	records := make([]trace.EventRecord, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var record trace.EventRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		records = append(records, record)
+	}
+	return records
 }
 
 func assertPerm(t *testing.T, path string, want os.FileMode) {
