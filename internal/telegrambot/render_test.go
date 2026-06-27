@@ -88,6 +88,50 @@ func TestToolProgressDeduplicatesToolLines(t *testing.T) {
 	}
 }
 
+func TestToolProgressUpdatesToolLineOnFinish(t *testing.T) {
+	progress := NewToolProgress()
+	renderer := NewRenderer()
+	started := renderer.Apply(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{
+			ID:        "call_fetch",
+			Name:      "web_fetch",
+			Arguments: []byte(`{"url":"https://example.com/a/really/long/path?query=secret"}`),
+		},
+	})
+	if len(started) != 1 || !progress.Add(started[0]) {
+		t.Fatalf("started = %#v", started)
+	}
+	finished := renderer.Apply(protocol.Event{
+		Type: protocol.EventToolCallFinished,
+		Data: protocol.ToolResult{
+			CallID:    "call_fetch",
+			Name:      "web_fetch",
+			Content:   strings.Repeat("full payload ", 200),
+			Truncated: true,
+			OutputRef: "/root/billyharness/tool-output/20260627/123456-web_fetch-call_fetch-abcd.txt",
+			Metadata: map[string]any{
+				"estimated_text_tokens": int64(1800),
+			},
+		},
+	})
+	if len(finished) != 1 || !progress.Add(finished[0]) {
+		t.Fatalf("finished = %#v", finished)
+	}
+	html := progress.HTML()
+	if strings.Count(html, "•") != 1 || strings.Count(html, "🌐 web_fetch") != 1 {
+		t.Fatalf("tool line should be updated in place, html=%q", html)
+	}
+	for _, want := range []string{"✅", "truncated", "123456-web_fetch-call_fetch-abcd.txt", "~1.8k tok"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("tool progress missing %q in %q", want, html)
+		}
+	}
+	if strings.Contains(html, "full payload full payload") || strings.Contains(html, "query=secret") {
+		t.Fatalf("tool progress leaked full payload or long URL: %q", html)
+	}
+}
+
 func TestToolResultsDoNotRenderFullPayload(t *testing.T) {
 	rendered := NewRenderer().Apply(protocol.Event{
 		Type: protocol.EventToolCallFinished,

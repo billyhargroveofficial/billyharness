@@ -29,16 +29,18 @@ type Renderer struct {
 	Started       time.Time
 	LastError     string
 	Done          bool
+	toolSummaries map[string]string
 }
 
 type RenderEvent struct {
 	Kind  string
 	Title string
 	Body  string
+	Key   string
 }
 
 func NewRenderer() *Renderer {
-	return &Renderer{Started: time.Now()}
+	return &Renderer{Started: time.Now(), toolSummaries: map[string]string{}}
 }
 
 func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
@@ -53,9 +55,17 @@ func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
 		r.Content.WriteString(fmt.Sprint(event.Data))
 	case protocol.EventToolCallRequested:
 		r.ToolCalls++
-		return []RenderEvent{{Kind: "tool", Title: "Tool", Body: toolSummary(event.Data)}}
+		key, summary := toolCallKeyAndSummary(event.Data)
+		if key != "" {
+			r.toolSummaries[key] = summary
+		}
+		return []RenderEvent{{Kind: "tool", Title: "Tool", Body: "⏳ " + summary, Key: key}}
 	case protocol.EventToolCallFinished:
-		return nil
+		key, summary := r.toolResultSummary(event.Data)
+		if summary == "" {
+			return nil
+		}
+		return []RenderEvent{{Kind: "tool", Title: "Tool", Body: summary, Key: key}}
 	case protocol.EventProviderUsageUpdate:
 		in, out, hit, miss, reasoning := usage(event.Data)
 		r.InputTokens += in
@@ -192,13 +202,20 @@ func ToolMessageHTML(event RenderEvent) string {
 type ToolProgress struct {
 	Started time.Time
 	Done    bool
-	lines   []string
+	lines   []toolProgressLine
+	index   map[string]int
 	seen    map[string]bool
+}
+
+type toolProgressLine struct {
+	key  string
+	text string
 }
 
 func NewToolProgress() *ToolProgress {
 	return &ToolProgress{
 		Started: time.Now(),
+		index:   map[string]int{},
 		seen:    map[string]bool{},
 	}
 }
@@ -209,13 +226,33 @@ func (p *ToolProgress) Add(event RenderEvent) bool {
 	}
 	prefix := "•"
 	line := strings.TrimSpace(prefix + " " + event.Body)
-	if line == "" || p.seen[line] {
+	if line == "" {
+		return false
+	}
+	key := strings.TrimSpace(event.Key)
+	if key == "" {
+		key = line
+	}
+	if idx, ok := p.index[key]; ok {
+		if p.lines[idx].text == line {
+			return false
+		}
+		p.lines[idx].text = line
+		return true
+	}
+	if p.seen[line] {
 		return false
 	}
 	p.seen[line] = true
-	p.lines = append(p.lines, line)
+	p.index[key] = len(p.lines)
+	p.lines = append(p.lines, toolProgressLine{key: key, text: line})
 	if len(p.lines) > 24 {
-		p.lines = p.lines[len(p.lines)-24:]
+		removed := p.lines[0]
+		delete(p.index, removed.key)
+		p.lines = p.lines[1:]
+		for i, entry := range p.lines {
+			p.index[entry.key] = i
+		}
 	}
 	return true
 }
@@ -229,7 +266,11 @@ func (p *ToolProgress) HTML() string {
 		state = "done"
 	}
 	elapsed := time.Since(p.Started).Round(time.Second)
-	body := strings.Join(p.lines, "\n")
+	lines := make([]string, 0, len(p.lines))
+	for _, line := range p.lines {
+		lines = append(lines, line.text)
+	}
+	body := strings.Join(lines, "\n")
 	text := "<b>Tools</b> " + esc(state) + " · <i>" + esc(elapsed.String()) + "</i>\n" + esc(body)
 	return trimTelegram(text)
 }
@@ -240,6 +281,19 @@ func ErrorMessageHTML(text string) string {
 
 func PlainMessageHTML(text string) string {
 	return trimTelegram(esc(text))
+}
+
+func toolCallKeyAndSummary(data any) (string, string) {
+	bytes, _ := json.Marshal(data)
+	var call protocol.ToolCall
+	if err := json.Unmarshal(bytes, &call); err != nil || call.Name == "" {
+		return "", resultPreview(string(bytes), 600)
+	}
+	key := call.ID
+	if key == "" {
+		key = call.Name
+	}
+	return key, toolSummary(call)
 }
 
 func toolSummary(data any) string {
@@ -274,6 +328,74 @@ func toolSummary(data any) string {
 	default:
 		return "🛠 " + call.Name + " " + resultPreview(string(call.Arguments), 160)
 	}
+}
+
+func (r *Renderer) toolResultSummary(data any) (string, string) {
+	bytes, _ := json.Marshal(data)
+	var result protocol.ToolResult
+	if err := json.Unmarshal(bytes, &result); err != nil || result.Name == "" {
+		return "", ""
+	}
+	key := result.CallID
+	if key == "" {
+		key = result.Name
+	}
+	base := r.toolSummaries[key]
+	if base == "" {
+		base = result.Name
+	}
+	var parts []string
+	if result.IsError {
+		parts = append(parts, "⛔ "+base)
+		if text := compactText(strings.TrimSpace(result.Content), 96); text != "" && text != "-" {
+			parts = append(parts, text)
+		}
+		return key, strings.Join(parts, " · ")
+	}
+	parts = append(parts, "✅ "+base)
+	if result.Truncated {
+		parts = append(parts, "truncated")
+	}
+	if result.OutputRef != "" {
+		parts = append(parts, "ref "+compactText(filepathBase(result.OutputRef), 56))
+	}
+	if tokens := metadataInt(result.Metadata, "estimated_text_tokens"); tokens > 0 {
+		parts = append(parts, "~"+compactInt(tokens)+" tok")
+	}
+	if original := metadataInt(result.Metadata, "original_output_bytes"); original > 0 {
+		parts = append(parts, compactInt(original)+"B")
+	}
+	return key, strings.Join(parts, " · ")
+}
+
+func metadataInt(metadata map[string]any, key string) int64 {
+	if len(metadata) == 0 {
+		return 0
+	}
+	switch value := metadata[key].(type) {
+	case int:
+		return int64(value)
+	case int64:
+		return value
+	case float64:
+		return int64(value)
+	case json.Number:
+		n, _ := value.Int64()
+		return n
+	default:
+		return 0
+	}
+}
+
+func filepathBase(path string) string {
+	path = strings.TrimRight(path, "/")
+	if path == "" {
+		return ""
+	}
+	if idx := strings.LastIndex(path, "/"); idx >= 0 {
+		return path[idx+1:]
+	}
+	return path
 }
 
 func resultPreview(text string, limit int) string {
