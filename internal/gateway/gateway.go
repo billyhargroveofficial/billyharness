@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/agent"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
@@ -37,10 +39,24 @@ type Session struct {
 
 type RunRequest struct {
 	Prompt          string `json:"prompt"`
+	Provider        string `json:"provider,omitempty"`
 	Model           string `json:"model,omitempty"`
 	Thinking        string `json:"thinking,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	MaxToolRounds   int    `json:"max_tool_rounds,omitempty"`
+}
+
+type CreateSessionRequest struct {
+	Messages []protocol.Message `json:"messages,omitempty"`
+}
+
+type DeepSeekAuthRequest struct {
+	APIKey string `json:"api_key"`
+}
+
+type CodexImportRequest struct {
+	SourcePath string          `json:"source_path,omitempty"`
+	AuthJSON   json.RawMessage `json:"auth_json,omitempty"`
 }
 
 func NewServer(cfg config.Config, prov provider.Provider, registry *tools.Registry) *Server {
@@ -85,7 +101,11 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
+	s.mux.HandleFunc("GET /v1/auth/status", s.handleAuthStatus)
+	s.mux.HandleFunc("POST /v1/auth/deepseek", s.handleDeepSeekAuth)
+	s.mux.HandleFunc("POST /v1/auth/codex/import", s.handleCodexImport)
 	s.mux.HandleFunc("GET /v1/tools", s.handleTools)
+	s.mux.HandleFunc("GET /v1/mcp", s.handleMCP)
 	s.mux.HandleFunc("POST /v1/run", s.handleRun)
 	s.mux.HandleFunc("POST /v1/sessions", s.handleCreateSession)
 	s.mux.HandleFunc("GET /v1/sessions/{id}", s.handleGetSession)
@@ -104,11 +124,78 @@ func (s *Server) handleTools(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.registry.Specs())
 }
 
-func (s *Server) handleCreateSession(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleAuthStatus(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, credentials.CurrentStatus(s.cfg))
+}
+
+func (s *Server) handleDeepSeekAuth(w http.ResponseWriter, r *http.Request) {
+	var req DeepSeekAuthRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	status, err := credentials.SaveDeepSeekAPIKey(req.APIKey)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"deepseek": status,
+	})
+}
+
+func (s *Server) handleCodexImport(w http.ResponseWriter, r *http.Request) {
+	var req CodexImportRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+	}
+	var (
+		status credentials.ProviderStatus
+		err    error
+	)
+	if len(req.AuthJSON) > 0 {
+		status, err = credentials.SaveCodexAuthJSON(s.cfg, req.AuthJSON)
+	} else {
+		status, err = credentials.ImportCodexAuth(s.cfg, req.SourcePath)
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"codex": status,
+	})
+}
+
+func (s *Server) handleMCP(w http.ResponseWriter, _ *http.Request) {
+	cfg := s.registry.Config()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"config_files": cfg.MCPConfigFiles,
+		"allowed":      cfg.MCPAllowedServers,
+		"enabled":      cfg.MCPEnabled,
+		"servers":      s.registry.MCPStatuses(),
+	})
+}
+
+func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+	var req CreateSessionRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+	}
+	messages := req.Messages
+	if len(messages) == 0 {
+		messages = agent.InitialMessages(s.cfg)
+	}
 	session := &Session{
 		ID:       newID(),
 		Created:  time.Now().UTC(),
-		Messages: agent.InitialMessages(),
+		Messages: messages,
 	}
 	s.mu.Lock()
 	s.sessions[session.ID] = session
@@ -124,11 +211,13 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	}
 	session.mu.Lock()
 	count := len(session.Messages)
+	messages := append([]protocol.Message(nil), session.Messages...)
 	session.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":            session.ID,
 		"created":       session.Created,
 		"message_count": count,
+		"messages":      messages,
 	})
 }
 
@@ -191,9 +280,13 @@ func (s *Server) session(id string) (*Session, bool) {
 
 func (s *Server) agentFor(req RunRequest) (*agent.Agent, error) {
 	cfg := s.cfg
+	if req.Provider != "" {
+		cfg.Provider = req.Provider
+	}
 	if req.Model != "" {
 		cfg.Model = req.Model
 	}
+	cfg.ApplyModelProviderDefaults()
 	if req.Thinking != "" {
 		cfg.Thinking = req.Thinking
 	}
@@ -207,8 +300,7 @@ func (s *Server) agentFor(req RunRequest) (*agent.Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	registry := tools.NewRegistry(cfg)
-	return agent.New(cfg, prov, registry), nil
+	return agent.New(cfg, prov, s.registry), nil
 }
 
 func streamEvents(w http.ResponseWriter, run func(func(protocol.Event)) error) {

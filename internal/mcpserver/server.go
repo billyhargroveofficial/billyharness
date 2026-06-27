@@ -89,7 +89,7 @@ func (s *Server) handle(ctx context.Context, req request) (response, bool) {
 				"version":     "0.1.0",
 				"description": "Native tools exposed by fast-agent-harness-go",
 			},
-			"instructions": "Use tools for filesystem, web, and controlled shell operations. Write and execute tools are disabled unless the server was started with FAST_AGENT_AUTO_APPROVE_DANGEROUS=true.",
+			"instructions": "Use tools for filesystem, web, and controlled shell operations. Write and execute tools are enabled by default. Set FAST_AGENT_AUTO_APPROVE_DANGEROUS=false to disable them.",
 		}}, true
 	case "notifications/initialized":
 		return response{}, false

@@ -4,20 +4,28 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
+	"unicode"
 
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/atotto/clipboard"
+	xansi "github.com/charmbracelet/x/ansi"
 
 	"github.com/billyhargroveofficial/billyharness/internal/agent"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/credentials"
+	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
@@ -29,6 +37,7 @@ type Options struct {
 	Dangerous  bool
 	MaxRounds  int
 	Plain      bool
+	Version    string
 }
 
 type thinkingMode struct {
@@ -37,10 +46,22 @@ type thinkingMode struct {
 	effort string
 }
 
+func (m thinkingMode) effortLabel() string {
+	if m.kind == "disabled" || m.effort == "" {
+		return "off"
+	}
+	return m.effort
+}
+
 type block struct {
 	kind    string
 	title   string
 	content string
+}
+
+type selectionPoint struct {
+	row int
+	col int
 }
 
 type Model struct {
@@ -48,34 +69,62 @@ type Model struct {
 	gatewayURL string
 	sessionID  string
 	messages   []protocol.Message
+	version    string
 
 	models       []string
 	modelIndex   int
 	thinking     []thinkingMode
 	thinkingIdx  int
 	theme        string
+	toolView     string
+	thinkView    string
 	showThinking bool
 	dangerous    bool
 	maxRounds    int
 	followOutput bool
 	plain        bool
+	settings     appSettings
+	settingsPath string
+	sessionsDir  string
+	localChatID  string
+	chatTitle    string
+	chatCreated  time.Time
 
 	textarea textarea.Model
 	viewport viewport.Model
-	width    int
-	height   int
+	// viewportContent is the unhighlighted transcript. Mouse selection applies
+	// ANSI styling over this copy so repeated drag events do not stack styles.
+	viewportContent string
+	width           int
+	height          int
 
-	blocks     []block
-	collapsed  map[int]bool
-	selected   int
-	busy       bool
-	status     string
-	err        string
-	events     chan tea.Msg
-	modelCalls int
-	toolCalls  int
-	inputTok   int64
-	outputTok  int64
+	blocks            []block
+	collapsed         map[int]bool
+	selected          int
+	busy              bool
+	status            string
+	err               string
+	events            chan tea.Msg
+	modelCalls        int
+	toolCalls         int
+	inputTok          int64
+	outputTok         int64
+	cacheHitTok       int64
+	cacheMissTok      int64
+	reasoningTok      int64
+	lastInputTok      int64
+	lastOutputTok     int64
+	lastCacheHitTok   int64
+	lastCacheMissTok  int64
+	slashIndex        int
+	slashDismissed    string
+	authInputProvider string
+	selecting         bool
+	selectStart       selectionPoint
+	selectEnd         selectionPoint
+	runStartedAt      time.Time
+	lastRunDuration   time.Duration
+	spinnerFrame      int
 }
 
 type sessionReadyMsg struct {
@@ -95,6 +144,28 @@ type errMsg struct {
 	err error
 }
 
+type mcpStatusMsg struct {
+	text string
+	err  error
+}
+
+type authResultMsg struct {
+	text string
+	err  error
+}
+
+type clipboardCopiedMsg struct {
+	chars  int
+	method string
+	err    string
+}
+
+type tickMsg time.Time
+
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+const defaultTextareaPlaceholder = "Message billyharness. Type / for commands."
+
 func Run(opts Options) error {
 	cfg := config.Default()
 	cfg.StoreReasoningContent = true
@@ -111,16 +182,31 @@ func Run(opts Options) error {
 
 func NewModel(cfg config.Config, opts Options) Model {
 	ta := textarea.New()
-	ta.Placeholder = "Type message or /theme /model /reasoning. Enter sends, Alt+Enter newline."
-	ta.Prompt = "  "
+	ta.Placeholder = defaultTextareaPlaceholder
+	ta.Prompt = ""
 	ta.ShowLineNumbers = false
-	ta.SetHeight(4)
+	ta.SetHeight(1)
 	ta.SetWidth(80)
 	ta.Focus()
 
 	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 	vp.KeyMap = viewport.KeyMap{}
-	models := []string{"deepseek-v4-flash", "deepseek-v4-pro"}
+	settings, settingsPath, sessionsDir, settingsErr := loadAppSettings()
+	if opts.Model == "" && settings.LastSelectedModel != "" {
+		cfg.Model = settings.LastSelectedModel
+	}
+	if settings.LastReasoningKind != "" {
+		cfg.Thinking = settings.LastReasoningKind
+		cfg.ReasoningEffort = settings.LastReasoningEffort
+	}
+	models := []string{
+		"deepseek-v4-flash",
+		"deepseek-v4-pro",
+		"gpt-5.5",
+		"gpt-5.4",
+		"gpt-5.4-mini",
+		"gpt-5.3-codex-spark",
+	}
 	modelIndex := 0
 	if opts.Model != "" {
 		models = appendIfMissing(models, opts.Model)
@@ -130,29 +216,86 @@ func NewModel(cfg config.Config, opts Options) Model {
 				break
 			}
 		}
-	} else if cfg.Model == "deepseek-v4-pro" {
-		modelIndex = 1
+	} else if cfg.Model != "" {
+		models = appendIfMissing(models, cfg.Model)
+		for i, model := range models {
+			if model == cfg.Model {
+				modelIndex = i
+				break
+			}
+		}
+	}
+	thinking := []thinkingMode{
+		{"reasoning: high", "enabled", "high"},
+		{"reasoning: xhigh", "enabled", "xhigh"},
+		{"reasoning: max", "enabled", "max"},
+		{"reasoning: medium", "enabled", "medium"},
+		{"reasoning: low", "enabled", "low"},
+		{"reasoning: off", "disabled", ""},
+	}
+	thinkingIdx := 0
+	for i, mode := range thinking {
+		if mode.kind == cfg.Thinking && mode.effort == cfg.ReasoningEffort {
+			thinkingIdx = i
+			break
+		}
+		if cfg.Thinking == "disabled" && mode.kind == "disabled" {
+			thinkingIdx = i
+		}
 	}
 	plain := opts.Plain || strings.EqualFold(os.Getenv("TERM"), "dumb")
+	theme := settings.Theme
+	if theme == "" {
+		theme = "dark"
+	}
+	toolView := settings.ToolView
+	if toolView == "" {
+		toolView = "collapsed"
+	}
+	thinkView := settings.ThinkView
+	if thinkView == "" {
+		thinkView = "expanded"
+	}
+	status := "ready"
+	if settingsErr != nil {
+		status = "settings error: " + settingsErr.Error()
+	}
+	localChatID := newChatID()
+	createdAt := time.Now().UTC()
+	version := opts.Version
+	if version == "" {
+		version = "dev"
+	}
 	m := Model{
 		cfg:          cfg,
 		gatewayURL:   strings.TrimRight(opts.GatewayURL, "/"),
-		messages:     agent.InitialMessages(),
+		messages:     agent.InitialMessages(cfg),
+		version:      version,
 		models:       models,
 		modelIndex:   modelIndex,
-		thinking:     []thinkingMode{{"reasoning: high", "enabled", "high"}, {"reasoning: max", "enabled", "max"}, {"reasoning: off", "disabled", ""}},
-		theme:        "light",
-		showThinking: true,
-		dangerous:    opts.Dangerous,
+		thinking:     thinking,
+		thinkingIdx:  thinkingIdx,
+		theme:        theme,
+		toolView:     toolView,
+		thinkView:    thinkView,
+		showThinking: thinkView != "hidden",
+		dangerous:    opts.Dangerous || cfg.AutoApproveDangerous,
 		maxRounds:    cfg.MaxToolRounds,
 		followOutput: true,
 		plain:        plain,
+		settings:     settings,
+		settingsPath: settingsPath,
+		sessionsDir:  sessionsDir,
+		localChatID:  localChatID,
+		chatTitle:    "new chat",
+		chatCreated:  createdAt,
 		textarea:     ta,
 		viewport:     vp,
 		collapsed:    map[int]bool{},
 		events:       make(chan tea.Msg, 256),
-		status:       "ready",
+		status:       status,
 	}
+	_ = m.saveCurrentSession()
 	return m
 }
 
@@ -176,6 +319,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.resize(m.followOutput)
 	case tea.KeyPressMsg:
+		if m.authInputProvider != "" && msg.String() == "esc" {
+			m.cancelAuthInput()
+			skipTextareaUpdate = true
+			break
+		}
+		if m.handleSlashNavigation(msg) {
+			skipTextareaUpdate = true
+			break
+		}
 		if msg.Code == tea.KeyEnter {
 			if msg.Mod.Contains(tea.ModAlt) {
 				m.textarea.InsertString("\n")
@@ -228,7 +380,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			skipTextareaUpdate = true
 		case "ctrl+e":
 			if len(m.blocks) > 0 {
-				m.collapsed[m.selected] = !m.collapsed[m.selected]
+				m.toggleSelectedBlock()
 				reflow = true
 			}
 			skipTextareaUpdate = true
@@ -245,14 +397,57 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			skipTextareaUpdate = true
 		}
+	case tea.MouseClickMsg:
+		if msg.Button == tea.MouseLeft && m.mouseInViewport(msg.X, msg.Y) {
+			point := m.selectionPointFromMouse(msg.X, msg.Y)
+			m.selecting = true
+			m.selectStart = point
+			m.selectEnd = point
+			m.applySelectionHighlight()
+			m.status = "selecting"
+			skipTextareaUpdate = true
+			skipViewportUpdate = true
+		}
+	case tea.MouseMotionMsg:
+		if m.selecting {
+			m.selectEnd = m.selectionPointFromMouseClamped(msg.X, msg.Y)
+			m.applySelectionHighlight()
+			m.status = "selecting"
+			skipTextareaUpdate = true
+			skipViewportUpdate = true
+		}
+	case tea.MouseReleaseMsg:
+		if m.selecting && msg.Button == tea.MouseLeft {
+			m.selectEnd = m.selectionPointFromMouseClamped(msg.X, msg.Y)
+			m.applySelectionHighlight()
+			text := m.selectedTranscriptText()
+			m.selecting = false
+			skipTextareaUpdate = true
+			skipViewportUpdate = true
+			if strings.TrimSpace(text) != "" {
+				m.status = fmt.Sprintf("copying %d chars", len([]rune(text)))
+				cmds = append(cmds, copySelectionCmd(text))
+			} else {
+				m.status = "selection empty"
+			}
+		}
 	case tea.MouseWheelMsg:
 		switch msg.Button {
 		case tea.MouseWheelUp, tea.MouseWheelLeft:
 			m.followOutput = false
 		}
+	case clipboardCopiedMsg:
+		if msg.err != "" {
+			m.status = "copy failed: " + msg.err
+		} else {
+			m.status = fmt.Sprintf("copied %d chars via %s", msg.chars, msg.method)
+		}
 	case sessionReadyMsg:
 		m.sessionID = msg.id
 		m.status = "gateway session " + msg.id[:min(len(msg.id), 8)]
+		m.settings.LastGatewaySessionID = msg.id
+		_ = m.saveSettings()
+		_ = m.saveCurrentSession()
 	case streamEventMsg:
 		m.applyEvent(msg.event)
 		reflow = true
@@ -262,6 +457,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case runDoneMsg:
 		m.busy = false
+		if !m.runStartedAt.IsZero() {
+			m.lastRunDuration = time.Since(m.runStartedAt)
+		}
+		m.runStartedAt = time.Time{}
 		if len(msg.messages) > 0 {
 			m.messages = msg.messages
 		}
@@ -271,20 +470,55 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "completed"
 		}
+		_ = m.saveCurrentSession()
 		reflow = true
 		gotoBottom = m.followOutput
 	case errMsg:
 		m.busy = false
+		if !m.runStartedAt.IsZero() {
+			m.lastRunDuration = time.Since(m.runStartedAt)
+		}
+		m.runStartedAt = time.Time{}
 		m.err = msg.err.Error()
 		m.addBlock("error", "ERROR", m.err)
+		_ = m.saveCurrentSession()
 		reflow = true
 		gotoBottom = m.followOutput
+	case mcpStatusMsg:
+		if msg.err != nil {
+			m.addBlock("error", "MCP", msg.err.Error())
+			m.status = "mcp status failed"
+		} else {
+			m.addInfoBlock("MCP", msg.text)
+			m.status = "mcp status shown"
+		}
+		reflow = true
+		gotoBottom = m.followOutput
+	case authResultMsg:
+		m.cancelAuthInput()
+		if msg.err != nil {
+			m.addBlock("error", "AUTH", msg.err.Error())
+			m.status = "auth failed"
+		} else {
+			m.addInfoBlock("AUTH", msg.text)
+			m.status = "auth updated"
+		}
+		reflow = true
+		gotoBottom = m.followOutput
+	case tickMsg:
+		if m.busy {
+			m.spinnerFrame++
+			cmds = append(cmds, m.tickCmd())
+		}
 	}
 
 	var cmd tea.Cmd
 	if !skipTextareaUpdate {
 		m.textarea, cmd = m.textarea.Update(msg)
 		cmds = append(cmds, cmd)
+	}
+	if _, ok := msg.(tea.KeyPressMsg); ok && m.width > 0 {
+		m.resize(m.followOutput)
 	}
 	if !skipViewportUpdate {
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -309,12 +543,21 @@ func (m Model) View() tea.View {
 		return v
 	}
 	styles := m.styles()
-	header := m.headerView()
 	ta := m.textarea
 	ta.SetStyles(styles.textarea)
-	input := styles.input.Width(max(20, m.width-2)).Render(ta.View())
-	footer := styles.footer.Width(max(20, m.width-2)).Render(m.footerView())
-	v := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, header, m.viewport.View(), input, footer))
+	input := styles.input.Width(m.inputContentWidth(styles)).Render(ta.View())
+	popup := m.slashPopupView()
+	runStatus := m.runStatusView()
+	status := styles.status.Width(m.statusContentWidth(styles)).Render(m.inlineStatusView())
+	parts := []string{m.viewport.View()}
+	if popup != "" {
+		parts = append(parts, popup)
+	}
+	if runStatus != "" {
+		parts = append(parts, runStatus)
+	}
+	parts = append(parts, input, status)
+	v := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, parts...))
 	v.BackgroundColor = lipgloss.Color(styles.background)
 	v.ForegroundColor = lipgloss.Color(styles.foreground)
 	m.applyTerminalMode(&v)
@@ -327,19 +570,48 @@ func (m Model) applyTerminalMode(v *tea.View) {
 		return
 	}
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	v.MouseMode = tea.MouseModeAllMotion
 }
 
 func (m *Model) resize(gotoBottom bool) {
-	inputH := 6
-	headerH := 3
-	footerH := 2
-	vh := max(5, m.height-inputH-headerH-footerH)
+	styles := m.styles()
 	m.viewport.SetWidth(m.width)
+	m.viewport.HighlightStyle = styles.selection
+	m.viewport.SelectedHighlightStyle = styles.selection
+	m.textarea.SetWidth(m.inputContentWidth(styles))
+	m.textarea.SetHeight(m.inputHeight(m.inputContentWidth(styles)))
+	ta := m.textarea
+	ta.SetStyles(styles.textarea)
+	inputH := lipgloss.Height(styles.input.Width(m.inputContentWidth(styles)).Render(ta.View()))
+	runStatusH := lipgloss.Height(m.runStatusView())
+	statusH := lipgloss.Height(styles.status.Width(m.statusContentWidth(styles)).Render(m.inlineStatusView()))
+	popupH := m.slashPopupHeight()
+	vh := max(4, m.height-inputH-runStatusH-statusH-popupH)
 	m.viewport.SetHeight(vh)
-	m.textarea.SetWidth(max(20, m.width-4))
-	m.textarea.SetHeight(4)
 	m.reflow(gotoBottom)
+}
+
+func (m Model) inputHeight(contentWidth int) int {
+	text := m.textarea.Value()
+	contentWidth = max(1, contentWidth)
+	height := 0
+	for _, line := range strings.Split(text, "\n") {
+		lineWidth := max(1, lipgloss.Width(line))
+		height += max(1, (lineWidth+contentWidth-1)/contentWidth)
+	}
+	if height < 1 {
+		height = 1
+	}
+	return min(height, 6)
+}
+
+func (m Model) inputContentWidth(styles themeStyles) int {
+	outer := max(24, m.width-2)
+	return max(20, outer-styles.input.GetHorizontalFrameSize())
+}
+
+func (m Model) statusContentWidth(styles themeStyles) int {
+	return max(20, m.width-styles.status.GetHorizontalFrameSize())
 }
 
 func (m Model) headerView() string {
@@ -352,34 +624,659 @@ func (m Model) headerView() string {
 	if m.dangerous {
 		danger = "dangerous tools"
 	}
-	line := fmt.Sprintf(" fast-agent-harness TUI  %s  %s  %s  theme:%s  %s ",
-		mode, m.currentModel(), m.currentThinking().label, m.theme, danger)
-	status := m.status
-	if !m.followOutput {
-		status = "scrolled: Alt+End follow | " + status
+	state := strings.ToUpper(m.status)
+	if m.busy {
+		state = "RUNNING"
 	}
-	stats := fmt.Sprintf(" %s | calls m:%d tools:%d tok in:%d out:%d ",
-		status, m.modelCalls, m.toolCalls, m.inputTok, m.outputTok)
-	return styles.header.Width(m.width).Render(line) + "\n" + styles.status.Width(m.width).Render(stats)
+	if !m.followOutput {
+		state = "SCROLLED"
+	}
+	title := m.chatTitle
+	if title == "" {
+		title = "new chat"
+	}
+	line := fitSegments(max(1, m.width-2), "  ",
+		"billyharness",
+		state,
+		mode,
+		shortModel(m.currentModel()),
+		m.currentThinking().effortLabel(),
+		danger,
+		"chat:"+shortID(m.localChatID),
+		title,
+	)
+	return styles.header.Width(m.width).Render(" " + line)
 }
 
 func (m Model) footerView() string {
-	return "/theme /model /reasoning /thinking /status  Enter send  Alt+Enter newline  mouse/Pg scroll  Alt+End follow"
+	return "Enter send  Alt+Enter newline  Tab complete slash command  mouse/Pg scroll  Alt+End follow"
+}
+
+type slashCommand struct {
+	name    string
+	args    string
+	summary string
+}
+
+type slashArg struct {
+	value   string
+	summary string
+}
+
+type statusSegment struct {
+	text  string
+	style lipgloss.Style
+}
+
+func slashCommands() []slashCommand {
+	return []slashCommand{
+		{"/help", "", "show commands and key bindings"},
+		{"/status", "", "show current session details"},
+		{"/auth", "deepseek|codex", "configure DeepSeek key or Codex OAuth"},
+		{"/theme", "light|dark", "switch active theme"},
+		{"/model", "flash|pro|gpt|id", "switch model"},
+		{"/models", "", "list known models"},
+		{"/mcp", "", "show connected MCP servers"},
+		{"/reasoning", "high|max|off", "set provider reasoning effort"},
+		{"/thinkview", "expanded|collapsed|hidden", "control thinking blocks"},
+		{"/thinking", "on|off", "alias for thinking visibility"},
+		{"/toolview", "auto|expanded|collapsed|hidden", "control tool blocks"},
+		{"/new", "", "start a new chat"},
+		{"/resume", "[id-prefix]", "list or resume local chats"},
+		{"/fork", "[id-prefix]", "fork current or named chat"},
+		{"/exit", "", "save and quit"},
+	}
+}
+
+func (m Model) slashActive() bool {
+	text := m.textarea.Value()
+	return strings.HasPrefix(text, "/") && !strings.Contains(text, "\n") && text != m.slashDismissed
+}
+
+func (m Model) slashToken() string {
+	text := strings.TrimSpace(m.textarea.Value())
+	if text == "" || !strings.HasPrefix(text, "/") {
+		return ""
+	}
+	token, _, _ := strings.Cut(text, " ")
+	return strings.ToLower(token)
+}
+
+func (m Model) slashParts() (commandToken, argPrefix string, hasArg bool) {
+	text := m.textarea.Value()
+	if !strings.HasPrefix(text, "/") || strings.Contains(text, "\n") {
+		return "", "", false
+	}
+	trimmedLeft := strings.TrimLeft(text, " \t")
+	for i, r := range trimmedLeft {
+		if r == ' ' || r == '\t' {
+			return strings.ToLower(trimmedLeft[:i]), strings.TrimSpace(trimmedLeft[i+1:]), true
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(trimmedLeft)), "", false
+}
+
+func (m Model) slashArgMode() (slashCommand, string, bool) {
+	token, argPrefix, _ := m.slashParts()
+	if token == "" {
+		return slashCommand{}, "", false
+	}
+	for _, command := range slashCommands() {
+		if token == command.name && len(m.slashArgs(command)) > 0 {
+			return command, strings.ToLower(argPrefix), true
+		}
+	}
+	return slashCommand{}, "", false
+}
+
+func (m Model) filteredSlashCommands() []slashCommand {
+	token := m.slashToken()
+	if strings.HasPrefix(token, "/") {
+		token = strings.TrimPrefix(token, "/")
+	}
+	var exact []slashCommand
+	var prefix []slashCommand
+	var contains []slashCommand
+	var summary []slashCommand
+	for _, command := range slashCommands() {
+		name := strings.TrimPrefix(command.name, "/")
+		haystack := strings.ToLower(name + " " + command.args)
+		switch {
+		case token == "":
+			prefix = append(prefix, command)
+		case name == token:
+			exact = append(exact, command)
+		case strings.HasPrefix(name, token):
+			prefix = append(prefix, command)
+		case strings.Contains(haystack, token):
+			contains = append(contains, command)
+		case strings.Contains(strings.ToLower(command.summary), token):
+			summary = append(summary, command)
+		}
+	}
+	out := append(exact, prefix...)
+	out = append(out, contains...)
+	out = append(out, summary...)
+	return out
+}
+
+func (m Model) slashArgs(command slashCommand) []slashArg {
+	next := func(values []slashArg, current string) []slashArg {
+		for i, item := range values {
+			if item.value == current {
+				return append(append([]slashArg{}, values[i+1:]...), values[:i+1]...)
+			}
+		}
+		return values
+	}
+	switch command.name {
+	case "/auth":
+		return []slashArg{
+			{"deepseek", "save DeepSeek API key"},
+			{"codex", "import Codex OAuth from codex login"},
+		}
+	case "/theme":
+		values := []slashArg{
+			{"dark", "black codex-style theme"},
+			{"light", "light theme"},
+			{"toggle", "switch to the other theme"},
+		}
+		return next(values, m.theme)
+	case "/model":
+		values := []slashArg{
+			{"flash", "deepseek-v4-flash"},
+			{"pro", "deepseek-v4-pro"},
+			{"gpt", "gpt-5.5 via Codex subscription"},
+			{"gpt-5.5", "Codex/ChatGPT subscription"},
+			{"gpt-5.4", "Codex/ChatGPT subscription"},
+			{"gpt-5.4-mini", "faster Codex/ChatGPT model"},
+			{"gpt-5.3-codex-spark", "ultra-fast Codex coding model"},
+			{"deepseek-v4-flash", "full model id"},
+			{"deepseek-v4-pro", "full model id"},
+			{"toggle", "switch to the other configured model"},
+		}
+		switch m.currentModel() {
+		case "deepseek-v4-flash":
+			return next(values, "flash")
+		case "deepseek-v4-pro":
+			return next(values, "pro")
+		case "gpt-5.5":
+			return next(values, "gpt")
+		}
+		return values
+	case "/reasoning":
+		values := []slashArg{
+			{"high", "reasoning high"},
+			{"xhigh", "reasoning xhigh"},
+			{"max", "reasoning max"},
+			{"medium", "reasoning medium"},
+			{"low", "reasoning low"},
+			{"off", "disable reasoning"},
+			{"toggle", "cycle reasoning mode"},
+		}
+		return next(values, m.currentThinking().effortLabel())
+	case "/thinkview":
+		values := []slashArg{
+			{"expanded", "show thinking content"},
+			{"collapsed", "show collapsed thinking blocks"},
+			{"hidden", "hide thinking blocks"},
+			{"toggle", "cycle thinking view"},
+		}
+		return next(values, m.thinkView)
+	case "/thinking":
+		if m.showThinking {
+			return []slashArg{{"off", "hide thinking blocks"}, {"on", "show thinking blocks"}, {"toggle", "switch thinking visibility"}}
+		}
+		return []slashArg{{"on", "show thinking blocks"}, {"off", "hide thinking blocks"}, {"toggle", "switch thinking visibility"}}
+	case "/toolview":
+		values := []slashArg{
+			{"auto", "expand tool blocks while running"},
+			{"expanded", "show full tool blocks"},
+			{"collapsed", "collapse tool blocks"},
+			{"hidden", "hide tool blocks"},
+			{"toggle", "cycle tool view"},
+		}
+		return next(values, m.toolView)
+	case "/resume":
+		return m.sessionArgs(true)
+	case "/fork":
+		return m.sessionArgs(false)
+	default:
+		return nil
+	}
+}
+
+func (m Model) filteredSlashArgs(command slashCommand, prefix string) []slashArg {
+	args := m.slashArgs(command)
+	prefix = strings.ToLower(strings.TrimSpace(prefix))
+	if prefix == "" {
+		return args
+	}
+	var exact []slashArg
+	var starts []slashArg
+	var contains []slashArg
+	for _, arg := range args {
+		value := strings.ToLower(arg.value)
+		haystack := value + " " + strings.ToLower(arg.summary)
+		switch {
+		case value == prefix:
+			exact = append(exact, arg)
+		case strings.HasPrefix(value, prefix):
+			starts = append(starts, arg)
+		case strings.Contains(haystack, prefix):
+			contains = append(contains, arg)
+		}
+	}
+	out := append(exact, starts...)
+	out = append(out, contains...)
+	return out
+}
+
+func (m Model) exactSlashArg(command slashCommand, prefix string) bool {
+	prefix = strings.ToLower(strings.TrimSpace(prefix))
+	if prefix == "" {
+		return false
+	}
+	for _, arg := range m.slashArgs(command) {
+		if strings.ToLower(arg.value) == prefix {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) sessionArgs(includeList bool) []slashArg {
+	var args []slashArg
+	if includeList {
+		args = append(args, slashArg{"list", "show saved chats"})
+	} else {
+		args = append(args, slashArg{"current", "fork current chat"})
+	}
+	sessions, err := listChatSessions(m.sessionsDir)
+	if err != nil {
+		return args
+	}
+	for i, session := range sessions {
+		if i >= 12 {
+			break
+		}
+		title := session.Title
+		if title == "" {
+			title = "untitled"
+		}
+		when := session.UpdatedAt.Local().Format("01-02 15:04")
+		args = append(args, slashArg{
+			value:   shortID(session.ID),
+			summary: truncateRunes(title, 44) + " · " + when,
+		})
+	}
+	return args
+}
+
+func (m Model) exactSlashCommand(prompt string) bool {
+	fields := strings.Fields(strings.ToLower(prompt))
+	if len(fields) == 0 {
+		return false
+	}
+	for _, command := range slashCommands() {
+		if fields[0] == command.name {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) handleSlashNavigation(msg tea.KeyPressMsg) bool {
+	if !m.slashActive() {
+		return false
+	}
+	if command, prefix, ok := m.slashArgMode(); ok {
+		args := m.filteredSlashArgs(command, prefix)
+		if len(args) == 0 {
+			m.slashIndex = 0
+			return false
+		}
+		switch msg.String() {
+		case "tab":
+			m.clampSlashIndexLen(len(args))
+			m.setSlashArg(command, args[m.slashIndex].value)
+			return true
+		case "down", "ctrl+n":
+			m.slashIndex = (m.slashIndex + 1) % len(args)
+			return true
+		case "up", "ctrl+p":
+			m.slashIndex--
+			if m.slashIndex < 0 {
+				m.slashIndex = len(args) - 1
+			}
+			return true
+		case "esc":
+			m.slashIndex = 0
+			m.slashDismissed = m.textarea.Value()
+			return true
+		}
+		m.clampSlashIndexLen(len(args))
+		return false
+	}
+	commands := m.filteredSlashCommands()
+	if len(commands) == 0 {
+		m.slashIndex = 0
+		return false
+	}
+	switch msg.String() {
+	case "tab":
+		m.clampSlashIndex(commands)
+		m.textarea.SetValue(commands[m.slashIndex].name + " ")
+		m.slashDismissed = ""
+		return true
+	case "down", "ctrl+n":
+		m.slashIndex = (m.slashIndex + 1) % len(commands)
+		return true
+	case "up", "ctrl+p":
+		m.slashIndex--
+		if m.slashIndex < 0 {
+			m.slashIndex = len(commands) - 1
+		}
+		return true
+	case "esc":
+		m.slashIndex = 0
+		m.slashDismissed = m.textarea.Value()
+		return true
+	}
+	m.clampSlashIndex(commands)
+	return false
+}
+
+func (m *Model) clampSlashIndex(commands []slashCommand) {
+	m.clampSlashIndexLen(len(commands))
+}
+
+func (m *Model) clampSlashIndexLen(length int) {
+	if length == 0 {
+		m.slashIndex = 0
+		return
+	}
+	if m.slashIndex < 0 {
+		m.slashIndex = 0
+	}
+	if m.slashIndex >= length {
+		m.slashIndex = length - 1
+	}
+}
+
+func (m *Model) setSlashArg(command slashCommand, value string) {
+	m.textarea.SetValue(command.name + " " + value)
+	m.slashDismissed = ""
+}
+
+func (m Model) slashPopupView() string {
+	if !m.slashActive() {
+		return ""
+	}
+	styles := m.styles()
+	outerW := min(max(40, m.width-4), 88)
+	contentW := max(36, outerW-styles.popup.GetHorizontalFrameSize())
+	if command, prefix, ok := m.slashArgMode(); ok {
+		return m.slashArgPopupView(styles, command, prefix, contentW)
+	}
+	commands := m.filteredSlashCommands()
+	if len(commands) == 0 {
+		noMatch := styles.popupMuted.Width(contentW).Render("No slash command matches " + strconv.Quote(m.slashToken()))
+		hint := styles.popupMuted.Width(contentW).Render("Esc close")
+		return styles.popup.Width(contentW).Render(noMatch + "\n" + hint)
+	}
+	index := m.slashIndex
+	if index < 0 || index >= len(commands) {
+		index = 0
+	}
+	limit := min(len(commands), 6)
+	var lines []string
+	nameW := min(30, max(18, contentW/2-2))
+	summaryW := max(12, contentW-nameW-5)
+	for i := 0; i < limit; i++ {
+		command := commands[i]
+		label := command.name
+		if command.args != "" {
+			label += " " + command.args
+		}
+		line := padRight(truncateRunes(label, nameW), nameW) + "  " + truncateRunes(command.summary, summaryW)
+		if i == index {
+			lines = append(lines, styles.popupSelected.Width(contentW).Render(line))
+		} else {
+			lines = append(lines, styles.popupLine.Width(contentW).Render(line))
+		}
+	}
+	if len(commands) > limit {
+		lines = append(lines, styles.popupMuted.Width(contentW).Render(fmt.Sprintf("%d more matches", len(commands)-limit)))
+	}
+	lines = append(lines, styles.popupMuted.Width(contentW).Render("Up/Down select  Tab complete  Enter run  Esc close"))
+	return styles.popup.Width(contentW).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) slashArgPopupView(styles themeStyles, command slashCommand, prefix string, contentW int) string {
+	args := m.filteredSlashArgs(command, prefix)
+	if len(args) == 0 {
+		noMatch := styles.popupMuted.Width(contentW).Render("No argument matches " + strconv.Quote(prefix))
+		hint := styles.popupMuted.Width(contentW).Render("Esc close")
+		return styles.popup.Width(contentW).Render(noMatch + "\n" + hint)
+	}
+	index := m.slashIndex
+	if index < 0 || index >= len(args) {
+		index = 0
+	}
+	limit := min(len(args), 6)
+	var lines []string
+	title := styles.popupMuted.Width(contentW).Render(command.name + " argument")
+	lines = append(lines, title)
+	valueW := min(28, max(14, contentW/2-2))
+	summaryW := max(12, contentW-valueW-5)
+	for i := 0; i < limit; i++ {
+		arg := args[i]
+		line := padRight(truncateRunes(arg.value, valueW), valueW) + "  " + truncateRunes(arg.summary, summaryW)
+		if i == index {
+			lines = append(lines, styles.popupSelected.Width(contentW).Render(line))
+		} else {
+			lines = append(lines, styles.popupLine.Width(contentW).Render(line))
+		}
+	}
+	if len(args) > limit {
+		lines = append(lines, styles.popupMuted.Width(contentW).Render(fmt.Sprintf("%d more matches", len(args)-limit)))
+	}
+	lines = append(lines, styles.popupMuted.Width(contentW).Render("Up/Down select  Tab complete  Enter run  Esc close"))
+	return styles.popup.Width(contentW).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) slashPopupHeight() int {
+	view := m.slashPopupView()
+	if view == "" {
+		return 0
+	}
+	return lipgloss.Height(view)
+}
+
+func (m Model) inlineStatusView() string {
+	styles := m.styles()
+	access := "Guarded"
+	if m.dangerous || m.cfg.AutoApproveDangerous {
+		access = "Full Access"
+	}
+	top := []statusSegment{
+		{m.runStateText(), styles.statusState},
+		{m.currentModel(), styles.statusModel},
+		{"🧠 " + m.currentThinking().effortLabel(), styles.statusReasoning},
+		{access, styles.statusAccess},
+		{"Context " + m.contextText() + " used", styles.statusUsage},
+		{m.costText(), styles.statusCost},
+	}
+	bottom := []statusSegment{
+		{"cached " + compactNumber(m.cacheHitTok), styles.statusUsage},
+		{"miss " + compactNumber(m.cacheMissTok), styles.statusUsage},
+		{"reasoning " + compactNumber(m.reasoningTok), styles.statusReasoning},
+		{compactNumber(m.usedTokens()) + " used", styles.statusUsage},
+		{"tools " + strconv.Itoa(m.toolCalls), styles.statusDim},
+		{"v" + m.version, styles.statusDim},
+		{"theme " + m.theme, styles.statusDim},
+		{"Main [" + shortID(m.localChatID) + "]", styles.statusDim},
+	}
+	width := max(1, m.statusContentWidth(styles))
+	return renderStatusSegments(width, top, styles.statusSeparator) + "\n" +
+		renderStatusSegments(width, bottom, styles.statusSeparator)
+}
+
+func (m Model) runStatusView() string {
+	if !m.busy {
+		return ""
+	}
+	styles := m.styles()
+	elapsed := "0s"
+	if !m.runStartedAt.IsZero() {
+		elapsed = compactDuration(time.Since(m.runStartedAt))
+	}
+	state := m.status
+	if state == "" || state == "running" {
+		state = "agent working"
+	}
+	text := " " + m.spinner() + " " + state + " · " + elapsed
+	return styles.runStatus.Width(m.statusContentWidth(styles)).Render(text)
+}
+
+func (m Model) runStateText() string {
+	if !m.followOutput {
+		return "scrolled"
+	}
+	if m.busy {
+		elapsed := "0s"
+		if !m.runStartedAt.IsZero() {
+			elapsed = compactDuration(time.Since(m.runStartedAt))
+		}
+		return "running " + elapsed
+	}
+	if m.lastRunDuration > 0 {
+		return m.status + " · last " + compactDuration(m.lastRunDuration)
+	}
+	return m.status
+}
+
+func (m Model) spinner() string {
+	if len(spinnerFrames) == 0 {
+		return "*"
+	}
+	return spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
+}
+
+func (m Model) contextText() string {
+	used := m.contextTokens()
+	window := m.settings.ContextWindowTokens
+	if window <= 0 {
+		return compactNumber(used)
+	}
+	percent := float64(used) / float64(window) * 100
+	if percent < 10 {
+		return fmt.Sprintf("%.1f%%", percent)
+	}
+	return fmt.Sprintf("%.0f%%", percent)
+}
+
+func (m Model) costText() string {
+	if isCodexModel(m.currentModel()) {
+		return "cost subscription"
+	}
+	hitPrice, missPrice, outputPrice := m.prices()
+	if hitPrice <= 0 && missPrice <= 0 && outputPrice <= 0 {
+		return "cost n/a"
+	}
+	hit := m.cacheHitTok
+	miss := m.cacheMissTok
+	if hit == 0 && miss == 0 {
+		miss = m.inputTok
+	}
+	cost := (float64(hit)/1_000_000)*hitPrice +
+		(float64(miss)/1_000_000)*missPrice +
+		(float64(m.outputTok)/1_000_000)*outputPrice
+	return fmt.Sprintf("cost $%.6f", cost)
+}
+
+func (m Model) prices() (hit, miss, output float64) {
+	hit = m.settings.CacheHitPricePer1MTokens
+	miss = m.settings.CacheMissPricePer1MTokens
+	output = m.settings.OutputPricePer1MTokens
+	if hit > 0 || miss > 0 || output > 0 {
+		if miss == 0 {
+			miss = m.settings.InputPricePer1MTokens
+		}
+		return hit, miss, output
+	}
+	switch m.currentModel() {
+	case "deepseek-v4-flash":
+		return 0.0028, 0.14, 0.28
+	case "deepseek-v4-pro":
+		return 0.003625, 0.435, 0.87
+	default:
+		return 0, m.settings.InputPricePer1MTokens, m.settings.OutputPricePer1MTokens
+	}
+}
+
+func (m Model) contextTokens() int64 {
+	if m.lastInputTok+m.lastOutputTok > 0 {
+		return m.lastInputTok + m.lastOutputTok
+	}
+	return m.inputTok + m.outputTok
+}
+
+func (m Model) usedTokens() int64 {
+	uncachedInput := m.inputTok - m.cacheHitTok
+	if uncachedInput < 0 {
+		uncachedInput = m.cacheMissTok
+	}
+	return uncachedInput + m.outputTok
 }
 
 func (m *Model) send() (tea.Model, tea.Cmd) {
 	prompt := strings.TrimSpace(m.textarea.Value())
+	if m.authInputProvider != "" {
+		if prompt == "" {
+			m.status = "empty credential"
+			m.reflow(m.followOutput)
+			return *m, nil
+		}
+		provider := m.authInputProvider
+		m.textarea.SetValue("")
+		m.textarea.SetHeight(1)
+		m.status = "saving " + provider + " credential"
+		m.reflow(m.followOutput)
+		return *m, m.authSaveCmd(provider, prompt)
+	}
 	if prompt == "" {
 		m.status = "empty prompt"
 		m.reflow(m.followOutput)
 		return *m, nil
 	}
 	if strings.HasPrefix(prompt, "/") {
-		if m.handleSlashCommand(prompt) {
+		if command, prefix, ok := m.slashArgMode(); ok {
+			args := m.filteredSlashArgs(command, prefix)
+			if len(args) > 0 && !m.exactSlashArg(command, prefix) {
+				m.clampSlashIndexLen(len(args))
+				prompt = command.name + " " + args[m.slashIndex].value
+			}
+		}
+		if !m.exactSlashCommand(prompt) {
+			commands := m.filteredSlashCommands()
+			if len(commands) > 0 {
+				m.clampSlashIndex(commands)
+				command := commands[m.slashIndex]
+				prompt = command.name
+				if args := m.slashArgs(command); len(args) > 0 {
+					prompt += " " + args[0].value
+				}
+			}
+		}
+		handled, cmd := m.handleSlashCommand(prompt)
+		if handled {
 			m.textarea.SetValue("")
+			m.textarea.SetHeight(1)
 		}
 		m.reflow(m.followOutput)
-		return *m, nil
+		return *m, cmd
 	}
 	if m.busy {
 		m.status = "busy"
@@ -392,22 +1289,24 @@ func (m *Model) send() (tea.Model, tea.Cmd) {
 		return *m, nil
 	}
 	m.textarea.SetValue("")
+	m.textarea.SetHeight(1)
 	m.addBlock("user", "USER", prompt)
 	m.busy = true
 	m.err = ""
 	m.status = "running"
+	m.runStartedAt = time.Now()
 	m.followOutput = true
-	m.modelCalls = 0
-	m.toolCalls = 0
-	m.inputTok = 0
-	m.outputTok = 0
+	if m.chatTitle == "new chat" {
+		m.chatTitle = sessionTitle(prompt)
+	}
+	_ = m.saveCurrentSession()
 	if m.gatewayURL != "" {
 		go m.runGateway(prompt)
 	} else {
 		go m.runLocal(prompt)
 	}
 	m.reflow(true)
-	return *m, m.waitEventCmd()
+	return *m, tea.Batch(m.waitEventCmd(), m.tickCmd())
 }
 
 func (m Model) waitEventCmd() tea.Cmd {
@@ -416,12 +1315,25 @@ func (m Model) waitEventCmd() tea.Cmd {
 	}
 }
 
+func (m Model) tickCmd() tea.Cmd {
+	return tea.Tick(120*time.Millisecond, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
+}
+
 func (m Model) createSessionCmd() tea.Cmd {
 	return func() tea.Msg {
-		req, err := http.NewRequest(http.MethodPost, m.gatewayURL+"/v1/sessions", nil)
+		body, err := json.Marshal(map[string]any{
+			"messages": m.messages,
+		})
 		if err != nil {
 			return errMsg{err: err}
 		}
+		req, err := http.NewRequest(http.MethodPost, m.gatewayURL+"/v1/sessions", bytes.NewReader(body))
+		if err != nil {
+			return errMsg{err: err}
+		}
+		req.Header.Set("Content-Type", "application/json")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return errMsg{err: err}
@@ -451,7 +1363,12 @@ func (m Model) runLocal(prompt string) {
 		m.events <- runDoneMsg{err: err}
 		return
 	}
-	registry := tools.NewRegistry(cfg)
+	registry, err := tools.NewRegistryWithMCP(context.Background(), cfg)
+	if err != nil {
+		m.events <- runDoneMsg{err: err}
+		return
+	}
+	defer registry.Close()
 	a := agent.New(cfg, prov, registry)
 	msgs := append([]protocol.Message(nil), m.messages...)
 	msgs = append(msgs, protocol.Message{Role: protocol.RoleUser, Content: prompt})
@@ -464,6 +1381,7 @@ func (m Model) runLocal(prompt string) {
 func (m Model) runGateway(prompt string) {
 	body, _ := json.Marshal(map[string]any{
 		"prompt":           prompt,
+		"provider":         m.currentProvider(),
 		"model":            m.currentModel(),
 		"thinking":         m.currentThinking().kind,
 		"reasoning_effort": m.currentThinking().effort,
@@ -489,6 +1407,7 @@ func (m Model) runGateway(prompt string) {
 	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	var runErr error
 	for scanner.Scan() {
 		var event protocol.Event
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
@@ -496,18 +1415,328 @@ func (m Model) runGateway(prompt string) {
 			return
 		}
 		m.events <- streamEventMsg{event: event}
+		if event.Type == protocol.EventRunFailed {
+			runErr = fmt.Errorf("%v", event.Data)
+		}
 	}
-	m.events <- runDoneMsg{err: scanner.Err()}
+	if err := scanner.Err(); err != nil {
+		m.events <- runDoneMsg{err: err}
+		return
+	}
+	if runErr != nil {
+		m.events <- runDoneMsg{err: runErr}
+		return
+	}
+	messages, err := m.fetchGatewayMessages()
+	if err != nil {
+		m.events <- runDoneMsg{err: err}
+		return
+	}
+	m.events <- runDoneMsg{messages: messages}
+}
+
+func (m Model) fetchGatewayMessages() ([]protocol.Message, error) {
+	path := fmt.Sprintf("%s/v1/sessions/%s", m.gatewayURL, m.sessionID)
+	req, err := http.NewRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("gateway HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(limited)))
+	}
+	var out struct {
+		Messages []protocol.Message `json:"messages"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Messages, nil
+}
+
+type mcpStatusResponse struct {
+	ConfigFiles []string                 `json:"config_files"`
+	Allowed     []string                 `json:"allowed"`
+	Enabled     bool                     `json:"enabled"`
+	Servers     []mcpclient.ServerStatus `json:"servers"`
+}
+
+func (m Model) mcpStatusCmd() tea.Cmd {
+	return func() tea.Msg {
+		text, err := m.loadMCPStatus()
+		return mcpStatusMsg{text: text, err: err}
+	}
+}
+
+func (m Model) loadMCPStatus() (string, error) {
+	if m.gatewayURL != "" {
+		resp, err := m.fetchGatewayMCPStatus()
+		if err != nil {
+			return "", err
+		}
+		return formatMCPStatus(resp), nil
+	}
+	cfg := m.currentConfig()
+	if err := cfg.LoadDefaultMCPServers(); err != nil {
+		return "", err
+	}
+	registry, err := tools.NewRegistryWithMCP(context.Background(), cfg)
+	if err != nil {
+		return "", err
+	}
+	defer registry.Close()
+	cfg = registry.Config()
+	return formatMCPStatus(mcpStatusResponse{
+		ConfigFiles: cfg.MCPConfigFiles,
+		Allowed:     cfg.MCPAllowedServers,
+		Enabled:     cfg.MCPEnabled,
+		Servers:     registry.MCPStatuses(),
+	}), nil
+}
+
+func (m Model) fetchGatewayMCPStatus() (mcpStatusResponse, error) {
+	path := fmt.Sprintf("%s/v1/mcp", m.gatewayURL)
+	req, err := http.NewRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return mcpStatusResponse{}, err
+	}
+	client := http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return mcpStatusResponse{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return mcpStatusResponse{}, fmt.Errorf("gateway HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(limited)))
+	}
+	var out mcpStatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return mcpStatusResponse{}, err
+	}
+	return out, nil
+}
+
+func formatMCPStatus(status mcpStatusResponse) string {
+	configFiles := strings.Join(status.ConfigFiles, ", ")
+	if configFiles == "" {
+		configFiles = "(none)"
+	}
+	allowed := strings.Join(status.Allowed, ", ")
+	if allowed == "" {
+		allowed = "(all)"
+	}
+	lines := []string{
+		"config: " + configFiles,
+		"allowed: " + allowed,
+		"native: web_search, web_fetch, web_crawl",
+	}
+	if !status.Enabled {
+		lines = append(lines, "mcp: disabled")
+		return strings.Join(lines, "\n")
+	}
+	if len(status.Servers) == 0 {
+		lines = append(lines, "servers: none connected")
+		return strings.Join(lines, "\n")
+	}
+	lines = append(lines, "")
+	for _, server := range status.Servers {
+		state := "disabled"
+		if server.Enabled && server.Connected {
+			state = "connected"
+		} else if server.Enabled && server.Error != "" {
+			state = "error"
+		} else if server.Enabled {
+			state = "not connected"
+		}
+		line := fmt.Sprintf("%-10s %-10s %s tools:%d", server.Name, state, server.Transport, server.ToolCount)
+		if server.Required {
+			line += " required"
+		}
+		if server.Error != "" {
+			line += "\n  " + oneLinePreview(server.Error, 180)
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+type authStatusResponse = credentials.Status
+
+func (m *Model) handleAuthCommand(arg string) (bool, tea.Cmd) {
+	switch strings.ToLower(strings.TrimSpace(arg)) {
+	case "", "deepseek", "api", "key", "deepseek api key":
+		m.authInputProvider = "deepseek"
+		m.textarea.Placeholder = "Paste DeepSeek API key. Enter saves, Esc cancels."
+		m.textarea.SetValue("")
+		m.status = "paste DeepSeek API key"
+		return true, nil
+	case "codex", "oauth", "chatgpt", "codex oauth":
+		m.status = "importing Codex OAuth"
+		return true, m.authCodexImportCmd()
+	case "status", "list":
+		m.status = "loading auth status"
+		return true, m.authStatusCmd()
+	default:
+		m.status = "unknown auth action " + arg
+		return false, nil
+	}
+}
+
+func (m *Model) cancelAuthInput() {
+	m.authInputProvider = ""
+	m.textarea.Placeholder = defaultTextareaPlaceholder
+}
+
+func (m Model) authSaveCmd(providerName, secret string) tea.Cmd {
+	return func() tea.Msg {
+		var (
+			text string
+			err  error
+		)
+		switch providerName {
+		case "deepseek":
+			text, err = m.saveDeepSeekCredential(secret)
+		default:
+			err = fmt.Errorf("unknown auth provider %s", providerName)
+		}
+		return authResultMsg{text: text, err: err}
+	}
+}
+
+func (m Model) authCodexImportCmd() tea.Cmd {
+	return func() tea.Msg {
+		text, err := m.importCodexCredential()
+		return authResultMsg{text: text, err: err}
+	}
+}
+
+func (m Model) authStatusCmd() tea.Cmd {
+	return func() tea.Msg {
+		status, err := m.loadAuthStatus()
+		if err != nil {
+			return authResultMsg{err: err}
+		}
+		return authResultMsg{text: formatAuthStatus(status)}
+	}
+}
+
+func (m Model) saveDeepSeekCredential(apiKey string) (string, error) {
+	if m.gatewayURL == "" {
+		status, err := credentials.SaveDeepSeekAPIKey(apiKey)
+		if err != nil {
+			return "", err
+		}
+		return "DeepSeek API key saved\n" + formatProviderStatus("deepseek", status), nil
+	}
+	body, _ := json.Marshal(map[string]string{"api_key": apiKey})
+	var out struct {
+		DeepSeek credentials.ProviderStatus `json:"deepseek"`
+	}
+	if err := m.gatewayJSON(http.MethodPost, "/v1/auth/deepseek", body, &out); err != nil {
+		return "", err
+	}
+	return "DeepSeek API key saved\n" + formatProviderStatus("deepseek", out.DeepSeek), nil
+}
+
+func (m Model) importCodexCredential() (string, error) {
+	if m.gatewayURL == "" {
+		status, err := credentials.ImportCodexAuth(m.currentConfig(), "")
+		if err != nil {
+			return "", err
+		}
+		return "Codex OAuth imported\n" + formatProviderStatus("codex", status), nil
+	}
+	var out struct {
+		Codex credentials.ProviderStatus `json:"codex"`
+	}
+	if err := m.gatewayJSON(http.MethodPost, "/v1/auth/codex/import", []byte(`{}`), &out); err != nil {
+		return "", err
+	}
+	return "Codex OAuth imported\n" + formatProviderStatus("codex", out.Codex), nil
+}
+
+func (m Model) loadAuthStatus() (authStatusResponse, error) {
+	if m.gatewayURL == "" {
+		return credentials.CurrentStatus(m.currentConfig()), nil
+	}
+	var out authStatusResponse
+	if err := m.gatewayJSON(http.MethodGet, "/v1/auth/status", nil, &out); err != nil {
+		return authStatusResponse{}, err
+	}
+	return out, nil
+}
+
+func (m Model) gatewayJSON(method, path string, body []byte, out any) error {
+	req, err := http.NewRequest(method, m.gatewayURL+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	client := http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("gateway HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(limited)))
+	}
+	if out == nil {
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func formatAuthStatus(status credentials.Status) string {
+	return strings.Join([]string{
+		formatProviderStatus("deepseek", status.DeepSeek),
+		formatProviderStatus("codex", status.Codex),
+	}, "\n")
+}
+
+func formatProviderStatus(name string, status credentials.ProviderStatus) string {
+	state := "missing"
+	if status.Configured {
+		state = "configured"
+	}
+	parts := []string{name + ": " + state}
+	if status.Mode != "" {
+		parts = append(parts, "mode "+status.Mode)
+	}
+	if status.AccountID != "" {
+		parts = append(parts, "account "+status.AccountID)
+	}
+	if status.ExpiresAt != "" {
+		parts = append(parts, "expires "+status.ExpiresAt)
+	}
+	if status.Path != "" {
+		parts = append(parts, "path "+status.Path)
+	}
+	if status.Source != "" && status.Source != status.Path {
+		parts = append(parts, "source "+status.Source)
+	}
+	return strings.Join(parts, "\n  ")
 }
 
 func (m Model) currentConfig() config.Config {
 	cfg := m.cfg
 	cfg.Model = m.currentModel()
+	cfg.Provider = m.currentProvider()
 	cfg.Thinking = m.currentThinking().kind
 	cfg.ReasoningEffort = m.currentThinking().effort
 	cfg.StoreReasoningContent = true
-	cfg.AutoApproveDangerous = m.dangerous
+	cfg.AutoApproveDangerous = cfg.AutoApproveDangerous || m.dangerous
 	cfg.MaxToolRounds = m.maxRounds
+	cfg.ApplyModelProviderDefaults()
 	return cfg
 }
 
@@ -515,14 +1744,28 @@ func (m Model) currentModel() string {
 	return m.models[m.modelIndex]
 }
 
+func (m Model) currentProvider() string {
+	model := strings.ToLower(strings.TrimSpace(m.currentModel()))
+	if isCodexModel(model) {
+		return "openai-codex"
+	}
+	if strings.HasPrefix(model, "deepseek-") {
+		return "deepseek"
+	}
+	if strings.TrimSpace(m.cfg.Provider) != "" {
+		return m.cfg.Provider
+	}
+	return "deepseek"
+}
+
 func (m Model) currentThinking() thinkingMode {
 	return m.thinking[m.thinkingIdx]
 }
 
-func (m *Model) handleSlashCommand(prompt string) bool {
+func (m *Model) handleSlashCommand(prompt string) (bool, tea.Cmd) {
 	fields := strings.Fields(prompt)
 	if len(fields) == 0 {
-		return true
+		return true, nil
 	}
 	command := strings.ToLower(fields[0])
 	arg := ""
@@ -530,29 +1773,48 @@ func (m *Model) handleSlashCommand(prompt string) bool {
 		arg = strings.ToLower(strings.Join(fields[1:], " "))
 	}
 	switch command {
+	case "/auth":
+		return m.handleAuthCommand(arg)
 	case "/theme":
-		return m.setTheme(arg)
+		return m.setTheme(arg), nil
 	case "/model":
-		return m.setModel(arg)
+		return m.setModel(arg), nil
 	case "/models":
 		m.addInfoBlock("MODELS", m.modelsText())
 		m.status = "models shown"
-		return true
+		return true, nil
+	case "/mcp":
+		m.status = "loading mcp status"
+		return true, m.mcpStatusCmd()
 	case "/reasoning":
-		return m.setReasoning(arg)
+		return m.setReasoning(arg), nil
 	case "/thinking", "/show-reasoning", "/show_reasoning":
-		return m.setThinkingDisplay(arg)
+		return m.setThinkingDisplay(arg), nil
+	case "/toolview":
+		return m.setToolView(arg), nil
+	case "/thinkview":
+		return m.setThinkView(arg), nil
+	case "/new":
+		return true, m.newChat()
+	case "/resume":
+		return true, m.resumeChat(arg)
+	case "/fork":
+		return true, m.forkChat(arg)
+	case "/exit", "/quit":
+		_ = m.saveCurrentSession()
+		_ = m.saveSettings()
+		return true, tea.Quit
 	case "/status":
 		m.addInfoBlock("STATUS", m.statusText())
 		m.status = "status shown"
-		return true
+		return true, nil
 	case "/help":
 		m.addInfoBlock("HELP", helpText())
 		m.status = "help shown"
-		return true
+		return true, nil
 	default:
 		m.status = "unknown command " + fields[0]
-		return false
+		return false, nil
 	}
 }
 
@@ -573,12 +1835,14 @@ func (m *Model) setTheme(value string) bool {
 		return false
 	}
 	m.status = "theme " + m.theme
+	_ = m.saveSettings()
 	return true
 }
 
 func (m *Model) cycleModel() {
 	m.modelIndex = (m.modelIndex + 1) % len(m.models)
 	m.status = "model " + m.currentModel()
+	_ = m.saveSettings()
 }
 
 func (m *Model) setModel(value string) bool {
@@ -590,6 +1854,14 @@ func (m *Model) setModel(value string) bool {
 		value = "deepseek-v4-flash"
 	case "pro", "v4 pro", "v4-pro", "deepseek pro", "deepseek-v4-pro":
 		value = "deepseek-v4-pro"
+	case "gpt", "codex", "chatgpt", "gpt max", "gpt-5.5":
+		value = "gpt-5.5"
+	case "gpt fast", "gpt mini", "gpt-5.4-mini":
+		value = "gpt-5.4-mini"
+	case "spark", "codex spark", "gpt-5.3-codex-spark":
+		value = "gpt-5.3-codex-spark"
+	case "gpt-5.4":
+		value = "gpt-5.4"
 	default:
 		if !strings.Contains(value, "/") && !strings.Contains(value, " ") {
 			// Keep the TUI open to custom compatible model ids without another release.
@@ -607,12 +1879,14 @@ func (m *Model) setModel(value string) bool {
 		}
 	}
 	m.status = "model " + m.currentModel()
+	_ = m.saveSettings()
 	return true
 }
 
 func (m *Model) cycleReasoning() {
 	m.thinkingIdx = (m.thinkingIdx + 1) % len(m.thinking)
 	m.status = m.currentThinking().label
+	_ = m.saveSettings()
 }
 
 func (m *Model) setReasoning(value string) bool {
@@ -622,8 +1896,14 @@ func (m *Model) setReasoning(value string) bool {
 		return true
 	case "high", "on", "enabled":
 		value = "high"
+	case "xhigh", "x-high", "extra", "extra-high":
+		value = "xhigh"
 	case "max", "maximum":
 		value = "max"
+	case "medium", "med":
+		value = "medium"
+	case "low", "minimal", "min":
+		value = "low"
 	case "off", "none", "disabled":
 		value = "off"
 	default:
@@ -634,6 +1914,7 @@ func (m *Model) setReasoning(value string) bool {
 		if mode.effort == value || (value == "off" && mode.kind == "disabled") {
 			m.thinkingIdx = i
 			m.status = m.currentThinking().label
+			_ = m.saveSettings()
 			return true
 		}
 	}
@@ -642,12 +1923,14 @@ func (m *Model) setReasoning(value string) bool {
 }
 
 func (m *Model) toggleThinkingDisplay() {
-	m.showThinking = !m.showThinking
-	if m.showThinking {
-		m.status = "thinking blocks visible"
+	if m.thinkView == "hidden" {
+		m.thinkView = "expanded"
 	} else {
-		m.status = "thinking blocks hidden"
+		m.thinkView = "hidden"
 	}
+	m.showThinking = m.thinkView != "hidden"
+	m.status = "thinking blocks " + m.thinkView
+	_ = m.saveSettings()
 }
 
 func (m *Model) setThinkingDisplay(value string) bool {
@@ -656,15 +1939,317 @@ func (m *Model) setThinkingDisplay(value string) bool {
 		m.toggleThinkingDisplay()
 	case "on", "show", "shown", "visible", "yes", "true":
 		m.showThinking = true
-		m.status = "thinking blocks visible"
+		m.thinkView = "expanded"
+		m.status = "thinking blocks expanded"
 	case "off", "hide", "hidden", "no", "false":
 		m.showThinking = false
+		m.thinkView = "hidden"
 		m.status = "thinking blocks hidden"
 	default:
 		m.status = "unknown thinking display " + value
 		return false
 	}
+	_ = m.saveSettings()
 	return true
+}
+
+func (m *Model) setToolView(value string) bool {
+	switch value {
+	case "", "toggle", "next":
+		switch m.toolView {
+		case "auto":
+			value = "collapsed"
+		case "collapsed":
+			value = "expanded"
+		case "expanded":
+			value = "hidden"
+		default:
+			value = "auto"
+		}
+	case "show", "visible", "on":
+		value = "auto"
+	case "open":
+		value = "expanded"
+	case "close":
+		value = "collapsed"
+	}
+	if !validViewMode(value, []string{"auto", "expanded", "collapsed", "hidden"}) {
+		m.status = "unknown toolview " + value
+		return false
+	}
+	m.toolView = value
+	m.status = "tool blocks " + value
+	_ = m.saveSettings()
+	return true
+}
+
+func (m *Model) setThinkView(value string) bool {
+	switch value {
+	case "", "toggle", "next":
+		switch m.thinkView {
+		case "expanded":
+			value = "collapsed"
+		case "collapsed":
+			value = "hidden"
+		default:
+			value = "expanded"
+		}
+	case "show", "visible", "on", "open":
+		value = "expanded"
+	case "close":
+		value = "collapsed"
+	case "hide", "off":
+		value = "hidden"
+	}
+	if !validViewMode(value, []string{"expanded", "collapsed", "hidden"}) {
+		m.status = "unknown thinkview " + value
+		return false
+	}
+	m.thinkView = value
+	m.showThinking = value != "hidden"
+	m.status = "thinking blocks " + value
+	_ = m.saveSettings()
+	return true
+}
+
+func (m *Model) newChat() tea.Cmd {
+	if m.busy {
+		m.status = "busy"
+		return nil
+	}
+	_ = m.saveCurrentSession()
+	m.localChatID = newChatID()
+	m.chatTitle = "new chat"
+	m.chatCreated = time.Now().UTC()
+	m.messages = agent.InitialMessages(m.currentConfig())
+	m.blocks = nil
+	m.collapsed = map[int]bool{}
+	m.selected = 0
+	m.modelCalls = 0
+	m.toolCalls = 0
+	m.inputTok = 0
+	m.outputTok = 0
+	m.cacheHitTok = 0
+	m.cacheMissTok = 0
+	m.reasoningTok = 0
+	m.lastInputTok = 0
+	m.lastOutputTok = 0
+	m.lastCacheHitTok = 0
+	m.lastCacheMissTok = 0
+	m.status = "new chat " + shortID(m.localChatID)
+	m.followOutput = true
+	m.sessionID = ""
+	_ = m.saveSettings()
+	_ = m.saveCurrentSession()
+	if m.gatewayURL != "" {
+		return m.createSessionCmd()
+	}
+	return nil
+}
+
+func (m *Model) resumeChat(prefix string) tea.Cmd {
+	if m.busy {
+		m.status = "busy"
+		return nil
+	}
+	prefix = strings.TrimSpace(strings.ToLower(prefix))
+	if prefix == "list" || prefix == "all" {
+		prefix = ""
+	}
+	if strings.TrimSpace(prefix) == "" {
+		m.addInfoBlock("CHATS", m.sessionsText())
+		m.status = "chats listed"
+		return nil
+	}
+	session, err := loadChatSession(m.sessionsDir, prefix)
+	if err != nil {
+		m.status = err.Error()
+		m.addBlock("error", "ERROR", err.Error())
+		return nil
+	}
+	m.applyChatSession(session)
+	m.status = "resumed " + shortID(m.localChatID)
+	if m.gatewayURL != "" {
+		m.sessionID = ""
+		return m.createSessionCmd()
+	}
+	return nil
+}
+
+func (m *Model) forkChat(prefix string) tea.Cmd {
+	if m.busy {
+		m.status = "busy"
+		return nil
+	}
+	prefix = strings.TrimSpace(strings.ToLower(prefix))
+	if prefix == "current" {
+		prefix = ""
+	}
+	if strings.TrimSpace(prefix) != "" {
+		session, err := loadChatSession(m.sessionsDir, prefix)
+		if err != nil {
+			m.status = err.Error()
+			m.addBlock("error", "ERROR", err.Error())
+			return nil
+		}
+		m.applyChatSession(session)
+	}
+	old := m.localChatID
+	m.localChatID = newChatID()
+	m.chatTitle = "fork of " + shortID(old)
+	m.chatCreated = time.Now().UTC()
+	m.sessionID = ""
+	m.status = "forked " + shortID(old) + " -> " + shortID(m.localChatID)
+	m.addInfoBlock("FORK", m.status)
+	_ = m.saveSettings()
+	_ = m.saveCurrentSession()
+	if m.gatewayURL != "" {
+		return m.createSessionCmd()
+	}
+	return nil
+}
+
+func (m *Model) applyChatSession(session chatSession) {
+	m.localChatID = session.ID
+	m.chatTitle = session.Title
+	if m.chatTitle == "" {
+		m.chatTitle = "untitled"
+	}
+	m.chatCreated = session.CreatedAt
+	if m.chatCreated.IsZero() {
+		m.chatCreated = time.Now().UTC()
+	}
+	if len(session.Messages) > 0 {
+		m.messages = append([]protocol.Message(nil), session.Messages...)
+	} else {
+		m.messages = agent.InitialMessages(m.currentConfig())
+	}
+	m.blocks = decodeBlocks(session.Blocks)
+	m.collapsed = map[int]bool{}
+	m.selected = max(0, len(m.blocks)-1)
+	m.inputTok = session.InputTokens
+	m.outputTok = session.OutputTokens
+	m.cacheHitTok = session.CacheHitTokens
+	m.cacheMissTok = session.CacheMissTokens
+	m.reasoningTok = session.ReasoningTokens
+	m.lastInputTok = session.InputTokens
+	m.lastOutputTok = session.OutputTokens
+	m.lastCacheHitTok = session.CacheHitTokens
+	m.lastCacheMissTok = session.CacheMissTokens
+	m.toolCalls = session.ToolCalls
+	m.modelCalls = session.ModelCalls
+	if session.Model != "" {
+		m.models = appendIfMissing(m.models, session.Model)
+		for i, model := range m.models {
+			if model == session.Model {
+				m.modelIndex = i
+				break
+			}
+		}
+	}
+	for i, mode := range m.thinking {
+		if mode.kind == session.ReasoningKind && mode.effort == session.ReasoningEffort {
+			m.thinkingIdx = i
+			break
+		}
+	}
+	_ = m.saveSettings()
+	_ = m.saveCurrentSession()
+	m.reflow(true)
+}
+
+func (m Model) sessionsText() string {
+	sessions, err := listChatSessions(m.sessionsDir)
+	if err != nil {
+		return err.Error()
+	}
+	if len(sessions) == 0 {
+		return "no saved chats"
+	}
+	var lines []string
+	for i, session := range sessions {
+		if i >= 20 {
+			lines = append(lines, fmt.Sprintf("... %d more", len(sessions)-i))
+			break
+		}
+		title := session.Title
+		if title == "" {
+			title = "untitled"
+		}
+		lines = append(lines, fmt.Sprintf("%s  %s  %s  tok:%d/%d tools:%d",
+			shortID(session.ID),
+			session.UpdatedAt.Local().Format("2006-01-02 15:04"),
+			title,
+			session.InputTokens,
+			session.OutputTokens,
+			session.ToolCalls,
+		))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *Model) saveSettings() error {
+	if m.settingsPath == "" {
+		return nil
+	}
+	m.settings.Theme = m.theme
+	m.settings.ToolView = m.toolView
+	m.settings.ThinkView = m.thinkView
+	m.settings.LastLocalChatID = m.localChatID
+	m.settings.LastGatewaySessionID = m.sessionID
+	m.settings.LastSelectedModel = m.currentModel()
+	m.settings.LastReasoningKind = m.currentThinking().kind
+	m.settings.LastReasoningEffort = m.currentThinking().effort
+	return saveAppSettings(m.settingsPath, m.settings)
+}
+
+func (m *Model) saveCurrentSession() error {
+	if m.sessionsDir == "" || m.localChatID == "" {
+		return nil
+	}
+	created := m.chatCreated
+	if created.IsZero() {
+		created = time.Now().UTC()
+	}
+	title := m.chatTitle
+	if title == "" {
+		title = "untitled"
+	}
+	return saveChatSession(m.sessionsDir, chatSession{
+		ID:               m.localChatID,
+		Title:            title,
+		CreatedAt:        created,
+		UpdatedAt:        time.Now().UTC(),
+		Model:            m.currentModel(),
+		ReasoningKind:    m.currentThinking().kind,
+		ReasoningEffort:  m.currentThinking().effort,
+		GatewaySessionID: m.sessionID,
+		Messages:         append([]protocol.Message(nil), m.messages...),
+		Blocks:           encodeBlocks(m.blocks),
+		InputTokens:      m.inputTok,
+		OutputTokens:     m.outputTok,
+		CacheHitTokens:   m.cacheHitTok,
+		CacheMissTokens:  m.cacheMissTok,
+		ReasoningTokens:  m.reasoningTok,
+		ToolCalls:        m.toolCalls,
+		ModelCalls:       m.modelCalls,
+	})
+}
+
+func encodeBlocks(blocks []block) []savedBlock {
+	out := make([]savedBlock, 0, len(blocks))
+	for _, b := range blocks {
+		out = append(out, savedBlock{Kind: b.kind, Title: b.title, Content: b.content})
+	}
+	return out
+}
+
+func decodeBlocks(blocks []savedBlock) []block {
+	out := make([]block, 0, len(blocks))
+	for _, b := range blocks {
+		out = append(out, block{kind: b.Kind, title: b.Title, content: b.Content})
+	}
+	return out
 }
 
 func (m *Model) addInfoBlock(title, content string) {
@@ -688,29 +2273,35 @@ func (m Model) statusText() string {
 		toolsMode = "dangerous"
 	}
 	thinkingDisplay := "hidden"
-	if m.showThinking {
-		thinkingDisplay = "visible"
+	if m.thinkView != "hidden" {
+		thinkingDisplay = m.thinkView
 	}
 	follow := "off"
 	if m.followOutput {
 		follow = "on"
 	}
 	return fmt.Sprintf(
-		"mode: %s\nmodel: %s\nreasoning: %s / %s\nthinking blocks: %s\ntheme: %s\ngateway: %s\nsession: %s\ntools: %s, max rounds %d\ncalls: model %d, tools %d\ntokens: input %d, output %d\nfollow output: %s",
+		"mode: %s\nchat: %s\nprovider: %s\nmodel: %s\nreasoning: %s / %s\nthinking blocks: %s\ntool blocks: %s\ntheme: %s\ngateway: %s\ngateway session: %s\nlocal settings: %s\ntools: %s, max rounds %d\ncalls: model %d, tools %d\ntokens: input %d, output %d\ncontext: %s\ncost: %s\nfollow output: %s",
 		mode,
+		m.localChatID,
+		m.currentProvider(),
 		m.currentModel(),
 		m.currentThinking().kind,
 		m.currentThinking().effort,
 		thinkingDisplay,
+		m.toolView,
 		m.theme,
 		gateway,
 		session,
+		m.settingsPath,
 		toolsMode,
 		m.maxRounds,
 		m.modelCalls,
 		m.toolCalls,
 		m.inputTok,
 		m.outputTok,
+		m.contextText(),
+		m.costText(),
 		follow,
 	)
 }
@@ -722,7 +2313,11 @@ func (m Model) modelsText() string {
 		if i == m.modelIndex {
 			marker = "*"
 		}
-		lines = append(lines, fmt.Sprintf("%s %s", marker, model))
+		provider := "deepseek"
+		if isCodexModel(model) {
+			provider = "openai-codex"
+		}
+		lines = append(lines, fmt.Sprintf("%s %-24s %s", marker, model, provider))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -743,12 +2338,22 @@ func (m *Model) applyEvent(event protocol.Event) {
 		m.status = "running tool " + toolName(event.Data)
 		m.addBlock("tool", toolTitle(event.Data), toolBody(event.Data))
 	case protocol.EventToolCallFinished:
-		m.appendToOpenBlock("tool", "TOOL", "\n\nresult:\n"+fmt.Sprint(event.Data))
+		m.appendToolResult(fmt.Sprint(event.Data))
 		m.collapseLastToolBlockIfLarge()
+	case protocol.EventContextCompacted:
+		m.status = "context compacted"
+		m.addInfoBlock("COMPACT", compactEventText(event.Data))
 	case protocol.EventProviderUsageUpdate:
-		in, out := usage(event.Data)
+		in, out, hit, miss, reasoning := usage(event.Data)
 		m.inputTok += in
 		m.outputTok += out
+		m.cacheHitTok += hit
+		m.cacheMissTok += miss
+		m.reasoningTok += reasoning
+		m.lastInputTok = in
+		m.lastOutputTok = out
+		m.lastCacheHitTok = hit
+		m.lastCacheMissTok = miss
 	case protocol.EventRunCompleted:
 		m.status = "completed"
 	case protocol.EventRunFailed:
@@ -763,6 +2368,25 @@ func (m *Model) appendToOpenBlock(kind, title, text string) {
 	}
 	m.blocks[len(m.blocks)-1].content += text
 	m.selected = len(m.blocks) - 1
+}
+
+func (m *Model) appendToolResult(text string) {
+	text = strings.TrimRight(text, "\n")
+	if strings.TrimSpace(text) == "" {
+		text = "[no output]"
+	}
+	if len(m.blocks) == 0 || m.blocks[len(m.blocks)-1].kind != "tool" {
+		m.addBlock("tool", "Called tool", text)
+		return
+	}
+	i := len(m.blocks) - 1
+	content := strings.TrimRight(m.blocks[i].content, "\n")
+	if strings.TrimSpace(content) == "" {
+		m.blocks[i].content = text
+	} else {
+		m.blocks[i].content = content + "\n" + text
+	}
+	m.selected = i
 }
 
 func (m *Model) collapseLastToolBlockIfLarge() {
@@ -786,19 +2410,25 @@ func (m *Model) addBlock(kind, title, content string) {
 func (m *Model) reflow(gotoBottom bool) {
 	var parts []string
 	for i, b := range m.blocks {
-		if b.kind == "reasoning" && !m.showThinking {
+		if b.kind == "reasoning" && m.thinkView == "hidden" {
+			continue
+		}
+		if b.kind == "tool" && m.toolView == "hidden" {
 			continue
 		}
 		parts = append(parts, m.renderBlock(i, b))
 	}
-	m.viewport.SetContent(strings.Join(parts, "\n"))
+	m.viewportContent = strings.Join(parts, "\n")
+	m.viewport.SetContent(m.viewportContent)
+	if m.hasSelection() {
+		m.applySelectionHighlight()
+	}
 	if gotoBottom {
 		m.viewport.GotoBottom()
 	}
 }
 
 func (m Model) renderBlock(i int, b block) string {
-	selected := i == m.selected
 	styles := m.styles()
 	style := styles.block
 	switch b.kind {
@@ -815,19 +2445,180 @@ func (m Model) renderBlock(i int, b block) string {
 	case "status":
 		style = styles.statusBlock
 	}
-	marker := " "
-	if selected {
-		marker = ">"
-	}
 	body := strings.TrimRight(b.content, "\n")
-	if m.collapsed[i] {
+	switch {
+	case b.kind == "tool" && m.toolCollapsed(i):
+		body = ""
+	case b.kind == "tool" && m.toolView == "auto" && m.collapsed[i]:
+		body = collapsedPreview(b.content, 8, 1000)
+	case b.kind == "reasoning" && m.thinkView == "collapsed":
+		body = collapsedSummary(b.content)
+	case m.collapsed[i]:
 		body = collapsedPreview(b.content, 8, 1000)
 	}
-	title := fmt.Sprintf("%s %s", marker, b.title)
-	if body == "" {
-		return style.Width(max(20, m.width-2)).Render(title)
+	width := max(20, m.width-style.GetHorizontalFrameSize())
+	if b.kind == "assistant" {
+		body = renderTerminalMarkdown(body, width, styles)
 	}
-	return style.Width(max(20, m.width-2)).Render(title + "\n" + body)
+	if b.kind == "user" || b.kind == "assistant" {
+		return style.Width(width).Render(body)
+	}
+	return renderActivityBlock(b, body, width, styles)
+}
+
+func (m Model) toolCollapsed(i int) bool {
+	if i < 0 || i >= len(m.blocks) || m.blocks[i].kind != "tool" {
+		return false
+	}
+	switch m.toolView {
+	case "collapsed":
+		collapsed, ok := m.collapsed[i]
+		if !ok {
+			return true
+		}
+		return collapsed
+	case "hidden":
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *Model) toggleSelectedBlock() {
+	if m.selected < 0 || m.selected >= len(m.blocks) {
+		return
+	}
+	if m.blocks[m.selected].kind == "tool" && m.toolView == "collapsed" {
+		m.collapsed[m.selected] = !m.toolCollapsed(m.selected)
+		return
+	}
+	m.collapsed[m.selected] = !m.collapsed[m.selected]
+}
+
+func blockTitle(b block) string {
+	label := strings.ToLower(b.title)
+	switch b.kind {
+	case "user":
+		return "user"
+	case "assistant":
+		return "assistant"
+	case "reasoning":
+		return "thinking"
+	case "tool":
+		return strings.ToLower(oneLinePreview(b.title, 72))
+	case "error":
+		return "error"
+	case "status":
+		return strings.ToLower(oneLinePreview(b.title, 72))
+	default:
+		return label
+	}
+}
+
+func renderActivityBlock(b block, body string, width int, styles themeStyles) string {
+	titleStyle := styles.activityStatus
+	switch b.kind {
+	case "tool":
+		titleStyle = styles.activityTool
+	case "reasoning":
+		titleStyle = styles.activityReasoning
+	case "error":
+		titleStyle = styles.activityError
+	case "status":
+		titleStyle = styles.activityStatus
+	}
+	header := titleStyle.Render("• " + activityTitle(b))
+	body = strings.Trim(body, "\n")
+	if body == "" {
+		return header
+	}
+	return header + "\n" + renderActivityBody(body, max(12, width-2), styles)
+}
+
+func activityTitle(b block) string {
+	title := strings.TrimSpace(b.title)
+	switch b.kind {
+	case "reasoning":
+		return "Thinking"
+	case "tool":
+		if title == "" || strings.EqualFold(title, "TOOL") {
+			return "Called tool"
+		}
+		return title
+	case "error":
+		if title == "" || strings.EqualFold(title, "ERROR") {
+			return "Error"
+		}
+		return title
+	case "status":
+		if title == "" {
+			return "Status"
+		}
+		return titleCase(title)
+	default:
+		return blockTitle(b)
+	}
+}
+
+func renderActivityBody(body string, width int, styles themeStyles) string {
+	lines := trimEmptyLines(strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n"))
+	if len(lines) == 0 {
+		return ""
+	}
+	var out []string
+	first := true
+	contentW := max(8, width-4)
+	for _, line := range lines {
+		wrapped := wrapActivityLine(line, contentW)
+		for _, part := range wrapped {
+			prefix := "  │ "
+			if first {
+				prefix = "  └ "
+				first = false
+			}
+			out = append(out, styles.activityGuide.Render(prefix)+styles.activityText.Render(part))
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func trimEmptyLines(lines []string) []string {
+	start := 0
+	for start < len(lines) && strings.TrimSpace(lines[start]) == "" {
+		start++
+	}
+	end := len(lines)
+	for end > start && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	return lines[start:end]
+}
+
+func wrapActivityLine(line string, width int) []string {
+	width = max(1, width)
+	if line == "" {
+		return []string{""}
+	}
+	var out []string
+	rest := line
+	for xansi.StringWidth(rest) > width {
+		part := xansi.Cut(rest, 0, width)
+		if part == "" {
+			break
+		}
+		out = append(out, part)
+		rest = xansi.Cut(rest, width, xansi.StringWidth(rest))
+	}
+	out = append(out, rest)
+	return out
+}
+
+func titleCase(text string) string {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return ""
+	}
+	return strings.ToUpper(text[:1]) + text[1:]
 }
 
 func (m Model) styles() themeStyles {
@@ -876,20 +2667,139 @@ func toolName(value any) string {
 func toolTitle(value any) string {
 	name := toolName(value)
 	args := toolArgs(value)
+	switch name {
+	case "shell_exec":
+		if argv := stringSliceArg(args["argv"]); len(argv) > 0 {
+			return "Ran " + oneLinePreview(formatArgv(argv), 120)
+		}
+	case "fs_read_file":
+		return "Read " + firstArg(args, "path", "file")
+	case "fs_list":
+		return "Listed " + firstArgDefault(args, ".", "path")
+	case "fs_search":
+		query := firstArg(args, "query", "pattern")
+		path := firstArgDefault(args, ".", "path")
+		if query != "" {
+			return "Searched " + oneLinePreview(query, 72) + " in " + path
+		}
+	case "fs_write_file":
+		return "Wrote " + firstArg(args, "path", "file")
+	case "fs_make_dir":
+		return "Created dir " + firstArg(args, "path")
+	case "web_fetch":
+		return "Fetched " + firstArg(args, "url")
+	case "web_search":
+		return "Searched web " + oneLinePreview(firstArg(args, "query"), 96)
+	case "web_crawl":
+		return "Crawled " + firstArg(args, "url")
+	case "time_now":
+		return "Checked time"
+	}
 	for _, key := range []string{"path", "command", "cmd", "query", "url", "pattern", "glob", "file"} {
 		if text, ok := args[key].(string); ok && text != "" {
-			return fmt.Sprintf("TOOL %s %s", name, oneLinePreview(text, 80))
+			return fmt.Sprintf("Called %s %s", name, oneLinePreview(text, 80))
 		}
 	}
-	return "TOOL " + name
+	return "Called " + name
 }
 
 func toolBody(value any) string {
 	args := toolArgs(value)
-	if len(args) > 0 {
+	if len(args) == 0 {
+		return ""
+	}
+	switch toolName(value) {
+	case "shell_exec":
+		return toolMetaLines(args, "cwd", "timeout_sec")
+	case "fs_read_file", "fs_list", "fs_search", "fs_make_dir", "web_fetch", "web_search", "web_crawl", "time_now":
+		return ""
+	case "fs_write_file":
+		return toolMetaLines(args, "append", "create_dirs")
+	default:
 		return pretty(args)
 	}
-	return pretty(value)
+}
+
+func toolMetaLines(args map[string]any, keys ...string) string {
+	var lines []string
+	for _, key := range keys {
+		value, ok := args[key]
+		if !ok {
+			continue
+		}
+		switch typed := value.(type) {
+		case string:
+			if typed == "" || (key == "cwd" && typed == ".") {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("%s: %s", key, typed))
+		case bool:
+			lines = append(lines, fmt.Sprintf("%s: %t", key, typed))
+		case float64:
+			if typed == 0 {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("%s: %.0f", key, typed))
+		default:
+			lines = append(lines, fmt.Sprintf("%s: %v", key, typed))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func stringSliceArg(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return typed
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text, ok := item.(string)
+			if !ok {
+				return nil
+			}
+			out = append(out, text)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func formatArgv(argv []string) string {
+	parts := make([]string, 0, len(argv))
+	for _, arg := range argv {
+		parts = append(parts, shellQuoteArg(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func shellQuoteArg(arg string) string {
+	if arg == "" {
+		return "''"
+	}
+	if strings.IndexFunc(arg, func(r rune) bool {
+		return !(unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("-_./:=+,%@", r))
+	}) < 0 {
+		return arg
+	}
+	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+}
+
+func firstArg(args map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if text, ok := args[key].(string); ok && text != "" {
+			return oneLinePreview(text, 120)
+		}
+	}
+	return ""
+}
+
+func firstArgDefault(args map[string]any, fallback string, keys ...string) string {
+	if value := firstArg(args, keys...); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func toolArgs(value any) map[string]any {
@@ -944,6 +2854,10 @@ func collapsedPreview(text string, maxLines, maxChars int) string {
 	return fmt.Sprintf("[collapsed: %d chars, Ctrl+E expand]\n%s", len(text), preview)
 }
 
+func collapsedSummary(text string) string {
+	return fmt.Sprintf("[collapsed: %d chars, Ctrl+E expand]", len(text))
+}
+
 func oneLinePreview(text string, maxChars int) string {
 	text = strings.Join(strings.Fields(text), " ")
 	runes := []rune(text)
@@ -967,33 +2881,369 @@ func truncateRunes(text string, maxChars int) string {
 	return string(runes[:maxChars])
 }
 
+func shortID(id string) string {
+	if len(id) <= 12 {
+		return id
+	}
+	return id[:12]
+}
+
+func shortModel(model string) string {
+	model = strings.TrimPrefix(model, "deepseek-")
+	model = strings.TrimPrefix(model, "deepseek/")
+	model = strings.TrimPrefix(model, "gpt-")
+	if strings.HasPrefix(model, "v4-") {
+		return model
+	}
+	return truncateRunes(model, 18)
+}
+
+func isCodexModel(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(model, "gpt-") ||
+		strings.HasPrefix(model, "o1") ||
+		strings.HasPrefix(model, "o3") ||
+		strings.HasPrefix(model, "o4")
+}
+
+func padRight(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(text) >= width {
+		return text
+	}
+	return text + strings.Repeat(" ", width-lipgloss.Width(text))
+}
+
+func fitSegments(width int, sep string, segments ...string) string {
+	var clean []string
+	for _, segment := range segments {
+		segment = strings.TrimSpace(segment)
+		if segment != "" {
+			clean = append(clean, segment)
+		}
+	}
+	if len(clean) == 0 || width <= 0 {
+		return ""
+	}
+	for keep := len(clean); keep > 0; keep-- {
+		candidate := strings.Join(clean[:keep], sep)
+		if keep < len(clean) {
+			candidate += sep + "..."
+		}
+		if lipgloss.Width(candidate) <= width {
+			return candidate
+		}
+	}
+	return truncateRunes(clean[0], width)
+}
+
+func renderStatusSegments(width int, segments []statusSegment, separator lipgloss.Style) string {
+	var clean []statusSegment
+	for _, segment := range segments {
+		segment.text = strings.TrimSpace(segment.text)
+		if segment.text != "" {
+			clean = append(clean, segment)
+		}
+	}
+	if width <= 0 || len(clean) == 0 {
+		return ""
+	}
+	sep := separator.Render(" · ")
+	for keep := len(clean); keep > 0; keep-- {
+		rendered := renderStatusParts(clean[:keep], sep)
+		if keep < len(clean) {
+			rendered += sep + separator.Render("...")
+		}
+		if lipgloss.Width(rendered) <= width {
+			return rendered
+		}
+	}
+	return clean[0].style.Render(truncateRunes(clean[0].text, width))
+}
+
+func renderStatusParts(segments []statusSegment, sep string) string {
+	parts := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		parts = append(parts, segment.style.Render(segment.text))
+	}
+	return strings.Join(parts, sep)
+}
+
+func compactNumber(value int64) string {
+	switch {
+	case value >= 1_000_000:
+		return fmt.Sprintf("%.1fm", float64(value)/1_000_000)
+	case value >= 10_000:
+		return fmt.Sprintf("%.0fk", float64(value)/1_000)
+	case value >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(value)/1_000)
+	default:
+		return fmt.Sprintf("%d", value)
+	}
+}
+
+func compactDuration(d time.Duration) string {
+	if d < time.Second {
+		return "0s"
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+}
+
 func helpText() string {
 	return strings.Join([]string{
-		"/theme [light|dark]       switch UI theme",
-		"/model [flash|pro]        switch DeepSeek V4 model",
-		"/models                   show known models",
-		"/reasoning [high|max|off] set provider reasoning effort",
-		"/thinking [on|off]        show or hide reasoning blocks",
-		"/status                   show session details",
-		"Enter                     send",
-		"Alt+Enter                 insert newline",
-		"Ctrl+S                    send fallback; may freeze SSH if IXON is enabled",
-		"mouse wheel / PgUp/PgDn    scroll transcript",
-		"Alt+Home / Alt+End         top / follow bottom",
-		"Ctrl+E                    collapse or expand selected block",
-		"Ctrl+P / Ctrl+L           select previous / next block",
-		"Ctrl+G                    reconnect gateway",
+		"/theme [light|dark]                    switch UI theme",
+		"/auth [deepseek|codex]                 configure credentials",
+		"/model [flash|pro|gpt|id]              switch model",
+		"/models                                show known models and providers",
+		"/mcp                                   show MCP servers and status",
+		"/reasoning [low|medium|high|xhigh|off] set provider reasoning effort",
+		"/thinkview [expanded|collapsed|hidden] show/collapse/hide thinking blocks",
+		"/toolview [auto|expanded|collapsed|hidden] control tool blocks",
+		"/new                                   start a new chat",
+		"/resume [id-prefix]                    list or resume saved chats",
+		"/fork [id-prefix]                      fork current or saved chat",
+		"/status                                show session details",
+		"/exit                                  save and quit",
+		"Tab / Up / Down                         complete slash commands",
+		"Enter                                  send",
+		"Alt+Enter                              insert newline",
+		"Ctrl+S                                 send fallback; may freeze SSH if IXON is enabled",
+		"mouse wheel / PgUp/PgDn                 scroll transcript",
+		"Alt+Home / Alt+End                      top / follow bottom",
+		"Ctrl+E                                 collapse or expand selected block",
+		"Ctrl+P / Ctrl+L                        select previous / next block",
+		"Ctrl+G                                 reconnect gateway",
 	}, "\n")
 }
 
-func usage(value any) (int64, int64) {
+func compactEventText(value any) string {
+	bytes, _ := json.Marshal(value)
+	var data struct {
+		ActiveMessages int    `json:"active_messages"`
+		SummaryChars   int    `json:"summary_chars"`
+		Detail         string `json:"detail"`
+	}
+	_ = json.Unmarshal(bytes, &data)
+	var lines []string
+	if data.Detail != "" {
+		lines = append(lines, data.Detail)
+	}
+	if data.ActiveMessages > 0 {
+		lines = append(lines, fmt.Sprintf("active messages: %d", data.ActiveMessages))
+	}
+	if data.SummaryChars > 0 {
+		lines = append(lines, fmt.Sprintf("summary chars: %d", data.SummaryChars))
+	}
+	if len(lines) == 0 {
+		return "context compacted"
+	}
+	return strings.Join(lines, "\n")
+}
+
+func usage(value any) (int64, int64, int64, int64, int64) {
 	bytes, _ := json.Marshal(value)
 	var u struct {
-		InputTokens  int64 `json:"input_tokens"`
-		OutputTokens int64 `json:"output_tokens"`
+		InputTokens     int64 `json:"input_tokens"`
+		OutputTokens    int64 `json:"output_tokens"`
+		CacheHitTokens  int64 `json:"cache_hit_tokens"`
+		CacheMissTokens int64 `json:"cache_miss_tokens"`
+		ReasoningTokens int64 `json:"reasoning_tokens"`
 	}
 	_ = json.Unmarshal(bytes, &u)
-	return u.InputTokens, u.OutputTokens
+	return u.InputTokens, u.OutputTokens, u.CacheHitTokens, u.CacheMissTokens, u.ReasoningTokens
+}
+
+func (m Model) mouseInViewport(x, y int) bool {
+	return x >= 0 && y >= 0 && y < m.viewport.Height() && x < max(1, m.viewport.Width())
+}
+
+func (m Model) selectionPointFromMouse(x, y int) selectionPoint {
+	return selectionPoint{row: m.viewport.YOffset() + y, col: max(0, m.viewport.XOffset()+x)}
+}
+
+func (m Model) selectionPointFromMouseClamped(x, y int) selectionPoint {
+	if y < 0 {
+		y = 0
+	}
+	if y >= m.viewport.Height() {
+		y = max(0, m.viewport.Height()-1)
+	}
+	if x < 0 {
+		x = 0
+	}
+	if x >= m.viewport.Width() {
+		x = max(0, m.viewport.Width()-1)
+	}
+	return m.selectionPointFromMouse(x, y)
+}
+
+func (m Model) selectedTranscriptText() string {
+	start, end := orderedSelection(m.selectStart, m.selectEnd)
+	if start.row == end.row && start.col == end.col {
+		return ""
+	}
+	lines := strings.Split(xansi.Strip(m.baseViewportContent()), "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	start.row = max(0, min(start.row, len(lines)-1))
+	end.row = max(0, min(end.row, len(lines)-1))
+	var selected []string
+	for row := start.row; row <= end.row; row++ {
+		line := lines[row]
+		left := 0
+		right := xansi.StringWidth(line)
+		if row == start.row {
+			left = min(start.col, right)
+		}
+		if row == end.row {
+			right = min(max(end.col, left), right)
+		}
+		selected = append(selected, strings.TrimRight(xansi.Cut(line, left, right), " "))
+	}
+	return strings.Trim(strings.Join(selected, "\n"), "\n")
+}
+
+func (m Model) hasSelection() bool {
+	start, end := orderedSelection(m.selectStart, m.selectEnd)
+	return start.row != end.row || start.col != end.col
+}
+
+func (m *Model) applySelectionHighlight() {
+	m.viewport.SetContent(m.selectionHighlightedContent())
+}
+
+func (m Model) baseViewportContent() string {
+	if m.viewportContent != "" {
+		return m.viewportContent
+	}
+	return m.viewport.GetContent()
+}
+
+func (m Model) selectionHighlightedContent() string {
+	content := m.baseViewportContent()
+	rawLines := strings.Split(content, "\n")
+	ranges := m.selectionLineRanges(rawLines)
+	if len(ranges) == 0 {
+		return content
+	}
+	styles := m.styles()
+	for _, rng := range ranges {
+		rawLines[rng.row] = lipgloss.StyleRanges(
+			rawLines[rng.row],
+			lipgloss.NewRange(rng.left, rng.right, styles.selection),
+		)
+	}
+	return strings.Join(rawLines, "\n")
+}
+
+type selectionLineRange struct {
+	row   int
+	left  int
+	right int
+}
+
+func (m Model) selectionLineRanges(rawLines []string) []selectionLineRange {
+	start, end := orderedSelection(m.selectStart, m.selectEnd)
+	if (start.row == end.row && start.col == end.col) || len(rawLines) == 0 {
+		return nil
+	}
+	start.row = max(0, min(start.row, len(rawLines)-1))
+	end.row = max(0, min(end.row, len(rawLines)-1))
+	ranges := make([]selectionLineRange, 0, end.row-start.row+1)
+	for row := start.row; row <= end.row; row++ {
+		lineWidth := xansi.StringWidth(xansi.Strip(rawLines[row]))
+		left := 0
+		right := lineWidth
+		if row == start.row {
+			left = min(max(start.col, 0), lineWidth)
+		}
+		if row == end.row {
+			right = min(max(end.col, left), lineWidth)
+		}
+		if right > left {
+			ranges = append(ranges, selectionLineRange{row: row, left: left, right: right})
+		}
+	}
+	return ranges
+}
+
+func (m Model) selectionByteRange() (int, int) {
+	start, end := orderedSelection(m.selectStart, m.selectEnd)
+	if start.row == end.row && start.col == end.col {
+		return -1, -1
+	}
+	content := xansi.Strip(m.baseViewportContent())
+	lines := strings.Split(content, "\n")
+	if len(lines) == 0 {
+		return -1, -1
+	}
+	start.row = max(0, min(start.row, len(lines)-1))
+	end.row = max(0, min(end.row, len(lines)-1))
+	startByte := byteOffsetForSelection(lines, start)
+	endByte := byteOffsetForSelection(lines, end)
+	if endByte < startByte {
+		return endByte, startByte
+	}
+	return startByte, endByte
+}
+
+func byteOffsetForSelection(lines []string, point selectionPoint) int {
+	offset := 0
+	for row := 0; row < point.row && row < len(lines); row++ {
+		offset += len(lines[row])
+		if row < len(lines)-1 {
+			offset++
+		}
+	}
+	if point.row >= len(lines) {
+		return offset
+	}
+	return offset + byteOffsetForDisplayCol(lines[point.row], point.col)
+}
+
+func byteOffsetForDisplayCol(line string, col int) int {
+	if col <= 0 {
+		return 0
+	}
+	width := 0
+	for idx, r := range line {
+		w := lipgloss.Width(string(r))
+		if width+w > col {
+			return idx
+		}
+		width += max(1, w)
+	}
+	return len(line)
+}
+
+func orderedSelection(a, b selectionPoint) (selectionPoint, selectionPoint) {
+	if a.row > b.row || (a.row == b.row && a.col > b.col) {
+		return b, a
+	}
+	return a, b
+}
+
+func copySelectionCmd(text string) tea.Cmd {
+	return func() tea.Msg {
+		if err := clipboard.WriteAll(text); err == nil {
+			return clipboardCopiedMsg{chars: len([]rune(text)), method: "clipboard"}
+		} else if oscErr := writeOSC52(text); oscErr != nil {
+			return clipboardCopiedMsg{chars: len([]rune(text)), err: err.Error() + "; osc52: " + oscErr.Error()}
+		}
+		return clipboardCopiedMsg{chars: len([]rune(text)), method: "osc52"}
+	}
+}
+
+func writeOSC52(text string) error {
+	payload := base64.StdEncoding.EncodeToString([]byte(text))
+	_, err := fmt.Fprint(os.Stdout, "\x1b]52;c;"+payload+"\x07")
+	return err
 }
 
 func min(a, b int) int {
@@ -1013,50 +3263,66 @@ func max(a, b int) int {
 var (
 	tuiThemes = map[string]tuiTheme{
 		"light": {
-			background:      "#f8fafc",
-			foreground:      "#0f172a",
-			headerFg:        "#0f172a",
-			headerBg:        "#bae6fd",
-			statusFg:        "#334155",
-			statusBg:        "#f1f5f9",
-			footerFg:        "#475569",
-			footerBg:        "#e2e8f0",
-			inputFg:         "#0f172a",
-			inputBg:         "#ffffff",
-			mutedFg:         "#64748b",
-			inputBorder:     "#94a3b8",
-			blockBorder:     "#cbd5e1",
-			userBorder:      "#2563eb",
-			assistantBorder: "#059669",
-			reasoningFg:     "#6d28d9",
-			reasoningBorder: "#8b5cf6",
-			toolFg:          "#92400e",
-			toolBorder:      "#f59e0b",
-			errorFg:         "#991b1b",
-			errorBorder:     "#ef4444",
+			background:      "#F7F3EA",
+			foreground:      "#1D1B16",
+			headerFg:        "#1D1B16",
+			headerBg:        "#E9DFC9",
+			statusFg:        "#2D3524",
+			statusBg:        "#DDE8D7",
+			footerFg:        "#6F675C",
+			footerBg:        "#E9DFC9",
+			inputFg:         "#1D1B16",
+			inputBg:         "#FFFDF8",
+			mutedFg:         "#6F675C",
+			inputBorder:     "#CFC3AF",
+			blockBorder:     "#CFC3AF",
+			blockBg:         "#FFFDF8",
+			userBg:          "#ECECEC",
+			userBorder:      "#B9B9B9",
+			userFg:          "#222222",
+			assistantBg:     "#FFFDF8",
+			assistantBorder: "#D8D1C3",
+			assistantFg:     "#1D1B16",
+			reasoningBg:     "#F4E6C4",
+			reasoningFg:     "#4A3512",
+			reasoningBorder: "#D2A747",
+			toolBg:          "#EDF0E6",
+			toolFg:          "#2D3524",
+			toolBorder:      "#A4B27C",
+			errorBg:         "#F8DAD3",
+			errorFg:         "#5A1D15",
+			errorBorder:     "#C86552",
 		},
 		"dark": {
-			background:      "#0b1117",
-			foreground:      "#d5dde8",
-			headerFg:        "#0b1117",
-			headerBg:        "#7dd3fc",
-			statusFg:        "#d5dde8",
-			statusBg:        "#1f2937",
-			footerFg:        "#a7b0be",
-			footerBg:        "#111827",
-			inputFg:         "#e5edf6",
-			inputBg:         "#111827",
-			mutedFg:         "#94a3b8",
-			inputBorder:     "#334155",
-			blockBorder:     "#334155",
-			userBorder:      "#60a5fa",
-			assistantBorder: "#34d399",
-			reasoningFg:     "#c4b5fd",
-			reasoningBorder: "#8b5cf6",
-			toolFg:          "#fde68a",
-			toolBorder:      "#f59e0b",
-			errorFg:         "#fecaca",
-			errorBorder:     "#ef4444",
+			background:      "#050505",
+			foreground:      "#E7E7E7",
+			headerFg:        "#E7E7E7",
+			headerBg:        "#111111",
+			statusFg:        "#E7E7E7",
+			statusBg:        "#050505",
+			footerFg:        "#8A8A8A",
+			footerBg:        "#050505",
+			inputFg:         "#F2F2F2",
+			inputBg:         "#0B0B0B",
+			mutedFg:         "#8A8A8A",
+			inputBorder:     "#303030",
+			blockBorder:     "#2B2B2B",
+			blockBg:         "#080808",
+			userBg:          "#161616",
+			userBorder:      "#4A4A4A",
+			userFg:          "#D8D8D8",
+			assistantBg:     "#080808",
+			assistantBorder: "#2B2B2B",
+			assistantFg:     "#F0F0F0",
+			reasoningBg:     "#171104",
+			reasoningFg:     "#FFDFA3",
+			reasoningBorder: "#F59E0B",
+			toolBg:          "#0D1208",
+			toolFg:          "#E7F6D4",
+			toolBorder:      "#84CC16",
+			errorBg:         "#210909",
+			errorFg:         "#FFD1D1",
+			errorBorder:     "#F87171",
 		},
 	}
 )
@@ -1075,31 +3341,60 @@ type tuiTheme struct {
 	mutedFg         string
 	inputBorder     string
 	blockBorder     string
+	blockBg         string
+	userBg          string
 	userBorder      string
+	userFg          string
+	assistantBg     string
 	assistantBorder string
+	assistantFg     string
+	reasoningBg     string
 	reasoningFg     string
 	reasoningBorder string
+	toolBg          string
 	toolFg          string
 	toolBorder      string
+	errorBg         string
 	errorFg         string
 	errorBorder     string
 }
 
 type themeStyles struct {
-	background  string
-	foreground  string
-	header      lipgloss.Style
-	status      lipgloss.Style
-	footer      lipgloss.Style
-	input       lipgloss.Style
-	textarea    textarea.Styles
-	block       lipgloss.Style
-	user        lipgloss.Style
-	assistant   lipgloss.Style
-	reasoning   lipgloss.Style
-	tool        lipgloss.Style
-	error       lipgloss.Style
-	statusBlock lipgloss.Style
+	background        string
+	foreground        string
+	header            lipgloss.Style
+	status            lipgloss.Style
+	footer            lipgloss.Style
+	input             lipgloss.Style
+	runStatus         lipgloss.Style
+	popup             lipgloss.Style
+	popupLine         lipgloss.Style
+	popupMuted        lipgloss.Style
+	popupSelected     lipgloss.Style
+	statusState       lipgloss.Style
+	statusModel       lipgloss.Style
+	statusReasoning   lipgloss.Style
+	statusAccess      lipgloss.Style
+	statusUsage       lipgloss.Style
+	statusCost        lipgloss.Style
+	statusDim         lipgloss.Style
+	statusSeparator   lipgloss.Style
+	selection         lipgloss.Style
+	activityText      lipgloss.Style
+	activityGuide     lipgloss.Style
+	activityTool      lipgloss.Style
+	activityReasoning lipgloss.Style
+	activityError     lipgloss.Style
+	activityStatus    lipgloss.Style
+	markdown          terminalMarkdownStyles
+	textarea          textarea.Styles
+	block             lipgloss.Style
+	user              lipgloss.Style
+	assistant         lipgloss.Style
+	reasoning         lipgloss.Style
+	tool              lipgloss.Style
+	error             lipgloss.Style
+	statusBlock       lipgloss.Style
 }
 
 func newThemeStyles(theme tuiTheme) themeStyles {
@@ -1107,13 +3402,16 @@ func newThemeStyles(theme tuiTheme) themeStyles {
 	inputText := lipgloss.Color(theme.inputFg)
 	inputBg := lipgloss.Color(theme.inputBg)
 	muted := lipgloss.Color(theme.mutedFg)
-	block := lipgloss.NewStyle().
-		Foreground(text).
-		Background(lipgloss.Color(theme.background)).
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color(theme.blockBorder)).
-		Padding(0, 1).
-		MarginBottom(1)
+	statusBg := lipgloss.Color("#050505")
+	block := func(fg, bg, border string) lipgloss.Style {
+		return lipgloss.NewStyle().
+			Foreground(lipgloss.Color(fg)).
+			Background(lipgloss.Color(bg)).
+			Border(lipgloss.NormalBorder(), false, false, false, true).
+			BorderForeground(lipgloss.Color(border)).
+			Padding(0, 0).
+			MarginBottom(1)
+	}
 	textareaStyles := textarea.DefaultLightStyles()
 	baseInput := lipgloss.NewStyle().
 		Foreground(inputText).
@@ -1143,7 +3441,8 @@ func newThemeStyles(theme tuiTheme) themeStyles {
 			Bold(true),
 		status: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(theme.statusFg)).
-			Background(lipgloss.Color(theme.statusBg)),
+			Background(statusBg).
+			Padding(0, 1),
 		footer: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(theme.footerFg)).
 			Background(lipgloss.Color(theme.footerBg)).
@@ -1153,22 +3452,80 @@ func newThemeStyles(theme tuiTheme) themeStyles {
 			Background(inputBg).
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(theme.inputBorder)).
-			Padding(0, 1),
-		textarea:  textareaStyles,
-		block:     block,
-		user:      block.Copy().BorderForeground(lipgloss.Color(theme.userBorder)),
-		assistant: block.Copy().BorderForeground(lipgloss.Color(theme.assistantBorder)),
-		reasoning: block.Copy().
-			Foreground(lipgloss.Color(theme.reasoningFg)).
-			BorderForeground(lipgloss.Color(theme.reasoningBorder)),
-		tool: block.Copy().
-			Foreground(lipgloss.Color(theme.toolFg)).
-			BorderForeground(lipgloss.Color(theme.toolBorder)),
-		error: block.Copy().
-			Foreground(lipgloss.Color(theme.errorFg)).
-			BorderForeground(lipgloss.Color(theme.errorBorder)),
-		statusBlock: block.Copy().
+			Padding(0, 0),
+		runStatus: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(theme.statusFg)).
-			BorderForeground(lipgloss.Color(theme.statusFg)),
+			Background(statusBg).
+			Bold(true),
+		popup: lipgloss.NewStyle().
+			Foreground(text).
+			Background(lipgloss.Color(theme.inputBg)).
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color(theme.inputBorder)).
+			Padding(0, 0),
+		popupLine: lipgloss.NewStyle().
+			Foreground(text).
+			Background(lipgloss.Color(theme.inputBg)),
+		popupMuted: lipgloss.NewStyle().
+			Foreground(muted).
+			Background(lipgloss.Color(theme.inputBg)),
+		popupSelected: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(theme.headerFg)).
+			Background(lipgloss.Color(theme.headerBg)).
+			Bold(false),
+		statusState: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(statusBg).
+			Bold(true),
+		statusModel: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#BFE7FF")).
+			Background(statusBg),
+		statusReasoning: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(theme.reasoningBorder)).
+			Background(statusBg),
+		statusAccess: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(theme.userBorder)).
+			Background(statusBg),
+		statusUsage: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#E7D7A9")).
+			Background(statusBg),
+		statusCost: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#B7E4C7")).
+			Background(statusBg),
+		statusDim: lipgloss.NewStyle().
+			Foreground(muted).
+			Background(statusBg),
+		statusSeparator: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#666666")).
+			Background(statusBg),
+		selection: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#050505")).
+			Background(lipgloss.Color("#FFD166")).
+			Bold(true),
+		activityText: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(theme.foreground)),
+		activityGuide: lipgloss.NewStyle().
+			Foreground(muted),
+		activityTool: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(theme.toolBorder)).
+			Bold(true),
+		activityReasoning: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(theme.reasoningBorder)).
+			Bold(true),
+		activityError: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(theme.errorBorder)).
+			Bold(true),
+		activityStatus: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(theme.statusFg)).
+			Bold(true),
+		markdown:    terminalMarkdownStyleSet(theme),
+		textarea:    textareaStyles,
+		block:       block(theme.foreground, theme.blockBg, theme.blockBorder),
+		user:        block(theme.userFg, theme.userBg, theme.userBorder),
+		assistant:   block(theme.assistantFg, theme.assistantBg, theme.assistantBorder),
+		reasoning:   block(theme.reasoningFg, theme.reasoningBg, theme.reasoningBorder),
+		tool:        block(theme.toolFg, theme.toolBg, theme.toolBorder),
+		error:       block(theme.errorFg, theme.errorBg, theme.errorBorder),
+		statusBlock: block(theme.statusFg, theme.statusBg, theme.statusFg),
 	}
 }

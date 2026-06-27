@@ -25,8 +25,11 @@ type Request struct {
 }
 
 type Usage struct {
-	InputTokens  int64 `json:"input_tokens,omitempty"`
-	OutputTokens int64 `json:"output_tokens,omitempty"`
+	InputTokens     int64 `json:"input_tokens,omitempty"`
+	OutputTokens    int64 `json:"output_tokens,omitempty"`
+	CacheHitTokens  int64 `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens int64 `json:"cache_miss_tokens,omitempty"`
+	ReasoningTokens int64 `json:"reasoning_tokens,omitempty"`
 }
 
 type EventKind int
@@ -57,6 +60,33 @@ func New(cfg config.Config) (Provider, error) {
 	if cfg.Provider == "mock" {
 		return Mock{}, nil
 	}
+	if isCodexProvider(cfg) {
+		client := &http.Client{Timeout: 0}
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.RequestTimeout)
+		defer cancel()
+		auth, err := loadCodexAuth(ctx, cfg, client)
+		if err != nil {
+			return nil, err
+		}
+		originator := cfg.CodexOriginator
+		if originator == "" {
+			originator = "billyharness"
+		}
+		return &Codex{
+			BaseURL:           strings.TrimRight(cfg.CodexBaseURL, "/"),
+			Model:             cfg.Model,
+			ReasoningEffort:   cfg.ReasoningEffort,
+			RequestTimeout:    cfg.RequestTimeout,
+			StreamIdleTimeout: cfg.StreamIdleTimeout,
+			Originator:        originator,
+			UserAgent:         originator + "/0.1.0",
+			SessionID:         newCodexSessionID(),
+			CodexRefreshURL:   cfg.CodexRefreshURL,
+			CodexClientID:     cfg.CodexClientID,
+			Auth:              auth,
+			Client:            client,
+		}, nil
+	}
 	if cfg.APIKey() == "" {
 		return nil, fmt.Errorf("missing API key env var %s", cfg.APIKeyEnv)
 	}
@@ -71,6 +101,16 @@ func New(cfg config.Config) (Provider, error) {
 		StreamIdleTimeout: cfg.StreamIdleTimeout,
 		Client:            &http.Client{Timeout: 0},
 	}, nil
+}
+
+func isCodexProvider(cfg config.Config) bool {
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	switch provider {
+	case "openai-codex", "codex", "chatgpt-codex", "chatgpt":
+		return true
+	}
+	model := strings.ToLower(strings.TrimSpace(cfg.Model))
+	return provider == "deepseek" && strings.HasPrefix(model, "gpt-")
 }
 
 type Mock struct{}
@@ -291,8 +331,16 @@ func parseChunk(data []byte) ([]Event, error) {
 			} `json:"delta"`
 		} `json:"choices"`
 		Usage *struct {
-			PromptTokens     int64 `json:"prompt_tokens"`
-			CompletionTokens int64 `json:"completion_tokens"`
+			PromptTokens          int64 `json:"prompt_tokens"`
+			CompletionTokens      int64 `json:"completion_tokens"`
+			PromptCacheHitTokens  int64 `json:"prompt_cache_hit_tokens"`
+			PromptCacheMissTokens int64 `json:"prompt_cache_miss_tokens"`
+			PromptTokensDetails   struct {
+				CachedTokens int64 `json:"cached_tokens"`
+			} `json:"prompt_tokens_details"`
+			CompletionTokensDetails struct {
+				ReasoningTokens int64 `json:"reasoning_tokens"`
+			} `json:"completion_tokens_details"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -300,7 +348,21 @@ func parseChunk(data []byte) ([]Event, error) {
 	}
 	var events []Event
 	if raw.Usage != nil {
-		events = append(events, Event{Kind: EventUsage, Usage: Usage{InputTokens: raw.Usage.PromptTokens, OutputTokens: raw.Usage.CompletionTokens}})
+		cacheHit := raw.Usage.PromptCacheHitTokens
+		if cacheHit == 0 {
+			cacheHit = raw.Usage.PromptTokensDetails.CachedTokens
+		}
+		cacheMiss := raw.Usage.PromptCacheMissTokens
+		if cacheMiss == 0 && raw.Usage.PromptTokens >= cacheHit {
+			cacheMiss = raw.Usage.PromptTokens - cacheHit
+		}
+		events = append(events, Event{Kind: EventUsage, Usage: Usage{
+			InputTokens:     raw.Usage.PromptTokens,
+			OutputTokens:    raw.Usage.CompletionTokens,
+			CacheHitTokens:  cacheHit,
+			CacheMissTokens: cacheMiss,
+			ReasoningTokens: raw.Usage.CompletionTokensDetails.ReasoningTokens,
+		}})
 	}
 	if len(raw.Choices) == 0 {
 		return events, nil
@@ -335,6 +397,9 @@ type partialToolCall struct {
 }
 
 func (a *ToolAccumulator) Push(event Event) {
+	if event.ToolIndex < 0 {
+		return
+	}
 	for len(a.calls) <= event.ToolIndex {
 		a.calls = append(a.calls, partialToolCall{})
 	}
@@ -352,6 +417,9 @@ func (a *ToolAccumulator) Finish() ([]protocol.ToolCall, error) {
 	var out []protocol.ToolCall
 	for i, call := range a.calls {
 		if call.Name == "" {
+			if call.ID != "" || strings.TrimSpace(call.Args.String()) != "" {
+				return nil, fmt.Errorf("tool call index %d missing name", i)
+			}
 			continue
 		}
 		id := call.ID

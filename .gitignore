@@ -1,5 +1,13 @@
 /.env
 /bench-runs/
 /fast-agent-harness
+/bin/
 /gateway.log
 /gateway.pid
+/telegram.log
+/telegram.pid
+/telegram/
+/settings.json
+/mcp.config.toml
+/auth/
+/sessions/

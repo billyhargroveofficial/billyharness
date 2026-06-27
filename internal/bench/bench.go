@@ -58,6 +58,8 @@ type Result struct {
 	ToolErrors       int            `json:"tool_errors"`
 	InputTokens      int64          `json:"input_tokens,omitempty"`
 	OutputTokens     int64          `json:"output_tokens,omitempty"`
+	CacheHitTokens   int64          `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens  int64          `json:"cache_miss_tokens,omitempty"`
 	EvaluatorTimeMS  int64          `json:"evaluator_time_ms,omitempty"`
 	EvaluatorCommand []string       `json:"evaluator_command,omitempty"`
 	EvaluatorOutput  string         `json:"evaluator_output,omitempty"`
@@ -65,19 +67,21 @@ type Result struct {
 }
 
 type Summary struct {
-	Total        int     `json:"total"`
-	Passed       int     `json:"passed"`
-	Failed       int     `json:"failed"`
-	Timeouts     int     `json:"timeouts"`
-	Crashes      int     `json:"crashes"`
-	PassRate     float64 `json:"pass_rate"`
-	WallTimeMS   int64   `json:"wall_time_ms"`
-	ModelCalls   int     `json:"model_calls"`
-	ToolCalls    int     `json:"tool_calls"`
-	InputTokens  int64   `json:"input_tokens,omitempty"`
-	OutputTokens int64   `json:"output_tokens,omitempty"`
-	ResultsJSONL string  `json:"results_jsonl"`
-	EventsJSONL  string  `json:"events_jsonl"`
+	Total           int     `json:"total"`
+	Passed          int     `json:"passed"`
+	Failed          int     `json:"failed"`
+	Timeouts        int     `json:"timeouts"`
+	Crashes         int     `json:"crashes"`
+	PassRate        float64 `json:"pass_rate"`
+	WallTimeMS      int64   `json:"wall_time_ms"`
+	ModelCalls      int     `json:"model_calls"`
+	ToolCalls       int     `json:"tool_calls"`
+	InputTokens     int64   `json:"input_tokens,omitempty"`
+	OutputTokens    int64   `json:"output_tokens,omitempty"`
+	CacheHitTokens  int64   `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens int64   `json:"cache_miss_tokens,omitempty"`
+	ResultsJSONL    string  `json:"results_jsonl"`
+	EventsJSONL     string  `json:"events_jsonl"`
 }
 
 func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) {
@@ -94,13 +98,7 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 	if err := os.MkdirAll(rc.OutDir, 0o755); err != nil {
 		return Summary{}, err
 	}
-	if rc.Mock {
-		cfg.Provider = "mock"
-		cfg.Model = "mock"
-	}
-	if rc.Model != "" {
-		cfg.Model = rc.Model
-	}
+	cfg = applyRunConfig(cfg, rc)
 	runID := time.Now().UTC().Format("20060102T150405Z")
 	resultsPath := filepath.Join(rc.OutDir, runID+"-results.jsonl")
 	eventsPath := filepath.Join(rc.OutDir, runID+"-events.jsonl")
@@ -128,6 +126,8 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 		summary.ToolCalls += result.ToolCalls
 		summary.InputTokens += result.InputTokens
 		summary.OutputTokens += result.OutputTokens
+		summary.CacheHitTokens += result.CacheHitTokens
+		summary.CacheMissTokens += result.CacheMissTokens
 		switch result.Outcome {
 		case "pass":
 			summary.Passed++
@@ -144,6 +144,18 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 		summary.PassRate = float64(summary.Passed) / float64(summary.Total)
 	}
 	return summary, nil
+}
+
+func applyRunConfig(cfg config.Config, rc RunConfig) config.Config {
+	if rc.Mock {
+		cfg.Provider = "mock"
+		cfg.Model = "mock"
+	}
+	if rc.Model != "" {
+		cfg.Model = rc.Model
+	}
+	cfg.ApplyModelProviderDefaults()
+	return cfg
 }
 
 func LoadTasks(path string) ([]Task, error) {
@@ -223,7 +235,14 @@ func runTask(parent context.Context, cfg config.Config, rc RunConfig, runID stri
 		result.WallTimeMS = time.Since(start).Milliseconds()
 		return result
 	}
-	registry := tools.NewRegistry(taskCfg)
+	registry, err := tools.NewRegistryWithMCP(ctx, taskCfg)
+	if err != nil {
+		result.Outcome = "crash"
+		result.Error = err.Error()
+		result.WallTimeMS = time.Since(start).Milliseconds()
+		return result
+	}
+	defer registry.Close()
 	a := agent.New(taskCfg, prov, registry)
 	err = a.Run(ctx, task.Prompt, func(event protocol.Event) {
 		observe(&result, event)
@@ -281,12 +300,16 @@ func observe(result *Result, event protocol.Event) {
 	case protocol.EventProviderUsageUpdate:
 		bytes, _ := json.Marshal(event.Data)
 		var usage struct {
-			InputTokens  int64 `json:"input_tokens"`
-			OutputTokens int64 `json:"output_tokens"`
+			InputTokens     int64 `json:"input_tokens"`
+			OutputTokens    int64 `json:"output_tokens"`
+			CacheHitTokens  int64 `json:"cache_hit_tokens"`
+			CacheMissTokens int64 `json:"cache_miss_tokens"`
 		}
 		if err := json.Unmarshal(bytes, &usage); err == nil {
 			result.InputTokens += usage.InputTokens
 			result.OutputTokens += usage.OutputTokens
+			result.CacheHitTokens += usage.CacheHitTokens
+			result.CacheMissTokens += usage.CacheMissTokens
 		}
 	}
 }

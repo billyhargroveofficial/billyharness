@@ -1,21 +1,28 @@
 package tui
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
+	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
-func TestDefaultsToLightTheme(t *testing.T) {
-	m := NewModel(config.Default(), Options{})
+func TestDefaultsToDarkTheme(t *testing.T) {
+	m := newTestModel(t)
 	if !m.textarea.Focused() {
 		t.Fatalf("textarea should start focused")
 	}
-	if m.theme != "light" {
-		t.Fatalf("theme = %q, want light", m.theme)
+	if m.theme != "dark" {
+		t.Fatalf("theme = %q, want dark", m.theme)
 	}
 	if got := m.currentModel(); got != "deepseek-v4-flash" {
 		t.Fatalf("model = %q, want deepseek-v4-flash", got)
@@ -23,10 +30,13 @@ func TestDefaultsToLightTheme(t *testing.T) {
 	if got := m.currentThinking().effort; got != "high" {
 		t.Fatalf("reasoning effort = %q, want high", got)
 	}
+	if got := m.toolView; got != "collapsed" {
+		t.Fatalf("toolView = %q, want collapsed", got)
+	}
 }
 
 func TestSlashCommands(t *testing.T) {
-	m := NewModel(config.Default(), Options{})
+	m := newTestModel(t)
 
 	for _, tc := range []struct {
 		input     string
@@ -38,13 +48,21 @@ func TestSlashCommands(t *testing.T) {
 		{input: "/theme light", wantTheme: "light"},
 		{input: "/model pro", wantModel: "deepseek-v4-pro"},
 		{input: "/model flash", wantModel: "deepseek-v4-flash"},
+		{input: "/model gpt", wantModel: "gpt-5.5"},
+		{input: "/model spark", wantModel: "gpt-5.3-codex-spark"},
 		{input: "/reasoning max", wantThink: "max"},
+		{input: "/reasoning xhigh", wantThink: "xhigh"},
+		{input: "/reasoning medium", wantThink: "medium"},
+		{input: "/reasoning low", wantThink: "low"},
 		{input: "/reasoning off", wantThink: ""},
 		{input: "/reasoning high", wantThink: "high"},
 		{input: "/thinking off"},
 		{input: "/thinking on"},
+		{input: "/toolview collapsed"},
+		{input: "/thinkview collapsed"},
 	} {
-		if !m.handleSlashCommand(tc.input) {
+		handled, _ := m.handleSlashCommand(tc.input)
+		if !handled {
 			t.Fatalf("handleSlashCommand(%q) returned false", tc.input)
 		}
 		if tc.wantModel != "" && m.currentModel() != tc.wantModel {
@@ -61,12 +79,115 @@ func TestSlashCommands(t *testing.T) {
 	}
 }
 
+func TestTUISelectsCodexProviderForGPTModels(t *testing.T) {
+	m := newTestModel(t)
+	handled, _ := m.handleSlashCommand("/model gpt")
+	if !handled {
+		t.Fatalf("/model gpt returned false")
+	}
+	if got := m.currentProvider(); got != "openai-codex" {
+		t.Fatalf("currentProvider = %q", got)
+	}
+	if got := m.currentConfig().Provider; got != "openai-codex" {
+		t.Fatalf("currentConfig.Provider = %q", got)
+	}
+	if got := m.costText(); got != "cost subscription" {
+		t.Fatalf("costText = %q", got)
+	}
+
+	handled, _ = m.handleSlashCommand("/model flash")
+	if !handled {
+		t.Fatalf("/model flash returned false")
+	}
+	if got := m.currentProvider(); got != "deepseek" {
+		t.Fatalf("currentProvider = %q", got)
+	}
+}
+
+func TestRunGatewaySendsSelectedProviderModelAndReasoning(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/sessions/session-1/run":
+			if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+				t.Fatal(err)
+			}
+			_ = json.NewEncoder(w).Encode(protocol.Event{Type: protocol.EventAssistantDelta, Data: "ok"})
+		case "/v1/sessions/session-1":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"messages": []protocol.Message{{Role: protocol.RoleUser, Content: "ping"}, {Role: protocol.RoleAssistant, Content: "ok"}},
+			})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	m := newTestModel(t)
+	m.gatewayURL = server.URL
+	m.sessionID = "session-1"
+	m.maxRounds = 77
+	if ok, _ := m.handleSlashCommand("/model gpt"); !ok {
+		t.Fatal("/model gpt failed")
+	}
+	if ok, _ := m.handleSlashCommand("/reasoning xhigh"); !ok {
+		t.Fatal("/reasoning xhigh failed")
+	}
+	m.runGateway("ping")
+	var done runDoneMsg
+	for i := 0; i < 3; i++ {
+		msg := <-m.events
+		if typed, ok := msg.(runDoneMsg); ok {
+			done = typed
+			break
+		}
+	}
+	if done.err != nil {
+		t.Fatal(done.err)
+	}
+	if captured["provider"] != "openai-codex" ||
+		captured["model"] != "gpt-5.5" ||
+		captured["thinking"] != "enabled" ||
+		captured["reasoning_effort"] != "xhigh" ||
+		int(captured["max_tool_rounds"].(float64)) != 77 ||
+		captured["prompt"] != "ping" {
+		t.Fatalf("captured = %#v", captured)
+	}
+}
+
+func TestRunGatewayTurnsStreamedRunFailedIntoRunDoneError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/sessions/session-1/run" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(protocol.Event{Type: protocol.EventRunFailed, Data: "boom"})
+	}))
+	t.Cleanup(server.Close)
+
+	m := newTestModel(t)
+	m.gatewayURL = server.URL
+	m.sessionID = "session-1"
+	m.runGateway("ping")
+	var done runDoneMsg
+	for i := 0; i < 3; i++ {
+		msg := <-m.events
+		if typed, ok := msg.(runDoneMsg); ok {
+			done = typed
+			break
+		}
+	}
+	if done.err == nil || !strings.Contains(done.err.Error(), "boom") {
+		t.Fatalf("done = %#v", done)
+	}
+}
+
 func TestHiddenReasoningIsPreserved(t *testing.T) {
-	m := NewModel(config.Default(), Options{})
+	m := newTestModel(t)
 	m.width = 80
 	m.height = 24
 
-	if !m.handleSlashCommand("/thinking off") {
+	handled, _ := m.handleSlashCommand("/thinking off")
+	if !handled {
 		t.Fatalf("/thinking off returned false")
 	}
 	m.appendToOpenBlock("reasoning", "THINKING", "hidden reasoning")
@@ -78,7 +199,8 @@ func TestHiddenReasoningIsPreserved(t *testing.T) {
 		t.Fatalf("hidden reasoning should not render")
 	}
 
-	if !m.handleSlashCommand("/thinking on") {
+	handled, _ = m.handleSlashCommand("/thinking on")
+	if !handled {
 		t.Fatalf("/thinking on returned false")
 	}
 	m.reflow(false)
@@ -87,8 +209,181 @@ func TestHiddenReasoningIsPreserved(t *testing.T) {
 	}
 }
 
+func TestToolAndThinkViewsAffectRendering(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 80
+	m.height = 24
+	m.addBlock("tool", "TOOL shell", "line1\nline2\nline3")
+	m.addBlock("reasoning", "THINKING", "private chain")
+
+	handled, _ := m.handleSlashCommand("/toolview hidden")
+	if !handled {
+		t.Fatalf("/toolview hidden returned false")
+	}
+	handled, _ = m.handleSlashCommand("/thinkview collapsed")
+	if !handled {
+		t.Fatalf("/thinkview collapsed returned false")
+	}
+	m.resize(false)
+	view := m.viewport.View()
+	if strings.Contains(view, "TOOL shell") {
+		t.Fatalf("hidden tool block should not render")
+	}
+	if !strings.Contains(view, "[collapsed:") || strings.Contains(view, "private chain") {
+		t.Fatalf("collapsed thinking should render a preview without full content, view=%q", view)
+	}
+}
+
+func TestToolAndThinkingBlocksRenderWithoutSelectionMarkersOrIndent(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	tool := stripANSITest(m.renderBlock(0, block{kind: "tool", title: "TOOL shell", content: "result"}))
+	thinking := stripANSITest(m.renderBlock(1, block{kind: "reasoning", title: "THINKING", content: "thought"}))
+	for _, rendered := range []string{tool, thinking} {
+		if strings.Contains(rendered, ">") {
+			t.Fatalf("block should not render selection marker: %q", rendered)
+		}
+		if strings.Contains(rendered, "┌") || strings.Contains(rendered, "└─") {
+			t.Fatalf("activity block should not render heavy box borders: %q", rendered)
+		}
+	}
+}
+
+func TestToolBlocksRenderCodexActivityStyle(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.toolView = "expanded"
+	m.applyEvent(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{
+			Name:      "shell_exec",
+			Arguments: json.RawMessage(`{"argv":["rg","-n","selection","internal/tui"],"cwd":"/root/billyharness","timeout_sec":20}`),
+		},
+	})
+	m.applyEvent(protocol.Event{Type: protocol.EventToolCallFinished, Data: "internal/tui/tui.go:2422: selection\n"})
+
+	rendered := stripANSITest(m.renderBlock(0, m.blocks[0]))
+	for _, want := range []string{"• Ran rg -n selection internal/tui", "└ cwd: /root/billyharness", "│ internal/tui/tui.go:2422: selection"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("tool activity block missing %q: %q", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "TOOL") || strings.Contains(rendered, `"argv"`) {
+		t.Fatalf("tool activity block should not show raw tool/json chrome: %q", rendered)
+	}
+}
+
+func TestToolBlocksAreOneLineByDefault(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.applyEvent(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{
+			Name:      "web_search",
+			Arguments: json.RawMessage(`{"query":"agent loop benchmark","limit":5}`),
+		},
+	})
+	m.applyEvent(protocol.Event{Type: protocol.EventToolCallFinished, Data: strings.Repeat("result line\n", 20)})
+
+	rendered := stripANSITest(m.renderBlock(0, m.blocks[0]))
+	if got := strings.Count(strings.TrimSpace(rendered), "\n"); got != 0 {
+		t.Fatalf("collapsed tool block should be one line, got %d newlines: %q", got, rendered)
+	}
+	if !strings.Contains(rendered, "• Searched web agent loop benchmark") {
+		t.Fatalf("collapsed tool block should show query in title: %q", rendered)
+	}
+	if strings.Contains(rendered, "result line") || strings.Contains(rendered, `"query"`) {
+		t.Fatalf("collapsed tool block should not show output or raw JSON: %q", rendered)
+	}
+
+	m.toggleSelectedBlock()
+	expanded := stripANSITest(m.renderBlock(0, m.blocks[0]))
+	if !strings.Contains(expanded, "result line") {
+		t.Fatalf("Ctrl+E toggle should expand selected collapsed tool block: %q", expanded)
+	}
+}
+
+func TestUserAndAssistantBlocksRenderWithoutRoleLabels(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	user := m.renderBlock(0, block{kind: "user", title: "USER", content: "hello"})
+	assistant := m.renderBlock(1, block{kind: "assistant", title: "ASSISTANT", content: "world"})
+	if strings.Contains(strings.ToLower(user), "user") {
+		t.Fatalf("user block should not render role label: %q", user)
+	}
+	if strings.Contains(strings.ToLower(assistant), "assistant") {
+		t.Fatalf("assistant block should not render role label: %q", assistant)
+	}
+	if !strings.Contains(user, "hello") || !strings.Contains(assistant, "world") {
+		t.Fatalf("blocks should render content, got user=%q assistant=%q", user, assistant)
+	}
+}
+
+func TestAssistantBlockRendersTerminalSafeMarkdown(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	rendered := stripANSITest(m.renderBlock(0, block{kind: "assistant", title: "ASSISTANT", content: strings.Join([]string{
+		"# Summary",
+		"",
+		"- **fast** path with `code`",
+		"- _lean_ path",
+		"1. [docs](https://example.com)",
+		"> quoted",
+		"---",
+		"| Name | Score |",
+		"| --- | ---: |",
+		"| **Billy** | `10` |",
+		"```go",
+		"fmt.Println(1)",
+		"```",
+	}, "\n")}))
+	for _, want := range []string{"Summary", "•", "fast", "lean", "code", "docs", "https://example.com", "│ quoted", "────", "┌", "Name", "Billy", "10", "fmt.Println(1)"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered markdown missing %q: %q", want, rendered)
+		}
+	}
+	for _, leak := range []string{"```", "**", "_lean_", "`10`"} {
+		if strings.Contains(rendered, leak) {
+			t.Fatalf("markdown syntax %q should not leak into rendered output: %q", leak, rendered)
+		}
+	}
+}
+
+func TestMarkdownTableDoesNotLeakInlineDelimitersWhenTruncated(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 48
+	rendered := stripANSITest(m.renderBlock(0, block{kind: "assistant", title: "ASSISTANT", content: strings.Join([]string{
+		"| Параметр | Значение |",
+		"| --- | --- |",
+		"| 🌡 **Температура с очень длинным описанием** | +21 °C |",
+		"| 💦 **Влажность воздуха тоже длинная** | 45% |",
+	}, "\n")}))
+	for _, want := range []string{"┌", "Температ", "Влажност", "+21", "45%"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered table missing %q: %q", want, rendered)
+		}
+	}
+	for _, leak := range []string{"**", "__", "`"} {
+		if strings.Contains(rendered, leak) {
+			t.Fatalf("table markdown delimiter %q leaked after truncation: %q", leak, rendered)
+		}
+	}
+}
+
+func TestUnsupportedMarkdownImageIsOmitted(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	rendered := stripANSITest(m.renderBlock(0, block{kind: "assistant", title: "ASSISTANT", content: "![secret diagram](https://example.com/image.png)"}))
+	if strings.Contains(rendered, "https://example.com/image.png") {
+		t.Fatalf("image URL should not render as supported markdown: %q", rendered)
+	}
+	if !strings.Contains(rendered, "image omitted: secret diagram") {
+		t.Fatalf("image placeholder missing: %q", rendered)
+	}
+}
+
 func TestAltEnterInsertsNewline(t *testing.T) {
-	m := NewModel(config.Default(), Options{})
+	m := newTestModel(t)
 	m.textarea.SetValue("first")
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt})
@@ -99,7 +394,7 @@ func TestAltEnterInsertsNewline(t *testing.T) {
 }
 
 func TestPrintableKeysReachTextarea(t *testing.T) {
-	m := NewModel(config.Default(), Options{})
+	m := newTestModel(t)
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
 	updated := next.(Model)
@@ -109,7 +404,7 @@ func TestPrintableKeysReachTextarea(t *testing.T) {
 }
 
 func TestMouseScrollDisablesFollowOutput(t *testing.T) {
-	m := NewModel(config.Default(), Options{})
+	m := newTestModel(t)
 	m.width = 80
 	m.height = 24
 	m.addBlock("assistant", "ASSISTANT", strings.Repeat("line\n", 80))
@@ -135,4 +430,373 @@ func TestMouseScrollDisablesFollowOutput(t *testing.T) {
 	if !updated.viewport.AtBottom() {
 		t.Fatalf("end key should move to bottom")
 	}
+}
+
+func TestTranscriptSelectionText(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 80
+	m.height = 24
+	m.addBlock("assistant", "ASSISTANT", "alpha\nbeta\ngamma")
+	m.resize(true)
+	m.selectStart = selectionPoint{row: 0, col: 1}
+	m.selectEnd = selectionPoint{row: 1, col: 4}
+	got := stripANSITest(m.selectedTranscriptText())
+	if !strings.Contains(got, "lpha") || !strings.Contains(got, "bet") {
+		t.Fatalf("selected text = %q", got)
+	}
+	start, end := m.selectionByteRange()
+	if start < 0 || end <= start {
+		t.Fatalf("selection byte range = %d:%d, want visible highlight range", start, end)
+	}
+}
+
+func TestTranscriptSelectionIsVisiblyHighlighted(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 80
+	m.height = 24
+	m.addBlock("assistant", "ASSISTANT", "alpha\nbeta\ngamma")
+	m.resize(true)
+	base := m.viewport.View()
+	m.selectStart = selectionPoint{row: 0, col: 1}
+	m.selectEnd = selectionPoint{row: 0, col: 4}
+	m.applySelectionHighlight()
+	highlighted := m.viewport.View()
+	if highlighted == base {
+		t.Fatalf("selection should alter rendered viewport")
+	}
+	if stripANSITest(highlighted) != stripANSITest(base) {
+		t.Fatalf("selection highlight should preserve visible text")
+	}
+	if !strings.Contains(highlighted, "48;2;255;209;102") {
+		t.Fatalf("selection highlight should use visible yellow background, rendered=%q", highlighted)
+	}
+}
+
+func TestTranscriptSelectionHighlightsCorrectStyledLine(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 80
+	m.height = 24
+	m.addBlock("assistant", "ASSISTANT", "alpha\nbeta\ngamma")
+	m.resize(true)
+
+	base := m.viewport.GetContent()
+	baseLines := strings.Split(base, "\n")
+	betaRow := -1
+	betaCol := 0
+	for row, line := range baseLines {
+		visible := stripANSITest(line)
+		idx := strings.Index(visible, "beta")
+		if idx >= 0 {
+			betaRow = row
+			betaCol = len([]rune(visible[:idx]))
+			break
+		}
+	}
+	if betaRow < 0 {
+		t.Fatalf("rendered transcript should contain beta, content=%q", stripANSITest(base))
+	}
+
+	m.selectStart = selectionPoint{row: betaRow, col: betaCol}
+	m.selectEnd = selectionPoint{row: betaRow, col: betaCol + 3}
+	m.applySelectionHighlight()
+
+	highlighted := m.viewport.GetContent()
+	if stripANSITest(highlighted) != stripANSITest(base) {
+		t.Fatalf("selection highlight should preserve visible text")
+	}
+	highlightedLines := strings.Split(highlighted, "\n")
+	if !strings.Contains(highlightedLines[betaRow], "48;2;255;209;102") {
+		t.Fatalf("beta line should be highlighted, line=%q", highlightedLines[betaRow])
+	}
+	for row, line := range highlightedLines {
+		if row != betaRow && strings.Contains(stripANSITest(line), "alpha") && strings.Contains(line, "48;2;255;209;102") {
+			t.Fatalf("selection highlight landed on wrong line %d: %q", row, line)
+		}
+	}
+}
+
+func TestSlashPopupCompletesCommand(t *testing.T) {
+	m := newTestModel(t)
+	m.textarea.SetValue("/the")
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	updated := next.(Model)
+	if got := updated.textarea.Value(); got != "/theme " {
+		t.Fatalf("textarea value = %q, want /theme space", got)
+	}
+}
+
+func TestSlashPopupCompletesArgument(t *testing.T) {
+	m := newTestModel(t)
+	m.textarea.SetValue("/theme")
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated := next.(Model)
+	if got := updated.theme; got != "light" {
+		t.Fatalf("theme = %q, want light", got)
+	}
+	if got := updated.textarea.Value(); got != "" {
+		t.Fatalf("textarea value = %q, want cleared after command runs", got)
+	}
+}
+
+func TestSlashPopupTabCompletesArgumentWithoutRunning(t *testing.T) {
+	m := newTestModel(t)
+	m.textarea.SetValue("/theme")
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	updated := next.(Model)
+	if got := updated.textarea.Value(); got != "/theme light" {
+		t.Fatalf("textarea value = %q, want /theme light", got)
+	}
+	if got := updated.theme; got != "dark" {
+		t.Fatalf("theme should not change on tab, got %q", got)
+	}
+}
+
+func TestSlashPopupCompletesResumeArgument(t *testing.T) {
+	m := newTestModel(t)
+	original := m.localChatID
+	m.textarea.SetValue("/resume")
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	updated := next.(Model)
+	next, _ = updated.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	updated = next.(Model)
+
+	want := "/resume " + shortID(original)
+	if got := updated.textarea.Value(); got != want {
+		t.Fatalf("textarea value = %q, want %q", got, want)
+	}
+}
+
+func TestSlashPopupEscDismissesUntilTextChanges(t *testing.T) {
+	m := newTestModel(t)
+	m.textarea.SetValue("/the")
+	if m.slashPopupView() == "" {
+		t.Fatalf("slash popup should render")
+	}
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	updated := next.(Model)
+	if got := updated.slashPopupView(); got != "" {
+		t.Fatalf("slash popup should be dismissed, got %q", got)
+	}
+}
+
+func TestInlineStatusShowsModelAccessCacheCostAndSession(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 180
+	m.version = "0.1.0"
+	m.dangerous = true
+	m.inputTok = 1000
+	m.outputTok = 500
+	m.cacheHitTok = 700
+	m.cacheMissTok = 300
+	m.lastInputTok = 1000
+	m.lastOutputTok = 500
+
+	status := m.inlineStatusView()
+	for _, want := range []string{
+		"deepseek-v4-flash",
+		"🧠 high",
+		"Full Access",
+		"Context",
+		"cost $",
+		"cached",
+		"v0.1.0",
+		"theme dark",
+		"Main [",
+	} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status %q does not contain %q", status, want)
+		}
+	}
+	if strings.Count(status, "\n") != 1 {
+		t.Fatalf("status should be two lines, got %q", status)
+	}
+}
+
+func TestFormatMCPStatusShowsOwnConfigAndNativeWebTools(t *testing.T) {
+	text := formatMCPStatus(mcpStatusResponse{
+		ConfigFiles: []string{"/root/billyharness/mcp.config.toml"},
+		Allowed:     []string{"telegram", "telegram-parilka", "github", "context7"},
+		Enabled:     true,
+		Servers: []mcpclient.ServerStatus{{
+			Name:      "github",
+			Transport: "stdio",
+			Enabled:   true,
+			Connected: true,
+			ToolCount: 7,
+		}},
+	})
+	for _, want := range []string{
+		"/root/billyharness/mcp.config.toml",
+		"allowed: telegram, telegram-parilka, github, context7",
+		"native: web_search, web_fetch, web_crawl",
+		"github",
+		"connected",
+		"tools:7",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("mcp status missing %q: %q", want, text)
+		}
+	}
+}
+
+func TestAuthDeepSeekGatewayFlowDoesNotRenderSecret(t *testing.T) {
+	var captured map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/auth/deepseek" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"deepseek": map[string]any{"configured": true, "path": "/root/billyharness/.env"},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	m := newTestModel(t)
+	m.gatewayURL = server.URL
+	handled, cmd := m.handleSlashCommand("/auth deepseek")
+	if !handled || cmd != nil {
+		t.Fatalf("handled=%v cmd=%v", handled, cmd)
+	}
+	if m.authInputProvider != "deepseek" {
+		t.Fatalf("authInputProvider = %q", m.authInputProvider)
+	}
+	m.textarea.SetValue("sk-secret-value")
+	next, cmd := m.send()
+	updated := next.(Model)
+	if updated.textarea.Value() != "" {
+		t.Fatalf("textarea should be cleared")
+	}
+	msg := cmd().(authResultMsg)
+	if msg.err != nil {
+		t.Fatal(msg.err)
+	}
+	if captured["api_key"] != "sk-secret-value" {
+		t.Fatalf("captured = %#v", captured)
+	}
+	if strings.Contains(msg.text, "sk-secret-value") {
+		t.Fatalf("auth result leaked secret: %q", msg.text)
+	}
+}
+
+func TestAuthCodexGatewayImport(t *testing.T) {
+	var called bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/auth/codex/import" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		called = true
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"codex": map[string]any{"configured": true, "path": "/root/billyharness/auth/codex.json", "account_id": "acct_123"},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	m := newTestModel(t)
+	m.gatewayURL = server.URL
+	handled, cmd := m.handleSlashCommand("/auth codex")
+	if !handled || cmd == nil {
+		t.Fatalf("handled=%v cmd=%v", handled, cmd)
+	}
+	msg := cmd().(authResultMsg)
+	if msg.err != nil {
+		t.Fatal(msg.err)
+	}
+	if !called || !strings.Contains(msg.text, "acct_123") {
+		t.Fatalf("called=%v text=%q", called, msg.text)
+	}
+}
+
+func TestRunStatusShowsSpinnerAndInlineStatusShowsElapsedWhileBusy(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 160
+	m.busy = true
+	m.status = "running tool shell"
+	m.runStartedAt = time.Now().Add(-3 * time.Second)
+	m.spinnerFrame = 3
+
+	status := m.inlineStatusView()
+	if !strings.Contains(status, "running 3s") {
+		t.Fatalf("status %q should show elapsed seconds", status)
+	}
+	for _, frame := range spinnerFrames {
+		if strings.Contains(status, frame) {
+			t.Fatalf("inline status %q should not show spinner frame %q", status, frame)
+		}
+	}
+
+	runStatus := m.runStatusView()
+	if !strings.Contains(runStatus, "running tool shell") || !strings.Contains(runStatus, "3s") {
+		t.Fatalf("run status %q should show live state and elapsed seconds", runStatus)
+	}
+	foundSpinner := false
+	for _, frame := range spinnerFrames {
+		if strings.Contains(runStatus, frame) {
+			foundSpinner = true
+			break
+		}
+	}
+	if !foundSpinner {
+		t.Fatalf("run status %q should show spinner", runStatus)
+	}
+}
+
+func TestResizeDoesNotReserveHiddenSlashPopup(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.height = 30
+	m.resize(false)
+	noPopupHeight := m.viewport.Height()
+
+	m.textarea.SetValue("/the")
+	m.resize(false)
+	withPopupHeight := m.viewport.Height()
+	if noPopupHeight <= withPopupHeight {
+		t.Fatalf("hidden popup should not reserve rows: noPopup=%d withPopup=%d", noPopupHeight, withPopupHeight)
+	}
+	if noPopupHeight-withPopupHeight > 8 {
+		t.Fatalf("popup should reserve only its rendered height, delta=%d", noPopupHeight-withPopupHeight)
+	}
+}
+
+func TestChatCommands(t *testing.T) {
+	m := newTestModel(t)
+	original := m.localChatID
+	m.addBlock("user", "USER", "hello")
+
+	handled, cmd := m.handleSlashCommand("/new")
+	if !handled || cmd != nil {
+		t.Fatalf("/new handled=%v cmd=%v, want handled without command", handled, cmd)
+	}
+	if m.localChatID == original {
+		t.Fatalf("/new should create a new local chat id")
+	}
+	if len(m.blocks) != 0 {
+		t.Fatalf("/new should clear rendered blocks")
+	}
+
+	handled, _ = m.handleSlashCommand("/resume")
+	if !handled {
+		t.Fatalf("/resume should be handled")
+	}
+	if len(m.blocks) == 0 || !strings.Contains(m.blocks[len(m.blocks)-1].content, shortID(original)) {
+		t.Fatalf("/resume should list saved chats")
+	}
+}
+
+func newTestModel(t *testing.T) Model {
+	t.Helper()
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	return NewModel(config.Default(), Options{})
+}
+
+func stripANSITest(text string) string {
+	return regexp.MustCompile(`\x1b\[[0-9;:]*[A-Za-z]`).ReplaceAllString(text, "")
 }

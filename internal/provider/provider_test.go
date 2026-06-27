@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
@@ -65,7 +66,13 @@ func TestParseChunkEmitsReasoningContentToolAndUsage(t *testing.T) {
 				}]
 			}
 		}],
-		"usage":{"prompt_tokens":3,"completion_tokens":5}
+		"usage":{
+			"prompt_tokens":30,
+			"completion_tokens":5,
+			"prompt_cache_hit_tokens":20,
+			"prompt_cache_miss_tokens":10,
+			"completion_tokens_details":{"reasoning_tokens":2}
+		}
 	}`))
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +80,12 @@ func TestParseChunkEmitsReasoningContentToolAndUsage(t *testing.T) {
 	if len(events) != 4 {
 		t.Fatalf("events len = %d: %#v", len(events), events)
 	}
-	if events[0].Kind != EventUsage || events[0].Usage.InputTokens != 3 || events[0].Usage.OutputTokens != 5 {
+	if events[0].Kind != EventUsage ||
+		events[0].Usage.InputTokens != 30 ||
+		events[0].Usage.OutputTokens != 5 ||
+		events[0].Usage.CacheHitTokens != 20 ||
+		events[0].Usage.CacheMissTokens != 10 ||
+		events[0].Usage.ReasoningTokens != 2 {
 		t.Fatalf("usage event = %#v", events[0])
 	}
 	if events[1].Kind != EventContent || events[1].Text != "answer" {
@@ -84,6 +96,45 @@ func TestParseChunkEmitsReasoningContentToolAndUsage(t *testing.T) {
 	}
 	if events[3].Kind != EventToolCallDelta || events[3].ToolID != "call_1" || events[3].ToolName != "time_now" || events[3].ArgsDelta != "{}" {
 		t.Fatalf("tool event = %#v", events[3])
+	}
+}
+
+func TestParseChunkNormalizesOpenAICachedTokens(t *testing.T) {
+	events, err := parseChunk([]byte(`{
+		"choices":[],
+		"usage":{
+			"prompt_tokens":100,
+			"completion_tokens":7,
+			"prompt_tokens_details":{"cached_tokens":64}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Kind != EventUsage {
+		t.Fatalf("events = %#v", events)
+	}
+	if events[0].Usage.CacheHitTokens != 64 || events[0].Usage.CacheMissTokens != 36 {
+		t.Fatalf("usage = %#v", events[0].Usage)
+	}
+}
+
+func TestParseChunkCountsPromptTokensAsMissWhenCacheFieldsMissing(t *testing.T) {
+	events, err := parseChunk([]byte(`{
+		"choices":[],
+		"usage":{
+			"prompt_tokens":100,
+			"completion_tokens":7
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Kind != EventUsage {
+		t.Fatalf("events = %#v", events)
+	}
+	if events[0].Usage.CacheHitTokens != 0 || events[0].Usage.CacheMissTokens != 100 {
+		t.Fatalf("usage = %#v", events[0].Usage)
 	}
 }
 
@@ -101,5 +152,31 @@ func TestToolAccumulatorAssemblesArgumentDeltas(t *testing.T) {
 	}
 	if calls[0].ID != "call_a" || calls[0].Name != "fs_list" || string(calls[0].Arguments) != `{"path":"."}` {
 		t.Fatalf("call = %#v", calls[0])
+	}
+}
+
+func TestToolAccumulatorParallelCallsAndGaps(t *testing.T) {
+	var acc ToolAccumulator
+	acc.Push(Event{Kind: EventToolCallDelta, ToolIndex: 1, ToolID: "call_b", ToolName: "fs_read_file", ArgsDelta: `{"path":"README.md"}`})
+	acc.Push(Event{Kind: EventToolCallDelta, ToolIndex: 0, ToolID: "call_a", ToolName: "time_now", ArgsDelta: `{}`})
+	acc.Push(Event{Kind: EventToolCallDelta, ToolIndex: -1, ToolID: "bad", ToolName: "bad", ArgsDelta: `{}`})
+
+	calls, err := acc.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("calls = %#v", calls)
+	}
+	if calls[0].Name != "time_now" || calls[1].Name != "fs_read_file" {
+		t.Fatalf("calls = %#v", calls)
+	}
+}
+
+func TestToolAccumulatorErrorsOnMissingNameWithArguments(t *testing.T) {
+	var acc ToolAccumulator
+	acc.Push(Event{Kind: EventToolCallDelta, ToolIndex: 0, ToolID: "call_a", ArgsDelta: `{"path":"."}`})
+	if _, err := acc.Finish(); err == nil || !strings.Contains(err.Error(), "missing name") {
+		t.Fatalf("err = %v", err)
 	}
 }

@@ -18,12 +18,16 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
 const (
 	defaultWebBytes = 64 * 1024
 	maxWebBytes     = 512 * 1024
+	webTextChars    = 6 * 1024
+	webCrawlChars   = 3 * 1024
+	webMaxLinks     = 20
 	maxWriteBytes   = 2 * 1024 * 1024
 	maxExecOutput   = 512 * 1024
 )
@@ -38,12 +42,15 @@ type Tool struct {
 }
 
 type Registry struct {
-	cfg   config.Config
-	tools map[string]Tool
+	cfg          config.Config
+	tools        map[string]Tool
+	mcpTools     map[string]Tool
+	manager      *mcpclient.Manager
+	instructions []string
 }
 
 func NewRegistry(cfg config.Config) *Registry {
-	r := &Registry{cfg: cfg, tools: map[string]Tool{}}
+	r := &Registry{cfg: cfg, tools: map[string]Tool{}, mcpTools: map[string]Tool{}}
 	r.addTime()
 	r.addFSRead()
 	r.addFSList()
@@ -55,6 +62,82 @@ func NewRegistry(cfg config.Config) *Registry {
 	r.addWebSearch()
 	r.addWebCrawl()
 	return r
+}
+
+func NewRegistryWithMCP(ctx context.Context, cfg config.Config) (*Registry, error) {
+	if !cfg.MCPEnabled {
+		return NewRegistry(cfg), nil
+	}
+	if cfg.Provider == "mock" && len(cfg.MCPServers) == 0 && len(cfg.MCPConfigFiles) == 0 {
+		return NewRegistry(cfg), nil
+	}
+	if len(cfg.MCPServers) == 0 {
+		if err := cfg.LoadDefaultMCPServers(); err != nil {
+			return nil, err
+		}
+	}
+	registry := NewRegistry(cfg)
+	if len(cfg.MCPServers) == 0 {
+		return registry, nil
+	}
+	manager, err := mcpclient.NewManager(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	registry.manager = manager
+	registry.instructions = manager.Instructions()
+	for _, external := range manager.Tools() {
+		spec := external.Spec
+		handler := external.Handler
+		registry.mcpTools[spec.Name] = Tool{
+			Spec: spec,
+			Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
+				content, err := handler(ctx, args)
+				return Result{Content: truncate(content, registry.cfg.MaxToolOutputBytes)}, err
+			},
+		}
+	}
+	if len(registry.mcpTools) > 0 {
+		registry.addMCPGateway()
+	}
+	return registry, nil
+}
+
+func (r *Registry) Instructions() []string {
+	if r == nil {
+		return nil
+	}
+	instructions := append([]string(nil), r.instructions...)
+	if r.hasMCPServer("telegram_parilka") {
+		instructions = append(instructions, `telegram-parilka: Russian "парилка" / "Parilka" means the configured Telegram Parilka chat. For requests asking what is happening there, use mcp_list_tools with server "telegram-parilka", then mcp_call on read_history/search_messages/get_thread_context/get_chat_info. Do not inspect filesystem paths for this.`)
+	}
+	return instructions
+}
+
+func (r *Registry) Config() config.Config {
+	if r == nil {
+		return config.Config{}
+	}
+	return r.cfg
+}
+
+func (r *Registry) MCPStatuses() []mcpclient.ServerStatus {
+	if r == nil || r.manager == nil {
+		return nil
+	}
+	return r.manager.Statuses()
+}
+
+func (r *Registry) hasMCPServer(server string) bool {
+	if r == nil {
+		return false
+	}
+	for name := range r.mcpTools {
+		if mcpServerFromToolName(name) == server {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Registry) Specs() []protocol.ToolSpec {
@@ -69,6 +152,9 @@ func (r *Registry) Specs() []protocol.ToolSpec {
 func (r *Registry) Call(ctx context.Context, call protocol.ToolCall) (Result, error) {
 	tool, ok := r.tools[call.Name]
 	if !ok {
+		tool, ok = r.mcpTools[call.Name]
+	}
+	if !ok {
 		return Result{}, fmt.Errorf("unknown tool %s", call.Name)
 	}
 	return tool.Handler(ctx, call.Arguments)
@@ -76,6 +162,24 @@ func (r *Registry) Call(ctx context.Context, call protocol.ToolCall) (Result, er
 
 func (r *Registry) add(tool Tool) {
 	r.tools[tool.Spec.Name] = tool
+}
+
+func (r *Registry) Register(tool Tool) error {
+	if tool.Spec.Name == "" {
+		return fmt.Errorf("tool name required")
+	}
+	if _, exists := r.tools[tool.Spec.Name]; exists {
+		return fmt.Errorf("tool %s already registered", tool.Spec.Name)
+	}
+	r.tools[tool.Spec.Name] = tool
+	return nil
+}
+
+func (r *Registry) Close() {
+	if r != nil && r.manager != nil {
+		r.manager.Close()
+		r.manager = nil
+	}
 }
 
 func (r *Registry) addTime() {
@@ -218,7 +322,7 @@ func (r *Registry) addFSWrite() {
 	r.add(Tool{
 		Spec: protocol.ToolSpec{
 			Name:        "fs_write_file",
-			Description: "Create, overwrite, or append to a UTF-8 file under the allowed workspace. Requires FAST_AGENT_AUTO_APPROVE_DANGEROUS=true.",
+			Description: "Create, overwrite, or append to a UTF-8 file under the allowed workspace. Enabled by default; set FAST_AGENT_AUTO_APPROVE_DANGEROUS=false to disable write/execute tools.",
 			Parameters:  raw(`{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"append":{"type":"boolean","default":false},"create_dirs":{"type":"boolean","default":true}},"required":["path","content"],"additionalProperties":false}`),
 			Risk:        protocol.RiskWrite,
 		},
@@ -273,7 +377,7 @@ func (r *Registry) addFSMkdir() {
 	r.add(Tool{
 		Spec: protocol.ToolSpec{
 			Name:        "fs_make_dir",
-			Description: "Create a directory under the allowed workspace. Requires FAST_AGENT_AUTO_APPROVE_DANGEROUS=true.",
+			Description: "Create a directory under the allowed workspace. Enabled by default; set FAST_AGENT_AUTO_APPROVE_DANGEROUS=false to disable write/execute tools.",
 			Parameters:  raw(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}`),
 			Risk:        protocol.RiskWrite,
 		},
@@ -303,7 +407,7 @@ func (r *Registry) addShellExec() {
 	r.add(Tool{
 		Spec: protocol.ToolSpec{
 			Name:        "shell_exec",
-			Description: "Run a command by argv in an allowed workspace directory. Requires FAST_AGENT_AUTO_APPROVE_DANGEROUS=true.",
+			Description: "Run a command by argv in an allowed workspace directory. Do not use for Telegram/Parilka chat context; use mcp_list_tools and mcp_call instead. Enabled by default; set FAST_AGENT_AUTO_APPROVE_DANGEROUS=false to disable write/execute tools.",
 			Parameters:  raw(`{"type":"object","properties":{"argv":{"type":"array","items":{"type":"string"},"minItems":1},"cwd":{"type":"string","default":"."},"timeout_sec":{"type":"integer","default":20},"max_output_bytes":{"type":"integer","default":65536}},"required":["argv"],"additionalProperties":false}`),
 			Risk:        protocol.RiskExecute,
 		},
@@ -357,14 +461,17 @@ func (r *Registry) addWebFetch() {
 	r.add(Tool{
 		Spec: protocol.ToolSpec{
 			Name:        "web_fetch",
-			Description: "Fetch a public HTTP(S) URL and return extracted text plus discovered links.",
-			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"max_bytes":{"type":"integer","default":65536}},"required":["url"],"additionalProperties":false}`),
+			Description: "Fetch a public HTTP(S) URL and return compact extracted text, summary, and links. Set full_text only when exact page text is required.",
+			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"max_bytes":{"type":"integer","default":65536},"max_chars":{"type":"integer","default":6144,"description":"Maximum extracted text characters returned unless full_text is true."},"full_text":{"type":"boolean","default":false},"max_links":{"type":"integer","default":20}},"required":["url"],"additionalProperties":false}`),
 			Risk:        protocol.RiskNetwork,
 		},
 		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in struct {
 				URL      string `json:"url"`
 				MaxBytes int    `json:"max_bytes"`
+				MaxChars int    `json:"max_chars"`
+				FullText bool   `json:"full_text"`
+				MaxLinks int    `json:"max_links"`
 			}
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
@@ -373,7 +480,11 @@ func (r *Registry) addWebFetch() {
 			if err != nil {
 				return Result{}, err
 			}
-			out, _ := json.MarshalIndent(page, "", "  ")
+			out, _ := json.MarshalIndent(compactFetchedPage(page, webFetchOptions{
+				MaxChars: in.MaxChars,
+				FullText: in.FullText,
+				MaxLinks: in.MaxLinks,
+			}), "", "  ")
 			return Result{Content: string(out)}, nil
 		},
 	})
@@ -416,7 +527,7 @@ func (r *Registry) addWebCrawl() {
 		Spec: protocol.ToolSpec{
 			Name:        "web_crawl",
 			Description: "Crawl public HTTP(S) pages breadth-first, optionally restricted to the start host.",
-			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"max_pages":{"type":"integer","default":3},"max_depth":{"type":"integer","default":1},"same_host":{"type":"boolean","default":true},"max_bytes_per_page":{"type":"integer","default":65536}},"required":["url"],"additionalProperties":false}`),
+			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"max_pages":{"type":"integer","default":3},"max_depth":{"type":"integer","default":1},"same_host":{"type":"boolean","default":true},"max_bytes_per_page":{"type":"integer","default":65536},"max_chars_per_page":{"type":"integer","default":3072},"full_text":{"type":"boolean","default":false}},"required":["url"],"additionalProperties":false}`),
 			Risk:        protocol.RiskNetwork,
 		},
 		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
@@ -426,6 +537,8 @@ func (r *Registry) addWebCrawl() {
 				MaxDepth        int    `json:"max_depth"`
 				SameHost        *bool  `json:"same_host"`
 				MaxBytesPerPage int    `json:"max_bytes_per_page"`
+				MaxCharsPerPage int    `json:"max_chars_per_page"`
+				FullText        bool   `json:"full_text"`
 			}
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
@@ -438,8 +551,114 @@ func (r *Registry) addWebCrawl() {
 			if err != nil {
 				return Result{}, err
 			}
-			out, _ := json.MarshalIndent(pages, "", "  ")
+			out, _ := json.MarshalIndent(compactCrawlPages(pages, webFetchOptions{
+				MaxChars: in.MaxCharsPerPage,
+				FullText: in.FullText,
+				MaxLinks: 0,
+			}), "", "  ")
 			return Result{Content: string(out)}, nil
+		},
+	})
+}
+
+func (r *Registry) addMCPGateway() {
+	r.add(Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "mcp_list_tools",
+			Description: "List connected MCP tools compactly. Use before mcp_call when Telegram, Telegram Parilka, GitHub, or Context7 tools are needed. For Russian парилка/Parilka chat requests, use server telegram-parilka.",
+			Parameters:  raw(`{"type":"object","properties":{"server":{"type":"string","description":"Optional MCP server filter: telegram, telegram-parilka, github, or context7. telegram_parilka and парилка are also accepted."},"query":{"type":"string","description":"Optional case-insensitive name/description filter."},"limit":{"type":"integer","default":40},"include_schema":{"type":"boolean","default":false,"description":"Include a matching tool input schema only when needed to call it."}},"additionalProperties":false}`),
+			Risk:        protocol.RiskReadOnly,
+		},
+		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
+			var in struct {
+				Server        string `json:"server"`
+				Query         string `json:"query"`
+				Limit         int    `json:"limit"`
+				IncludeSchema bool   `json:"include_schema"`
+			}
+			if err := json.Unmarshal(args, &in); err != nil {
+				return Result{}, err
+			}
+			if in.Limit <= 0 || in.Limit > 80 {
+				in.Limit = 40
+			}
+			type item struct {
+				Name        string          `json:"name"`
+				Server      string          `json:"server,omitempty"`
+				Description string          `json:"description,omitempty"`
+				InputSchema json.RawMessage `json:"input_schema,omitempty"`
+			}
+			serverFilter := normalizeMCPServerFilter(in.Server)
+			query := strings.ToLower(strings.TrimSpace(in.Query))
+			if serverFilter == "" && isParilkaAlias(query) {
+				serverFilter = "telegram_parilka"
+				query = ""
+			}
+			names := make([]string, 0, len(r.mcpTools))
+			for name := range r.mcpTools {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			var tools []item
+			truncated := false
+			for _, name := range names {
+				tool := r.mcpTools[name]
+				server := mcpServerFromToolName(name)
+				if serverFilter != "" && server != serverFilter {
+					continue
+				}
+				haystack := strings.ToLower(name + " " + tool.Spec.Description)
+				if query != "" && !strings.Contains(haystack, query) {
+					continue
+				}
+				if len(tools) >= in.Limit {
+					truncated = true
+					break
+				}
+				out := item{
+					Name:        name,
+					Server:      displayMCPServerName(server),
+					Description: truncate(oneLine(tool.Spec.Description), 240),
+				}
+				if in.IncludeSchema {
+					out.InputSchema = tool.Spec.Parameters
+				}
+				tools = append(tools, out)
+			}
+			out, _ := json.MarshalIndent(map[string]any{
+				"tools":     tools,
+				"truncated": truncated,
+			}, "", "  ")
+			return Result{Content: string(out)}, nil
+		},
+	})
+	r.add(Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "mcp_call",
+			Description: "Call a connected MCP tool by full name after inspecting it with mcp_list_tools. For Parilka chat requests, call a tool named like mcp__telegram_parilka__read_history or mcp__telegram_parilka__search_messages.",
+			Parameters:  raw(`{"type":"object","properties":{"name":{"type":"string","description":"Full MCP tool name, for example mcp__github__search_repositories."},"arguments":{"type":"object","description":"Arguments for the MCP tool.","additionalProperties":true}},"required":["name"],"additionalProperties":false}`),
+			Risk:        protocol.RiskExternal,
+		},
+		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
+			var in struct {
+				Name      string          `json:"name"`
+				Arguments json.RawMessage `json:"arguments"`
+			}
+			if err := json.Unmarshal(args, &in); err != nil {
+				return Result{}, err
+			}
+			name := strings.TrimSpace(in.Name)
+			if name == "" {
+				return Result{}, fmt.Errorf("name required")
+			}
+			if len(in.Arguments) == 0 || string(in.Arguments) == "null" {
+				in.Arguments = json.RawMessage(`{}`)
+			}
+			tool, ok := r.mcpTools[name]
+			if !ok {
+				return Result{}, fmt.Errorf("unknown MCP tool %s; call mcp_list_tools first", name)
+			}
+			return tool.Handler(ctx, in.Arguments)
 		},
 	})
 }
@@ -448,7 +667,7 @@ func (r *Registry) requireDangerous() error {
 	if r.cfg.AutoApproveDangerous {
 		return nil
 	}
-	return fmt.Errorf("tool disabled; set FAST_AGENT_AUTO_APPROVE_DANGEROUS=true to enable write/execute tools")
+	return fmt.Errorf("tool disabled; set FAST_AGENT_AUTO_APPROVE_DANGEROUS=true or unset FAST_AGENT_AUTO_APPROVE_DANGEROUS to enable write/execute tools")
 }
 
 func (r *Registry) safePath(input string) (string, error) {
@@ -465,13 +684,51 @@ func (r *Registry) safePath(input string) (string, error) {
 	if sensitive(path) {
 		return "", fmt.Errorf("refusing sensitive path %s", path)
 	}
+	policyPath, err := resolvedPathForPolicy(path)
+	if err != nil {
+		return "", err
+	}
+	if sensitive(policyPath) {
+		return "", fmt.Errorf("refusing sensitive path %s", policyPath)
+	}
 	for _, root := range r.cfg.WorkspaceRoots {
 		absRoot, _ := filepath.Abs(root)
-		if path == absRoot || strings.HasPrefix(path, absRoot+string(os.PathSeparator)) {
+		policyRoot, err := filepath.EvalSymlinks(absRoot)
+		if err != nil {
+			policyRoot = absRoot
+		}
+		policyRoot, _ = filepath.Abs(policyRoot)
+		if policyPath == policyRoot || strings.HasPrefix(policyPath, policyRoot+string(os.PathSeparator)) {
 			return path, nil
 		}
 	}
 	return "", fmt.Errorf("path outside workspace roots: %s", path)
+}
+
+func resolvedPathForPolicy(path string) (string, error) {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Abs(resolved)
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	cursor := filepath.Clean(path)
+	var missing []string
+	for {
+		parent := filepath.Dir(cursor)
+		if parent == cursor {
+			return filepath.Abs(path)
+		}
+		missing = append([]string{filepath.Base(cursor)}, missing...)
+		if resolved, err := filepath.EvalSymlinks(parent); err == nil {
+			for _, part := range missing {
+				resolved = filepath.Join(resolved, part)
+			}
+			return filepath.Abs(resolved)
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		cursor = parent
+	}
 }
 
 func (r *Registry) relativeBase() string {
@@ -518,6 +775,218 @@ type crawlPage struct {
 	Title string `json:"title,omitempty"`
 	Text  string `json:"text"`
 	Error string `json:"error,omitempty"`
+}
+
+type webFetchOptions struct {
+	MaxChars int
+	FullText bool
+	MaxLinks int
+}
+
+type compactPage struct {
+	URL                 string   `json:"url"`
+	Status              int      `json:"status,omitempty"`
+	ContentType         string   `json:"content_type,omitempty"`
+	Title               string   `json:"title,omitempty"`
+	Summary             string   `json:"summary,omitempty"`
+	Text                string   `json:"text,omitempty"`
+	Links               []string `json:"links,omitempty"`
+	Truncated           bool     `json:"truncated,omitempty"`
+	OriginalTextChars   int      `json:"original_text_chars,omitempty"`
+	OutputTextTruncated bool     `json:"output_text_truncated,omitempty"`
+}
+
+type compactCrawlPage struct {
+	URL                 string `json:"url"`
+	Depth               int    `json:"depth"`
+	Title               string `json:"title,omitempty"`
+	Summary             string `json:"summary,omitempty"`
+	Text                string `json:"text,omitempty"`
+	Error               string `json:"error,omitempty"`
+	OriginalTextChars   int    `json:"original_text_chars,omitempty"`
+	OutputTextTruncated bool   `json:"output_text_truncated,omitempty"`
+}
+
+func compactFetchedPage(page fetchedPage, opts webFetchOptions) compactPage {
+	maxChars := normalizedWebChars(opts.MaxChars, webTextChars)
+	text, outputTruncated := compactWebText(page.Text, maxChars, opts.FullText)
+	maxLinks := opts.MaxLinks
+	if maxLinks <= 0 || maxLinks > 50 {
+		maxLinks = webMaxLinks
+	}
+	links := page.Links
+	if len(links) > maxLinks {
+		links = links[:maxLinks]
+	}
+	return compactPage{
+		URL:                 page.URL,
+		Status:              page.Status,
+		ContentType:         page.ContentType,
+		Title:               page.Title,
+		Summary:             summarizeText(page.Title, page.Text, 900),
+		Text:                text,
+		Links:               links,
+		Truncated:           page.Truncated,
+		OriginalTextChars:   len([]rune(page.Text)),
+		OutputTextTruncated: outputTruncated || len(page.Links) > len(links),
+	}
+}
+
+func compactCrawlPages(pages []crawlPage, opts webFetchOptions) []compactCrawlPage {
+	maxChars := normalizedWebChars(opts.MaxChars, webCrawlChars)
+	out := make([]compactCrawlPage, 0, len(pages))
+	for _, page := range pages {
+		text, outputTruncated := compactWebText(page.Text, maxChars, opts.FullText)
+		out = append(out, compactCrawlPage{
+			URL:                 page.URL,
+			Depth:               page.Depth,
+			Title:               page.Title,
+			Summary:             summarizeText(page.Title, page.Text, 700),
+			Text:                text,
+			Error:               page.Error,
+			OriginalTextChars:   len([]rune(page.Text)),
+			OutputTextTruncated: outputTruncated,
+		})
+	}
+	return out
+}
+
+func normalizedWebChars(value, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	if value < 800 {
+		return 800
+	}
+	if value > 24*1024 {
+		return 24 * 1024
+	}
+	return value
+}
+
+func compactWebText(text string, maxChars int, fullText bool) (string, bool) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", false
+	}
+	if fullText {
+		return truncateRunes(text, maxWebBytes), len([]rune(text)) > maxWebBytes
+	}
+	return truncateRunesWithMarker(text, maxChars)
+}
+
+func summarizeText(title, text string, maxChars int) string {
+	text = oneLine(text)
+	if text == "" {
+		return strings.TrimSpace(title)
+	}
+	var parts []string
+	if title = strings.TrimSpace(title); title != "" {
+		parts = append(parts, title)
+	}
+	sentences := splitSentences(text)
+	for _, sentence := range sentences {
+		sentence = strings.TrimSpace(sentence)
+		if sentence == "" {
+			continue
+		}
+		candidate := strings.Join(append(append([]string{}, parts...), sentence), " — ")
+		if len([]rune(candidate)) > maxChars {
+			break
+		}
+		parts = append(parts, sentence)
+		if len(parts) >= 4 {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return truncate(text, maxChars)
+	}
+	return truncate(strings.Join(parts, " — "), maxChars)
+}
+
+func splitSentences(text string) []string {
+	var out []string
+	start := 0
+	for i, r := range text {
+		if r != '.' && r != '!' && r != '?' && r != '。' && r != '…' {
+			continue
+		}
+		if i+1 <= start {
+			continue
+		}
+		out = append(out, strings.TrimSpace(text[start:i+len(string(r))]))
+		start = i + len(string(r))
+		if len(out) >= 8 {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return []string{truncate(text, 320)}
+	}
+	return out
+}
+
+func oneLine(text string) string {
+	return strings.Join(strings.Fields(text), " ")
+}
+
+func truncateRunesWithMarker(text string, maxRunes int) (string, bool) {
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text, false
+	}
+	if maxRunes < 32 {
+		maxRunes = 32
+	}
+	return string(runes[:maxRunes]) + "\n...[truncated; call web_fetch with full_text=true only if exact full page text is required]", true
+}
+
+func truncateRunes(text string, maxRunes int) string {
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	return string(runes[:maxRunes])
+}
+
+func mcpServerFromToolName(name string) string {
+	name = strings.TrimPrefix(name, "mcp__")
+	server, _, ok := strings.Cut(name, "__")
+	if !ok {
+		return ""
+	}
+	return server
+}
+
+func normalizeMCPServerFilter(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	if isParilkaAlias(value) {
+		return "telegram_parilka"
+	}
+	return sanitizeMCPServerName(value)
+}
+
+func displayMCPServerName(value string) string {
+	if value == "telegram_parilka" {
+		return "telegram-parilka"
+	}
+	return value
+}
+
+func isParilkaAlias(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return strings.Contains(value, "parilka") ||
+		strings.Contains(value, "парил")
+}
+
+func sanitizeMCPServerName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = mcpServerUnsafeRE.ReplaceAllString(value, "_")
+	return strings.Trim(value, "_")
 }
 
 func searchDuckDuckGoLite(ctx context.Context, query string, limit int) ([]searchResult, error) {
@@ -699,15 +1168,16 @@ func isPublicIP(ip net.IP) bool {
 }
 
 var (
-	anchorRE   = regexp.MustCompile(`(?is)<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)</a>`)
-	brRE       = regexp.MustCompile(`(?i)<br\s*/?>|</p>|</div>|</li>|</h[1-6]>`)
-	scriptRE   = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
-	styleRE    = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
-	noscriptRE = regexp.MustCompile(`(?is)<noscript[^>]*>.*?</noscript>`)
-	tagRE      = regexp.MustCompile(`(?s)<[^>]+>`)
-	spaceRE    = regexp.MustCompile(`[ \t\r\f\v]+`)
-	blankRE    = regexp.MustCompile(`\n{3,}`)
-	titleRE    = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+	mcpServerUnsafeRE = regexp.MustCompile(`[^a-z0-9_]+`)
+	anchorRE          = regexp.MustCompile(`(?is)<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)</a>`)
+	brRE              = regexp.MustCompile(`(?i)<br\s*/?>|</p>|</div>|</li>|</h[1-6]>`)
+	scriptRE          = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
+	styleRE           = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
+	noscriptRE        = regexp.MustCompile(`(?is)<noscript[^>]*>.*?</noscript>`)
+	tagRE             = regexp.MustCompile(`(?s)<[^>]+>`)
+	spaceRE           = regexp.MustCompile(`[ \t\r\f\v]+`)
+	blankRE           = regexp.MustCompile(`\n{3,}`)
+	titleRE           = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 )
 
 func parseSearchResults(baseURL, body string, limit int) []searchResult {

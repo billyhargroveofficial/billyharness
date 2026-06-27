@@ -54,6 +54,7 @@ const (
 	EventToolCallRequested   EventType = "tool.call_requested"
 	EventToolCallStarted     EventType = "tool.call_started"
 	EventToolCallFinished    EventType = "tool.call_finished"
+	EventContextCompacted    EventType = "context.compacted"
 	EventRunCompleted        EventType = "run.completed"
 	EventRunFailed           EventType = "run.failed"
 	EventProviderUsageUpdate EventType = "provider.usage"
