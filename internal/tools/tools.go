@@ -73,6 +73,7 @@ func NewRegistry(cfg config.Config) *Registry {
 	r.addWebFetch()
 	r.addWebSearch()
 	r.addWebCrawl()
+	r.addToolSearch()
 	return r
 }
 
@@ -612,6 +613,142 @@ func (r *Registry) addWebCrawl() {
 			return Result{Content: string(out)}, nil
 		},
 	})
+}
+
+func (r *Registry) addToolSearch() {
+	r.add(Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "tool_search",
+			Description: "Search native and connected MCP tools by name or description without listing every external tool in the model prompt. Returns compact call hints.",
+			Parameters:  raw(`{"type":"object","properties":{"query":{"type":"string","description":"Tool capability, name, or description text to search for. Empty returns the first matching tools."},"server":{"type":"string","description":"Optional MCP server filter: telegram, telegram-parilka, github, or context7."},"limit":{"type":"integer","default":20},"include_schema":{"type":"boolean","default":false,"description":"Include input schema for matching tools when exact arguments are needed."}},"additionalProperties":false}`),
+			Risk:        protocol.RiskReadOnly,
+		},
+		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
+			var in struct {
+				Query         string `json:"query"`
+				Server        string `json:"server"`
+				Limit         int    `json:"limit"`
+				IncludeSchema bool   `json:"include_schema"`
+			}
+			if err := json.Unmarshal(args, &in); err != nil {
+				return Result{}, err
+			}
+			if in.Limit <= 0 || in.Limit > 80 {
+				in.Limit = 20
+			}
+			results := r.searchTools(in.Query, in.Server, in.Limit, in.IncludeSchema)
+			out, _ := json.MarshalIndent(map[string]any{
+				"tools":     results.Items,
+				"truncated": results.Truncated,
+			}, "", "  ")
+			return Result{Content: string(out), Metadata: map[string]any{"matches": len(results.Items), "truncated": results.Truncated}}, nil
+		},
+	})
+}
+
+type toolSearchResults struct {
+	Items     []toolSearchItem
+	Truncated bool
+}
+
+type toolSearchItem struct {
+	Name        string          `json:"name"`
+	Source      string          `json:"source"`
+	Server      string          `json:"server,omitempty"`
+	CallTool    string          `json:"call_tool"`
+	CallName    string          `json:"call_name,omitempty"`
+	Risk        protocol.Risk   `json:"risk,omitempty"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema,omitempty"`
+}
+
+func (r *Registry) searchTools(query, server string, limit int, includeSchema bool) toolSearchResults {
+	if limit <= 0 {
+		limit = 20
+	}
+	query = strings.ToLower(strings.TrimSpace(query))
+	serverFilter := normalizeMCPServerFilter(server)
+	if serverFilter == "" && isParilkaAlias(query) {
+		serverFilter = "telegram_parilka"
+		query = ""
+	}
+	var items []toolSearchItem
+	truncated := false
+	add := func(item toolSearchItem, spec protocol.ToolSpec) bool {
+		haystack := strings.ToLower(spec.Name + " " + spec.Description + " " + item.Server + " " + item.Source)
+		if !toolSearchMatches(haystack, query) {
+			return false
+		}
+		if len(items) >= limit {
+			truncated = true
+			return true
+		}
+		item.Description = truncate(oneLine(spec.Description), 240)
+		item.Risk = spec.Risk
+		if includeSchema {
+			item.InputSchema = spec.Parameters
+		}
+		items = append(items, item)
+		return false
+	}
+
+	nativeNames := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		nativeNames = append(nativeNames, name)
+	}
+	sort.Strings(nativeNames)
+	for _, name := range nativeNames {
+		if serverFilter != "" {
+			continue
+		}
+		tool := r.tools[name]
+		if stop := add(toolSearchItem{
+			Name:     tool.Spec.Name,
+			Source:   "native",
+			CallTool: tool.Spec.Name,
+		}, tool.Spec); stop {
+			return toolSearchResults{Items: items, Truncated: truncated}
+		}
+	}
+
+	mcpNames := make([]string, 0, len(r.mcpTools))
+	for name := range r.mcpTools {
+		mcpNames = append(mcpNames, name)
+	}
+	sort.Strings(mcpNames)
+	for _, name := range mcpNames {
+		tool := r.mcpTools[name]
+		serverName := mcpServerFromToolName(name)
+		if serverFilter != "" && serverName != serverFilter {
+			continue
+		}
+		if stop := add(toolSearchItem{
+			Name:     tool.Spec.Name,
+			Source:   "mcp",
+			Server:   displayMCPServerName(serverName),
+			CallTool: "mcp_call",
+			CallName: tool.Spec.Name,
+		}, tool.Spec); stop {
+			return toolSearchResults{Items: items, Truncated: truncated}
+		}
+	}
+	return toolSearchResults{Items: items, Truncated: truncated}
+}
+
+func toolSearchMatches(haystack, query string) bool {
+	query = strings.TrimSpace(strings.ToLower(query))
+	if query == "" {
+		return true
+	}
+	if strings.Contains(haystack, query) {
+		return true
+	}
+	for _, term := range strings.Fields(query) {
+		if !strings.Contains(haystack, term) {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *Registry) addMCPGateway() {

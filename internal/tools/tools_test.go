@@ -499,7 +499,7 @@ func TestLazyMCPGatewayHidesRawSpecsAndCanCallTool(t *testing.T) {
 			t.Fatalf("raw MCP tool leaked into model specs: %#v", registry.Specs())
 		}
 	}
-	if !hasSpec(registry.Specs(), "mcp_list_tools") || !hasSpec(registry.Specs(), "mcp_call") {
+	if !hasSpec(registry.Specs(), "mcp_list_tools") || !hasSpec(registry.Specs(), "mcp_call") || !hasSpec(registry.Specs(), "tool_search") {
 		t.Fatalf("lazy MCP tools missing: %#v", registry.Specs())
 	}
 
@@ -588,6 +588,63 @@ func TestLazyMCPGatewayHidesRawSpecsAndCanCallTool(t *testing.T) {
 	}
 	if nullArgs.Content != "history" {
 		t.Fatalf("null mcp_call arguments result = %q", nullArgs.Content)
+	}
+}
+
+func TestToolSearchFindsNativeAndMCPTools(t *testing.T) {
+	registry := NewRegistry(config.Default())
+	registry.mcpTools["mcp__github__search_repositories"] = Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "mcp__github__search_repositories",
+			Description: "Search GitHub repositories by query.",
+			Parameters:  raw(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}`),
+			Risk:        protocol.RiskExternal,
+		},
+		Handler: func(context.Context, json.RawMessage) (Result, error) {
+			return Result{Content: "ok"}, nil
+		},
+	}
+	registry.addMCPGateway()
+
+	native, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "tool_search",
+		Arguments: rawArgs(map[string]any{"query": "read file", "limit": 5}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"name": "fs_read_file"`,
+		`"source": "native"`,
+		`"call_tool": "fs_read_file"`,
+	} {
+		if !strings.Contains(native.Content, want) {
+			t.Fatalf("native tool_search missing %q in:\n%s", want, native.Content)
+		}
+	}
+
+	mcp, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "tool_search",
+		Arguments: rawArgs(map[string]any{
+			"query":          "repositories",
+			"server":         "github",
+			"include_schema": true,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"name": "mcp__github__search_repositories"`,
+		`"source": "mcp"`,
+		`"server": "github"`,
+		`"call_tool": "mcp_call"`,
+		`"call_name": "mcp__github__search_repositories"`,
+		`"input_schema"`,
+	} {
+		if !strings.Contains(mcp.Content, want) {
+			t.Fatalf("mcp tool_search missing %q in:\n%s", want, mcp.Content)
+		}
 	}
 }
 
