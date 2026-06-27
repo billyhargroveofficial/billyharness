@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -255,6 +256,101 @@ func TestCodexStreamRefreshesAfterUnauthorizedResponse(t *testing.T) {
 	}
 	if len(sawAuthorization) != 2 || sawAuthorization[0] == sawAuthorization[1] {
 		t.Fatalf("authorization headers = %#v", sawAuthorization)
+	}
+}
+
+func TestCodexConcurrentStreamsRefreshExpiredTokenOnce(t *testing.T) {
+	expired := testJWT(t, map[string]any{"exp": time.Now().Add(-time.Hour).Unix()})
+	refreshed := testJWT(t, map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "refreshed": true})
+	var mu sync.Mutex
+	var refreshCalls int
+	var responseAuthorizations []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/oauth/token":
+			mu.Lock()
+			refreshCalls++
+			mu.Unlock()
+			time.Sleep(20 * time.Millisecond)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token":  refreshed,
+				"refresh_token": "refresh-new",
+			})
+		case "/responses":
+			mu.Lock()
+			responseAuthorizations = append(responseAuthorizations, r.Header.Get("Authorization"))
+			mu.Unlock()
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{}}\n\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	c := &Codex{
+		BaseURL:         server.URL,
+		RequestTimeout:  time.Second,
+		CodexRefreshURL: server.URL + "/oauth/token",
+		CodexClientID:   "client-test",
+		Auth: &codexAuth{
+			AccessToken:  expired,
+			RefreshToken: "refresh-old",
+			ExpiresAt:    time.Now().Add(-time.Hour),
+		},
+		Client: server.Client(),
+	}
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			events, streamErrs := c.Stream(context.Background(), Request{
+				Model:    "gpt-5.5",
+				Messages: []protocol.Message{{Role: protocol.RoleUser, Content: "ping"}},
+			})
+			for range events {
+			}
+			errs <- <-streamErrs
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if refreshCalls != 1 {
+		t.Fatalf("refreshCalls = %d, want 1", refreshCalls)
+	}
+	if len(responseAuthorizations) != 2 {
+		t.Fatalf("response authorizations = %#v", responseAuthorizations)
+	}
+	for _, auth := range responseAuthorizations {
+		if auth != "Bearer "+refreshed {
+			t.Fatalf("Authorization = %q, want refreshed token", auth)
+		}
+	}
+}
+
+func TestCodexStreamMissingAuthReturnsError(t *testing.T) {
+	c := &Codex{BaseURL: "http://127.0.0.1", Client: http.DefaultClient}
+	events, errs := c.Stream(context.Background(), Request{
+		Model:    "gpt-5.5",
+		Messages: []protocol.Message{{Role: protocol.RoleUser, Content: "ping"}},
+	})
+	for range events {
+	}
+	err := <-errs
+	if err == nil || !strings.Contains(err.Error(), "missing an access token") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

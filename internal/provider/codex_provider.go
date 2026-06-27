@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
@@ -37,6 +38,13 @@ type Codex struct {
 	CodexClientID     string
 	Auth              *codexAuth
 	Client            *http.Client
+	authMu            sync.Mutex
+}
+
+type codexAuthSnapshot struct {
+	AccessToken string
+	AccountID   string
+	FedRAMP     bool
 }
 
 func (c *Codex) Stream(ctx context.Context, req Request) (<-chan Event, <-chan error) {
@@ -57,23 +65,8 @@ func (c *Codex) stream(ctx context.Context, req Request, events chan<- Event) er
 	if err != nil {
 		return err
 	}
-	if c.Auth != nil && c.Auth.needsRefresh(time.Now()) && c.Auth.RefreshToken != "" {
-		refreshCtx, finishSetup, cancelRefresh := newRequestSetupContext(ctx, c.RequestTimeout)
-		err := c.Auth.refresh(refreshCtx, config.Config{
-			CodexRefreshURL: c.CodexRefreshURL,
-			CodexClientID:   c.CodexClientID,
-		}, c.Client)
-		setupTimedOut := finishSetup()
-		cancelRefresh()
-		if setupTimedOut {
-			return context.DeadlineExceeded
-		}
-		if err != nil {
-			return err
-		}
-	}
-	if c.Auth != nil && c.Auth.needsRefresh(time.Now()) {
-		return fmt.Errorf("Codex access token needs refresh but no refresh token is available")
+	if err := c.ensureFreshAuth(ctx); err != nil {
+		return err
 	}
 	resp, respCancel, err := c.doResponsesWithRetry(ctx, body)
 	if err != nil {
@@ -94,20 +87,11 @@ func (c *Codex) doResponsesWithRetry(ctx context.Context, body []byte) (*http.Re
 		if err == nil {
 			return resp, respCancel, nil
 		}
-		if c.canRefreshAfterUnauthorized(err, refreshedUnauthorized) {
-			refreshCtx, finishSetup, cancelRefresh := newRequestSetupContext(ctx, c.RequestTimeout)
-			refreshErr := c.Auth.refresh(refreshCtx, config.Config{
-				CodexRefreshURL: c.CodexRefreshURL,
-				CodexClientID:   c.CodexClientID,
-			}, c.Client)
-			setupTimedOut := finishSetup()
-			cancelRefresh()
-			if setupTimedOut {
-				return nil, nil, context.DeadlineExceeded
-			}
-			if refreshErr != nil {
-				return nil, nil, refreshErr
-			}
+		refreshed, refreshErr := c.refreshAfterUnauthorized(ctx, err, refreshedUnauthorized)
+		if refreshErr != nil {
+			return nil, nil, refreshErr
+		}
+		if refreshed {
 			refreshedUnauthorized = true
 			continue
 		}
@@ -122,6 +106,10 @@ func (c *Codex) doResponsesWithRetry(ctx context.Context, body []byte) (*http.Re
 }
 
 func (c *Codex) doResponsesRequest(ctx context.Context, body []byte) (*http.Response, context.CancelFunc, error) {
+	auth, err := c.authSnapshot()
+	if err != nil {
+		return nil, nil, err
+	}
 	reqCtx, finishSetup, cancelReq := newRequestSetupContext(ctx, c.RequestTimeout)
 	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, codexResponsesURL(c.BaseURL), bytes.NewReader(body))
 	if err != nil {
@@ -131,11 +119,11 @@ func (c *Codex) doResponsesRequest(ctx context.Context, body []byte) (*http.Resp
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
-	httpReq.Header.Set("Authorization", "Bearer "+c.Auth.AccessToken)
-	if c.Auth.AccountID != "" {
-		httpReq.Header.Set("ChatGPT-Account-ID", c.Auth.AccountID)
+	httpReq.Header.Set("Authorization", "Bearer "+auth.AccessToken)
+	if auth.AccountID != "" {
+		httpReq.Header.Set("ChatGPT-Account-ID", auth.AccountID)
 	}
-	if c.Auth.FedRAMP {
+	if auth.FedRAMP {
 		httpReq.Header.Set("X-OpenAI-Fedramp", "true")
 	}
 	if c.Originator != "" {
@@ -163,17 +151,79 @@ func (c *Codex) doResponsesRequest(ctx context.Context, body []byte) (*http.Resp
 		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
 		cancelReq()
-		return nil, nil, providerHTTPError("codex", resp.StatusCode, resp.Header, secrets.Redact(string(limited), c.Auth.AccessToken))
+		return nil, nil, providerHTTPError("codex", resp.StatusCode, resp.Header, secrets.Redact(string(limited), auth.AccessToken))
 	}
 	return resp, cancelReq, nil
 }
 
-func (c *Codex) canRefreshAfterUnauthorized(err error, alreadyRefreshed bool) bool {
-	if alreadyRefreshed || c == nil || c.Auth == nil || c.Auth.PAT || c.Auth.RefreshToken == "" {
-		return false
+func (c *Codex) ensureFreshAuth(ctx context.Context) error {
+	if c == nil {
+		return fmt.Errorf("Codex provider is nil")
+	}
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+	if c.Auth == nil || strings.TrimSpace(c.Auth.AccessToken) == "" {
+		return fmt.Errorf("Codex auth is missing an access token")
+	}
+	if !c.Auth.needsRefresh(time.Now()) {
+		return nil
+	}
+	if c.Auth.RefreshToken == "" {
+		return fmt.Errorf("Codex access token needs refresh but no refresh token is available")
+	}
+	return c.refreshAuthLocked(ctx)
+}
+
+func (c *Codex) authSnapshot() (codexAuthSnapshot, error) {
+	if c == nil {
+		return codexAuthSnapshot{}, fmt.Errorf("Codex provider is nil")
+	}
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+	if c.Auth == nil || strings.TrimSpace(c.Auth.AccessToken) == "" {
+		return codexAuthSnapshot{}, fmt.Errorf("Codex auth is missing an access token")
+	}
+	return codexAuthSnapshot{
+		AccessToken: c.Auth.AccessToken,
+		AccountID:   c.Auth.AccountID,
+		FedRAMP:     c.Auth.FedRAMP,
+	}, nil
+}
+
+func (c *Codex) refreshAfterUnauthorized(ctx context.Context, err error, alreadyRefreshed bool) (bool, error) {
+	if alreadyRefreshed {
+		return false, nil
 	}
 	var providerErr *ProviderError
-	return errors.As(err, &providerErr) && providerErr.Status == http.StatusUnauthorized
+	if !errors.As(err, &providerErr) || providerErr.Status != http.StatusUnauthorized {
+		return false, nil
+	}
+	if c == nil {
+		return false, nil
+	}
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+	if c.Auth == nil || c.Auth.PAT || c.Auth.RefreshToken == "" {
+		return false, nil
+	}
+	if err := c.refreshAuthLocked(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (c *Codex) refreshAuthLocked(ctx context.Context) error {
+	refreshCtx, finishSetup, cancelRefresh := newRequestSetupContext(ctx, c.RequestTimeout)
+	err := c.Auth.refresh(refreshCtx, config.Config{
+		CodexRefreshURL: c.CodexRefreshURL,
+		CodexClientID:   c.CodexClientID,
+	}, c.Client)
+	setupTimedOut := finishSetup()
+	cancelRefresh()
+	if setupTimedOut {
+		return context.DeadlineExceeded
+	}
+	return err
 }
 
 func (c *Codex) body(req Request) ([]byte, error) {
