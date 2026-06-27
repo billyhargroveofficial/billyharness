@@ -142,13 +142,13 @@ func (s *Server) callTool(ctx context.Context, req request) response {
 		params.Arguments = json.RawMessage(`{}`)
 	}
 	result, err := s.registry.Call(ctx, protocol.ToolCall{Name: params.Name, Arguments: params.Arguments})
-	isError := false
+	isError := result.IsError
 	text := result.Content
 	if err != nil {
 		isError = true
 		if text == "" {
 			text = err.Error()
-		} else {
+		} else if text != err.Error() {
 			text = fmt.Sprintf("%s\n%s", text, err.Error())
 		}
 	}

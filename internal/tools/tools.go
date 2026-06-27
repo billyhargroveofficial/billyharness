@@ -33,7 +33,12 @@ const (
 )
 
 type Result struct {
-	Content string
+	Content   string
+	IsError   bool
+	ErrorCode string
+	Metadata  map[string]any
+	Truncated bool
+	OutputRef string
 }
 
 type Tool struct {
@@ -152,7 +157,11 @@ func (r *Registry) Specs() []protocol.ToolSpec {
 func (r *Registry) Call(ctx context.Context, call protocol.ToolCall) (Result, error) {
 	tool, ok := r.lookup(call.Name)
 	if !ok {
-		return Result{}, fmt.Errorf("unknown tool %s", call.Name)
+		return errorResult("unknown_tool", fmt.Sprintf("unknown tool %s", call.Name)), fmt.Errorf("unknown tool %s", call.Name)
+	}
+	call.Arguments = normalizeArgs(call.Arguments)
+	if err := validateArgs(tool.Spec.Parameters, call.Arguments); err != nil {
+		return errorResult("validation_error", err.Error()), err
 	}
 	return tool.Handler(ctx, call.Arguments)
 }
@@ -176,6 +185,17 @@ func (r *Registry) lookup(name string) (Tool, bool) {
 		tool, ok = r.mcpTools[name]
 	}
 	return tool, ok
+}
+
+func normalizeArgs(args json.RawMessage) json.RawMessage {
+	if len(args) == 0 || strings.TrimSpace(string(args)) == "" || strings.TrimSpace(string(args)) == "null" {
+		return json.RawMessage(`{}`)
+	}
+	return args
+}
+
+func errorResult(code, content string) Result {
+	return Result{Content: content, IsError: true, ErrorCode: code}
 }
 
 func (r *Registry) add(tool Tool) {

@@ -2406,7 +2406,7 @@ func (m *Model) applyEvent(event protocol.Event) {
 		m.status = "running tool " + toolName(event.Data)
 		m.addBlock("tool", toolTitle(event.Data), toolBody(event.Data))
 	case protocol.EventToolCallFinished:
-		m.appendToolResult(fmt.Sprint(event.Data))
+		m.appendToolResult(toolResultText(event.Data))
 		m.collapseLastToolBlockIfLarge()
 	case protocol.EventContextCompacted:
 		m.status = "context compacted"
@@ -2428,6 +2428,18 @@ func (m *Model) applyEvent(event protocol.Event) {
 		m.addBlock("error", "ERROR", fmt.Sprint(event.Data))
 		m.status = "failed"
 	}
+}
+
+func toolResultText(value any) string {
+	bytes, _ := json.Marshal(value)
+	var result protocol.ToolResult
+	if err := json.Unmarshal(bytes, &result); err == nil && (result.Content != "" || result.Name != "" || result.CallID != "") {
+		if result.Content != "" {
+			return result.Content
+		}
+		return fmt.Sprint(value)
+	}
+	return fmt.Sprint(value)
 }
 
 func (m *Model) appendToOpenBlock(kind, title, text string) {

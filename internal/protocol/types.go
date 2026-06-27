@@ -36,6 +36,17 @@ type ToolCall struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
+type ToolResult struct {
+	CallID    string         `json:"call_id,omitempty"`
+	Name      string         `json:"name,omitempty"`
+	Content   string         `json:"content"`
+	IsError   bool           `json:"is_error,omitempty"`
+	ErrorCode string         `json:"error_code,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	Truncated bool           `json:"truncated,omitempty"`
+	OutputRef string         `json:"output_ref,omitempty"`
+}
+
 type ToolSpec struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`

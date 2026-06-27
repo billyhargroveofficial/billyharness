@@ -90,7 +90,12 @@ func TestObserveCountsUsageToolErrorsAndNames(t *testing.T) {
 	result := Result{ToolCallsByName: map[string]int{}}
 	observe(&result, protocol.Event{Type: protocol.EventModelCallStarted})
 	observe(&result, protocol.Event{Type: protocol.EventToolCallStarted, Data: "fs_read_file"})
-	observe(&result, protocol.Event{Type: protocol.EventToolCallFinished, Data: "tool error: nope"})
+	observe(&result, protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
+		Name:      "fs_read_file",
+		Content:   "nope",
+		IsError:   true,
+		ErrorCode: "validation_error",
+	}})
 	observe(&result, protocol.Event{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
 		"input_tokens":      10,
 		"output_tokens":     3,

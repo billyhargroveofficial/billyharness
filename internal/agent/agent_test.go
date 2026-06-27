@@ -285,6 +285,9 @@ func TestRunMessagesExecutesToolAndContinuesLoop(t *testing.T) {
 	if !sawEvent(events, protocol.EventToolCallRequested) || !sawEvent(events, protocol.EventToolCallFinished) || !sawEvent(events, protocol.EventRunCompleted) {
 		t.Fatalf("events missing tool/run completion: %#v", events)
 	}
+	if result, ok := firstToolResult(events); !ok || result.Name != "fs_write_file" || result.CallID != "call_1" || result.IsError {
+		t.Fatalf("tool result event = %#v ok=%v", result, ok)
+	}
 	if prov.calls != 2 {
 		t.Fatalf("provider calls = %d", prov.calls)
 	}
@@ -577,6 +580,17 @@ func sawToolStarted(events []protocol.Event, name string) bool {
 		}
 	}
 	return false
+}
+
+func firstToolResult(events []protocol.Event) (protocol.ToolResult, bool) {
+	for _, event := range events {
+		if event.Type != protocol.EventToolCallFinished {
+			continue
+		}
+		result, ok := event.Data.(protocol.ToolResult)
+		return result, ok
+	}
+	return protocol.ToolResult{}, false
 }
 
 func hasToolSpec(specs []protocol.ToolSpec, name string) bool {

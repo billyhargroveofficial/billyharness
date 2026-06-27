@@ -111,7 +111,7 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 		for _, result := range results {
 			messages = append(messages, protocol.Message{
 				Role:       protocol.RoleTool,
-				Content:    result.Content,
+				Content:    result.Result.Content,
 				ToolCallID: result.Call.ID,
 				Name:       result.Call.Name,
 			})
@@ -123,9 +123,9 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 }
 
 type toolExecutionResult struct {
-	Index   int
-	Call    protocol.ToolCall
-	Content string
+	Index  int
+	Call   protocol.ToolCall
+	Result protocol.ToolResult
 }
 
 func (a *Agent) executeToolCalls(ctx context.Context, calls []protocol.ToolCall, emit func(protocol.Event)) []toolExecutionResult {
@@ -185,24 +185,39 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, calls []protocol.T
 	}()
 	for result := range done {
 		results[result.Index] = result
-		emit(protocol.Event{Type: protocol.EventToolCallFinished, Data: result.Content})
+		emit(protocol.Event{Type: protocol.EventToolCallFinished, Data: result.Result})
 	}
 }
 
 func (a *Agent) executeOneTool(ctx context.Context, index int, call protocol.ToolCall, emit func(protocol.Event)) toolExecutionResult {
 	emit(protocol.Event{Type: protocol.EventToolCallStarted, Data: call.Name})
 	result := a.callTool(ctx, index, call)
-	emit(protocol.Event{Type: protocol.EventToolCallFinished, Data: result.Content})
+	emit(protocol.Event{Type: protocol.EventToolCallFinished, Data: result.Result})
 	return result
 }
 
 func (a *Agent) callTool(ctx context.Context, index int, call protocol.ToolCall) toolExecutionResult {
 	result, err := a.tools.Call(ctx, call)
-	content := result.Content
-	if err != nil {
-		content = "tool error: " + err.Error()
+	out := protocol.ToolResult{
+		CallID:    call.ID,
+		Name:      call.Name,
+		Content:   result.Content,
+		IsError:   result.IsError,
+		ErrorCode: result.ErrorCode,
+		Metadata:  result.Metadata,
+		Truncated: result.Truncated,
+		OutputRef: result.OutputRef,
 	}
-	return toolExecutionResult{Index: index, Call: call, Content: content}
+	if err != nil {
+		out.IsError = true
+		if out.ErrorCode == "" {
+			out.ErrorCode = "tool_error"
+		}
+		if out.Content == "" {
+			out.Content = err.Error()
+		}
+	}
+	return toolExecutionResult{Index: index, Call: call, Result: out}
 }
 
 func (a *Agent) canRunToolParallel(call protocol.ToolCall) bool {

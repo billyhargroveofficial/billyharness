@@ -294,7 +294,7 @@ func observe(result *Result, event protocol.Event) {
 			result.ToolCallsByName[name]++
 		}
 	case protocol.EventToolCallFinished:
-		if text, ok := event.Data.(string); ok && strings.HasPrefix(text, "tool error:") {
+		if toolResultIsError(event.Data) {
 			result.ToolErrors++
 		}
 	case protocol.EventProviderUsageUpdate:
@@ -312,6 +312,15 @@ func observe(result *Result, event protocol.Event) {
 			result.CacheMissTokens += usage.CacheMissTokens
 		}
 	}
+}
+
+func toolResultIsError(value any) bool {
+	if text, ok := value.(string); ok {
+		return strings.HasPrefix(text, "tool error:")
+	}
+	bytes, _ := json.Marshal(value)
+	var result protocol.ToolResult
+	return json.Unmarshal(bytes, &result) == nil && result.IsError
 }
 
 func prepareWorkspace(outDir, runID string, task Task) (string, error) {

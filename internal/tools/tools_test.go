@@ -49,6 +49,50 @@ func TestWriteToolCanBeDisabled(t *testing.T) {
 	}
 }
 
+func TestToolArgumentsValidatedAgainstSchema(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	registry := NewRegistry(cfg)
+
+	for _, tc := range []struct {
+		name string
+		call protocol.ToolCall
+		want string
+	}{
+		{
+			name: "missing required",
+			call: protocol.ToolCall{Name: "fs_read_file", Arguments: rawArgs(map[string]any{})},
+			want: `missing required property "path"`,
+		},
+		{
+			name: "wrong type",
+			call: protocol.ToolCall{Name: "fs_list", Arguments: rawArgs(map[string]any{"path": ".", "limit": "ten"})},
+			want: "$.limit must be integer",
+		},
+		{
+			name: "extra property",
+			call: protocol.ToolCall{Name: "time_now", Arguments: rawArgs(map[string]any{"unused": true})},
+			want: `unknown property "unused"`,
+		},
+		{
+			name: "array min items",
+			call: protocol.ToolCall{Name: "shell_exec", Arguments: rawArgs(map[string]any{"argv": []string{}})},
+			want: "$.argv must contain at least 1 items",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := registry.Call(context.Background(), tc.call)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+			if !result.IsError || result.ErrorCode != "validation_error" || !strings.Contains(result.Content, tc.want) {
+				t.Fatalf("result = %#v", result)
+			}
+		})
+	}
+}
+
 func TestDangerousToolsCanBeDisabled(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Default()
