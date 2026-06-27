@@ -111,7 +111,15 @@ func isCodexProvider(cfg config.Config) bool {
 		return true
 	}
 	model := strings.ToLower(strings.TrimSpace(cfg.Model))
-	return provider == "deepseek" && strings.HasPrefix(model, "gpt-")
+	return provider == "deepseek" && isCodexModelFamily(model)
+}
+
+func isCodexModelFamily(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(model, "gpt-") ||
+		strings.HasPrefix(model, "o1") ||
+		strings.HasPrefix(model, "o3") ||
+		strings.HasPrefix(model, "o4")
 }
 
 type Mock struct{}
@@ -286,10 +294,17 @@ func parseSSE(ctx context.Context, r io.Reader, idle time.Duration, events chan<
 		case <-timer:
 			return errors.New("provider stream idle timeout")
 		case err := <-errs:
-			return err
+			if err != nil {
+				return err
+			}
+			return errors.New("provider stream closed before [DONE]")
 		case line, ok := <-lines:
 			if !ok {
-				return nil
+				err := <-errs
+				if err != nil {
+					return err
+				}
+				return errors.New("provider stream closed before [DONE]")
 			}
 			if idle > 0 {
 				timer = time.After(idle)
@@ -306,7 +321,7 @@ func parseSSE(ctx context.Context, r io.Reader, idle time.Duration, events chan<
 				if err := sendEvent(ctx, events, Event{Kind: EventDone}); err != nil {
 					return err
 				}
-				continue
+				return nil
 			}
 			parsed, err := parseChunk([]byte(data))
 			if err != nil {

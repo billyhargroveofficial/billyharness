@@ -178,7 +178,7 @@ func (c *Config) LoadDefaultMCPServers() error {
 		}
 		files = []string{path}
 	}
-	servers, err := LoadMCPServers(files)
+	servers, err := loadMCPServers(files, c.MCPAllowedServers)
 	if err != nil {
 		return err
 	}
@@ -336,8 +336,13 @@ tool_timeout_sec = 300.0
 `
 
 func LoadMCPServers(files []string) ([]MCPServer, error) {
+	return loadMCPServers(files, nil)
+}
+
+func loadMCPServers(files []string, allowed []string) ([]MCPServer, error) {
 	merged := map[string]MCPServer{}
 	order := []string{}
+	allowedSet := mcpAllowedSet(allowed)
 	for _, file := range files {
 		if strings.TrimSpace(file) == "" {
 			continue
@@ -347,8 +352,12 @@ func LoadMCPServers(files []string) ([]MCPServer, error) {
 			return nil, err
 		}
 		for name, raw := range root.MCPServers {
+			if len(allowedSet) > 0 && !allowedSet[strings.ToLower(strings.TrimSpace(name))] {
+				continue
+			}
 			if raw.Enabled != nil && !*raw.Enabled {
 				delete(merged, name)
+				order = removeString(order, name)
 				continue
 			}
 			if err := raw.validate(name); err != nil {
@@ -362,12 +371,41 @@ func LoadMCPServers(files []string) ([]MCPServer, error) {
 		}
 	}
 	out := make([]MCPServer, 0, len(merged))
+	emitted := map[string]bool{}
 	for _, name := range order {
-		if server, ok := merged[name]; ok {
+		if server, ok := merged[name]; ok && !emitted[name] {
 			out = append(out, server)
+			emitted[name] = true
 		}
 	}
 	return out, nil
+}
+
+func mcpAllowedSet(allowed []string) map[string]bool {
+	if len(allowed) == 0 {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, name := range allowed {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name != "" {
+			out[name] = true
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func removeString(values []string, target string) []string {
+	out := values[:0]
+	for _, value := range values {
+		if value != target {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 type codexMCPConfig struct {

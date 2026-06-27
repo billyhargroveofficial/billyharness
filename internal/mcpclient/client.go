@@ -174,13 +174,14 @@ func mcpTransport(server config.MCPServer) string {
 }
 
 type stdioClient struct {
-	server config.MCPServer
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	out    *bufio.Reader
-	mu     sync.Mutex
-	nextID int64
-	stderr *limitedBuffer
+	server    config.MCPServer
+	cmd       *exec.Cmd
+	stdin     io.WriteCloser
+	out       *bufio.Reader
+	mu        sync.Mutex
+	closeOnce sync.Once
+	nextID    int64
+	stderr    *limitedBuffer
 }
 
 type rpcRequest struct {
@@ -411,7 +412,8 @@ func (c *stdioClient) write(ctx context.Context, value any) error {
 	}()
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		go c.close()
+		return c.withStderr(ctx.Err())
 	case err := <-done:
 		if err != nil {
 			return fmt.Errorf("MCP %s write: %w", c.server.Name, err)
@@ -473,14 +475,16 @@ func (c *stdioClient) callTool(ctx context.Context, name string, args json.RawMe
 }
 
 func (c *stdioClient) close() {
-	if c.stdin != nil {
-		_ = c.stdin.Close()
-	}
-	if c.cmd != nil && c.cmd.Process != nil {
-		_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
-		_ = c.cmd.Process.Kill()
-		_, _ = c.cmd.Process.Wait()
-	}
+	c.closeOnce.Do(func() {
+		if c.stdin != nil {
+			_ = c.stdin.Close()
+		}
+		if c.cmd != nil && c.cmd.Process != nil {
+			_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
+			_ = c.cmd.Process.Kill()
+			_, _ = c.cmd.Process.Wait()
+		}
+	})
 }
 
 func (c *stdioClient) withStderr(err error) error {

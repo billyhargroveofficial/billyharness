@@ -3160,7 +3160,7 @@ func (m Model) selectionPointFromMouseClamped(x, y int) selectionPoint {
 		x = 0
 	}
 	if x >= m.viewport.Width() {
-		x = max(0, m.viewport.Width()-1)
+		x = max(0, m.viewport.Width())
 	}
 	return m.selectionPointFromMouse(x, y)
 }

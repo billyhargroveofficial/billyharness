@@ -228,6 +228,32 @@ func TestFilterMCPServersKeepsOnlyAllowedNames(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultMCPServersSkipsInvalidDisallowedServers(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[mcp_servers.github]
+command = "npx"
+
+[mcp_servers.bad]
+command = "python3"
+url = "https://example.com/mcp"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{
+		MCPEnabled:        true,
+		MCPConfigFiles:    []string{path},
+		MCPAllowedServers: []string{"github"},
+	}
+	if err := cfg.LoadDefaultMCPServers(); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.MCPServers) != 1 || cfg.MCPServers[0].Name != "github" {
+		t.Fatalf("servers = %#v", cfg.MCPServers)
+	}
+}
+
 func TestLoadMCPServersOverlayDisablesAndRejectsInvalidTransport(t *testing.T) {
 	root := t.TempDir()
 	base := filepath.Join(root, "base.toml")
@@ -259,6 +285,35 @@ url = "https://example.com/mcp"
 	}
 	if _, err := LoadMCPServers([]string{invalid}); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestLoadMCPServersDisableThenReenableDoesNotDuplicate(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "base.toml")
+	disabled := filepath.Join(root, "disabled.toml")
+	reenabled := filepath.Join(root, "reenabled.toml")
+	if err := os.WriteFile(base, []byte(`[mcp_servers.fake]
+command = "python3"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(disabled, []byte(`[mcp_servers.fake]
+enabled = false
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(reenabled, []byte(`[mcp_servers.fake]
+command = "node"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := LoadMCPServers([]string{base, disabled, reenabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(servers) != 1 || servers[0].Name != "fake" || servers[0].Command != "node" {
+		t.Fatalf("servers = %#v", servers)
 	}
 }
 

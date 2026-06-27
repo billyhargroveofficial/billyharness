@@ -14,6 +14,8 @@ import (
 )
 
 const deepSeekKeyEnv = "DEEPSEEK_API_KEY"
+const codexAccessTokenEnv = "CODEX_ACCESS_TOKEN"
+const codexAccountIDEnv = "CODEX_CHATGPT_ACCOUNT_ID"
 
 type ProviderStatus struct {
 	Configured bool   `json:"configured"`
@@ -71,14 +73,21 @@ func CodexStatus(cfg config.Config) ProviderStatus {
 		path = config.DefaultCodexAuthFile()
 	}
 	status := ProviderStatus{Path: path}
+	if token := strings.TrimSpace(os.Getenv(codexAccessTokenEnv)); token != "" {
+		return codexEnvStatus(token, strings.TrimSpace(os.Getenv(codexAccountIDEnv)), "env:"+codexAccessTokenEnv, path)
+	}
+	if token, ok := config.LookupEnvOrDotenv(codexAccessTokenEnv); ok && strings.TrimSpace(token) != "" {
+		accountID, _ := config.LookupEnvOrDotenv(codexAccountIDEnv)
+		return codexEnvStatus(token, strings.TrimSpace(accountID), ".env", path)
+	}
 	payload, err := readAuthPayload(path)
 	if err != nil {
 		return status
 	}
-	status.Configured = true
-	status.Source = path
 	status.Mode = stringField(payload, "auth_mode")
 	if token := stringField(payload, "personal_access_token"); token != "" {
+		status.Configured = true
+		status.Source = path
 		status.Mode = "personalAccessToken"
 		status.AccountID = stringField(payload, "chatgpt_account_id")
 		return status
@@ -87,13 +96,36 @@ func CodexStatus(cfg config.Config) ProviderStatus {
 	if tokens == nil {
 		return status
 	}
+	accessToken := stringField(tokens, "access_token")
+	refreshToken := stringField(tokens, "refresh_token")
+	if accessToken == "" && refreshToken == "" {
+		return status
+	}
+	status.Configured = true
+	status.Source = path
 	if status.AccountID = stringField(tokens, "account_id"); status.AccountID == "" {
 		status.AccountID = accountIDFromJWT(stringField(tokens, "id_token"))
 	}
 	if status.AccountID == "" {
-		status.AccountID = accountIDFromJWT(stringField(tokens, "access_token"))
+		status.AccountID = accountIDFromJWT(accessToken)
 	}
-	if exp := expirationFromJWT(stringField(tokens, "access_token")); !exp.IsZero() {
+	if exp := expirationFromJWT(accessToken); !exp.IsZero() {
+		status.ExpiresAt = exp.UTC().Format(time.RFC3339)
+	}
+	return status
+}
+
+func codexEnvStatus(token, accountID, source, path string) ProviderStatus {
+	status := ProviderStatus{Configured: true, Source: source, Path: path, AccountID: accountID}
+	if strings.HasPrefix(strings.TrimSpace(token), "at-") {
+		status.Mode = "personalAccessToken"
+		return status
+	}
+	status.Mode = "accessToken"
+	if status.AccountID == "" {
+		status.AccountID = accountIDFromJWT(token)
+	}
+	if exp := expirationFromJWT(token); !exp.IsZero() {
 		status.ExpiresAt = exp.UTC().Format(time.RFC3339)
 	}
 	return status

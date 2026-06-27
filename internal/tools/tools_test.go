@@ -1,12 +1,15 @@
 package tools
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
@@ -465,7 +468,7 @@ func TestLazyMCPGatewayHidesRawSpecsAndCanCallTool(t *testing.T) {
 		Spec: protocol.ToolSpec{
 			Name:        "mcp__fake__echo",
 			Description: "MCP fake/echo. Echo text",
-			Parameters:  raw(`{"type":"object","properties":{"text":{"type":"string"}}}`),
+			Parameters:  raw(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}`),
 			Risk:        protocol.RiskExternal,
 		},
 		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
@@ -498,6 +501,17 @@ func TestLazyMCPGatewayHidesRawSpecsAndCanCallTool(t *testing.T) {
 	}
 	if !hasSpec(registry.Specs(), "mcp_list_tools") || !hasSpec(registry.Specs(), "mcp_call") {
 		t.Fatalf("lazy MCP tools missing: %#v", registry.Specs())
+	}
+
+	direct, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "mcp__fake__echo",
+		Arguments: rawArgs(map[string]any{"text": "bypass"}),
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown tool") {
+		t.Fatalf("raw MCP tool should not be directly callable, got result=%#v err=%v", direct, err)
+	}
+	if direct.ErrorCode != "unknown_tool" {
+		t.Fatalf("direct raw MCP call result = %#v", direct)
 	}
 
 	list, err := registry.Call(context.Background(), protocol.ToolCall{
@@ -547,6 +561,161 @@ func TestLazyMCPGatewayHidesRawSpecsAndCanCallTool(t *testing.T) {
 	if called.Content != "ok" {
 		t.Fatalf("mcp_call result = %q", called.Content)
 	}
+
+	rejected, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_call",
+		Arguments: rawArgs(map[string]any{
+			"name":      "mcp__fake__echo",
+			"arguments": map[string]any{"text": "ok", "extra": true},
+		}),
+	})
+	if err == nil || !strings.Contains(err.Error(), `unknown property "extra"`) {
+		t.Fatalf("expected target schema validation error, got result=%#v err=%v", rejected, err)
+	}
+	if !rejected.IsError || rejected.ErrorCode != "validation_error" {
+		t.Fatalf("expected validation error result, got %#v", rejected)
+	}
+
+	nullArgs, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_call",
+		Arguments: rawArgs(map[string]any{
+			"name":      "mcp__telegram_parilka__read_history",
+			"arguments": nil,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nullArgs.Content != "history" {
+		t.Fatalf("null mcp_call arguments result = %q", nullArgs.Content)
+	}
+}
+
+func TestMCPGatewayListsServerStatusesAndValidatesStdioCalls(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.MCPEnabled = true
+	cfg.MCPServers = []config.MCPServer{{
+		Name:           "fake",
+		Command:        os.Args[0],
+		Args:           []string{"-test.run=TestToolsFakeStdioMCPServer"},
+		Env:            map[string]string{"BILLYHARNESS_TOOLS_MCP_HELPER": "1"},
+		CWD:            root,
+		Enabled:        true,
+		Required:       true,
+		StartupTimeout: 5 * time.Second,
+		ToolTimeout:    5 * time.Second,
+	}}
+	registry, err := NewRegistryWithMCP(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+
+	list, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_list_tools",
+		Arguments: rawArgs(map[string]any{
+			"server":         "fake",
+			"include_schema": true,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"servers"`,
+		`"name": "fake"`,
+		`"connected": true`,
+		`"tool_count": 1`,
+		`"mcp__fake__echo"`,
+		`"input_schema"`,
+	} {
+		if !strings.Contains(list.Content, want) {
+			t.Fatalf("mcp_list_tools missing %q in:\n%s", want, list.Content)
+		}
+	}
+
+	invalid, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_call",
+		Arguments: rawArgs(map[string]any{
+			"name":      "mcp__fake__echo",
+			"arguments": map[string]any{"extra": "nope"},
+		}),
+	})
+	if err == nil || !strings.Contains(err.Error(), `missing required property "text"`) {
+		t.Fatalf("expected target schema validation error, got result=%#v err=%v", invalid, err)
+	}
+	if !invalid.IsError || invalid.ErrorCode != "validation_error" {
+		t.Fatalf("expected validation error result, got %#v", invalid)
+	}
+
+	valid, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_call",
+		Arguments: rawArgs(map[string]any{
+			"name":      "mcp__fake__echo",
+			"arguments": map[string]any{"text": "hello"},
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if valid.Content != "hello" {
+		t.Fatalf("mcp_call content = %q", valid.Content)
+	}
+}
+
+func TestToolsFakeStdioMCPServer(t *testing.T) {
+	if os.Getenv("BILLYHARNESS_TOOLS_MCP_HELPER") != "1" {
+		return
+	}
+	scanner := bufio.NewScanner(os.Stdin)
+	enc := json.NewEncoder(os.Stdout)
+	for scanner.Scan() {
+		var req struct {
+			ID     any             `json:"id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+			continue
+		}
+		if req.Method == "notifications/initialized" {
+			continue
+		}
+		switch req.Method {
+		case "initialize":
+			_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{
+				"protocolVersion": "2025-06-18",
+				"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
+				"serverInfo":      map[string]any{"name": "fake", "version": "1.0.0"},
+				"instructions":    "Use echo for MCP gateway tests.",
+			}})
+		case "tools/list":
+			_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"tools": []map[string]any{{
+				"name":        "echo",
+				"description": "Echo text",
+				"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"text": map[string]any{"type": "string"}}, "required": []string{"text"}, "additionalProperties": false},
+			}}}})
+		case "tools/call":
+			var call struct {
+				Name      string         `json:"name"`
+				Arguments map[string]any `json:"arguments"`
+			}
+			_ = json.Unmarshal(req.Params, &call)
+			if call.Name != "echo" {
+				_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{"code": -32602, "message": "unknown tool"}})
+				continue
+			}
+			_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{
+				"content": []map[string]any{{"type": "text", "text": fmt.Sprint(call.Arguments["text"])}},
+				"isError": false,
+			}})
+		default:
+			_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{"code": -32601, "message": "method not found"}})
+		}
+	}
+	os.Exit(0)
 }
 
 func hasSpec(specs []protocol.ToolSpec, name string) bool {

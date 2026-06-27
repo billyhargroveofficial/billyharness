@@ -80,6 +80,42 @@ func TestSaveCodexAuthJSONRejectsMissingTokens(t *testing.T) {
 	}
 }
 
+func TestCodexStatusSeesEnvAccessToken(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	exp := time.Now().Add(time.Hour).Unix()
+	t.Setenv("CODEX_ACCESS_TOKEN", testJWT(t, map[string]any{"exp": exp, "chatgpt_account_id": "acct_env"}))
+
+	status := CodexStatus(config.Default())
+	if !status.Configured || status.Source != "env:CODEX_ACCESS_TOKEN" || status.AccountID != "acct_env" || status.Mode != "accessToken" {
+		t.Fatalf("status = %#v", status)
+	}
+	if status.ExpiresAt == "" {
+		t.Fatalf("expires_at missing: %#v", status)
+	}
+}
+
+func TestCodexStatusDoesNotConfigureEmptyAuthFile(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	t.Setenv("FAST_AGENT_ENV_FILE", filepath.Join(root, "missing.env"))
+	path := filepath.Join(root, "auth", "codex.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(path, map[string]any{"auth_mode": "chatgpt"}); err != nil {
+		t.Fatal(err)
+	}
+
+	status := CodexStatus(config.Default())
+	if status.Configured || status.Source != "" {
+		t.Fatalf("empty auth file should not be configured: %#v", status)
+	}
+	if status.Path != path || status.Mode != "chatgpt" {
+		t.Fatalf("status should still report path/mode: %#v", status)
+	}
+}
+
 func writeJSON(path string, value any) error {
 	body, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {

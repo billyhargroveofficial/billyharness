@@ -482,6 +482,23 @@ func TestTranscriptSelectionText(t *testing.T) {
 	}
 }
 
+func TestTranscriptSelectionClampKeepsRightEdgeExclusive(t *testing.T) {
+	m := newTestModel(t)
+	m.viewport.SetWidth(3)
+	m.viewport.SetHeight(1)
+	m.viewportContent = "abc"
+	m.viewport.SetContent("abc")
+	m.selectStart = selectionPoint{row: 0, col: 0}
+	m.selectEnd = m.selectionPointFromMouseClamped(999, 0)
+
+	if m.selectEnd.col != 3 {
+		t.Fatalf("end col = %d, want exclusive right edge 3", m.selectEnd.col)
+	}
+	if got := m.selectedTranscriptText(); got != "abc" {
+		t.Fatalf("selected text = %q, want abc", got)
+	}
+}
+
 func TestTranscriptSelectionIsVisiblyHighlighted(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 80

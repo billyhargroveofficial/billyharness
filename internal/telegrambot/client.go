@@ -32,9 +32,9 @@ type Client struct {
 	httpClient  *http.Client
 	minInterval time.Duration
 
-	mu       sync.Mutex
-	lastCall map[int64]time.Time
-	backoff  map[int64]time.Duration
+	mu           sync.Mutex
+	lastCall     map[int64]time.Time
+	backoffUntil map[int64]time.Time
 }
 
 type ClientOptions struct {
@@ -58,12 +58,12 @@ func NewClient(opts ClientOptions) *Client {
 		minInterval = 1100 * time.Millisecond
 	}
 	return &Client{
-		baseURL:     baseURL,
-		token:       strings.TrimSpace(opts.Token),
-		httpClient:  client,
-		minInterval: minInterval,
-		lastCall:    map[int64]time.Time{},
-		backoff:     map[int64]time.Duration{},
+		baseURL:      baseURL,
+		token:        strings.TrimSpace(opts.Token),
+		httpClient:   client,
+		minInterval:  minInterval,
+		lastCall:     map[int64]time.Time{},
+		backoffUntil: map[int64]time.Time{},
 	}
 }
 
@@ -99,7 +99,7 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text, parseMode 
 		payload["message_thread_id"] = threadID
 	}
 	err := c.postWithRetry(ctx, chatID, "sendMessage", payload, &msg)
-	if err == nil || parseMode == "" {
+	if err == nil || parseMode == "" || !isTelegramParseError(err) {
 		return msg, err
 	}
 	delete(payload, "parse_mode")
@@ -135,7 +135,7 @@ func (c *Client) EditMessageText(ctx context.Context, chatID int64, messageID in
 	}
 	var out json.RawMessage
 	err := c.postWithRetry(ctx, chatID, "editMessageText", payload, &out)
-	if err == nil || parseMode == "" {
+	if err == nil || parseMode == "" || !isTelegramParseError(err) {
 		return err
 	}
 	delete(payload, "parse_mode")
@@ -206,12 +206,12 @@ func (c *Client) post(ctx context.Context, chatID int64, method string, payload 
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/bot"+c.token+"/"+method, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return redactTelegramError(err, c.token)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return redactTelegramError(err, c.token)
 	}
 	defer resp.Body.Close()
 	limited, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
@@ -239,27 +239,47 @@ func (c *Client) post(ctx context.Context, chatID int64, method string, payload 
 }
 
 func (c *Client) waitRate(ctx context.Context, chatID int64) error {
+	now := time.Now()
 	c.mu.Lock()
-	last := c.lastCall[chatID]
-	interval := c.minInterval
-	if c.backoff[chatID] > interval {
-		interval = c.backoff[chatID]
+	scheduled := now
+	if last, ok := c.lastCall[chatID]; ok {
+		if next := last.Add(c.minInterval); next.After(scheduled) {
+			scheduled = next
+		}
 	}
-	wait := interval - time.Since(last)
+	if until, ok := c.backoffUntil[chatID]; ok {
+		if until.After(scheduled) {
+			scheduled = until
+		}
+		if !until.After(now) {
+			delete(c.backoffUntil, chatID)
+		}
+	}
+	c.lastCall[chatID] = scheduled
 	c.mu.Unlock()
+	wait := time.Until(scheduled)
 	if wait > 0 {
 		timer := time.NewTimer(wait)
 		defer timer.Stop()
 		select {
 		case <-ctx.Done():
+			c.releaseRateReservation(chatID, scheduled)
 			return ctx.Err()
 		case <-timer.C:
 		}
 	}
-	c.mu.Lock()
-	c.lastCall[chatID] = time.Now()
-	c.mu.Unlock()
 	return nil
+}
+
+func (c *Client) releaseRateReservation(chatID int64, scheduled time.Time) {
+	if chatID == 0 {
+		return
+	}
+	c.mu.Lock()
+	if c.lastCall[chatID].Equal(scheduled) {
+		delete(c.lastCall, chatID)
+	}
+	c.mu.Unlock()
 }
 
 func (c *Client) setBackoff(chatID int64, interval time.Duration) {
@@ -269,11 +289,49 @@ func (c *Client) setBackoff(chatID int64, interval time.Duration) {
 	if interval > 10*time.Second {
 		interval = 10 * time.Second
 	}
+	until := time.Now().Add(interval)
 	c.mu.Lock()
-	if interval > c.backoff[chatID] {
-		c.backoff[chatID] = interval
+	if until.After(c.backoffUntil[chatID]) {
+		c.backoffUntil[chatID] = until
 	}
 	c.mu.Unlock()
+}
+
+func isTelegramParseError(err error) bool {
+	var botErr BotError
+	if !asBotError(err, &botErr) || botErr.Code != http.StatusBadRequest {
+		return false
+	}
+	desc := strings.ToLower(botErr.Description)
+	return strings.Contains(desc, "parse") || strings.Contains(desc, "entit")
+}
+
+func redactTelegramError(err error, token string) error {
+	if err == nil {
+		return nil
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return err
+	}
+	text := strings.ReplaceAll(err.Error(), token, "<redacted>")
+	if text == err.Error() {
+		return err
+	}
+	return redactedError{text: text, err: err}
+}
+
+type redactedError struct {
+	text string
+	err  error
+}
+
+func (e redactedError) Error() string {
+	return e.text
+}
+
+func (e redactedError) Unwrap() error {
+	return e.err
 }
 
 func asBotError(err error, target *BotError) bool {

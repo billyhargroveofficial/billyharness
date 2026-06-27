@@ -307,7 +307,12 @@ func runTask(parent context.Context, cfg config.Config, rc RunConfig, runID stri
 			result.Outcome = "pass"
 		}
 	} else {
-		result.Outcome = "pass"
+		if result.ToolErrors > 0 {
+			result.Outcome = "fail"
+			result.Error = fmt.Sprintf("%d tool error(s)", result.ToolErrors)
+		} else {
+			result.Outcome = "pass"
+		}
 	}
 	result.WallTimeMS = time.Since(start).Milliseconds()
 	return result

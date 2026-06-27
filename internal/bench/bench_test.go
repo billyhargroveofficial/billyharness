@@ -96,6 +96,31 @@ func TestRunMockScriptedLoopCountsRoundsAndCompactions(t *testing.T) {
 	}
 }
 
+func TestRunMockScriptedLoopFailsWhenToolErrorsWithoutEvaluator(t *testing.T) {
+	root := t.TempDir()
+	tasksPath := filepath.Join(root, "tasks.jsonl")
+	line := `{"id":"bad-tool","suite":"agent-loop-stress","prompt":"run scripted loop","scripted_tool_rounds":1,"scripted_tool_name":"missing_tool"}` + "\n"
+	if err := os.WriteFile(tasksPath, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.MaxToolRounds = 3
+	summary, err := Run(context.Background(), cfg, RunConfig{TasksPath: tasksPath, OutDir: filepath.Join(root, "runs"), Mock: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Total != 1 || summary.Failed != 1 || summary.Passed != 0 {
+		t.Fatalf("summary = %#v", summary)
+	}
+	results, err := os.ReadFile(summary.ResultsJSONL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(results), `"tool_errors":1`) || !strings.Contains(string(results), `"outcome":"fail"`) {
+		t.Fatalf("results should fail on tool error: %s", results)
+	}
+}
+
 func TestApplyRunConfigSelectsProviderAfterModelOverride(t *testing.T) {
 	cfg := config.Config{Provider: "deepseek", Model: "deepseek-v4-flash"}
 	got := applyRunConfig(cfg, RunConfig{Model: "gpt-5.5"})

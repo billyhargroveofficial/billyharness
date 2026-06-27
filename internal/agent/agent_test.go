@@ -158,6 +158,14 @@ func TestRunMessagesCompactsBeforeProviderCall(t *testing.T) {
 	}
 }
 
+func TestEstimateMessagesTokensIgnoresStoredReasoningContent(t *testing.T) {
+	base := []protocol.Message{{Role: protocol.RoleAssistant, Content: "answer"}}
+	withReasoning := []protocol.Message{{Role: protocol.RoleAssistant, Content: "answer", ReasoningContent: strings.Repeat("hidden reasoning ", 1000)}}
+	if estimateMessagesTokens(base) != estimateMessagesTokens(withReasoning) {
+		t.Fatalf("stored reasoning should not inflate fallback context estimate")
+	}
+}
+
 func TestCompactMessagesPreservesAgentsContextPrefix(t *testing.T) {
 	cfg := config.Default()
 	cfg.ContextCompactTokens = 1

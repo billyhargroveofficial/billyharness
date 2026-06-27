@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -56,6 +57,15 @@ func TestDeepSeekBodyThinkingHigh(t *testing.T) {
 	tools, ok := payload["tools"].([]any)
 	if !ok || len(tools) != 1 {
 		t.Fatalf("tools = %#v", payload["tools"])
+	}
+}
+
+func TestIsCodexProviderReroutesOSeriesModels(t *testing.T) {
+	for _, model := range []string{"gpt-5.5", "o1-preview", "o3-mini", "o4-mini"} {
+		cfg := config.Config{Provider: "deepseek", Model: model}
+		if !isCodexProvider(cfg) {
+			t.Fatalf("model %q should route to Codex provider", model)
+		}
 	}
 }
 
@@ -161,6 +171,30 @@ func TestParseSSEReturnsWhenEventConsumerBlockedAndContextCancelled(t *testing.T
 		}
 	case <-time.After(time.Second):
 		t.Fatal("parseSSE did not return after context cancellation")
+	}
+}
+
+func TestParseSSEReturnsErrorWhenStreamClosesBeforeDone(t *testing.T) {
+	events := make(chan Event, 4)
+	err := parseSSE(context.Background(), strings.NewReader(`data: {"choices":[{"delta":{"content":"partial"}}]}`+"\n\n"), time.Minute, events)
+	if err == nil || !strings.Contains(err.Error(), "before [DONE]") {
+		t.Fatalf("err = %v, want truncated stream error", err)
+	}
+}
+
+func TestParseSSEReturnsImmediatelyAfterDone(t *testing.T) {
+	events := make(chan Event, 4)
+	err := parseSSE(context.Background(), strings.NewReader("data: [DONE]\n\n"), time.Minute, events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-events:
+		if event.Kind != EventDone {
+			t.Fatalf("event = %#v", event)
+		}
+	default:
+		t.Fatal("missing done event")
 	}
 }
 

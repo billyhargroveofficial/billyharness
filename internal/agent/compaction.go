@@ -142,7 +142,7 @@ func truncateForCompaction(text string, maxChars int) string {
 func estimateMessagesTokens(messages []protocol.Message) int64 {
 	var chars int64
 	for _, msg := range messages {
-		chars += int64(len(msg.Content) + len(msg.ReasoningContent) + len(msg.Name) + len(msg.ToolCallID) + len(string(msg.Role)))
+		chars += int64(len(msg.Content) + len(msg.Name) + len(msg.ToolCallID) + len(string(msg.Role)))
 		for _, call := range msg.ToolCalls {
 			chars += int64(len(call.ID) + len(call.Name) + len(call.Arguments))
 		}

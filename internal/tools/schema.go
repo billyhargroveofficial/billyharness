@@ -122,7 +122,11 @@ func schemaTypes(raw any) []string {
 }
 
 func shouldValidateObject(schema schemaNode, value any) bool {
-	if hasSchemaType(schema, "object") || len(schema.Properties) > 0 || len(schema.Required) > 0 {
+	if hasSchemaType(schema, "object") {
+		_, ok := value.(map[string]any)
+		return ok
+	}
+	if len(schema.Properties) > 0 || len(schema.Required) > 0 {
 		return true
 	}
 	_, ok := value.(map[string]any)
@@ -135,7 +139,11 @@ func additionalPropertiesFalse(value any) bool {
 }
 
 func shouldValidateArray(schema schemaNode, value any) bool {
-	return hasSchemaType(schema, "array") || schema.Items != nil || schema.MinItems != nil || schema.MaxItems != nil
+	if hasSchemaType(schema, "array") {
+		_, ok := value.([]any)
+		return ok
+	}
+	return schema.Items != nil || schema.MinItems != nil || schema.MaxItems != nil
 }
 
 func hasSchemaType(schema schemaNode, typ string) bool {

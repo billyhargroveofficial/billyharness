@@ -188,9 +188,6 @@ func (r *Registry) CanRunParallel(name string) bool {
 
 func (r *Registry) lookup(name string) (Tool, bool) {
 	tool, ok := r.tools[name]
-	if !ok {
-		tool, ok = r.mcpTools[name]
-	}
 	return tool, ok
 }
 
@@ -644,6 +641,15 @@ func (r *Registry) addMCPGateway() {
 				Description string          `json:"description,omitempty"`
 				InputSchema json.RawMessage `json:"input_schema,omitempty"`
 			}
+			type serverItem struct {
+				Name      string `json:"name"`
+				Transport string `json:"transport,omitempty"`
+				Enabled   bool   `json:"enabled"`
+				Required  bool   `json:"required"`
+				Connected bool   `json:"connected"`
+				ToolCount int    `json:"tool_count,omitempty"`
+				Error     string `json:"error,omitempty"`
+			}
 			serverFilter := normalizeMCPServerFilter(in.Server)
 			query := strings.ToLower(strings.TrimSpace(in.Query))
 			if serverFilter == "" && isParilkaAlias(query) {
@@ -681,8 +687,26 @@ func (r *Registry) addMCPGateway() {
 				}
 				tools = append(tools, out)
 			}
+			statuses := r.MCPStatuses()
+			servers := make([]serverItem, 0, len(statuses))
+			for _, status := range statuses {
+				normalized := normalizeMCPServerFilter(status.Name)
+				if serverFilter != "" && normalized != serverFilter {
+					continue
+				}
+				servers = append(servers, serverItem{
+					Name:      displayMCPServerName(normalized),
+					Transport: status.Transport,
+					Enabled:   status.Enabled,
+					Required:  status.Required,
+					Connected: status.Connected,
+					ToolCount: status.ToolCount,
+					Error:     status.Error,
+				})
+			}
 			out, _ := json.MarshalIndent(map[string]any{
 				"tools":     tools,
+				"servers":   servers,
 				"truncated": truncated,
 			}, "", "  ")
 			return Result{Content: string(out)}, nil
@@ -692,7 +716,7 @@ func (r *Registry) addMCPGateway() {
 		Spec: protocol.ToolSpec{
 			Name:        "mcp_call",
 			Description: "Call a connected MCP tool by full name after inspecting it with mcp_list_tools. For Parilka chat requests, call a tool named like mcp__telegram_parilka__read_history or mcp__telegram_parilka__search_messages.",
-			Parameters:  raw(`{"type":"object","properties":{"name":{"type":"string","description":"Full MCP tool name, for example mcp__github__search_repositories."},"arguments":{"type":"object","description":"Arguments for the MCP tool.","additionalProperties":true}},"required":["name"],"additionalProperties":false}`),
+			Parameters:  raw(`{"type":"object","properties":{"name":{"type":"string","description":"Full MCP tool name, for example mcp__github__search_repositories."},"arguments":{"type":["object","null"],"description":"Arguments for the MCP tool.","additionalProperties":true}},"required":["name"],"additionalProperties":false}`),
 			Risk:        protocol.RiskExternal,
 		},
 		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
@@ -713,6 +737,9 @@ func (r *Registry) addMCPGateway() {
 			tool, ok := r.mcpTools[name]
 			if !ok {
 				return Result{}, fmt.Errorf("unknown MCP tool %s; call mcp_list_tools first", name)
+			}
+			if err := validateArgs(tool.Spec.Parameters, in.Arguments); err != nil {
+				return errorResult("validation_error", err.Error()), err
 			}
 			return tool.Handler(ctx, in.Arguments)
 		},
