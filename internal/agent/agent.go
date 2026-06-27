@@ -2,10 +2,17 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
+	"time"
+	"unicode/utf8"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/instructions"
@@ -217,7 +224,88 @@ func (a *Agent) callTool(ctx context.Context, index int, call protocol.ToolCall)
 			out.Content = err.Error()
 		}
 	}
+	a.compactToolResult(index, call, &out)
 	return toolExecutionResult{Index: index, Call: call, Result: out}
+}
+
+func (a *Agent) compactToolResult(index int, call protocol.ToolCall, out *protocol.ToolResult) {
+	if a == nil || out == nil || out.Content == "" || out.Truncated {
+		return
+	}
+	limit := a.cfg.MaxToolOutputBytes
+	if limit <= 0 || len(out.Content) <= limit {
+		return
+	}
+	full := out.Content
+	ref, err := storeManagedToolOutput(index, call, full)
+	preview := trimUTF8Bytes(full, limit)
+	if preview == "" {
+		preview = "[tool output omitted]"
+	}
+	note := fmt.Sprintf("\n...[truncated %d bytes; full tool output saved to %s. Use fs_read_file on output_ref if exact output is needed]", len(full)-len(preview), ref)
+	if err != nil {
+		ref = ""
+		note = fmt.Sprintf("\n...[truncated %d bytes; failed to save full tool output: %v]", len(full)-len(preview), err)
+	}
+	out.Content = preview + note
+	out.Truncated = true
+	out.OutputRef = ref
+	if out.Metadata == nil {
+		out.Metadata = map[string]any{}
+	}
+	out.Metadata["original_output_bytes"] = len(full)
+	out.Metadata["returned_output_bytes"] = len(out.Content)
+	if ref != "" {
+		out.Metadata["output_ref"] = ref
+	}
+}
+
+func storeManagedToolOutput(index int, call protocol.ToolCall, content string) (string, error) {
+	dir := filepath.Join(config.BillyHomeDir(), "tool-output", time.Now().UTC().Format("20060102"))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(content))
+	name := fmt.Sprintf("%s-%02d-%s-%s-%s.txt",
+		time.Now().UTC().Format("150405.000000000"),
+		index+1,
+		safeOutputName(call.Name),
+		safeOutputName(call.ID),
+		hex.EncodeToString(sum[:4]),
+	)
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+var unsafeOutputNameRE = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
+
+func safeOutputName(value string) string {
+	value = unsafeOutputNameRE.ReplaceAllString(strings.TrimSpace(value), "_")
+	value = strings.Trim(value, "._-")
+	if value == "" {
+		return "tool"
+	}
+	if len(value) > 64 {
+		value = value[:64]
+	}
+	return value
+}
+
+func trimUTF8Bytes(text string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(text) <= maxBytes {
+		return text
+	}
+	text = text[:maxBytes]
+	for len(text) > 0 && !utf8.ValidString(text) {
+		text = text[:len(text)-1]
+	}
+	return text
 }
 
 func (a *Agent) canRunToolParallel(call protocol.ToolCall) bool {

@@ -374,6 +374,77 @@ func TestRunMessagesExecutesParallelSafeToolsConcurrentlyAndPreservesOrder(t *te
 	}
 }
 
+func TestRunMessagesStoresLargeToolOutputAndSendsPreview(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	cfg := config.Default()
+	cfg.MaxToolRounds = 3
+	cfg.MaxToolOutputBytes = 128
+	registry := tools.NewRegistry(cfg)
+	fullOutput := strings.Repeat("large-output-", 80)
+	if err := registry.Register(tools.Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "big_output",
+			Description: "Return a large output.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+			Risk:        protocol.RiskReadOnly,
+		},
+		Handler: func(context.Context, json.RawMessage) (tools.Result, error) {
+			return tools.Result{Content: fullOutput}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_big", ToolName: "big_output", ArgsDelta: `{}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "finished"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	a := New(cfg, prov, registry)
+	var events []protocol.Event
+	next, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "run big tool"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, ok := firstToolResult(events)
+	if !ok || !result.Truncated || result.OutputRef == "" {
+		t.Fatalf("tool result = %#v ok=%v", result, ok)
+	}
+	if strings.Contains(result.Content, fullOutput) || !strings.Contains(result.Content, "full tool output saved") {
+		t.Fatalf("result content should be preview with saved-output note: %q", result.Content)
+	}
+	bytes, err := os.ReadFile(result.OutputRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(bytes) != fullOutput {
+		t.Fatalf("stored output mismatch")
+	}
+	if !strings.HasPrefix(result.OutputRef, filepath.Join(home, "tool-output")) {
+		t.Fatalf("output ref = %q, want under billy home %q", result.OutputRef, home)
+	}
+	var toolMessage protocol.Message
+	for _, msg := range next {
+		if msg.Role == protocol.RoleTool && msg.Name == "big_output" {
+			toolMessage = msg
+			break
+		}
+	}
+	if toolMessage.Content == "" || strings.Contains(toolMessage.Content, fullOutput) || !strings.Contains(toolMessage.Content, result.OutputRef) {
+		t.Fatalf("tool message should contain preview and output ref, got %#v", toolMessage)
+	}
+}
+
 func TestRunMessagesExecutesMCPToolAndContinuesLoop(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Default()

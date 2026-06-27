@@ -105,7 +105,7 @@ func NewRegistryWithMCP(ctx context.Context, cfg config.Config) (*Registry, erro
 			Spec: spec,
 			Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 				content, err := handler(ctx, args)
-				return Result{Content: truncate(content, registry.cfg.MaxToolOutputBytes)}, err
+				return Result{Content: content}, err
 			},
 		}
 	}
@@ -264,7 +264,7 @@ func (r *Registry) addFSRead() {
 			if err != nil {
 				return Result{}, err
 			}
-			return Result{Content: truncate(string(bytes), r.cfg.MaxToolOutputBytes)}, nil
+			return Result{Content: string(bytes)}, nil
 		},
 	})
 }
@@ -478,8 +478,9 @@ func (r *Registry) addShellExec() {
 			if in.TimeoutSec <= 0 || in.TimeoutSec > 120 {
 				in.TimeoutSec = 20
 			}
+			explicitMaxOutput := in.MaxOutputBytes > 0
 			if in.MaxOutputBytes <= 0 || in.MaxOutputBytes > maxExecOutput {
-				in.MaxOutputBytes = r.cfg.MaxToolOutputBytes
+				in.MaxOutputBytes = maxExecOutput
 			}
 			cwd, err := r.safePath(in.CWD)
 			if err != nil {
@@ -490,7 +491,10 @@ func (r *Registry) addShellExec() {
 			cmd := exec.CommandContext(cmdCtx, in.Argv[0], in.Argv[1:]...)
 			cmd.Dir = cwd
 			output, err := cmd.CombinedOutput()
-			text := truncate(string(output), in.MaxOutputBytes)
+			text := string(output)
+			if explicitMaxOutput {
+				text = truncate(text, in.MaxOutputBytes)
+			}
 			if cmdCtx.Err() != nil {
 				return Result{Content: text}, cmdCtx.Err()
 			}

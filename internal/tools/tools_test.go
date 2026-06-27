@@ -212,6 +212,29 @@ func TestReadToolRejectsPathOutsideWorkspace(t *testing.T) {
 	}
 }
 
+func TestReadToolReturnsFullContentForAgentManagedOutput(t *testing.T) {
+	root := t.TempDir()
+	content := strings.Repeat("full-content-", 200)
+	if err := os.WriteFile(filepath.Join(root, "big.txt"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.MaxToolOutputBytes = 64
+	registry := NewRegistry(cfg)
+
+	result, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "fs_read_file",
+		Arguments: rawArgs(map[string]any{"path": "big.txt"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != content {
+		t.Fatalf("read content len=%d, want full len=%d", len(result.Content), len(content))
+	}
+}
+
 func TestSafePathRejectsSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	outsideDir := t.TempDir()
