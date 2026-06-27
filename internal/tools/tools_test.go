@@ -390,6 +390,52 @@ func TestCompactFetchedPageLimitsDefaultOutput(t *testing.T) {
 	}
 }
 
+func TestCompactFetchedPageHonorsTokenBudgetEvenForFullText(t *testing.T) {
+	text := strings.Repeat("Alpha beta gamma. ", 2000)
+	page := fetchedPage{
+		URL:         "https://example.com",
+		Status:      200,
+		ContentType: "text/plain",
+		Title:       "Example",
+		Text:        text,
+	}
+	out := compactFetchedPage(page, webFetchOptions{FullText: true, MaxTokens: 200})
+	if out.BudgetTextTokens != 200 || out.BudgetTextChars != 800 {
+		t.Fatalf("budget = %d tokens / %d chars, want 200 / 800", out.BudgetTextTokens, out.BudgetTextChars)
+	}
+	if !out.OutputTextTruncated || !strings.Contains(out.CompactNote, "full_text") {
+		t.Fatalf("full_text should still be capped: %#v", out)
+	}
+	if out.ReturnedTextChars > 1000 || out.EstimatedTextTokens > 260 {
+		t.Fatalf("returned too much text: chars=%d tokens=%d", out.ReturnedTextChars, out.EstimatedTextTokens)
+	}
+}
+
+func TestCompactCrawlPagesHonorsTotalTokenBudget(t *testing.T) {
+	pages := []crawlPage{
+		{URL: "https://example.com/a", Depth: 0, Title: "A", Text: strings.Repeat("A page sentence. ", 800)},
+		{URL: "https://example.com/b", Depth: 1, Title: "B", Text: strings.Repeat("B page sentence. ", 800)},
+		{URL: "https://example.com/c", Depth: 1, Title: "C", Text: strings.Repeat("C page sentence. ", 800)},
+	}
+	out := compactCrawlPages(pages, webFetchOptions{MaxTokens: 2000, MaxTotalTokens: 900})
+	if len(out) != len(pages) {
+		t.Fatalf("pages = %d, want %d", len(out), len(pages))
+	}
+	totalBudgetChars := 0
+	for _, page := range out {
+		totalBudgetChars += page.BudgetTextChars
+		if page.BudgetTextChars != 1200 {
+			t.Fatalf("per-page budget = %d, want 1200: %#v", page.BudgetTextChars, page)
+		}
+		if !page.OutputTextTruncated || page.EstimatedTextTokens > 360 {
+			t.Fatalf("page was not compacted enough: %#v", page)
+		}
+	}
+	if totalBudgetChars != 3600 {
+		t.Fatalf("total budget chars = %d, want 3600", totalBudgetChars)
+	}
+}
+
 func TestLazyMCPGatewayHidesRawSpecsAndCanCallTool(t *testing.T) {
 	registry := NewRegistry(config.Default())
 	registry.mcpTools["mcp__fake__echo"] = Tool{

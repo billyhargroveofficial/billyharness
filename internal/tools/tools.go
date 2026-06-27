@@ -23,13 +23,20 @@ import (
 )
 
 const (
-	defaultWebBytes = 64 * 1024
-	maxWebBytes     = 512 * 1024
-	webTextChars    = 6 * 1024
-	webCrawlChars   = 3 * 1024
-	webMaxLinks     = 20
-	maxWriteBytes   = 2 * 1024 * 1024
-	maxExecOutput   = 512 * 1024
+	defaultWebBytes          = 64 * 1024
+	maxWebBytes              = 512 * 1024
+	webTextChars             = 6 * 1024
+	webFullTextChars         = 24 * 1024
+	webHardTextChars         = 24 * 1024
+	webDefaultTextTokens     = 1800
+	webMaxTextTokens         = 8000
+	webCrawlChars            = 3 * 1024
+	webCrawlDefaultTokens    = 900
+	webCrawlDefaultTotalToks = 4000
+	webCrawlMaxTotalToks     = 12000
+	webMaxLinks              = 20
+	maxWriteBytes            = 2 * 1024 * 1024
+	maxExecOutput            = 512 * 1024
 )
 
 type Result struct {
@@ -499,17 +506,18 @@ func (r *Registry) addWebFetch() {
 	r.add(Tool{
 		Spec: protocol.ToolSpec{
 			Name:        "web_fetch",
-			Description: "Fetch a public HTTP(S) URL and return compact extracted text, summary, and links. Set full_text only when exact page text is required.",
-			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"max_bytes":{"type":"integer","default":65536},"max_chars":{"type":"integer","default":6144,"description":"Maximum extracted text characters returned unless full_text is true."},"full_text":{"type":"boolean","default":false},"max_links":{"type":"integer","default":20}},"required":["url"],"additionalProperties":false}`),
+			Description: "Fetch a public HTTP(S) URL and return an extractive summary, capped text, and links. Use max_tokens/max_chars to control context cost. Set full_text only when exact page text is required; output is still capped.",
+			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"max_bytes":{"type":"integer","default":65536},"max_tokens":{"type":"integer","default":1800,"description":"Approximate output token budget for extracted text."},"max_chars":{"type":"integer","description":"Maximum extracted text characters returned; combined with max_tokens by taking the smaller budget."},"full_text":{"type":"boolean","default":false},"max_links":{"type":"integer","default":20}},"required":["url"],"additionalProperties":false}`),
 			Risk:        protocol.RiskNetwork,
 		},
 		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in struct {
-				URL      string `json:"url"`
-				MaxBytes int    `json:"max_bytes"`
-				MaxChars int    `json:"max_chars"`
-				FullText bool   `json:"full_text"`
-				MaxLinks int    `json:"max_links"`
+				URL       string `json:"url"`
+				MaxBytes  int    `json:"max_bytes"`
+				MaxTokens int    `json:"max_tokens"`
+				MaxChars  int    `json:"max_chars"`
+				FullText  bool   `json:"full_text"`
+				MaxLinks  int    `json:"max_links"`
 			}
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
@@ -518,12 +526,14 @@ func (r *Registry) addWebFetch() {
 			if err != nil {
 				return Result{}, err
 			}
-			out, _ := json.MarshalIndent(compactFetchedPage(page, webFetchOptions{
-				MaxChars: in.MaxChars,
-				FullText: in.FullText,
-				MaxLinks: in.MaxLinks,
-			}), "", "  ")
-			return Result{Content: string(out)}, nil
+			compact := compactFetchedPage(page, webFetchOptions{
+				MaxChars:  in.MaxChars,
+				MaxTokens: in.MaxTokens,
+				FullText:  in.FullText,
+				MaxLinks:  in.MaxLinks,
+			})
+			out, _ := json.MarshalIndent(compact, "", "  ")
+			return Result{Content: string(out), Metadata: webPageMetadata(compact), Truncated: compact.OutputTextTruncated}, nil
 		},
 	})
 }
@@ -564,19 +574,21 @@ func (r *Registry) addWebCrawl() {
 	r.add(Tool{
 		Spec: protocol.ToolSpec{
 			Name:        "web_crawl",
-			Description: "Crawl public HTTP(S) pages breadth-first, optionally restricted to the start host.",
-			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"max_pages":{"type":"integer","default":3},"max_depth":{"type":"integer","default":1},"same_host":{"type":"boolean","default":true},"max_bytes_per_page":{"type":"integer","default":65536},"max_chars_per_page":{"type":"integer","default":3072},"full_text":{"type":"boolean","default":false}},"required":["url"],"additionalProperties":false}`),
+			Description: "Crawl public HTTP(S) pages breadth-first and return compact summaries plus capped text. max_total_tokens bounds total returned crawl text.",
+			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"max_pages":{"type":"integer","default":3},"max_depth":{"type":"integer","default":1},"same_host":{"type":"boolean","default":true},"max_bytes_per_page":{"type":"integer","default":65536},"max_tokens_per_page":{"type":"integer","default":900},"max_total_tokens":{"type":"integer","default":4000},"max_chars_per_page":{"type":"integer","description":"Maximum extracted text characters per page; combined with token budgets by taking the smaller budget."},"full_text":{"type":"boolean","default":false}},"required":["url"],"additionalProperties":false}`),
 			Risk:        protocol.RiskNetwork,
 		},
 		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in struct {
-				URL             string `json:"url"`
-				MaxPages        int    `json:"max_pages"`
-				MaxDepth        int    `json:"max_depth"`
-				SameHost        *bool  `json:"same_host"`
-				MaxBytesPerPage int    `json:"max_bytes_per_page"`
-				MaxCharsPerPage int    `json:"max_chars_per_page"`
-				FullText        bool   `json:"full_text"`
+				URL              string `json:"url"`
+				MaxPages         int    `json:"max_pages"`
+				MaxDepth         int    `json:"max_depth"`
+				SameHost         *bool  `json:"same_host"`
+				MaxBytesPerPage  int    `json:"max_bytes_per_page"`
+				MaxTokensPerPage int    `json:"max_tokens_per_page"`
+				MaxTotalTokens   int    `json:"max_total_tokens"`
+				MaxCharsPerPage  int    `json:"max_chars_per_page"`
+				FullText         bool   `json:"full_text"`
 			}
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
@@ -590,9 +602,11 @@ func (r *Registry) addWebCrawl() {
 				return Result{}, err
 			}
 			out, _ := json.MarshalIndent(compactCrawlPages(pages, webFetchOptions{
-				MaxChars: in.MaxCharsPerPage,
-				FullText: in.FullText,
-				MaxLinks: 0,
+				MaxChars:       in.MaxCharsPerPage,
+				MaxTokens:      in.MaxTokensPerPage,
+				MaxTotalTokens: in.MaxTotalTokens,
+				FullText:       in.FullText,
+				MaxLinks:       0,
 			}), "", "  ")
 			return Result{Content: string(out)}, nil
 		},
@@ -816,9 +830,11 @@ type crawlPage struct {
 }
 
 type webFetchOptions struct {
-	MaxChars int
-	FullText bool
-	MaxLinks int
+	MaxChars       int
+	MaxTokens      int
+	MaxTotalTokens int
+	FullText       bool
+	MaxLinks       int
 }
 
 type compactPage struct {
@@ -831,7 +847,12 @@ type compactPage struct {
 	Links               []string `json:"links,omitempty"`
 	Truncated           bool     `json:"truncated,omitempty"`
 	OriginalTextChars   int      `json:"original_text_chars,omitempty"`
+	ReturnedTextChars   int      `json:"returned_text_chars,omitempty"`
+	EstimatedTextTokens int      `json:"estimated_text_tokens,omitempty"`
+	BudgetTextChars     int      `json:"budget_text_chars,omitempty"`
+	BudgetTextTokens    int      `json:"budget_text_tokens,omitempty"`
 	OutputTextTruncated bool     `json:"output_text_truncated,omitempty"`
+	CompactNote         string   `json:"compact_note,omitempty"`
 }
 
 type compactCrawlPage struct {
@@ -842,11 +863,16 @@ type compactCrawlPage struct {
 	Text                string `json:"text,omitempty"`
 	Error               string `json:"error,omitempty"`
 	OriginalTextChars   int    `json:"original_text_chars,omitempty"`
+	ReturnedTextChars   int    `json:"returned_text_chars,omitempty"`
+	EstimatedTextTokens int    `json:"estimated_text_tokens,omitempty"`
+	BudgetTextChars     int    `json:"budget_text_chars,omitempty"`
+	BudgetTextTokens    int    `json:"budget_text_tokens,omitempty"`
 	OutputTextTruncated bool   `json:"output_text_truncated,omitempty"`
+	CompactNote         string `json:"compact_note,omitempty"`
 }
 
 func compactFetchedPage(page fetchedPage, opts webFetchOptions) compactPage {
-	maxChars := normalizedWebChars(opts.MaxChars, webTextChars)
+	maxChars, budgetTokens := webTextBudget(opts, webTextChars, webDefaultTextTokens, webMaxTextTokens)
 	text, outputTruncated := compactWebText(page.Text, maxChars, opts.FullText)
 	maxLinks := opts.MaxLinks
 	if maxLinks <= 0 || maxLinks > 50 {
@@ -866,12 +892,25 @@ func compactFetchedPage(page fetchedPage, opts webFetchOptions) compactPage {
 		Links:               links,
 		Truncated:           page.Truncated,
 		OriginalTextChars:   len([]rune(page.Text)),
+		ReturnedTextChars:   len([]rune(text)),
+		EstimatedTextTokens: estimateTokens(text),
+		BudgetTextChars:     maxChars,
+		BudgetTextTokens:    budgetTokens,
 		OutputTextTruncated: outputTruncated || len(page.Links) > len(links),
+		CompactNote:         webCompactNote(outputTruncated || len(page.Links) > len(links), opts.FullText),
 	}
 }
 
 func compactCrawlPages(pages []crawlPage, opts webFetchOptions) []compactCrawlPage {
-	maxChars := normalizedWebChars(opts.MaxChars, webCrawlChars)
+	maxChars, budgetTokens := webTextBudget(opts, webCrawlChars, webCrawlDefaultTokens, webMaxTextTokens)
+	totalTextChars, totalTokens := webTotalTextBudget(opts.MaxTotalTokens, len(pages))
+	if totalTextChars > 0 && len(pages) > 0 {
+		perPageTotalCap := max(800, totalTextChars/len(pages))
+		if maxChars > perPageTotalCap {
+			maxChars = perPageTotalCap
+			budgetTokens = estimateTokensByChars(maxChars)
+		}
+	}
 	out := make([]compactCrawlPage, 0, len(pages))
 	for _, page := range pages {
 		text, outputTruncated := compactWebText(page.Text, maxChars, opts.FullText)
@@ -883,21 +922,64 @@ func compactCrawlPages(pages []crawlPage, opts webFetchOptions) []compactCrawlPa
 			Text:                text,
 			Error:               page.Error,
 			OriginalTextChars:   len([]rune(page.Text)),
+			ReturnedTextChars:   len([]rune(text)),
+			EstimatedTextTokens: estimateTokens(text),
+			BudgetTextChars:     maxChars,
+			BudgetTextTokens:    min(budgetTokens, totalTokens),
 			OutputTextTruncated: outputTruncated,
+			CompactNote:         webCompactNote(outputTruncated, opts.FullText),
 		})
 	}
 	return out
 }
 
+func webTextBudget(opts webFetchOptions, fallbackChars, fallbackTokens, maxTokens int) (int, int) {
+	fallback := fallbackChars
+	if opts.FullText && opts.MaxChars <= 0 && opts.MaxTokens <= 0 {
+		fallback = webFullTextChars
+	}
+	charBudget := normalizedWebChars(opts.MaxChars, fallback)
+	tokenBudget := normalizedWebTokens(opts.MaxTokens, fallbackTokens, maxTokens)
+	tokenChars := tokenBudget * 4
+	if tokenChars > 0 && tokenChars < charBudget {
+		charBudget = tokenChars
+	}
+	if charBudget > webHardTextChars {
+		charBudget = webHardTextChars
+	}
+	return charBudget, estimateTokensByChars(charBudget)
+}
+
+func webTotalTextBudget(maxTotalTokens, pageCount int) (int, int) {
+	if pageCount <= 0 {
+		return 0, 0
+	}
+	tokens := normalizedWebTokens(maxTotalTokens, webCrawlDefaultTotalToks, webCrawlMaxTotalToks)
+	return tokens * 4, tokens
+}
+
 func normalizedWebChars(value, fallback int) int {
 	if value <= 0 {
-		return fallback
+		value = fallback
 	}
 	if value < 800 {
-		return 800
+		value = 800
 	}
-	if value > 24*1024 {
-		return 24 * 1024
+	if value > webHardTextChars {
+		value = webHardTextChars
+	}
+	return value
+}
+
+func normalizedWebTokens(value, fallback, maxTokens int) int {
+	if value <= 0 {
+		value = fallback
+	}
+	if value < 200 {
+		value = 200
+	}
+	if value > maxTokens {
+		value = maxTokens
 	}
 	return value
 }
@@ -907,10 +989,40 @@ func compactWebText(text string, maxChars int, fullText bool) (string, bool) {
 	if text == "" {
 		return "", false
 	}
-	if fullText {
-		return truncateRunes(text, maxWebBytes), len([]rune(text)) > maxWebBytes
-	}
 	return truncateRunesWithMarker(text, maxChars)
+}
+
+func webCompactNote(truncated, fullText bool) string {
+	if !truncated {
+		return ""
+	}
+	if fullText {
+		return "full_text was requested, but output is still capped by max_tokens/max_chars to protect context cost"
+	}
+	return "text is capped; increase max_tokens/max_chars only if exact source text is required"
+}
+
+func webPageMetadata(page compactPage) map[string]any {
+	return map[string]any{
+		"original_text_chars":     page.OriginalTextChars,
+		"returned_text_chars":     page.ReturnedTextChars,
+		"estimated_text_tokens":   page.EstimatedTextTokens,
+		"budget_text_chars":       page.BudgetTextChars,
+		"budget_text_tokens":      page.BudgetTextTokens,
+		"output_text_truncated":   page.OutputTextTruncated,
+		"response_body_truncated": page.Truncated,
+	}
+}
+
+func estimateTokens(text string) int {
+	return estimateTokensByChars(len([]rune(text)))
+}
+
+func estimateTokensByChars(chars int) int {
+	if chars <= 0 {
+		return 0
+	}
+	return (chars + 3) / 4
 }
 
 func summarizeText(title, text string, maxChars int) string {
