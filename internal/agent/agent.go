@@ -33,6 +33,9 @@ func (a *Agent) Run(ctx context.Context, prompt string, emit func(protocol.Event
 func InitialMessages(cfgs ...config.Config) []protocol.Message {
 	messages := []protocol.Message{{Role: protocol.RoleSystem, Content: systemPrompt()}}
 	if len(cfgs) > 0 {
+		if msg, ok := instructions.ProfileMessage(cfgs[0]); ok {
+			messages = append(messages, msg)
+		}
 		if msg, ok := instructions.Message(cfgs[0]); ok {
 			messages = append(messages, msg)
 		}
@@ -154,11 +157,12 @@ func systemPrompt() string {
 	return strings.Join([]string{
 		"You are a fast coding and research agent. Use tools when useful. Keep final answers concise. Never reveal secrets.",
 		"",
-		"Format final answers with terminal-safe Markdown only.",
-		"Supported Markdown: short paragraphs, headings, bullet lists, numbered lists, blockquotes, inline code, fenced code blocks, bold, italic, plain links, and simple pipe tables.",
-		"Do not use HTML, images, Mermaid diagrams, LaTeX/math blocks, footnotes, task-list checkboxes, or other Markdown extensions that do not render reliably in a terminal TUI.",
-		"Prefer fenced code blocks with a language tag for code and commands.",
-		"Keep formatting simple enough to remain readable when ANSI styling is unavailable.",
+		"Format final answers with simple Markdown that remains readable in a terminal TUI and Telegram rich messages.",
+		"Supported Markdown: short paragraphs, headings, bullet lists, numbered lists, blockquotes, inline code, fenced code blocks, bold, italic, plain links, simple pipe tables, and LaTeX math.",
+		"Use LaTeX for mathematical formulas: prefer inline $...$ for short formulas and display $$...$$ for important formulas. Do not put math formulas in code fences.",
+		"Do not use HTML, images, Mermaid diagrams, footnotes, task-list checkboxes, or other Markdown extensions unless the user explicitly asks for them.",
+		"Prefer fenced code blocks with a language tag for code, logs, and commands.",
+		"Keep non-math formatting simple enough to remain readable when ANSI styling is unavailable.",
 		"Connected MCP servers are exposed lazily through mcp_list_tools and mcp_call; use them only when the user asks for those external services.",
 		"If the user mentions Parilka, парилка, парилке, or asks what is happening there, treat it as the Telegram Parilka chat. Use mcp_list_tools with server \"telegram-parilka\" and then mcp_call. Do not search the filesystem or run shell commands for Parilka chat context.",
 	}, "\n")

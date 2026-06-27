@@ -195,6 +195,9 @@ func NewModel(cfg config.Config, opts Options) Model {
 	if opts.Model == "" && settings.LastSelectedModel != "" {
 		cfg.Model = settings.LastSelectedModel
 	}
+	if settings.LastProfile != "" {
+		cfg.Profile = config.NormalizeProfileName(settings.LastProfile)
+	}
 	if settings.LastReasoningKind != "" {
 		cfg.Thinking = settings.LastReasoningKind
 		cfg.ReasoningEffort = settings.LastReasoningEffort
@@ -676,6 +679,7 @@ func slashCommands() []slashCommand {
 		{"/theme", "light|dark", "switch active theme"},
 		{"/model", "flash|pro|gpt|id", "switch model"},
 		{"/models", "", "list known models"},
+		{"/profile", "billy|name", "switch SOUL.md system profile"},
 		{"/mcp", "", "show connected MCP servers"},
 		{"/reasoning", "high|max|off", "set provider reasoning effort"},
 		{"/thinkview", "expanded|collapsed|hidden", "control thinking blocks"},
@@ -804,6 +808,11 @@ func (m Model) slashArgs(command slashCommand) []slashArg {
 			return next(values, "gpt")
 		}
 		return values
+	case "/profile":
+		return []slashArg{
+			{m.currentProfile(), "current SOUL.md profile"},
+			{"billy", "teacher-style default profile"},
+		}
 	case "/reasoning":
 		values := []slashArg{
 			{"high", "reasoning high"},
@@ -1325,6 +1334,7 @@ func (m Model) createSessionCmd() tea.Cmd {
 	return func() tea.Msg {
 		body, err := json.Marshal(map[string]any{
 			"messages": m.messages,
+			"profile":  m.currentProfile(),
 		})
 		if err != nil {
 			return errMsg{err: err}
@@ -1383,6 +1393,7 @@ func (m Model) runGateway(prompt string) {
 		"prompt":           prompt,
 		"provider":         m.currentProvider(),
 		"model":            m.currentModel(),
+		"profile":          m.currentProfile(),
 		"thinking":         m.currentThinking().kind,
 		"reasoning_effort": m.currentThinking().effort,
 		"max_tool_rounds":  m.maxRounds,
@@ -1731,6 +1742,7 @@ func (m Model) currentConfig() config.Config {
 	cfg := m.cfg
 	cfg.Model = m.currentModel()
 	cfg.Provider = m.currentProvider()
+	cfg.Profile = m.currentProfile()
 	cfg.Thinking = m.currentThinking().kind
 	cfg.ReasoningEffort = m.currentThinking().effort
 	cfg.StoreReasoningContent = true
@@ -1758,6 +1770,10 @@ func (m Model) currentProvider() string {
 	return "deepseek"
 }
 
+func (m Model) currentProfile() string {
+	return config.NormalizeProfileName(m.cfg.Profile)
+}
+
 func (m Model) currentThinking() thinkingMode {
 	return m.thinking[m.thinkingIdx]
 }
@@ -1783,6 +1799,8 @@ func (m *Model) handleSlashCommand(prompt string) (bool, tea.Cmd) {
 		m.addInfoBlock("MODELS", m.modelsText())
 		m.status = "models shown"
 		return true, nil
+	case "/profile":
+		return true, m.setProfile(arg)
 	case "/mcp":
 		m.status = "loading mcp status"
 		return true, m.mcpStatusCmd()
@@ -1881,6 +1899,50 @@ func (m *Model) setModel(value string) bool {
 	m.status = "model " + m.currentModel()
 	_ = m.saveSettings()
 	return true
+}
+
+func (m *Model) setProfile(value string) tea.Cmd {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		m.addInfoBlock("PROFILE", "current profile: "+m.currentProfile()+"\nfile: "+config.DefaultProfileFile(m.currentProfile()))
+		m.status = "profile " + m.currentProfile()
+		return nil
+	}
+	profile := config.NormalizeProfileName(value)
+	if _, err := config.EnsureDefaultProfileFile(profile); err != nil {
+		m.status = "profile error: " + err.Error()
+		m.addBlock("error", "ERROR", err.Error())
+		return nil
+	}
+	_ = m.saveCurrentSession()
+	m.cfg.Profile = profile
+	m.localChatID = newChatID()
+	m.chatTitle = "new chat"
+	m.chatCreated = time.Now().UTC()
+	m.messages = agent.InitialMessages(m.currentConfig())
+	m.blocks = nil
+	m.collapsed = map[int]bool{}
+	m.selected = 0
+	m.modelCalls = 0
+	m.toolCalls = 0
+	m.inputTok = 0
+	m.outputTok = 0
+	m.cacheHitTok = 0
+	m.cacheMissTok = 0
+	m.reasoningTok = 0
+	m.lastInputTok = 0
+	m.lastOutputTok = 0
+	m.lastCacheHitTok = 0
+	m.lastCacheMissTok = 0
+	m.sessionID = ""
+	m.followOutput = true
+	m.status = "profile " + m.currentProfile() + "; new chat"
+	_ = m.saveSettings()
+	_ = m.saveCurrentSession()
+	if m.gatewayURL != "" {
+		return m.createSessionCmd()
+	}
+	return nil
 }
 
 func (m *Model) cycleReasoning() {
@@ -2119,6 +2181,9 @@ func (m *Model) applyChatSession(session chatSession) {
 	if m.chatCreated.IsZero() {
 		m.chatCreated = time.Now().UTC()
 	}
+	if session.Profile != "" {
+		m.cfg.Profile = config.NormalizeProfileName(session.Profile)
+	}
 	if len(session.Messages) > 0 {
 		m.messages = append([]protocol.Message(nil), session.Messages...)
 	} else {
@@ -2198,6 +2263,7 @@ func (m *Model) saveSettings() error {
 	m.settings.LastLocalChatID = m.localChatID
 	m.settings.LastGatewaySessionID = m.sessionID
 	m.settings.LastSelectedModel = m.currentModel()
+	m.settings.LastProfile = m.currentProfile()
 	m.settings.LastReasoningKind = m.currentThinking().kind
 	m.settings.LastReasoningEffort = m.currentThinking().effort
 	return saveAppSettings(m.settingsPath, m.settings)
@@ -2221,6 +2287,7 @@ func (m *Model) saveCurrentSession() error {
 		CreatedAt:        created,
 		UpdatedAt:        time.Now().UTC(),
 		Model:            m.currentModel(),
+		Profile:          m.currentProfile(),
 		ReasoningKind:    m.currentThinking().kind,
 		ReasoningEffort:  m.currentThinking().effort,
 		GatewaySessionID: m.sessionID,
@@ -2281,11 +2348,12 @@ func (m Model) statusText() string {
 		follow = "on"
 	}
 	return fmt.Sprintf(
-		"mode: %s\nchat: %s\nprovider: %s\nmodel: %s\nreasoning: %s / %s\nthinking blocks: %s\ntool blocks: %s\ntheme: %s\ngateway: %s\ngateway session: %s\nlocal settings: %s\ntools: %s, max rounds %d\ncalls: model %d, tools %d\ntokens: input %d, output %d\ncontext: %s\ncost: %s\nfollow output: %s",
+		"mode: %s\nchat: %s\nprovider: %s\nmodel: %s\nprofile: %s\nreasoning: %s / %s\nthinking blocks: %s\ntool blocks: %s\ntheme: %s\ngateway: %s\ngateway session: %s\nlocal settings: %s\ntools: %s, max rounds %d\ncalls: model %d, tools %d\ntokens: input %d, output %d\ncontext: %s\ncost: %s\nfollow output: %s",
 		mode,
 		m.localChatID,
 		m.currentProvider(),
 		m.currentModel(),
+		m.currentProfile(),
 		m.currentThinking().kind,
 		m.currentThinking().effort,
 		thinkingDisplay,
@@ -3000,6 +3068,7 @@ func helpText() string {
 		"/auth [deepseek|codex]                 configure credentials",
 		"/model [flash|pro|gpt|id]              switch model",
 		"/models                                show known models and providers",
+		"/profile [billy|name]                  switch SOUL.md system profile",
 		"/mcp                                   show MCP servers and status",
 		"/reasoning [low|medium|high|xhigh|off] set provider reasoning effort",
 		"/thinkview [expanded|collapsed|hidden] show/collapse/hide thinking blocks",

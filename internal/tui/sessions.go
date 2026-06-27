@@ -20,6 +20,7 @@ type chatSession struct {
 	CreatedAt        time.Time          `json:"created_at"`
 	UpdatedAt        time.Time          `json:"updated_at"`
 	Model            string             `json:"model"`
+	Profile          string             `json:"profile,omitempty"`
 	ReasoningKind    string             `json:"reasoning_kind"`
 	ReasoningEffort  string             `json:"reasoning_effort"`
 	GatewaySessionID string             `json:"gateway_session_id,omitempty"`

@@ -147,11 +147,41 @@ func TestRunGatewaySendsSelectedProviderModelAndReasoning(t *testing.T) {
 	}
 	if captured["provider"] != "openai-codex" ||
 		captured["model"] != "gpt-5.5" ||
+		captured["profile"] != "billy" ||
 		captured["thinking"] != "enabled" ||
 		captured["reasoning_effort"] != "xhigh" ||
 		int(captured["max_tool_rounds"].(float64)) != 77 ||
 		captured["prompt"] != "ping" {
 		t.Fatalf("captured = %#v", captured)
+	}
+}
+
+func TestProfileSlashCommandStartsNewProfileChat(t *testing.T) {
+	m := newTestModel(t)
+	oldChat := m.localChatID
+	handled, cmd := m.handleSlashCommand("/profile Billy/Profile")
+	if !handled {
+		t.Fatal("/profile failed")
+	}
+	if cmd != nil {
+		t.Fatalf("local profile switch should not create gateway command")
+	}
+	if got := m.currentProfile(); got != "billyprofile" {
+		t.Fatalf("profile = %q", got)
+	}
+	if m.localChatID == oldChat {
+		t.Fatalf("profile switch should start a new chat")
+	}
+	if len(m.messages) != 1 {
+		t.Fatalf("custom missing profile should fall back to base system only, got %#v", m.messages)
+	}
+
+	handled, _ = m.handleSlashCommand("/profile billy")
+	if !handled {
+		t.Fatal("/profile billy failed")
+	}
+	if len(m.messages) != 2 || !strings.Contains(m.messages[1].Content, "# Billyharness profile: billy") {
+		t.Fatalf("billy profile not injected: %#v", m.messages)
 	}
 }
 

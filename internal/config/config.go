@@ -15,6 +15,7 @@ import (
 type Config struct {
 	Provider               string
 	Model                  string
+	Profile                string
 	BaseURL                string
 	APIKeyEnv              string
 	CodexBaseURL           string
@@ -70,6 +71,7 @@ func Default() Config {
 	cfg := Config{
 		Provider:               env("FAST_AGENT_PROVIDER", "deepseek"),
 		Model:                  env("FAST_AGENT_MODEL", "deepseek-v4-flash"),
+		Profile:                NormalizeProfileName(env("BILLYHARNESS_PROFILE", env("FAST_AGENT_PROFILE", DefaultProfileName))),
 		BaseURL:                env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
 		APIKeyEnv:              env("DEEPSEEK_API_KEY_ENV", "DEEPSEEK_API_KEY"),
 		CodexBaseURL:           env("FAST_AGENT_CODEX_BASE_URL", "https://chatgpt.com/backend-api/codex"),
@@ -140,6 +142,7 @@ func (c *Config) ApplyBillySettingsDefaults() {
 		LastSelectedModel   string `json:"last_selected_model"`
 		LastReasoningKind   string `json:"last_reasoning_kind"`
 		LastReasoningEffort string `json:"last_reasoning_effort"`
+		LastProfile         string `json:"last_profile"`
 	}
 	if err := json.Unmarshal(body, &settings); err != nil {
 		return
@@ -152,6 +155,9 @@ func (c *Config) ApplyBillySettingsDefaults() {
 	}
 	if os.Getenv("DEEPSEEK_REASONING_EFFORT") == "" && strings.TrimSpace(settings.LastReasoningEffort) != "" {
 		c.ReasoningEffort = strings.TrimSpace(settings.LastReasoningEffort)
+	}
+	if os.Getenv("BILLYHARNESS_PROFILE") == "" && os.Getenv("FAST_AGENT_PROFILE") == "" && strings.TrimSpace(settings.LastProfile) != "" {
+		c.Profile = NormalizeProfileName(settings.LastProfile)
 	}
 }
 
@@ -227,6 +233,51 @@ func DefaultCodexAuthFile() string {
 	return filepath.Join(BillyHomeDir(), "auth", "codex.json")
 }
 
+const DefaultProfileName = "billy"
+
+func NormalizeProfileName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return DefaultProfileName
+	}
+	var b strings.Builder
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			b.WriteRune(r)
+		}
+	}
+	normalized := strings.Trim(b.String(), ".")
+	if normalized == "" {
+		return DefaultProfileName
+	}
+	return normalized
+}
+
+func DefaultProfileDir(profile string) string {
+	return filepath.Join(BillyHomeDir(), "profiles", NormalizeProfileName(profile))
+}
+
+func DefaultProfileFile(profile string) string {
+	return filepath.Join(DefaultProfileDir(profile), "SOUL.md")
+}
+
+func EnsureDefaultProfileFile(profile string) (string, error) {
+	name := NormalizeProfileName(profile)
+	path := DefaultProfileFile(name)
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	if name != DefaultProfileName {
+		return path, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", err
+	}
+	return path, os.WriteFile(path, []byte(defaultBillyProfilePrompt), 0o600)
+}
+
 func EnsureDefaultMCPConfigFile() (string, error) {
 	path := DefaultMCPConfigFile()
 	if _, err := os.Stat(path); err == nil {
@@ -239,6 +290,17 @@ func EnsureDefaultMCPConfigFile() (string, error) {
 	}
 	return path, os.WriteFile(path, []byte(defaultMCPConfig), 0o600)
 }
+
+const defaultBillyProfilePrompt = `Пиши как внимательный преподаватель, ближе к стилю Claude Opus: спокойно, связно, человечески и без ощущения корпоративного отчёта.
+
+По умолчанию отвечай цельными абзацами, а не списками. Не используй буллеты, нумерацию, таблицы, жирные заголовки, эмодзи и чрезмерный markdown, если я прямо не прошу список, чеклист, сравнение, алгоритм или таблицу. Если нужно перечислить несколько идей, вплетай их в обычные предложения.
+
+В математике сначала объясняй смысл идеи, потом формулу, потом интуицию, потом короткий пример. Формулы пиши в LaTeX, но обязательно расшифровывай каждую переменную человеческим языком. Не перескакивай через шаги: если используется преобразование, теорема, распределение, оценка или приближение, объясни зачем оно нужно и почему это законно.
+
+Не делай “конспект из пунктов”. Веди меня как преподаватель у доски: одна мысль плавно вытекает из другой. Если тема сложная, объясняй подробно, но без воды и повторов. Если я ошибаюсь в предпосылке, мягко поправь. Если ответ можно дать коротко, дай коротко; если без длинного объяснения я не пойму следующую тему, объясняй глубже.
+
+Очень важно, разбирай материал максимально интересно, чтобы я прям хотел учиться и мне было максимально интересно выучить эту штуку, пока что я в ахуе просто и заебался учиться. С исторической справкой можно, я люблю всякие истории.
+`
 
 const defaultMCPConfig = `# billyharness MCP config.
 # Native web_search, web_fetch, and web_crawl are built in; keep them out of MCP.

@@ -46,13 +46,17 @@ func compactMessages(messages []protocol.Message, cfg config.Config, observedPro
 
 func protectedPrefixEnd(messages []protocol.Message) int {
 	end := 0
-	if len(messages) > 0 && messages[0].Role == protocol.RoleSystem {
-		end = 1
+	for end < len(messages) && messages[end].Role == protocol.RoleSystem && !isCompactionSummary(messages[end]) {
+		end++
 	}
 	for end < len(messages) && isContextInstructionMessage(messages[end]) {
 		end++
 	}
 	return end
+}
+
+func isCompactionSummary(msg protocol.Message) bool {
+	return msg.Role == protocol.RoleSystem && strings.HasPrefix(strings.TrimSpace(msg.Content), compactionMarker)
 }
 
 func isContextInstructionMessage(msg protocol.Message) bool {

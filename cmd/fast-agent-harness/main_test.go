@@ -30,6 +30,7 @@ func TestGatewayRunSendsFullRunRequest(t *testing.T) {
 		Prompt:          "ping",
 		Provider:        "openai-codex",
 		Model:           "gpt-5.5",
+		Profile:         "billy",
 		Thinking:        "enabled",
 		ReasoningEffort: "xhigh",
 		MaxToolRounds:   42,
@@ -39,6 +40,7 @@ func TestGatewayRunSendsFullRunRequest(t *testing.T) {
 	}
 	if captured.Provider != "openai-codex" ||
 		captured.Model != "gpt-5.5" ||
+		captured.Profile != "billy" ||
 		captured.ReasoningEffort != "xhigh" ||
 		captured.MaxToolRounds != 42 ||
 		captured.Prompt != "ping" {

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
@@ -21,6 +22,7 @@ type Options struct {
 	GatewayURL       string
 	StatePath        string
 	Model            string
+	Profile          string
 	ReasoningEffort  string
 	MaxToolRounds    int
 	PollTimeoutSec   int
@@ -56,6 +58,7 @@ func New(opts Options, client *Client, harness Harness) (*Bot, error) {
 	if opts.EditInterval <= 0 {
 		opts.EditInterval = 700 * time.Millisecond
 	}
+	opts.Profile = config.NormalizeProfileName(opts.Profile)
 	if client == nil {
 		client = NewClient(ClientOptions{
 			BaseURL:     opts.BotAPIBaseURL,
@@ -135,8 +138,11 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 	defer cancel()
 
 	state := b.chatState(key)
+	if state.Profile == "" {
+		state.Profile = b.opts.Profile
+	}
 	if state.SessionID == "" {
-		id, err := b.harness.CreateSession(runCtx)
+		id, err := b.harness.CreateSession(runCtx, state.Profile)
 		if err != nil {
 			_ = b.sendPlain(parent, msg, "Gateway session failed: "+err.Error())
 			return
@@ -223,6 +229,7 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 	runReq := gateway.RunRequest{
 		Prompt:          text,
 		Model:           state.Model,
+		Profile:         state.Profile,
 		ReasoningEffort: state.ReasoningEffort,
 		MaxToolRounds:   b.opts.MaxToolRounds,
 	}
@@ -255,7 +262,7 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 	err = b.harness.RunSession(runCtx, state.SessionID, runReq, emitEvent)
 	if gatewaySessionMissing(err) {
 		log.Printf("telegram gateway session missing; recreating chat=%d old_session=%s", msg.Chat.ID, short(state.SessionID))
-		id, createErr := b.harness.CreateSession(runCtx)
+		id, createErr := b.harness.CreateSession(runCtx, state.Profile)
 		if createErr != nil {
 			err = createErr
 		} else {
@@ -358,12 +365,15 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 	case "/start", "/help":
 		_ = b.sendHTML(ctx, msg, HelpHTML())
 	case "/new", "/reset":
-		id, err := b.harness.CreateSession(ctx)
+		state := b.chatState(key)
+		if state.Profile == "" {
+			state.Profile = b.opts.Profile
+		}
+		id, err := b.harness.CreateSession(ctx, state.Profile)
 		if err != nil {
 			_ = b.sendPlain(ctx, msg, "Gateway session failed: "+err.Error())
 			return
 		}
-		state := b.chatState(key)
 		state.SessionID = id
 		state.UpdatedAt = time.Now().UTC()
 		b.setChatState(key, state)
@@ -381,6 +391,17 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 		state.UpdatedAt = time.Now().UTC()
 		b.setChatState(key, state)
 		_ = b.sendPlain(ctx, msg, "Model: "+state.Model)
+	case "/profile":
+		state := b.chatState(key)
+		if arg == "" {
+			_ = b.sendPlain(ctx, msg, "Current profile: "+fallback(state.Profile, b.opts.Profile))
+			return
+		}
+		state.Profile = config.NormalizeProfileName(arg)
+		state.SessionID = ""
+		state.UpdatedAt = time.Now().UTC()
+		b.setChatState(key, state)
+		_ = b.sendPlain(ctx, msg, "Profile: "+state.Profile+"; next message starts a new session")
 	case "/reasoning":
 		state := b.chatState(key)
 		if arg == "" {
@@ -549,6 +570,7 @@ Commands:
 <code>/new</code> new session
 <code>/status</code> current chat settings
 <code>/model flash|pro|gpt|gpt-5.5</code>
+<code>/profile billy</code>
 <code>/reasoning low|medium|high|xhigh|off</code>
 <code>/mcp</code> MCP status
 <code>/cancel</code> cancel current run`
@@ -566,6 +588,7 @@ func StatusHTML(state ChatState, opts Options) string {
 	return "<b>Status</b>\n" +
 		"session: <code>" + esc(short(state.SessionID)) + "</code>\n" +
 		"model: <code>" + esc(fallback(state.Model, opts.Model)) + "</code>\n" +
+		"profile: <code>" + esc(fallback(state.Profile, opts.Profile)) + "</code>\n" +
 		"reasoning: <code>" + esc(fallback(state.ReasoningEffort, opts.ReasoningEffort)) + "</code>\n" +
 		"send: <code>" + esc(fmt.Sprint(opts.SendEnabled && !opts.DryRunDefault)) + "</code>\n" +
 		"allowlist: <code>" + esc(strings.Join(allowed, ",")) + "</code>"

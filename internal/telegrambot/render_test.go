@@ -47,7 +47,9 @@ func TestRendererFinalRichMarkdownPreservesRichMarkdown(t *testing.T) {
 | Ветер | 6 м/с |
 
 - Облачно
-- Без сильного дождя`})
+- Без сильного дождя
+
+Формула: $$\frac{\bar X - \mu}{\sigma/\sqrt n} \approx N(0,1)$$`})
 	r.Apply(protocol.Event{Type: protocol.EventRunCompleted})
 
 	chunks := r.FinalRichMarkdownChunks("deepseek-v4-flash", "high")
@@ -55,7 +57,7 @@ func TestRendererFinalRichMarkdownPreservesRichMarkdown(t *testing.T) {
 		t.Fatalf("chunks = %d, want 1", len(chunks))
 	}
 	got := chunks[0]
-	for _, want := range []string{"**✅ Billyharness · Done**", "_🧬 deepseek-v4-flash · 🧠 high", "## Погода", "| Параметр | Значение |", "- Облачно", "_⚡ streaming_"} {
+	for _, want := range []string{"**✅ Billyharness · Done**", "_🧬 deepseek-v4-flash · 🧠 high", "## Погода", "| Параметр | Значение |", "- Облачно", "$$\\frac{\\bar X - \\mu}{\\sigma/\\sqrt n} \\approx N(0,1)$$", "_⚡ streaming_"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rich markdown missing %q in:\n%s", want, got)
 		}

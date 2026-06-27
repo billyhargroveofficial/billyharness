@@ -45,9 +45,10 @@ func TestRunWithMockProvider(t *testing.T) {
 func TestSystemPromptDocumentsTerminalSafeMarkdown(t *testing.T) {
 	prompt := systemPrompt()
 	for _, want := range []string{
-		"terminal-safe Markdown",
+		"simple Markdown",
 		"fenced code blocks",
 		"simple pipe tables",
+		"Do not put math formulas in code fences",
 		"HTML",
 		"images",
 		"Mermaid",
@@ -58,6 +59,29 @@ func TestSystemPromptDocumentsTerminalSafeMarkdown(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("system prompt missing %q: %s", want, prompt)
 		}
+	}
+}
+
+func TestInitialMessagesInjectProfileAsSystemContext(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	messages := InitialMessages(config.Config{
+		Profile:            "billy",
+		ProjectDocMaxBytes: 0,
+	})
+	if len(messages) != 2 {
+		t.Fatalf("messages = %#v", messages)
+	}
+	if messages[0].Role != protocol.RoleSystem || messages[1].Role != protocol.RoleSystem {
+		t.Fatalf("roles = %#v", messages)
+	}
+	if !strings.Contains(messages[1].Content, "# Billyharness profile: billy") ||
+		!strings.Contains(messages[1].Content, "<SOUL>") ||
+		!strings.Contains(messages[1].Content, "Формулы пиши в LaTeX") {
+		t.Fatalf("profile message = %s", messages[1].Content)
+	}
+	if _, err := os.Stat(filepath.Join(home, "profiles", "billy", "SOUL.md")); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -155,6 +179,34 @@ func TestCompactMessagesPreservesAgentsContextPrefix(t *testing.T) {
 	}
 	if !strings.HasPrefix(compacted[2].Content, compactionMarker) {
 		t.Fatalf("summary should be after AGENTS context: %#v", compacted)
+	}
+}
+
+func TestCompactMessagesPreservesProfileSystemPrefix(t *testing.T) {
+	cfg := config.Default()
+	cfg.ContextCompactTokens = 1
+	cfg.ContextCompactKeep = 1
+	cfg.ContextCompactMaxChars = 2000
+	messages := []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "base system"},
+		{Role: protocol.RoleSystem, Content: "# Billyharness profile: billy\n\n<SOUL>\nprofile rules\n</SOUL>"},
+		{Role: protocol.RoleUser, Content: "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nproject rules\n</INSTRUCTIONS>"},
+		{Role: protocol.RoleUser, Content: strings.Repeat("old ", 100)},
+		{Role: protocol.RoleAssistant, Content: "old answer"},
+		{Role: protocol.RoleUser, Content: "latest"},
+	}
+	compacted, ok := compactMessages(messages, cfg, 100)
+	if !ok {
+		t.Fatal("expected compaction")
+	}
+	if len(compacted) < 5 ||
+		compacted[0].Content != messages[0].Content ||
+		compacted[1].Content != messages[1].Content ||
+		compacted[2].Content != messages[2].Content {
+		t.Fatalf("protected prefix not preserved: %#v", compacted)
+	}
+	if !strings.HasPrefix(compacted[3].Content, compactionMarker) {
+		t.Fatalf("summary should be after protected prefix: %#v", compacted)
 	}
 }
 

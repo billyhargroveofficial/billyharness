@@ -64,6 +64,7 @@ type parameters struct {
 type ChatState struct {
 	SessionID       string    `json:"session_id,omitempty"`
 	Model           string    `json:"model,omitempty"`
+	Profile         string    `json:"profile,omitempty"`
 	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }

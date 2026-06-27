@@ -22,6 +22,7 @@ type appSettings struct {
 	LastLocalChatID           string  `json:"last_local_chat_id,omitempty"`
 	LastGatewaySessionID      string  `json:"last_gateway_session_id,omitempty"`
 	LastSelectedModel         string  `json:"last_selected_model,omitempty"`
+	LastProfile               string  `json:"last_profile,omitempty"`
 	LastReasoningEffort       string  `json:"last_reasoning_effort,omitempty"`
 	LastReasoningKind         string  `json:"last_reasoning_kind,omitempty"`
 }
@@ -74,6 +75,9 @@ func (s appSettings) normalized() appSettings {
 	}
 	if s.ContextWindowTokens <= 0 || s.ContextWindowTokens == 128000 {
 		s.ContextWindowTokens = defaultContextWindowTokens
+	}
+	if s.LastProfile == "" {
+		s.LastProfile = "billy"
 	}
 	return s
 }

@@ -226,6 +226,36 @@ func TestGatewayCreateSessionAcceptsMessages(t *testing.T) {
 	}
 }
 
+func TestGatewayCreateSessionUsesRequestedProfile(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+
+	create := httptest.NewRecorder()
+	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewBufferString(`{"profile":"billy"}`)))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var session struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &session); err != nil {
+		t.Fatal(err)
+	}
+	get := httptest.NewRecorder()
+	server.Handler().ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/v1/sessions/"+session.ID, nil))
+	if get.Code != http.StatusOK {
+		t.Fatalf("get status = %d body=%s", get.Code, get.Body.String())
+	}
+	if !strings.Contains(get.Body.String(), "# Billyharness profile: billy") ||
+		!strings.Contains(get.Body.String(), "Формулы пиши в LaTeX") {
+		t.Fatalf("profile not injected: %s", get.Body.String())
+	}
+}
+
 func TestGatewayToolsExposeMCPRegistry(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Default()

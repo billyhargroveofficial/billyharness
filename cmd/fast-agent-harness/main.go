@@ -70,6 +70,7 @@ func runOnce(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	mock := fs.Bool("mock", false, "use mock provider")
 	model := fs.String("model", "", "model override")
+	profile := fs.String("profile", "", "system profile override")
 	gatewayURL := fs.String("gateway", "", "gateway base URL, for example http://127.0.0.1:8765")
 	noReasoning := fs.Bool("hide-reasoning", true, "do not print reasoning deltas")
 	if err := fs.Parse(args); err != nil {
@@ -80,7 +81,7 @@ func runOnce(args []string) error {
 		return fmt.Errorf("prompt required")
 	}
 	if *gatewayURL != "" {
-		req := gateway.RunRequest{Prompt: prompt, Model: *model}
+		req := gateway.RunRequest{Prompt: prompt, Model: *model, Profile: config.NormalizeProfileName(*profile)}
 		if *mock {
 			req.Provider = "mock"
 			req.Model = "mock"
@@ -94,6 +95,9 @@ func runOnce(args []string) error {
 	}
 	if *model != "" {
 		cfg.Model = *model
+	}
+	if *profile != "" {
+		cfg.Profile = config.NormalizeProfileName(*profile)
 	}
 	cfg.ApplyModelProviderDefaults()
 	prov, err := provider.New(cfg)
@@ -113,13 +117,14 @@ func chat(args []string) error {
 	fs := flag.NewFlagSet("chat", flag.ExitOnError)
 	mock := fs.Bool("mock", false, "use mock provider")
 	model := fs.String("model", "", "model override")
+	profile := fs.String("profile", "", "system profile override")
 	gatewayURL := fs.String("gateway", "", "gateway base URL, for example http://127.0.0.1:8765")
 	noReasoning := fs.Bool("hide-reasoning", true, "do not print reasoning deltas")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *gatewayURL != "" {
-		return chatGateway(*gatewayURL, *noReasoning, *model, *mock)
+		return chatGateway(*gatewayURL, *noReasoning, *model, *profile, *mock)
 	}
 	cfg := config.Default()
 	if *mock {
@@ -128,6 +133,9 @@ func chat(args []string) error {
 	}
 	if *model != "" {
 		cfg.Model = *model
+	}
+	if *profile != "" {
+		cfg.Profile = config.NormalizeProfileName(*profile)
 	}
 	cfg.ApplyModelProviderDefaults()
 	prov, err := provider.New(cfg)
@@ -196,6 +204,7 @@ func telegramCmd(args []string) error {
 	token := fs.String("token", "", "Telegram bot token; defaults to TELEGRAM_BOT_TOKEN from env or .env")
 	botAPIBase := fs.String("bot-api-base", lookupEnvAny("BILLYHARNESS_TELEGRAM_BOT_API_BASE_URL", "TELEGRAM_BOT_API_BASE_URL"), "Telegram Bot API base URL")
 	model := fs.String("model", cfg.Model, "initial model for new Telegram chats")
+	profile := fs.String("profile", cfg.Profile, "system profile for new Telegram chats")
 	reasoning := fs.String("reasoning", cfg.ReasoningEffort, "initial reasoning effort")
 	statePath := fs.String("state", telegrambot.DefaultStatePath(), "Telegram gateway state JSON path")
 	allowedRaw := fs.String("allow-chat", lookupEnvAny("BILLYHARNESS_TELEGRAM_ALLOWED_CHAT_IDS", "TELEGRAM_ALLOWED_CHAT_IDS"), "comma-separated allowed Telegram chat IDs")
@@ -233,6 +242,7 @@ func telegramCmd(args []string) error {
 		GatewayURL:       *gatewayURL,
 		StatePath:        *statePath,
 		Model:            modelAliasForTelegram(*model),
+		Profile:          config.NormalizeProfileName(*profile),
 		ReasoningEffort:  strings.ToLower(strings.TrimSpace(*reasoning)),
 		MaxToolRounds:    *maxRounds,
 		PollTimeoutSec:   *pollTimeout,
@@ -474,8 +484,9 @@ func benchCmd(args []string) error {
 	return enc.Encode(summary)
 }
 
-func chatGateway(baseURL string, noReasoning bool, model string, mock bool) error {
-	sessionID, err := gatewayCreateSession(context.Background(), baseURL)
+func chatGateway(baseURL string, noReasoning bool, model, profile string, mock bool) error {
+	profile = config.NormalizeProfileName(profile)
+	sessionID, err := gatewayCreateSession(context.Background(), baseURL, profile)
 	if err != nil {
 		return err
 	}
@@ -495,7 +506,7 @@ func chatGateway(baseURL string, noReasoning bool, model string, mock bool) erro
 			return nil
 		}
 		path := "/v1/sessions/" + sessionID + "/run"
-		req := gateway.RunRequest{Prompt: prompt, Model: model}
+		req := gateway.RunRequest{Prompt: prompt, Model: model, Profile: profile}
 		if mock {
 			req.Provider = "mock"
 			req.Model = "mock"
@@ -506,11 +517,16 @@ func chatGateway(baseURL string, noReasoning bool, model string, mock bool) erro
 	}
 }
 
-func gatewayCreateSession(ctx context.Context, baseURL string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/v1/sessions", nil)
+func gatewayCreateSession(ctx context.Context, baseURL, profile string) (string, error) {
+	body, err := json.Marshal(gateway.CreateSessionRequest{Profile: profile})
 	if err != nil {
 		return "", err
 	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/v1/sessions", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err

@@ -21,6 +21,9 @@ const (
 	contextStartMarker    = "# AGENTS.md instructions"
 	contextOpenMarker     = "<INSTRUCTIONS>"
 	contextEndMarker      = "</INSTRUCTIONS>"
+	profileStartMarker    = "# Billyharness profile"
+	profileOpenMarker     = "<SOUL>"
+	profileEndMarker      = "</SOUL>"
 )
 
 type Source struct {
@@ -34,6 +37,12 @@ type Loaded struct {
 	Text      string
 	Directory string
 	Sources   []Source
+}
+
+type Profile struct {
+	Name string
+	Path string
+	Text string
 }
 
 func Load(cfg config.Config) Loaded {
@@ -61,6 +70,37 @@ func Message(cfg config.Config) (protocol.Message, bool) {
 	}, true
 }
 
+func ProfileMessage(cfg config.Config) (protocol.Message, bool) {
+	profile, ok := LoadProfile(cfg)
+	if !ok {
+		return protocol.Message{}, false
+	}
+	return protocol.Message{
+		Role:    protocol.RoleSystem,
+		Content: profile.ContextualText(),
+	}, true
+}
+
+func LoadProfile(cfg config.Config) (Profile, bool) {
+	if strings.TrimSpace(cfg.Profile) == "" {
+		return Profile{}, false
+	}
+	name := config.NormalizeProfileName(cfg.Profile)
+	path, err := config.EnsureDefaultProfileFile(name)
+	if err != nil || strings.TrimSpace(path) == "" {
+		return Profile{}, false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return Profile{}, false
+	}
+	text := strings.TrimSpace(string(raw))
+	if text == "" {
+		return Profile{}, false
+	}
+	return Profile{Name: name, Path: path, Text: text}, true
+}
+
 func (l Loaded) ContextualText() string {
 	directory := ""
 	if l.Directory != "" {
@@ -70,6 +110,14 @@ func (l Loaded) ContextualText() string {
 		contextOpenMarker + "\n" +
 		l.Text + "\n" +
 		contextEndMarker
+}
+
+func (p Profile) ContextualText() string {
+	return profileStartMarker + ": " + p.Name + "\n" +
+		"Source: " + p.Path + "\n\n" +
+		profileOpenMarker + "\n" +
+		p.Text + "\n" +
+		profileEndMarker
 }
 
 type instructionPart struct {

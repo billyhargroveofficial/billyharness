@@ -52,6 +52,9 @@ func TestDefaultRuntimeLimits(t *testing.T) {
 	if cfg.CodexAuthFile != filepath.Join(os.Getenv("BILLYHARNESS_HOME"), "auth", "codex.json") {
 		t.Fatalf("CodexAuthFile = %q", cfg.CodexAuthFile)
 	}
+	if cfg.Profile != "billy" {
+		t.Fatalf("Profile = %q, want billy", cfg.Profile)
+	}
 }
 
 func TestMCPAllowedServersEnvOverridesDefault(t *testing.T) {
@@ -76,6 +79,53 @@ func TestDefaultReadsBillySettingsModelWhenEnvIsUnset(t *testing.T) {
 	cfg := Default()
 	if cfg.Model != "gpt-5.5" || cfg.Provider != "openai-codex" || cfg.ReasoningEffort != "xhigh" {
 		t.Fatalf("cfg = %#v", cfg)
+	}
+}
+
+func TestDefaultReadsBillySettingsProfileWhenEnvIsUnset(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	t.Setenv("BILLYHARNESS_PROFILE", "")
+	t.Setenv("FAST_AGENT_PROFILE", "")
+	if err := os.WriteFile(filepath.Join(root, "settings.json"), []byte(`{"last_profile":"teacher.profile"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Default()
+	if cfg.Profile != "teacher.profile" {
+		t.Fatalf("Profile = %q", cfg.Profile)
+	}
+}
+
+func TestProfileEnvOverridesBillySettings(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	t.Setenv("BILLYHARNESS_PROFILE", "Env/Profile")
+	if err := os.WriteFile(filepath.Join(root, "settings.json"), []byte(`{"last_profile":"settings-profile"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Default()
+	if cfg.Profile != "envprofile" {
+		t.Fatalf("Profile = %q", cfg.Profile)
+	}
+}
+
+func TestEnsureDefaultProfileFileCreatesBillySoul(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	path, err := EnsureDefaultProfileFile("billy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, "profiles", "billy", "SOUL.md")
+	if path != want {
+		t.Fatalf("path = %q, want %q", path, want)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "Формулы пиши в LaTeX") {
+		t.Fatalf("profile body = %s", body)
 	}
 }
 

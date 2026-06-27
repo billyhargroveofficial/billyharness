@@ -41,6 +41,7 @@ type RunRequest struct {
 	Prompt          string `json:"prompt"`
 	Provider        string `json:"provider,omitempty"`
 	Model           string `json:"model,omitempty"`
+	Profile         string `json:"profile,omitempty"`
 	Thinking        string `json:"thinking,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	MaxToolRounds   int    `json:"max_tool_rounds,omitempty"`
@@ -48,6 +49,7 @@ type RunRequest struct {
 
 type CreateSessionRequest struct {
 	Messages []protocol.Message `json:"messages,omitempty"`
+	Profile  string             `json:"profile,omitempty"`
 }
 
 type DeepSeekAuthRequest struct {
@@ -190,7 +192,11 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	messages := req.Messages
 	if len(messages) == 0 {
-		messages = agent.InitialMessages(s.cfg)
+		cfg := s.cfg
+		if strings.TrimSpace(req.Profile) != "" {
+			cfg.Profile = config.NormalizeProfileName(req.Profile)
+		}
+		messages = agent.InitialMessages(cfg)
 	}
 	session := &Session{
 		ID:       newID(),
@@ -285,6 +291,9 @@ func (s *Server) agentFor(req RunRequest) (*agent.Agent, error) {
 	}
 	if req.Model != "" {
 		cfg.Model = req.Model
+	}
+	if strings.TrimSpace(req.Profile) != "" {
+		cfg.Profile = config.NormalizeProfileName(req.Profile)
 	}
 	cfg.ApplyModelProviderDefaults()
 	if req.Thinking != "" {

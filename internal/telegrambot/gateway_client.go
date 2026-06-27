@@ -14,7 +14,7 @@ import (
 )
 
 type Harness interface {
-	CreateSession(context.Context) (string, error)
+	CreateSession(context.Context, string) (string, error)
 	RunSession(context.Context, string, gateway.RunRequest, func(protocol.Event)) error
 	MCPStatus(context.Context) (string, error)
 }
@@ -31,8 +31,12 @@ func NewGatewayClient(baseURL string) *GatewayClient {
 	}
 }
 
-func (c *GatewayClient) CreateSession(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/sessions", bytes.NewReader([]byte(`{}`)))
+func (c *GatewayClient) CreateSession(ctx context.Context, profile string) (string, error) {
+	body, err := json.Marshal(gateway.CreateSessionRequest{Profile: profile})
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/sessions", bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
