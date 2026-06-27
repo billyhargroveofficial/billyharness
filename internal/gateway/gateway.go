@@ -20,6 +20,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
+	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
@@ -38,10 +39,9 @@ type ServerOptions struct {
 }
 
 type Session struct {
-	ID       string             `json:"id"`
-	Created  time.Time          `json:"created"`
-	Messages []protocol.Message `json:"-"`
-	mu       sync.Mutex
+	ID      string              `json:"id"`
+	Created time.Time           `json:"created"`
+	Thread  *sessionpkg.Session `json:"-"`
 }
 
 type RunRequest struct {
@@ -154,6 +154,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/sessions", s.handleCreateSession)
 	s.mux.HandleFunc("GET /v1/sessions/{id}", s.handleGetSession)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/run", s.handleSessionRun)
+	s.mux.HandleFunc("POST /v1/sessions/{id}/cancel", s.handleSessionCancel)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -241,9 +242,9 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		messages = agent.InitialMessages(cfg)
 	}
 	session := &Session{
-		ID:       newID(),
-		Created:  time.Now().UTC(),
-		Messages: messages,
+		ID:      newID(),
+		Created: time.Now().UTC(),
+		Thread:  sessionpkg.New(messages),
 	}
 	s.mu.Lock()
 	s.sessions[session.ID] = session
@@ -257,15 +258,13 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	session.mu.Lock()
-	count := len(session.Messages)
-	messages := append([]protocol.Message(nil), session.Messages...)
-	session.mu.Unlock()
+	messages := session.Thread.Messages()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":            session.ID,
 		"created":       session.Created,
-		"message_count": count,
+		"message_count": len(messages),
 		"messages":      messages,
+		"running":       session.Thread.Running(),
 	})
 }
 
@@ -303,20 +302,24 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "prompt required")
 		return
 	}
-	session.mu.Lock()
-	session.Messages = append(session.Messages, protocol.Message{Role: protocol.RoleUser, Content: req.Prompt})
 	streamEvents(w, func(emit func(protocol.Event)) error {
 		a, err := s.agentFor(req)
 		if err != nil {
 			return err
 		}
-		next, err := a.RunMessages(r.Context(), session.Messages, emit)
-		if err == nil {
-			session.Messages = next
-		}
-		return err
+		return session.Thread.Run(r.Context(), sessionpkg.RunnerFunc(a.RunMessages), req.Prompt, emit)
 	})
-	session.mu.Unlock()
+}
+
+func (s *Server) handleSessionCancel(w http.ResponseWriter, r *http.Request) {
+	session, ok := s.session(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"cancelled": session.Thread.Cancel(),
+	})
 }
 
 func (s *Server) session(id string) (*Session, bool) {

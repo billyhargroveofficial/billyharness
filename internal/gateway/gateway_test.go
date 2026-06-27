@@ -18,6 +18,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
+	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
@@ -68,6 +69,98 @@ func TestGatewaySessionRunStreamsEvents(t *testing.T) {
 	}
 	if got := content.String(); got != "mock: through gateway" {
 		t.Fatalf("content = %q", got)
+	}
+}
+
+func TestGatewaySessionRunPersistsHistory(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+
+	create := httptest.NewRecorder()
+	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", nil))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	for _, prompt := range []string{"one", "two"} {
+		run := httptest.NewRecorder()
+		server.Handler().ServeHTTP(run, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/run", bytes.NewBufferString(`{"prompt":"`+prompt+`"}`)))
+		if run.Code != http.StatusOK {
+			t.Fatalf("run status = %d body=%s", run.Code, run.Body.String())
+		}
+	}
+
+	get := httptest.NewRecorder()
+	server.Handler().ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID, nil))
+	if get.Code != http.StatusOK {
+		t.Fatalf("get status = %d body=%s", get.Code, get.Body.String())
+	}
+	var got struct {
+		MessageCount int                `json:"message_count"`
+		Messages     []protocol.Message `json:"messages"`
+		Running      bool               `json:"running"`
+	}
+	if err := json.Unmarshal(get.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Running {
+		t.Fatal("session reports running after completed runs")
+	}
+	if got.MessageCount != len(got.Messages) || got.MessageCount < 5 {
+		t.Fatalf("unexpected message count: %+v", got)
+	}
+	if got.Messages[len(got.Messages)-4].Content != "one" ||
+		got.Messages[len(got.Messages)-3].Content != "mock: one" ||
+		got.Messages[len(got.Messages)-2].Content != "two" ||
+		got.Messages[len(got.Messages)-1].Content != "mock: two" {
+		t.Fatalf("unexpected history tail: %+v", got.Messages)
+	}
+}
+
+func TestGatewaySessionCancelEndpointCancelsActiveThread(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+	thread := sessionpkg.New([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	server.sessions["test-session"] = &Session{
+		ID:      "test-session",
+		Created: time.Now().UTC(),
+		Thread:  thread,
+	}
+
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- thread.Run(context.Background(), sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, _ func(protocol.Event)) ([]protocol.Message, error) {
+			close(started)
+			<-ctx.Done()
+			return messages, ctx.Err()
+		}), "wait", nil)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("thread did not start")
+	}
+
+	cancel := httptest.NewRecorder()
+	server.Handler().ServeHTTP(cancel, httptest.NewRequest(http.MethodPost, "/v1/sessions/test-session/cancel", nil))
+	if cancel.Code != http.StatusOK {
+		t.Fatalf("cancel status = %d body=%s", cancel.Code, cancel.Body.String())
+	}
+	if !strings.Contains(cancel.Body.String(), `"cancelled":true`) {
+		t.Fatalf("cancel response = %s", cancel.Body.String())
+	}
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("thread error = %v, want context.Canceled", err)
 	}
 }
 
