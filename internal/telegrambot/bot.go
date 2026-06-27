@@ -28,6 +28,7 @@ type Options struct {
 	PollTimeoutSec   int
 	EditInterval     time.Duration
 	AllowedChatIDs   map[int64]bool
+	AllowAllChats    bool
 	SendEnabled      bool
 	DryRunDefault    bool
 	RequireAllowlist bool
@@ -41,6 +42,7 @@ type Bot struct {
 	state   State
 
 	mu      sync.Mutex
+	saveMu  sync.Mutex
 	chatMux map[string]*sync.Mutex
 	cancel  map[string]context.CancelFunc
 }
@@ -57,6 +59,11 @@ func New(opts Options, client *Client, harness Harness) (*Bot, error) {
 	}
 	if opts.EditInterval <= 0 {
 		opts.EditInterval = 700 * time.Millisecond
+	}
+	if opts.AllowAllChats {
+		opts.RequireAllowlist = false
+	} else if opts.SendEnabled && !opts.DryRunDefault {
+		opts.RequireAllowlist = true
 	}
 	opts.Profile = config.NormalizeProfileName(opts.Profile)
 	if client == nil {
@@ -104,10 +111,7 @@ func (b *Bot) Run(ctx context.Context) error {
 			continue
 		}
 		for _, update := range updates {
-			if update.UpdateID >= b.state.Offset {
-				b.state.Offset = update.UpdateID + 1
-				_ = b.store.Save(b.state)
-			}
+			b.ackOffset(update.UpdateID)
 			if update.Message == nil || strings.TrimSpace(update.Message.Text) == "" {
 				continue
 			}
@@ -119,15 +123,20 @@ func (b *Bot) Run(ctx context.Context) error {
 
 func (b *Bot) handleMessage(parent context.Context, msg Message) {
 	key := chatKey(msg.Chat.ID, msg.ThreadID)
-	mu := b.mutexFor(key)
-	mu.Lock()
-	defer mu.Unlock()
-
 	if !b.allowed(msg.Chat.ID) {
 		_ = b.sendPlain(parent, msg, "Chat is not allowlisted for this bot.")
 		return
 	}
 	text := strings.TrimSpace(msg.Text)
+	if bypassActiveRunLock(text) {
+		b.handleCommand(parent, msg, text)
+		return
+	}
+
+	mu := b.mutexFor(key)
+	mu.Lock()
+	defer mu.Unlock()
+
 	if strings.HasPrefix(text, "/") {
 		b.handleCommand(parent, msg, text)
 		return
@@ -497,6 +506,9 @@ func (b *Bot) nextOffset() int {
 }
 
 func (b *Bot) allowed(chatID int64) bool {
+	if b.opts.AllowAllChats {
+		return true
+	}
 	if len(b.opts.AllowedChatIDs) == 0 {
 		return !b.opts.RequireAllowlist
 	}
@@ -522,14 +534,34 @@ func (b *Bot) chatState(key string) ChatState {
 }
 
 func (b *Bot) setChatState(key string, state ChatState) {
+	b.saveMu.Lock()
+	defer b.saveMu.Unlock()
+
 	b.mu.Lock()
 	if b.state.Chats == nil {
 		b.state.Chats = map[string]ChatState{}
 	}
 	b.state.Chats[key] = state
-	snapshot := b.state
+	snapshot := cloneState(b.state)
 	b.mu.Unlock()
-	_ = b.store.Save(snapshot)
+	if err := b.store.Save(snapshot); err != nil {
+		log.Printf("telegram state save: %v", err)
+	}
+}
+
+func (b *Bot) ackOffset(updateID int) {
+	b.saveMu.Lock()
+	defer b.saveMu.Unlock()
+
+	b.mu.Lock()
+	if updateID >= b.state.Offset {
+		b.state.Offset = updateID + 1
+	}
+	snapshot := cloneState(b.state)
+	b.mu.Unlock()
+	if err := b.store.Save(snapshot); err != nil {
+		log.Printf("telegram state save: %v", err)
+	}
 }
 
 func (b *Bot) setCancel(key string, cancel context.CancelFunc) {
@@ -553,6 +585,34 @@ func (b *Bot) cancelChat(key string) bool {
 	}
 	cancel()
 	return true
+}
+
+func bypassActiveRunLock(text string) bool {
+	if !strings.HasPrefix(text, "/") {
+		return false
+	}
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return false
+	}
+	cmd := strings.ToLower(strings.SplitN(fields[0], "@", 2)[0])
+	switch cmd {
+	case "/cancel", "/status", "/start", "/help":
+		return true
+	default:
+		return false
+	}
+}
+
+func cloneState(state State) State {
+	out := State{
+		Offset: state.Offset,
+		Chats:  map[string]ChatState{},
+	}
+	for key, value := range state.Chats {
+		out.Chats[key] = value
+	}
+	return out
 }
 
 func chatKey(chatID int64, threadID int) string {
@@ -582,7 +642,9 @@ func StatusHTML(state ChatState, opts Options) string {
 		allowed = append(allowed, strconv.FormatInt(chat, 10))
 	}
 	sort.Strings(allowed)
-	if len(allowed) == 0 {
+	if opts.AllowAllChats {
+		allowed = []string{"all chats"}
+	} else if len(allowed) == 0 {
 		allowed = []string{"not configured"}
 	}
 	return "<b>Status</b>\n" +

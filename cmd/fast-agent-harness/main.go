@@ -209,6 +209,7 @@ func telegramCmd(args []string) error {
 	statePath := fs.String("state", telegrambot.DefaultStatePath(), "Telegram gateway state JSON path")
 	allowedRaw := fs.String("allow-chat", lookupEnvAny("BILLYHARNESS_TELEGRAM_ALLOWED_CHAT_IDS", "TELEGRAM_ALLOWED_CHAT_IDS"), "comma-separated allowed Telegram chat IDs")
 	requireAllowlist := fs.Bool("require-allowlist", envBoolAnyDefault(false, "BILLYHARNESS_TELEGRAM_REQUIRE_ALLOWLIST", "TELEGRAM_REQUIRE_ALLOWLIST"), "reject chats not listed in -allow-chat")
+	allowAllChats := fs.Bool("allow-all-chats", envBoolAnyDefault(false, "BILLYHARNESS_TELEGRAM_ALLOW_ALL_CHATS", "TELEGRAM_ALLOW_ALL_CHATS"), "allow every Telegram chat; unsafe for live bots")
 	sendEnabled := fs.Bool("send-enabled", envBoolAnyDefault(true, "BILLYHARNESS_TELEGRAM_SEND_ENABLED", "TELEGRAM_SEND_ENABLED"), "actually send Telegram messages")
 	dryRun := fs.Bool("dry-run", envBoolAnyDefault(false, "BILLYHARNESS_TELEGRAM_DRY_RUN", "TELEGRAM_DRY_RUN"), "log Telegram sends without sending")
 	pollTimeout := fs.Int("poll-timeout-sec", envIntAnyDefault(30, "BILLYHARNESS_TELEGRAM_POLL_TIMEOUT_SEC", "TELEGRAM_POLL_TIMEOUT_SEC"), "Telegram long poll timeout")
@@ -236,6 +237,13 @@ func telegramCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	effectiveRequireAllowlist := *requireAllowlist
+	if *allowAllChats {
+		effectiveRequireAllowlist = false
+	}
+	if *sendEnabled && !*dryRun && len(allowed) == 0 && !*allowAllChats {
+		return fmt.Errorf("Telegram live send requires -allow-chat or -allow-all-chats")
+	}
 	opts := telegrambot.Options{
 		BotToken:         *token,
 		BotAPIBaseURL:    *botAPIBase,
@@ -248,9 +256,10 @@ func telegramCmd(args []string) error {
 		PollTimeoutSec:   *pollTimeout,
 		EditInterval:     time.Duration(*editIntervalMS) * time.Millisecond,
 		AllowedChatIDs:   allowed,
+		AllowAllChats:    *allowAllChats,
 		SendEnabled:      *sendEnabled,
 		DryRunDefault:    *dryRun,
-		RequireAllowlist: *requireAllowlist,
+		RequireAllowlist: effectiveRequireAllowlist,
 	}
 	bot, err := telegrambot.New(opts, nil, nil)
 	if err != nil {
