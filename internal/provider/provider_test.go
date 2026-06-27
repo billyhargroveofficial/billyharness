@@ -1,9 +1,12 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
@@ -135,6 +138,26 @@ func TestParseChunkCountsPromptTokensAsMissWhenCacheFieldsMissing(t *testing.T) 
 	}
 	if events[0].Usage.CacheHitTokens != 0 || events[0].Usage.CacheMissTokens != 100 {
 		t.Fatalf("usage = %#v", events[0].Usage)
+	}
+}
+
+func TestParseSSEReturnsWhenEventConsumerBlockedAndContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := make(chan Event)
+	done := make(chan error, 1)
+	go func() {
+		done <- parseSSE(ctx, strings.NewReader(`data: {"choices":[{"delta":{"content":"blocked"}}]}`+"\n\n"), time.Minute, events)
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("parseSSE did not return after context cancellation")
 	}
 }
 

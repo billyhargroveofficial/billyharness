@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -466,6 +467,26 @@ func TestParseResponsesSSEReturnsErrorWhenStreamEndsBeforeCompleted(t *testing.T
 	err := parseResponsesSSE(context.Background(), strings.NewReader(sse), 0, events)
 	if err == nil || !strings.Contains(err.Error(), "before response.completed") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestParseResponsesSSEReturnsWhenEventConsumerBlockedAndContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := make(chan Event)
+	done := make(chan error, 1)
+	go func() {
+		done <- parseResponsesSSE(ctx, strings.NewReader(`data: {"type":"response.output_text.delta","delta":"blocked"}`+"\n\n"), time.Minute, events)
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("parseResponsesSSE did not return after context cancellation")
 	}
 }
 

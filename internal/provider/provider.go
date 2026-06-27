@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -261,17 +260,9 @@ func (d *DeepSeek) body(req Request) ([]byte, error) {
 }
 
 func parseSSE(ctx context.Context, r io.Reader, idle time.Duration, events chan<- Event) error {
-	lines := make(chan string)
-	errs := make(chan error, 1)
-	go func() {
-		defer close(lines)
-		scanner := bufio.NewScanner(r)
-		scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
-		for scanner.Scan() {
-			lines <- scanner.Text()
-		}
-		errs <- scanner.Err()
-	}()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	lines, errs := scanLines(ctx, r)
 	var timer <-chan time.Time
 	if idle > 0 {
 		timer = time.After(idle)
@@ -300,7 +291,9 @@ func parseSSE(ctx context.Context, r io.Reader, idle time.Duration, events chan<
 				continue
 			}
 			if data == "[DONE]" {
-				events <- Event{Kind: EventDone}
+				if err := sendEvent(ctx, events, Event{Kind: EventDone}); err != nil {
+					return err
+				}
 				continue
 			}
 			parsed, err := parseChunk([]byte(data))
@@ -308,7 +301,9 @@ func parseSSE(ctx context.Context, r io.Reader, idle time.Duration, events chan<
 				return err
 			}
 			for _, event := range parsed {
-				events <- event
+				if err := sendEvent(ctx, events, event); err != nil {
+					return err
+				}
 			}
 		}
 	}

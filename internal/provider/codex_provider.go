@@ -6,7 +6,6 @@
 package provider
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -221,17 +220,9 @@ func codexResponsesURL(base string) string {
 }
 
 func parseResponsesSSE(ctx context.Context, r io.Reader, idle time.Duration, events chan<- Event) error {
-	lines := make(chan string)
-	errs := make(chan error, 1)
-	go func() {
-		defer close(lines)
-		scanner := bufio.NewScanner(r)
-		scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
-		for scanner.Scan() {
-			lines <- scanner.Text()
-		}
-		errs <- scanner.Err()
-	}()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	lines, errs := scanLines(ctx, r)
 	var timer <-chan time.Time
 	if idle > 0 {
 		timer = time.After(idle)
@@ -247,7 +238,7 @@ func parseResponsesSSE(ctx context.Context, r io.Reader, idle time.Duration, eve
 		if chunk == "" || chunk == "[DONE]" {
 			return nil
 		}
-		if err := parser.Handle([]byte(chunk), events); err != nil {
+		if err := parser.Handle(ctx, []byte(chunk), events); err != nil {
 			return err
 		}
 		return nil
@@ -318,7 +309,7 @@ func newResponsesParser() *responsesParser {
 	}
 }
 
-func (p *responsesParser) Handle(data []byte, events chan<- Event) error {
+func (p *responsesParser) Handle(ctx context.Context, data []byte, events chan<- Event) error {
 	var raw struct {
 		Type         string          `json:"type"`
 		Delta        string          `json:"delta"`
@@ -340,34 +331,44 @@ func (p *responsesParser) Handle(data []byte, events chan<- Event) error {
 	case "response.output_text.delta":
 		if raw.Delta != "" {
 			p.sawTextDelta = true
-			events <- Event{Kind: EventContent, Text: raw.Delta}
+			if err := sendEvent(ctx, events, Event{Kind: EventContent, Text: raw.Delta}); err != nil {
+				return err
+			}
 		}
 	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
 		if raw.Delta != "" {
-			events <- Event{Kind: EventReasoning, Text: raw.Delta}
+			if err := sendEvent(ctx, events, Event{Kind: EventReasoning, Text: raw.Delta}); err != nil {
+				return err
+			}
 		}
 	case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
 		callID := p.resolveCallID(raw.CallID, raw.ItemID)
 		index := p.toolIndex(callID)
 		p.sawArgsDelta[callID] = true
-		events <- Event{
+		if err := sendEvent(ctx, events, Event{
 			Kind:      EventToolCallDelta,
 			ToolIndex: index,
 			ToolID:    callID,
 			ToolName:  p.nameByCallID[callID],
 			ArgsDelta: raw.Delta,
+		}); err != nil {
+			return err
 		}
 	case "response.output_item.added", "response.output_item.done":
 		if len(raw.Item) == 0 {
 			return nil
 		}
-		return p.handleOutputItem(raw.Type, raw.Item, events)
+		return p.handleOutputItem(ctx, raw.Type, raw.Item, events)
 	case "response.completed":
 		usage := codexUsage(raw.Response)
 		if usage != (Usage{}) {
-			events <- Event{Kind: EventUsage, Usage: usage}
+			if err := sendEvent(ctx, events, Event{Kind: EventUsage, Usage: usage}); err != nil {
+				return err
+			}
 		}
-		events <- Event{Kind: EventDone}
+		if err := sendEvent(ctx, events, Event{Kind: EventDone}); err != nil {
+			return err
+		}
 		p.completed = true
 	case "response.failed", "response.incomplete":
 		return codexResponseError(raw.Response, raw.Type)
@@ -379,7 +380,7 @@ func (p *responsesParser) Handle(data []byte, events chan<- Event) error {
 	return nil
 }
 
-func (p *responsesParser) handleOutputItem(eventType string, data []byte, events chan<- Event) error {
+func (p *responsesParser) handleOutputItem(ctx context.Context, eventType string, data []byte, events chan<- Event) error {
 	var item struct {
 		Type      string `json:"type"`
 		ID        string `json:"id"`
@@ -416,25 +417,29 @@ func (p *responsesParser) handleOutputItem(eventType string, data []byte, events
 		if eventType == "response.output_item.done" && !p.sawArgsDelta[callID] {
 			args = item.Arguments
 		}
-		events <- Event{
+		return sendEvent(ctx, events, Event{
 			Kind:      EventToolCallDelta,
 			ToolIndex: index,
 			ToolID:    callID,
 			ToolName:  item.Name,
 			ArgsDelta: args,
-		}
+		})
 	case "message":
 		if eventType == "response.output_item.done" && !p.sawTextDelta && item.Role == "assistant" {
 			for _, content := range item.Content {
 				if content.Type == "output_text" && content.Text != "" {
-					events <- Event{Kind: EventContent, Text: content.Text}
+					if err := sendEvent(ctx, events, Event{Kind: EventContent, Text: content.Text}); err != nil {
+						return err
+					}
 				}
 			}
 		}
 	case "reasoning":
 		for _, summary := range item.Summary {
 			if summary.Text != "" {
-				events <- Event{Kind: EventReasoning, Text: summary.Text}
+				if err := sendEvent(ctx, events, Event{Kind: EventReasoning, Text: summary.Text}); err != nil {
+					return err
+				}
 			}
 		}
 	}
