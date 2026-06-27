@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -158,6 +161,81 @@ func TestParseSSEReturnsWhenEventConsumerBlockedAndContextCancelled(t *testing.T
 		}
 	case <-time.After(time.Second):
 		t.Fatal("parseSSE did not return after context cancellation")
+	}
+}
+
+func TestDeepSeekStreamRetriesRateLimitBeforeStreaming(t *testing.T) {
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		n := atomic.AddInt32(&calls, 1)
+		if n == 1 {
+			w.Header().Set("Retry-After", "0")
+			http.Error(w, "slow down", http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	d := &DeepSeek{
+		BaseURL:           server.URL,
+		APIKey:            "secret",
+		RequestTimeout:    time.Second,
+		StreamIdleTimeout: time.Second,
+		MaxRetries:        1,
+		Client:            server.Client(),
+	}
+	events, errs := d.Stream(context.Background(), Request{
+		Model:    "deepseek-v4-flash",
+		Messages: []protocol.Message{{Role: protocol.RoleUser, Content: "ping"}},
+	})
+	var content string
+	for event := range events {
+		if event.Kind == EventContent {
+			content += event.Text
+		}
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || content != "ok" {
+		t.Fatalf("calls=%d content=%q", calls, content)
+	}
+}
+
+func TestDeepSeekHTTPErrorIsTypedAndRedacted(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "bad secret-token", http.StatusBadRequest)
+	}))
+	t.Cleanup(server.Close)
+	d := &DeepSeek{
+		BaseURL:        server.URL,
+		APIKey:         "secret-token",
+		RequestTimeout: time.Second,
+		MaxRetries:     1,
+		Client:         server.Client(),
+	}
+	events, errs := d.Stream(context.Background(), Request{
+		Model:    "deepseek-v4-flash",
+		Messages: []protocol.Message{{Role: protocol.RoleUser, Content: "ping"}},
+	})
+	for range events {
+	}
+	err := <-errs
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("err = %T %v, want ProviderError", err, err)
+	}
+	if providerErr.Kind != ErrorBadRequest || providerErr.Status != http.StatusBadRequest {
+		t.Fatalf("provider error = %#v", providerErr)
+	}
+	if strings.Contains(err.Error(), "secret-token") || !strings.Contains(err.Error(), "[redacted]") {
+		t.Fatalf("error redaction failed: %v", err)
 	}
 }
 

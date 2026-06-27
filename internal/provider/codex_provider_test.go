@@ -120,7 +120,7 @@ func TestCodexStreamRefreshesExpiredTokenBeforeRequest(t *testing.T) {
 		case "/oauth/token":
 			refreshCalled = true
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"access_token":  testJWT(t, map[string]any{"exp": time.Now().Add(time.Hour).Unix()}),
+				"access_token":  testJWT(t, map[string]any{"exp": time.Now().Add(2 * time.Hour).Unix(), "refreshed": true}),
 				"refresh_token": "refresh-new",
 			})
 		case "/responses":
@@ -155,6 +155,63 @@ func TestCodexStreamRefreshesExpiredTokenBeforeRequest(t *testing.T) {
 	}
 	if !strings.HasPrefix(sawAuthorization, "Bearer ") || sawAuthorization == "Bearer " {
 		t.Fatalf("Authorization = %q", sawAuthorization)
+	}
+}
+
+func TestCodexStreamRefreshesAfterUnauthorizedResponse(t *testing.T) {
+	var refreshCalled bool
+	var responseCalls int
+	var sawAuthorization []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/oauth/token":
+			refreshCalled = true
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token":  testJWT(t, map[string]any{"exp": time.Now().Add(time.Hour).Unix()}),
+				"refresh_token": "refresh-new",
+			})
+		case "/responses":
+			responseCalls++
+			sawAuthorization = append(sawAuthorization, r.Header.Get("Authorization"))
+			if responseCalls == 1 {
+				http.Error(w, "expired", http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n"))
+			_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{}}\n\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	c := &Codex{
+		BaseURL:         server.URL,
+		RequestTimeout:  time.Second,
+		CodexRefreshURL: server.URL + "/oauth/token",
+		CodexClientID:   "client-test",
+		Auth: &codexAuth{
+			AccessToken:  testJWT(t, map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "refreshed": false}),
+			RefreshToken: "refresh-old",
+			ExpiresAt:    time.Now().Add(time.Hour),
+		},
+		Client: server.Client(),
+	}
+	events, errs := c.Stream(context.Background(), Request{Model: "gpt-5.5", Messages: []protocol.Message{{Role: protocol.RoleUser, Content: "ping"}}})
+	var content string
+	for event := range events {
+		if event.Kind == EventContent {
+			content += event.Text
+		}
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	if !refreshCalled || responseCalls != 2 || content != "ok" {
+		t.Fatalf("refresh=%v responseCalls=%d content=%q", refreshCalled, responseCalls, content)
+	}
+	if len(sawAuthorization) != 2 || sawAuthorization[0] == sawAuthorization[1] {
+		t.Fatalf("authorization headers = %#v", sawAuthorization)
 	}
 }
 

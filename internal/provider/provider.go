@@ -80,6 +80,7 @@ func New(cfg config.Config) (Provider, error) {
 			Originator:        originator,
 			UserAgent:         originator + "/0.1.0",
 			SessionID:         newCodexSessionID(),
+			MaxRetries:        cfg.ProviderMaxRetries,
 			CodexRefreshURL:   cfg.CodexRefreshURL,
 			CodexClientID:     cfg.CodexClientID,
 			Auth:              auth,
@@ -98,6 +99,7 @@ func New(cfg config.Config) (Provider, error) {
 		MaxTokens:         cfg.MaxTokens,
 		RequestTimeout:    cfg.RequestTimeout,
 		StreamIdleTimeout: cfg.StreamIdleTimeout,
+		MaxRetries:        cfg.ProviderMaxRetries,
 		Client:            &http.Client{Timeout: 0},
 	}, nil
 }
@@ -147,6 +149,7 @@ type DeepSeek struct {
 	MaxTokens         int
 	RequestTimeout    time.Duration
 	StreamIdleTimeout time.Duration
+	MaxRetries        int
 	Client            *http.Client
 }
 
@@ -170,21 +173,30 @@ func (d *DeepSeek) stream(ctx context.Context, req Request, events chan<- Event)
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, d.RequestTimeout)
 	defer cancel()
-	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, d.BaseURL+"/chat/completions", bytes.NewReader(body))
+	var resp *http.Response
+	err = withProviderRetry(reqCtx, d.MaxRetries, func(int) error {
+		attemptReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, d.BaseURL+"/chat/completions", bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		attemptReq.Header.Set("Content-Type", "application/json")
+		attemptReq.Header.Set("Authorization", "Bearer "+d.APIKey)
+		attemptResp, err := d.Client.Do(attemptReq)
+		if err != nil {
+			return providerTransportError("deepseek", err)
+		}
+		if attemptResp.StatusCode < 200 || attemptResp.StatusCode >= 300 {
+			limited, _ := io.ReadAll(io.LimitReader(attemptResp.Body, 4096))
+			_ = attemptResp.Body.Close()
+			return providerHTTPError("deepseek", attemptResp.StatusCode, attemptResp.Header, secrets.Redact(string(limited), d.APIKey))
+		}
+		resp = attemptResp
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+d.APIKey)
-	resp, err := d.Client.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("provider request failed: %w", err)
-	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("provider HTTP %d: %s", resp.StatusCode, secrets.Redact(string(limited), d.APIKey))
-	}
 	return parseSSE(reqCtx, resp.Body, d.StreamIdleTimeout, events)
 }
 
