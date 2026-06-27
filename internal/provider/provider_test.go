@@ -242,6 +242,106 @@ func TestDeepSeekStreamRetriesRateLimitBeforeStreaming(t *testing.T) {
 	}
 }
 
+func TestDeepSeekStreamDoesNotApplyRequestTimeoutAfterHeaders(t *testing.T) {
+	requestTimeout := 50 * time.Millisecond
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":"first"}}]}` + "\n\n"))
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		time.Sleep(2 * requestTimeout)
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":"second"}}]}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	d := &DeepSeek{
+		BaseURL:           server.URL,
+		APIKey:            "secret",
+		RequestTimeout:    requestTimeout,
+		StreamIdleTimeout: time.Second,
+		Client:            server.Client(),
+	}
+	events, errs := d.Stream(context.Background(), Request{
+		Model:    "deepseek-v4-flash",
+		Messages: []protocol.Message{{Role: protocol.RoleUser, Content: "ping"}},
+	})
+	var content string
+	for event := range events {
+		if event.Kind == EventContent {
+			content += event.Text
+		}
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	if content != "firstsecond" {
+		t.Fatalf("content = %q", content)
+	}
+}
+
+func TestDeepSeekStreamBuffersEventsForSlowConsumer(t *testing.T) {
+	const eventCount = 128
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for i := 0; i < eventCount; i++ {
+			_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":"x"}}]}` + "\n\n"))
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	d := &DeepSeek{
+		BaseURL:           server.URL,
+		APIKey:            "secret",
+		RequestTimeout:    time.Second,
+		StreamIdleTimeout: time.Second,
+		Client:            server.Client(),
+	}
+	events, errs := d.Stream(context.Background(), Request{
+		Model:    "deepseek-v4-flash",
+		Messages: []protocol.Message{{Role: protocol.RoleUser, Content: "ping"}},
+	})
+	select {
+	case err := <-errs:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("provider stream blocked behind slow event consumer")
+	}
+
+	var contentEvents int
+	var sawDone bool
+	for event := range events {
+		switch event.Kind {
+		case EventContent:
+			contentEvents++
+		case EventDone:
+			sawDone = true
+		}
+	}
+	if contentEvents != eventCount || !sawDone {
+		t.Fatalf("contentEvents=%d sawDone=%v", contentEvents, sawDone)
+	}
+}
+
+func TestRetryAfterParsingAndDelay(t *testing.T) {
+	if got := parseRetryAfter("0.25", time.Now()); got != 250*time.Millisecond {
+		t.Fatalf("fractional Retry-After = %s", got)
+	}
+	retryAfter := 30 * time.Second
+	err := &ProviderError{Kind: ErrorRateLimit, RetryAfter: retryAfter}
+	if got := providerRetryDelay(err, 0); got != retryAfter {
+		t.Fatalf("retry delay = %s, want %s", got, retryAfter)
+	}
+}
+
 func TestDeepSeekHTTPErrorIsTypedAndRedacted(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "bad secret-token", http.StatusBadRequest)

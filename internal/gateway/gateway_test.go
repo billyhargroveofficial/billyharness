@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -155,6 +157,78 @@ func TestGatewayAuthEndpointsSaveDeepSeekAndImportCodex(t *testing.T) {
 	server.Handler().ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/v1/auth/status", nil))
 	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"configured":true`) {
 		t.Fatalf("status = %d body=%s", status.Code, status.Body.String())
+	}
+}
+
+func TestGatewayAuthMiddlewareProtectsNonLoopbackClients(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{AuthToken: "secret"})
+
+	health := httptest.NewRecorder()
+	healthReq := httptest.NewRequest(http.MethodGet, "/health", nil)
+	healthReq.RemoteAddr = "203.0.113.10:4444"
+	server.Handler().ServeHTTP(health, healthReq)
+	if health.Code != http.StatusOK {
+		t.Fatalf("health status = %d body=%s", health.Code, health.Body.String())
+	}
+
+	unauthorized := httptest.NewRecorder()
+	unauthorizedReq := httptest.NewRequest(http.MethodGet, "/v1/mcp", nil)
+	unauthorizedReq.RemoteAddr = "203.0.113.10:4444"
+	server.Handler().ServeHTTP(unauthorized, unauthorizedReq)
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d body=%s", unauthorized.Code, unauthorized.Body.String())
+	}
+	if unauthorized.Header().Get("WWW-Authenticate") == "" {
+		t.Fatal("missing WWW-Authenticate header")
+	}
+
+	authorized := httptest.NewRecorder()
+	authorizedReq := httptest.NewRequest(http.MethodGet, "/v1/mcp", nil)
+	authorizedReq.RemoteAddr = "203.0.113.10:4444"
+	authorizedReq.Header.Set("Authorization", "Bearer secret")
+	server.Handler().ServeHTTP(authorized, authorizedReq)
+	if authorized.Code != http.StatusOK {
+		t.Fatalf("authorized status = %d body=%s", authorized.Code, authorized.Body.String())
+	}
+
+	local := httptest.NewRecorder()
+	localReq := httptest.NewRequest(http.MethodGet, "/v1/mcp", nil)
+	localReq.RemoteAddr = "127.0.0.1:4444"
+	server.Handler().ServeHTTP(local, localReq)
+	if local.Code != http.StatusOK {
+		t.Fatalf("local status = %d body=%s", local.Code, local.Body.String())
+	}
+}
+
+func TestGatewayServeUsesPreboundListener(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	errs := make(chan error, 1)
+	go func() {
+		errs <- server.Serve(ctx, listener)
+	}()
+	if !WaitForReady(context.Background(), NormalizeBaseURL(listener.Addr().String()), time.Second) {
+		cancel()
+		select {
+		case <-errs:
+		case <-time.After(time.Second):
+		}
+		t.Fatal("gateway did not become ready on prebound listener")
+	}
+	cancel()
+	if err := <-errs; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Serve error = %v, want context.Canceled", err)
 	}
 }
 

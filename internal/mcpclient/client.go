@@ -18,13 +18,21 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/secrets"
 )
 
-const protocolVersion = "2025-06-18"
+const (
+	protocolVersion              = "2025-06-18"
+	defaultMCPToolOutputBytes    = 64 * 1024
+	mcpReadBufferBytes           = 32 * 1024
+	mcpCallResponseOverheadBytes = 64 * 1024
+	minMCPCallResponseBytes      = 256 * 1024
+	maxMCPControlResponseBytes   = 4 * 1024 * 1024
+)
 
 type ExternalTool struct {
 	Spec    protocol.ToolSpec
@@ -42,10 +50,12 @@ type ServerStatus struct {
 }
 
 type Manager struct {
-	tools        []ExternalTool
-	instructions []string
-	clients      []*stdioClient
-	statuses     []ServerStatus
+	tools         []ExternalTool
+	instructions  []string
+	mu            sync.RWMutex
+	clients       []*stdioClient
+	statusClients []*stdioClient
+	statuses      []ServerStatus
 }
 
 func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
@@ -60,13 +70,13 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 			Required:  server.Required,
 		}
 		if !server.Enabled {
-			manager.statuses = append(manager.statuses, status)
+			manager.addStatus(status, nil)
 			continue
 		}
 		if server.URL != "" {
 			err := fmt.Errorf("MCP server %s uses streamable HTTP; billyharness currently supports stdio MCP only", server.Name)
 			status.Error = err.Error()
-			manager.statuses = append(manager.statuses, status)
+			manager.addStatus(status, nil)
 			if server.Required {
 				errs = append(errs, err.Error())
 			}
@@ -75,7 +85,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		if strings.TrimSpace(server.Command) == "" {
 			err := fmt.Errorf("MCP server %s has no command", server.Name)
 			status.Error = err.Error()
-			manager.statuses = append(manager.statuses, status)
+			manager.addStatus(status, nil)
 			if server.Required {
 				errs = append(errs, err.Error())
 			}
@@ -84,7 +94,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		client, specs, serverInstructions, err := startStdio(ctx, cfg, server)
 		if err != nil {
 			status.Error = err.Error()
-			manager.statuses = append(manager.statuses, status)
+			manager.addStatus(status, nil)
 			if server.Required {
 				errs = append(errs, err.Error())
 			}
@@ -92,7 +102,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		}
 		status.Connected = true
 		status.ToolCount = len(specs)
-		manager.statuses = append(manager.statuses, status)
+		manager.addStatus(status, client)
 		manager.clients = append(manager.clients, client)
 		if strings.TrimSpace(serverInstructions) != "" {
 			manager.instructions = append(manager.instructions, fmt.Sprintf("%s: %s", server.Name, truncateText(serverInstructions, 512)))
@@ -146,7 +156,16 @@ func (m *Manager) Statuses() []ServerStatus {
 	if m == nil {
 		return nil
 	}
-	return append([]ServerStatus(nil), m.statuses...)
+	m.mu.RLock()
+	statuses := append([]ServerStatus(nil), m.statuses...)
+	clients := append([]*stdioClient(nil), m.statusClients...)
+	m.mu.RUnlock()
+	for i, client := range clients {
+		if client != nil && i < len(statuses) {
+			statuses[i].Connected = client.connected.Load()
+		}
+	}
+	return statuses
 }
 
 func (m *Manager) Instructions() []string {
@@ -160,10 +179,24 @@ func (m *Manager) Close() {
 	if m == nil {
 		return
 	}
-	for _, client := range m.clients {
+	m.mu.Lock()
+	clients := append([]*stdioClient(nil), m.clients...)
+	m.clients = nil
+	for i, client := range m.statusClients {
+		if client != nil && i < len(m.statuses) {
+			client.connected.Store(false)
+			m.statuses[i].Connected = false
+		}
+	}
+	m.mu.Unlock()
+	for _, client := range clients {
 		client.close()
 	}
-	m.clients = nil
+}
+
+func (m *Manager) addStatus(status ServerStatus, client *stdioClient) {
+	m.statuses = append(m.statuses, status)
+	m.statusClients = append(m.statusClients, client)
 }
 
 func mcpTransport(server config.MCPServer) string {
@@ -174,14 +207,16 @@ func mcpTransport(server config.MCPServer) string {
 }
 
 type stdioClient struct {
-	server    config.MCPServer
-	cmd       *exec.Cmd
-	stdin     io.WriteCloser
-	out       *bufio.Reader
-	mu        sync.Mutex
-	closeOnce sync.Once
-	nextID    int64
-	stderr    *limitedBuffer
+	server      config.MCPServer
+	cmd         *exec.Cmd
+	stdin       io.WriteCloser
+	out         *bufio.Reader
+	mu          sync.Mutex
+	closeOnce   sync.Once
+	nextID      int64
+	stderr      *limitedBuffer
+	connected   atomic.Bool
+	outputLimit int
 }
 
 type rpcRequest struct {
@@ -264,12 +299,14 @@ func startStdio(parent context.Context, cfg config.Config, server config.MCPServ
 		return nil, nil, "", fmt.Errorf("MCP %s start: %w", server.Name, err)
 	}
 	client := &stdioClient{
-		server: server,
-		cmd:    cmd,
-		stdin:  stdin,
-		out:    bufio.NewReaderSize(stdout, 1024*1024),
-		stderr: stderrBuf,
+		server:      server,
+		cmd:         cmd,
+		stdin:       stdin,
+		out:         bufio.NewReaderSize(stdout, mcpReadBufferBytes),
+		stderr:      stderrBuf,
+		outputLimit: mcpToolOutputLimit(cfg.MaxToolOutputBytes),
 	}
+	client.connected.Store(true)
 	initResult, err := client.request(ctx, "initialize", map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities":    map[string]any{},
@@ -371,7 +408,7 @@ func (c *stdioClient) request(ctx context.Context, method string, params any) (j
 		return nil, err
 	}
 	for {
-		resp, err := c.read(ctx)
+		resp, err := c.read(ctx, c.responseLimit(method))
 		if err != nil {
 			return nil, err
 		}
@@ -412,36 +449,39 @@ func (c *stdioClient) write(ctx context.Context, value any) error {
 	}()
 	select {
 	case <-ctx.Done():
-		go c.close()
+		c.close()
 		return c.withStderr(ctx.Err())
 	case err := <-done:
 		if err != nil {
+			c.close()
 			return fmt.Errorf("MCP %s write: %w", c.server.Name, err)
 		}
 		return nil
 	}
 }
 
-func (c *stdioClient) read(ctx context.Context) (rpcResponse, error) {
+func (c *stdioClient) read(ctx context.Context, limit int) (rpcResponse, error) {
 	type readResult struct {
 		line []byte
 		err  error
 	}
 	done := make(chan readResult, 1)
 	go func() {
-		line, err := c.out.ReadBytes('\n')
+		line, err := c.readLine(limit)
 		done <- readResult{line: line, err: err}
 	}()
 	select {
 	case <-ctx.Done():
-		go c.close()
+		c.close()
 		return rpcResponse{}, c.withStderr(ctx.Err())
 	case result := <-done:
 		if result.err != nil {
+			c.close()
 			return rpcResponse{}, c.withStderr(result.err)
 		}
 		var resp rpcResponse
 		if err := json.Unmarshal(bytes.TrimSpace(result.line), &resp); err != nil {
+			c.close()
 			return rpcResponse{}, fmt.Errorf("MCP %s sent invalid JSON-RPC: %w", c.server.Name, err)
 		}
 		return resp, nil
@@ -463,7 +503,7 @@ func (c *stdioClient) callTool(ctx context.Context, name string, args json.RawMe
 	if err := json.Unmarshal(result, &out); err != nil {
 		return "", fmt.Errorf("MCP %s tools/call decode: %w", c.server.Name, err)
 	}
-	text := renderContent(out)
+	text := renderContent(out, c.outputLimit)
 	if out.IsError {
 		if text == "" {
 			text = "MCP tool returned isError=true"
@@ -475,6 +515,7 @@ func (c *stdioClient) callTool(ctx context.Context, name string, args json.RawMe
 }
 
 func (c *stdioClient) close() {
+	c.connected.Store(false)
 	c.closeOnce.Do(func() {
 		if c.stdin != nil {
 			_ = c.stdin.Close()
@@ -487,6 +528,52 @@ func (c *stdioClient) close() {
 	})
 }
 
+func (c *stdioClient) responseLimit(method string) int {
+	if method != "tools/call" {
+		return maxMCPControlResponseBytes
+	}
+	limit := c.outputLimit + mcpCallResponseOverheadBytes
+	if limit < minMCPCallResponseBytes {
+		return minMCPCallResponseBytes
+	}
+	return limit
+}
+
+func (c *stdioClient) readLine(limit int) ([]byte, error) {
+	if limit <= 0 {
+		limit = maxMCPControlResponseBytes
+	}
+	var line []byte
+	for {
+		chunk, err := c.out.ReadSlice('\n')
+		if len(chunk) > 0 {
+			if len(line)+len(chunk) > limit {
+				keep := limit - len(line)
+				if keep > 0 {
+					line = append(line, chunk[:keep]...)
+				}
+				return line, responseTooLargeError{limit: limit}
+			}
+			line = append(line, chunk...)
+		}
+		if err == nil {
+			return line, nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return line, err
+	}
+}
+
+type responseTooLargeError struct {
+	limit int
+}
+
+func (e responseTooLargeError) Error() string {
+	return fmt.Sprintf("response exceeded %d bytes", e.limit)
+}
+
 func (c *stdioClient) withStderr(err error) error {
 	text := strings.TrimSpace(c.stderr.String())
 	if text == "" {
@@ -495,25 +582,98 @@ func (c *stdioClient) withStderr(err error) error {
 	return fmt.Errorf("MCP %s transport: %w: %s", c.server.Name, err, secrets.Redact(text, serverSecrets(c.server)...))
 }
 
-func renderContent(out callToolResult) string {
-	var parts []string
+func renderContent(out callToolResult, limit int) string {
+	limit = mcpToolOutputLimit(limit)
+	var b strings.Builder
+	omitted := 0
+	appendPart := func(text string) {
+		if text == "" {
+			return
+		}
+		if b.Len() > 0 {
+			if omitted > 0 {
+				omitted++
+			} else {
+				omitted += appendLimitedUTF8(&b, "\n", limit)
+			}
+		}
+		if omitted > 0 {
+			omitted += len(text)
+			return
+		}
+		omitted += appendLimitedUTF8(&b, text, limit)
+	}
 	for _, item := range out.Content {
 		if item["type"] == "text" {
 			if text, ok := item["text"].(string); ok {
-				parts = append(parts, text)
+				appendPart(text)
 				continue
 			}
 		}
 		bytes, _ := json.Marshal(item)
 		if len(bytes) > 0 {
-			parts = append(parts, string(bytes))
+			appendPart(string(bytes))
 		}
 	}
-	if len(parts) == 0 && out.StructuredContent != nil {
+	if b.Len() == 0 && omitted == 0 && out.StructuredContent != nil {
 		bytes, _ := json.MarshalIndent(out.StructuredContent, "", "  ")
-		return string(bytes)
+		return truncateMCPOutput(string(bytes), limit)
 	}
-	return strings.Join(parts, "\n")
+	return withMCPTruncationNote(b.String(), omitted)
+}
+
+func mcpToolOutputLimit(limit int) int {
+	if limit <= 0 {
+		return defaultMCPToolOutputBytes
+	}
+	return limit
+}
+
+func truncateMCPOutput(text string, limit int) string {
+	limit = mcpToolOutputLimit(limit)
+	if len(text) <= limit {
+		return text
+	}
+	trimmed := trimUTF8Bytes(text, limit)
+	return withMCPTruncationNote(trimmed, len(text)-len(trimmed))
+}
+
+func withMCPTruncationNote(text string, omitted int) string {
+	if omitted <= 0 {
+		return text
+	}
+	return text + fmt.Sprintf("\n...[truncated %d bytes from MCP tool output]", omitted)
+}
+
+func appendLimitedUTF8(b *strings.Builder, text string, limit int) int {
+	if limit <= 0 {
+		limit = defaultMCPToolOutputBytes
+	}
+	remaining := limit - b.Len()
+	if remaining <= 0 {
+		return len(text)
+	}
+	if len(text) <= remaining {
+		b.WriteString(text)
+		return 0
+	}
+	trimmed := trimUTF8Bytes(text, remaining)
+	b.WriteString(trimmed)
+	return len(text) - len(trimmed)
+}
+
+func trimUTF8Bytes(text string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(text) <= maxBytes {
+		return text
+	}
+	text = text[:maxBytes]
+	for len(text) > 0 && !utf8.ValidString(text) {
+		text = text[:len(text)-1]
+	}
+	return text
 }
 
 func mcpEnv(server config.MCPServer) []string {

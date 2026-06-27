@@ -1,6 +1,7 @@
 package telegrambot
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -37,6 +38,38 @@ func TestRendererFinalChunksAreTelegramSizedAndEscaped(t *testing.T) {
 	}
 }
 
+func TestRendererProviderUsageDeduplicatesCumulativeSnapshots(t *testing.T) {
+	r := NewRenderer()
+	r.Apply(protocol.Event{Type: protocol.EventRunStarted})
+	r.Apply(protocol.Event{Type: protocol.EventModelCallStarted})
+	r.Apply(protocol.Event{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
+		"input_tokens":      200,
+		"output_tokens":     40,
+		"cache_hit_tokens":  150,
+		"cache_miss_tokens": 50,
+		"reasoning_tokens":  8,
+	}})
+	r.Apply(protocol.Event{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
+		"input_tokens":      200,
+		"output_tokens":     40,
+		"cache_hit_tokens":  150,
+		"cache_miss_tokens": 50,
+		"reasoning_tokens":  8,
+	}})
+	r.Apply(protocol.Event{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
+		"input_tokens":      230,
+		"output_tokens":     45,
+		"cache_hit_tokens":  160,
+		"cache_miss_tokens": 70,
+		"reasoning_tokens":  9,
+	}})
+
+	if r.InputTokens != 230 || r.OutputTokens != 45 || r.CacheHit != 160 || r.CacheMiss != 70 || r.Reasoning != 9 {
+		t.Fatalf("usage totals = in:%d out:%d hit:%d miss:%d reasoning:%d",
+			r.InputTokens, r.OutputTokens, r.CacheHit, r.CacheMiss, r.Reasoning)
+	}
+}
+
 func TestRendererFinalRichMarkdownPreservesRichMarkdown(t *testing.T) {
 	r := NewRenderer()
 	r.Apply(protocol.Event{Type: protocol.EventAssistantDelta, Data: `## Погода
@@ -67,6 +100,52 @@ func TestRendererFinalRichMarkdownPreservesRichMarkdown(t *testing.T) {
 	}
 	if strings.Contains(got, "&lt;") || strings.Contains(got, "<b>") {
 		t.Fatalf("rich markdown should not be HTML escaped/rendered:\n%s", got)
+	}
+}
+
+func TestRendererFinalRichMarkdownSplitsOversizedCodeBlock(t *testing.T) {
+	r := NewRenderer()
+	r.Apply(protocol.Event{Type: protocol.EventAssistantDelta, Data: "```go\n" + strings.Repeat("fmt.Println(\"🙂 telegram-safe\")\n", 3000) + "```"})
+	r.Apply(protocol.Event{Type: protocol.EventRunCompleted})
+
+	chunks := r.FinalRichMarkdownChunks("deepseek-v4-flash", "high")
+	if len(chunks) < 2 {
+		t.Fatalf("chunks = %d, want split", len(chunks))
+	}
+	for _, chunk := range chunks {
+		if got := telegramUTF16Len(chunk); got > telegramRichLimit {
+			t.Fatalf("chunk exceeds Telegram rich limit: %d", got)
+		}
+		if !strings.Contains(chunk, "```go\n") {
+			t.Fatalf("chunk missing reopened code fence:\n%s", chunk[:min(len(chunk), 200)])
+		}
+		if count := strings.Count(chunk, "```"); count != 2 {
+			t.Fatalf("chunk has %d code fences, want 2", count)
+		}
+	}
+}
+
+func TestRendererFinalRichMarkdownSplitsOversizedTableByRows(t *testing.T) {
+	var table strings.Builder
+	table.WriteString("| Row | Value |\n|---|---|\n")
+	for i := 0; i < 2500; i++ {
+		fmt.Fprintf(&table, "| %04d | %s |\n", i, strings.Repeat("🙂", 8))
+	}
+	r := NewRenderer()
+	r.Apply(protocol.Event{Type: protocol.EventAssistantDelta, Data: table.String()})
+	r.Apply(protocol.Event{Type: protocol.EventRunCompleted})
+
+	chunks := r.FinalRichMarkdownChunks("deepseek-v4-flash", "high")
+	if len(chunks) < 2 {
+		t.Fatalf("chunks = %d, want split", len(chunks))
+	}
+	for _, chunk := range chunks {
+		if got := telegramUTF16Len(chunk); got > telegramRichLimit {
+			t.Fatalf("chunk exceeds Telegram rich limit: %d", got)
+		}
+		if !strings.Contains(chunk, "| Row | Value |") || !strings.Contains(chunk, "|---|---|") {
+			t.Fatalf("chunk missing repeated table header:\n%s", chunk[:min(len(chunk), 200)])
+		}
 	}
 }
 

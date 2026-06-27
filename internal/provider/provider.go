@@ -162,7 +162,7 @@ type DeepSeek struct {
 }
 
 func (d *DeepSeek) Stream(ctx context.Context, req Request) (<-chan Event, <-chan error) {
-	events := make(chan Event, 64)
+	events := newProviderEventChannel()
 	errs := make(chan error, 1)
 	go func() {
 		defer close(events)
@@ -179,33 +179,48 @@ func (d *DeepSeek) stream(ctx context.Context, req Request, events chan<- Event)
 	if err != nil {
 		return err
 	}
-	reqCtx, cancel := context.WithTimeout(ctx, d.RequestTimeout)
-	defer cancel()
 	var resp *http.Response
-	err = withProviderRetry(reqCtx, d.MaxRetries, func(int) error {
+	var respCancel context.CancelFunc
+	err = withProviderRetry(ctx, d.MaxRetries, func(int) error {
+		reqCtx, finishSetup, cancelReq := newRequestSetupContext(ctx, d.RequestTimeout)
 		attemptReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, d.BaseURL+"/chat/completions", bytes.NewReader(body))
 		if err != nil {
+			_ = finishSetup()
+			cancelReq()
 			return err
 		}
 		attemptReq.Header.Set("Content-Type", "application/json")
 		attemptReq.Header.Set("Authorization", "Bearer "+d.APIKey)
 		attemptResp, err := d.Client.Do(attemptReq)
+		if finishSetup() {
+			if attemptResp != nil {
+				_ = attemptResp.Body.Close()
+			}
+			cancelReq()
+			return context.DeadlineExceeded
+		}
 		if err != nil {
+			cancelReq()
 			return providerTransportError("deepseek", err)
 		}
 		if attemptResp.StatusCode < 200 || attemptResp.StatusCode >= 300 {
 			limited, _ := io.ReadAll(io.LimitReader(attemptResp.Body, 4096))
 			_ = attemptResp.Body.Close()
+			cancelReq()
 			return providerHTTPError("deepseek", attemptResp.StatusCode, attemptResp.Header, secrets.Redact(string(limited), d.APIKey))
 		}
 		resp = attemptResp
+		respCancel = cancelReq
 		return nil
 	})
 	if err != nil {
 		return err
 	}
+	if respCancel != nil {
+		defer respCancel()
+	}
 	defer resp.Body.Close()
-	return parseSSE(reqCtx, resp.Body, d.StreamIdleTimeout, events)
+	return parseSSE(ctx, resp.Body, d.StreamIdleTimeout, events)
 }
 
 func (d *DeepSeek) body(req Request) ([]byte, error) {
@@ -293,11 +308,6 @@ func parseSSE(ctx context.Context, r io.Reader, idle time.Duration, events chan<
 			return ctx.Err()
 		case <-timer:
 			return errors.New("provider stream idle timeout")
-		case err := <-errs:
-			if err != nil {
-				return err
-			}
-			return errors.New("provider stream closed before [DONE]")
 		case line, ok := <-lines:
 			if !ok {
 				err := <-errs

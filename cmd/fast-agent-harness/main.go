@@ -186,6 +186,8 @@ func tuiCmd(args []string) error {
 		if discovered, ok := discoverGatewayURL(context.Background(), config.Default()); ok {
 			*gatewayURL = discovered
 		}
+	} else {
+		*gatewayURL = normalizeGatewayURL(*gatewayURL)
 	}
 	return tui.Run(tui.Options{
 		GatewayURL: *gatewayURL,
@@ -270,26 +272,24 @@ func telegramCmd(args []string) error {
 }
 
 func discoverGatewayURL(ctx context.Context, cfg config.Config) (string, bool) {
-	client := http.Client{Timeout: 180 * time.Millisecond}
-	for _, baseURL := range gatewayURLCandidates(cfg) {
-		reqCtx, cancel := context.WithTimeout(ctx, 220*time.Millisecond)
-		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, baseURL+"/health", nil)
-		if err != nil {
-			cancel()
-			continue
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		for _, baseURL := range gatewayURLCandidates(cfg) {
+			if gateway.WaitForReady(ctx, baseURL, 0) {
+				return baseURL, true
+			}
 		}
-		resp, err := client.Do(req)
-		cancel()
-		if err != nil {
-			continue
+		if time.Now().After(deadline) {
+			return "", false
 		}
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
-		_ = resp.Body.Close()
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			return baseURL, true
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", false
+		case <-timer.C:
 		}
 	}
-	return "", false
 }
 
 func gatewayURLCandidates(cfg config.Config) []string {
@@ -319,26 +319,7 @@ func gatewayURLCandidates(cfg config.Config) []string {
 }
 
 func normalizeGatewayURL(value string) string {
-	value = strings.TrimRight(strings.TrimSpace(value), "/")
-	if value == "" {
-		return ""
-	}
-	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
-		return value
-	}
-	if strings.HasPrefix(value, ":") {
-		return "http://127.0.0.1" + value
-	}
-	host, port, err := net.SplitHostPort(value)
-	if err == nil {
-		host = strings.Trim(host, "[]")
-		switch host {
-		case "", "0.0.0.0", "::":
-			host = "127.0.0.1"
-		}
-		return "http://" + net.JoinHostPort(host, port)
-	}
-	return "http://" + value
+	return gateway.NormalizeBaseURL(value)
 }
 
 func lookupEnvAny(keys ...string) string {
@@ -411,6 +392,7 @@ func serve(args []string) error {
 	mock := fs.Bool("mock", false, "use mock provider")
 	model := fs.String("model", "", "model override")
 	addr := fs.String("addr", "", "listen address")
+	authToken := fs.String("auth-token", "", "gateway bearer token for non-loopback clients; defaults to BILLYHARNESS_GATEWAY_AUTH_TOKEN")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -426,14 +408,32 @@ func serve(args []string) error {
 	if *addr == "" {
 		*addr = cfg.GatewayAddr
 	}
+	if strings.TrimSpace(*authToken) == "" {
+		*authToken = gateway.AuthTokenFromEnv()
+	}
+	*authToken = strings.TrimSpace(*authToken)
+	listener, err := net.Listen("tcp", *addr)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", *addr, err)
+	}
+	defer listener.Close()
+	authRequired := gateway.RequiresAuthForAddr(listener.Addr().String())
+	if authRequired && *authToken == "" {
+		return fmt.Errorf("gateway auth token required for non-loopback listen address %q; set %s or use -addr 127.0.0.1:8765 for local-only access", *addr, gateway.GatewayAuthTokenEnv)
+	}
 	registry, err := tools.NewRegistryWithMCP(context.Background(), cfg)
 	if err != nil {
 		return err
 	}
 	defer registry.Close()
-	server := gateway.NewServer(cfg, provider.Mock{}, registry)
-	fmt.Fprintln(os.Stderr, "fast-agent-harness gateway listening on http://"+*addr)
-	return server.ListenAndServe(context.Background(), *addr)
+	server := gateway.NewServerWithOptions(cfg, provider.Mock{}, registry, gateway.ServerOptions{AuthToken: *authToken})
+	listenURL := normalizeGatewayURL(listener.Addr().String())
+	status := "fast-agent-harness gateway listening on " + listenURL
+	if authRequired {
+		status += "; bearer auth required for non-loopback clients"
+	}
+	fmt.Fprintln(os.Stderr, status)
+	return server.Serve(context.Background(), listener)
 }
 
 func mcp(args []string) error {
@@ -502,6 +502,7 @@ func benchCmd(args []string) error {
 }
 
 func chatGateway(baseURL string, noReasoning bool, model, profile string, mock bool) error {
+	baseURL = normalizeGatewayURL(baseURL)
 	profile = config.NormalizeProfileName(profile)
 	sessionID, err := gatewayCreateSession(context.Background(), baseURL, profile)
 	if err != nil {
@@ -535,16 +536,20 @@ func chatGateway(baseURL string, noReasoning bool, model, profile string, mock b
 }
 
 func gatewayCreateSession(ctx context.Context, baseURL, profile string) (string, error) {
+	baseURL = normalizeGatewayURL(baseURL)
 	body, err := json.Marshal(gateway.CreateSessionRequest{Profile: profile})
 	if err != nil {
 		return "", err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/v1/sessions", bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := gateway.DoWithReadyRetry(ctx, http.DefaultClient, baseURL, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/v1/sessions", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		gateway.SetAuthHeaderFromEnv(req)
+		return req, nil
+	})
 	if err != nil {
 		return "", err
 	}
@@ -566,13 +571,17 @@ func gatewayCreateSession(ctx context.Context, baseURL, profile string) (string,
 }
 
 func gatewayRun(ctx context.Context, baseURL, path string, runReq gateway.RunRequest, emit func(protocol.Event)) error {
+	baseURL = normalizeGatewayURL(baseURL)
 	body, _ := json.Marshal(runReq)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+path, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := gateway.DoWithReadyRetry(ctx, http.DefaultClient, baseURL, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+path, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		gateway.SetAuthHeaderFromEnv(req)
+		return req, nil
+	})
 	if err != nil {
 		return err
 	}

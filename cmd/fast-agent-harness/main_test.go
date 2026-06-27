@@ -16,6 +16,10 @@ import (
 func TestGatewayRunSendsFullRunRequest(t *testing.T) {
 	var captured gateway.RunRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		if r.URL.Path != "/v1/run" {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
@@ -49,7 +53,11 @@ func TestGatewayRunSendsFullRunRequest(t *testing.T) {
 }
 
 func TestGatewayRunReturnsStreamedFailure(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(protocol.Event{Type: protocol.EventRunFailed, Data: "boom"})
 	}))
 	t.Cleanup(server.Close)

@@ -648,6 +648,42 @@ func TestSlashPopupCompletesResumeArgument(t *testing.T) {
 	}
 }
 
+func TestSlashPopupKeepsSelectedCommandVisiblePastFirstPage(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.textarea.SetValue("/")
+	m.slashIndex = 9
+
+	view := stripANSITest(m.slashPopupView())
+	if !strings.Contains(view, "/thinkview") {
+		t.Fatalf("selected command should be visible, popup=%q", view)
+	}
+	if strings.Contains(view, "/help") {
+		t.Fatalf("popup should scroll past first page, popup=%q", view)
+	}
+	if !strings.Contains(view, "previous matches") {
+		t.Fatalf("popup should show previous count, popup=%q", view)
+	}
+}
+
+func TestSlashArgPopupKeepsSelectedArgumentVisiblePastFirstPage(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.textarea.SetValue("/reasoning ")
+	m.slashIndex = 6
+
+	view := stripANSITest(m.slashPopupView())
+	if !strings.Contains(view, "toggle") {
+		t.Fatalf("selected argument should be visible, popup=%q", view)
+	}
+	if strings.Contains(view, "xhigh") {
+		t.Fatalf("popup should scroll past first argument page, popup=%q", view)
+	}
+	if !strings.Contains(view, "previous matches") {
+		t.Fatalf("popup should show previous count, popup=%q", view)
+	}
+}
+
 func TestSlashPopupEscDismissesUntilTextChanges(t *testing.T) {
 	m := newTestModel(t)
 	m.textarea.SetValue("/the")
@@ -692,6 +728,100 @@ func TestInlineStatusShowsModelAccessCacheCostAndSession(t *testing.T) {
 	}
 	if strings.Count(status, "\n") != 1 {
 		t.Fatalf("status should be two lines, got %q", status)
+	}
+}
+
+func TestResumeChatDoesNotTreatLifetimeTokensAsContextUsage(t *testing.T) {
+	m := newTestModel(t)
+	session := chatSession{
+		ID:              "20260628-120000-feedfacecafe",
+		Title:           "saved chat",
+		CreatedAt:       time.Now().UTC().Add(-time.Hour),
+		UpdatedAt:       time.Now().UTC(),
+		Model:           m.currentModel(),
+		ReasoningKind:   m.currentThinking().kind,
+		ReasoningEffort: m.currentThinking().effort,
+		InputTokens:     900000,
+		OutputTokens:    100000,
+		CacheHitTokens:  200000,
+		CacheMissTokens: 700000,
+		ReasoningTokens: 50000,
+	}
+	if err := saveChatSession(m.sessionsDir, session); err != nil {
+		t.Fatal(err)
+	}
+
+	if cmd := m.resumeChat(session.ID); cmd != nil {
+		t.Fatalf("resumeChat returned unexpected command: %#v", cmd)
+	}
+	if got := m.inputTok; got != session.InputTokens {
+		t.Fatalf("inputTok = %d, want saved lifetime %d", got, session.InputTokens)
+	}
+	if got := m.outputTok; got != session.OutputTokens {
+		t.Fatalf("outputTok = %d, want saved lifetime %d", got, session.OutputTokens)
+	}
+	if got := m.contextTokens(); got != 0 {
+		t.Fatalf("contextTokens = %d, want 0 after resume without live usage snapshot", got)
+	}
+}
+
+func TestProviderUsageUpdateDeduplicatesCumulativeSnapshots(t *testing.T) {
+	m := newTestModel(t)
+	m.applyEvent(protocol.Event{Type: protocol.EventRunStarted})
+	m.applyEvent(protocol.Event{Type: protocol.EventModelCallStarted})
+
+	m.applyEvent(protocol.Event{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
+		"input_tokens":      100,
+		"output_tokens":     20,
+		"cache_hit_tokens":  40,
+		"cache_miss_tokens": 60,
+		"reasoning_tokens":  5,
+	}})
+	m.applyEvent(protocol.Event{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
+		"input_tokens":      100,
+		"output_tokens":     20,
+		"cache_hit_tokens":  40,
+		"cache_miss_tokens": 60,
+		"reasoning_tokens":  5,
+	}})
+	m.applyEvent(protocol.Event{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
+		"input_tokens":      125,
+		"output_tokens":     25,
+		"cache_hit_tokens":  50,
+		"cache_miss_tokens": 75,
+		"reasoning_tokens":  7,
+	}})
+
+	if m.inputTok != 125 || m.outputTok != 25 || m.cacheHitTok != 50 || m.cacheMissTok != 75 || m.reasoningTok != 7 {
+		t.Fatalf("usage totals = in:%d out:%d hit:%d miss:%d reasoning:%d",
+			m.inputTok, m.outputTok, m.cacheHitTok, m.cacheMissTok, m.reasoningTok)
+	}
+	if got := m.contextTokens(); got != 150 {
+		t.Fatalf("contextTokens = %d, want current snapshot input+output 150", got)
+	}
+}
+
+func TestLightThemeStatusLineUsesThemeBackground(t *testing.T) {
+	styles := newThemeStyles(tuiThemes["light"])
+	rendered := styles.status.Render("status")
+	if !strings.Contains(rendered, "48;2;221;232;215") {
+		t.Fatalf("light status should use theme status bg, rendered=%q", rendered)
+	}
+}
+
+func TestMarkdownTableRowKeepsEscapedAndCodePipesInCells(t *testing.T) {
+	cells, ok := parseMarkdownTableRow("| `a\\|b` | escaped \\| literal | plain |")
+	if !ok {
+		t.Fatal("expected markdown table row")
+	}
+	want := []string{"`a|b`", "escaped | literal", "plain"}
+	if len(cells) != len(want) {
+		t.Fatalf("cells = %#v, want %#v", cells, want)
+	}
+	for i := range want {
+		if cells[i] != want[i] {
+			t.Fatalf("cells = %#v, want %#v", cells, want)
+		}
 	}
 }
 

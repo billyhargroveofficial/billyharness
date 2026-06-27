@@ -128,11 +128,15 @@ func parseRetryAfter(value string, now time.Time) time.Duration {
 	if value == "" {
 		return 0
 	}
-	if seconds, err := strconv.Atoi(value); err == nil {
-		if seconds < 0 {
+	if seconds, err := strconv.ParseFloat(value, 64); err == nil {
+		if seconds <= 0 || seconds != seconds {
 			return 0
 		}
-		return time.Duration(seconds) * time.Second
+		const maxDuration = time.Duration(1<<63 - 1)
+		if seconds > float64(maxDuration)/float64(time.Second) {
+			return maxDuration
+		}
+		return time.Duration(seconds * float64(time.Second))
 	}
 	if parsed, err := http.ParseTime(value); err == nil {
 		if parsed.Before(now) {

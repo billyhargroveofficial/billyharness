@@ -2,6 +2,7 @@ package bench
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,9 @@ func TestRunMockTaskWritesResults(t *testing.T) {
 	if _, err := os.Stat(summary.EventsJSONL); err != nil {
 		t.Fatal(err)
 	}
+	assertPerm(t, outDir, 0o700)
+	assertPerm(t, summary.ResultsJSONL, 0o600)
+	assertPerm(t, summary.EventsJSONL, 0o600)
 }
 
 func TestRunEvaluatorFailure(t *testing.T) {
@@ -149,6 +153,88 @@ func TestLoadTasksSkipsBlankAndCommentLines(t *testing.T) {
 	}
 }
 
+func TestRunRedactsEvaluatorOutputInResults(t *testing.T) {
+	root := t.TempDir()
+	tasksPath := filepath.Join(root, "tasks.jsonl")
+	line := `{"id":"redact","suite":"unit","prompt":"hello","workspace":` + quote(root) + `,"evaluator":["sh","-c","printf 'API_KEY=super-secret\nplain output\n'"]}` + "\n"
+	if err := os.WriteFile(tasksPath, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	summary, err := Run(context.Background(), cfg, RunConfig{TasksPath: tasksPath, OutDir: filepath.Join(root, "runs"), Mock: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bytes, err := os.ReadFile(summary.ResultsJSONL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(bytes)
+	if strings.Contains(text, "super-secret") {
+		t.Fatalf("results should redact evaluator secret: %s", text)
+	}
+	if !strings.Contains(text, "API_KEY=[REDACTED]") || !strings.Contains(text, "plain output") {
+		t.Fatalf("results redaction removed too much or too little: %s", text)
+	}
+}
+
+func TestRedactForPersistenceRedactsNestedSecretsButKeepsTokenCounts(t *testing.T) {
+	event := protocol.Event{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{
+		ID:        "call_secret",
+		Name:      "mcp_call",
+		Arguments: json.RawMessage(`{"api_key":"super-secret","input_tokens":12,"env":{"MCP_TOKEN":"token-secret"}}`),
+	}}
+	redacted, err := json.Marshal(redactForPersistence(event))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(redacted)
+	if strings.Contains(text, "super-secret") || strings.Contains(text, "token-secret") {
+		t.Fatalf("redacted event still contains secret: %s", text)
+	}
+	if !strings.Contains(text, `"api_key":"[REDACTED]"`) ||
+		!strings.Contains(text, `"MCP_TOKEN":"[REDACTED]"`) ||
+		!strings.Contains(text, `"input_tokens":12`) {
+		t.Fatalf("unexpected redacted event: %s", text)
+	}
+}
+
+func TestPrepareWorkspaceCopiesTemplateWithPrivateModesAndSafeTaskID(t *testing.T) {
+	root := t.TempDir()
+	template := filepath.Join(root, "template")
+	if err := os.MkdirAll(filepath.Join(template, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(template, "README.md"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(template, "bin", "run.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	outDir := filepath.Join(root, "runs")
+	workspace, err := prepareWorkspace(outDir, "runid", Task{
+		ID:                "../unsafe/task",
+		WorkspaceTemplate: template,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(outDir, "runid-workspaces")
+	rel, err := filepath.Rel(base, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		t.Fatalf("workspace escaped output base: workspace=%q base=%q rel=%q", workspace, base, rel)
+	}
+	assertPerm(t, base, 0o700)
+	assertPerm(t, workspace, 0o700)
+	assertPerm(t, filepath.Join(workspace, "bin"), 0o700)
+	assertPerm(t, filepath.Join(workspace, "README.md"), 0o600)
+	assertPerm(t, filepath.Join(workspace, "bin", "run.sh"), 0o700)
+}
+
 func TestObserveCountsUsageToolErrorsAndNames(t *testing.T) {
 	result := Result{ToolCallsByName: map[string]int{}}
 	observe(&result, protocol.Event{Type: protocol.EventModelCallStarted})
@@ -170,6 +256,17 @@ func TestObserveCountsUsageToolErrorsAndNames(t *testing.T) {
 	}
 	if result.InputTokens != 10 || result.OutputTokens != 3 || result.CacheHitTokens != 7 || result.CacheMissTokens != 3 {
 		t.Fatalf("usage = %#v", result)
+	}
+}
+
+func assertPerm(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("%s mode = %o, want %o", path, got, want)
 	}
 }
 

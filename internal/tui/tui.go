@@ -117,6 +117,7 @@ type Model struct {
 	lastOutputTok     int64
 	lastCacheHitTok   int64
 	lastCacheMissTok  int64
+	usageAccounting   usageAccumulator
 	slashIndex        int
 	slashDismissed    string
 	authInputProvider string
@@ -1041,10 +1042,14 @@ func (m Model) slashPopupView() string {
 		index = 0
 	}
 	limit := min(len(commands), 6)
+	start, end := slashPopupWindow(len(commands), index, limit)
 	var lines []string
+	if start > 0 {
+		lines = append(lines, styles.popupMuted.Width(contentW).Render(fmt.Sprintf("%d previous matches", start)))
+	}
 	nameW := min(30, max(18, contentW/2-2))
 	summaryW := max(12, contentW-nameW-5)
-	for i := 0; i < limit; i++ {
+	for i := start; i < end; i++ {
 		command := commands[i]
 		label := command.name
 		if command.args != "" {
@@ -1057,8 +1062,8 @@ func (m Model) slashPopupView() string {
 			lines = append(lines, styles.popupLine.Width(contentW).Render(line))
 		}
 	}
-	if len(commands) > limit {
-		lines = append(lines, styles.popupMuted.Width(contentW).Render(fmt.Sprintf("%d more matches", len(commands)-limit)))
+	if end < len(commands) {
+		lines = append(lines, styles.popupMuted.Width(contentW).Render(fmt.Sprintf("%d more matches", len(commands)-end)))
 	}
 	lines = append(lines, styles.popupMuted.Width(contentW).Render("Up/Down select  Tab complete  Enter run  Esc close"))
 	return styles.popup.Width(contentW).Render(strings.Join(lines, "\n"))
@@ -1076,12 +1081,16 @@ func (m Model) slashArgPopupView(styles themeStyles, command slashCommand, prefi
 		index = 0
 	}
 	limit := min(len(args), 6)
+	start, end := slashPopupWindow(len(args), index, limit)
 	var lines []string
 	title := styles.popupMuted.Width(contentW).Render(command.name + " argument")
 	lines = append(lines, title)
+	if start > 0 {
+		lines = append(lines, styles.popupMuted.Width(contentW).Render(fmt.Sprintf("%d previous matches", start)))
+	}
 	valueW := min(28, max(14, contentW/2-2))
 	summaryW := max(12, contentW-valueW-5)
-	for i := 0; i < limit; i++ {
+	for i := start; i < end; i++ {
 		arg := args[i]
 		line := padRight(truncateRunes(arg.value, valueW), valueW) + "  " + truncateRunes(arg.summary, summaryW)
 		if i == index {
@@ -1090,11 +1099,34 @@ func (m Model) slashArgPopupView(styles themeStyles, command slashCommand, prefi
 			lines = append(lines, styles.popupLine.Width(contentW).Render(line))
 		}
 	}
-	if len(args) > limit {
-		lines = append(lines, styles.popupMuted.Width(contentW).Render(fmt.Sprintf("%d more matches", len(args)-limit)))
+	if end < len(args) {
+		lines = append(lines, styles.popupMuted.Width(contentW).Render(fmt.Sprintf("%d more matches", len(args)-end)))
 	}
 	lines = append(lines, styles.popupMuted.Width(contentW).Render("Up/Down select  Tab complete  Enter run  Esc close"))
 	return styles.popup.Width(contentW).Render(strings.Join(lines, "\n"))
+}
+
+func slashPopupWindow(length, index, limit int) (int, int) {
+	if length <= 0 || limit <= 0 {
+		return 0, 0
+	}
+	if index < 0 {
+		index = 0
+	}
+	if index >= length {
+		index = length - 1
+	}
+	limit = min(limit, length)
+	start := index - limit + 1
+	if start < 0 {
+		start = 0
+	}
+	end := start + limit
+	if end > length {
+		end = length
+		start = max(0, end-limit)
+	}
+	return start, end
 }
 
 func (m Model) slashPopupHeight() int {
@@ -1228,10 +1260,7 @@ func (m Model) prices() (hit, miss, output float64) {
 }
 
 func (m Model) contextTokens() int64 {
-	if m.lastInputTok+m.lastOutputTok > 0 {
-		return m.lastInputTok + m.lastOutputTok
-	}
-	return m.inputTok + m.outputTok
+	return m.lastInputTok + m.lastOutputTok
 }
 
 func (m Model) usedTokens() int64 {
@@ -2100,6 +2129,7 @@ func (m *Model) newChat() tea.Cmd {
 	m.lastOutputTok = 0
 	m.lastCacheHitTok = 0
 	m.lastCacheMissTok = 0
+	m.usageAccounting.Reset()
 	m.status = "new chat " + shortID(m.localChatID)
 	m.followOutput = true
 	m.sessionID = ""
@@ -2199,10 +2229,11 @@ func (m *Model) applyChatSession(session chatSession) {
 	m.cacheHitTok = session.CacheHitTokens
 	m.cacheMissTok = session.CacheMissTokens
 	m.reasoningTok = session.ReasoningTokens
-	m.lastInputTok = session.InputTokens
-	m.lastOutputTok = session.OutputTokens
-	m.lastCacheHitTok = session.CacheHitTokens
-	m.lastCacheMissTok = session.CacheMissTokens
+	m.lastInputTok = 0
+	m.lastOutputTok = 0
+	m.lastCacheHitTok = 0
+	m.lastCacheMissTok = 0
+	m.usageAccounting.Reset()
 	m.toolCalls = session.ToolCalls
 	m.modelCalls = session.ModelCalls
 	if session.Model != "" {
@@ -2396,9 +2427,11 @@ func (m *Model) applyEvent(event protocol.Event) {
 	switch event.Type {
 	case protocol.EventRunStarted:
 		m.status = "run started"
+		m.usageAccounting.Reset()
 	case protocol.EventModelCallStarted:
 		m.modelCalls++
 		m.status = fmt.Sprintf("model call %d", m.modelCalls)
+		m.usageAccounting.Reset()
 	case protocol.EventAssistantReasoning:
 		m.appendToOpenBlock("reasoning", "THINKING", fmt.Sprint(event.Data))
 	case protocol.EventAssistantDelta:
@@ -2414,16 +2447,18 @@ func (m *Model) applyEvent(event protocol.Event) {
 		m.status = "context compacted"
 		m.addInfoBlock("COMPACT", compactEventText(event.Data))
 	case protocol.EventProviderUsageUpdate:
-		in, out, hit, miss, reasoning := usage(event.Data)
-		m.inputTok += in
-		m.outputTok += out
-		m.cacheHitTok += hit
-		m.cacheMissTok += miss
-		m.reasoningTok += reasoning
-		m.lastInputTok = in
-		m.lastOutputTok = out
-		m.lastCacheHitTok = hit
-		m.lastCacheMissTok = miss
+		update := usageFromAny(event.Data)
+		delta := m.usageAccounting.Apply(update)
+		current := m.usageAccounting.Current()
+		m.inputTok += delta.InputTokens
+		m.outputTok += delta.OutputTokens
+		m.cacheHitTok += delta.CacheHitTokens
+		m.cacheMissTok += delta.CacheMissTokens
+		m.reasoningTok += delta.ReasoningTokens
+		m.lastInputTok = current.InputTokens
+		m.lastOutputTok = current.OutputTokens
+		m.lastCacheHitTok = current.CacheHitTokens
+		m.lastCacheMissTok = current.CacheMissTokens
 	case protocol.EventRunCompleted:
 		m.status = "completed"
 	case protocol.EventRunFailed:
@@ -3128,19 +3163,6 @@ func compactEventText(value any) string {
 	return strings.Join(lines, "\n")
 }
 
-func usage(value any) (int64, int64, int64, int64, int64) {
-	bytes, _ := json.Marshal(value)
-	var u struct {
-		InputTokens     int64 `json:"input_tokens"`
-		OutputTokens    int64 `json:"output_tokens"`
-		CacheHitTokens  int64 `json:"cache_hit_tokens"`
-		CacheMissTokens int64 `json:"cache_miss_tokens"`
-		ReasoningTokens int64 `json:"reasoning_tokens"`
-	}
-	_ = json.Unmarshal(bytes, &u)
-	return u.InputTokens, u.OutputTokens, u.CacheHitTokens, u.CacheMissTokens, u.ReasoningTokens
-}
-
 func (m Model) mouseInViewport(x, y int) bool {
 	return x >= 0 && y >= 0 && y < m.viewport.Height() && x < max(1, m.viewport.Width())
 }
@@ -3510,7 +3532,7 @@ func newThemeStyles(theme tuiTheme) themeStyles {
 	inputText := lipgloss.Color(theme.inputFg)
 	inputBg := lipgloss.Color(theme.inputBg)
 	muted := lipgloss.Color(theme.mutedFg)
-	statusBg := lipgloss.Color("#050505")
+	statusBg := lipgloss.Color(theme.statusBg)
 	block := func(fg, bg, border string) lipgloss.Style {
 		return lipgloss.NewStyle().
 			Foreground(lipgloss.Color(fg)).

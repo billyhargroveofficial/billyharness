@@ -16,6 +16,18 @@ reasoning mode saved in `$BILLYHARNESS_HOME/settings.json` (`~/billyharness/sett
 unless command-line flags or env vars override them. The TUI auto-discovers a local gateway from the same
 config, so `-gateway` is only needed for a non-default remote gateway.
 
+By default the gateway listens on `127.0.0.1:8765`. If you bind it to a non-loopback address such as
+`0.0.0.0:8765`, set a bearer token first:
+
+```bash
+export BILLYHARNESS_GATEWAY_AUTH_TOKEN='change-me'
+./bin/fast-agent-harness gateway -addr 0.0.0.0:8765
+curl -H "Authorization: Bearer $BILLYHARNESS_GATEWAY_AUTH_TOKEN" http://127.0.0.1:8765/v1/auth/status
+```
+
+`/health` remains unauthenticated for readiness checks. The `run`, `chat`, and `telegram` gateway clients
+read `BILLYHARNESS_GATEWAY_AUTH_TOKEN` automatically when calling a protected gateway.
+
 For SSH terminals with broken alt-screen or key handling:
 
 ```bash

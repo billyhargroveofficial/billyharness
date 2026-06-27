@@ -4,10 +4,42 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"sync/atomic"
+	"time"
 )
 
+const (
+	providerEventBuffer = 1024
+	providerLineBuffer  = 256
+)
+
+func newProviderEventChannel() chan Event {
+	return make(chan Event, providerEventBuffer)
+}
+
+func newRequestSetupContext(ctx context.Context, timeout time.Duration) (context.Context, func() bool, context.CancelFunc) {
+	reqCtx, cancel := context.WithCancel(ctx)
+	var timer *time.Timer
+	var timedOut atomic.Bool
+	if timeout > 0 {
+		timer = time.AfterFunc(timeout, func() {
+			timedOut.Store(true)
+			cancel()
+		})
+	}
+	finishSetup := func() bool {
+		if timer != nil {
+			if !timer.Stop() {
+				timedOut.Store(true)
+			}
+		}
+		return timedOut.Load()
+	}
+	return reqCtx, finishSetup, cancel
+}
+
 func scanLines(ctx context.Context, r io.Reader) (<-chan string, <-chan error) {
-	lines := make(chan string)
+	lines := make(chan string, providerLineBuffer)
 	errs := make(chan error, 1)
 	go func() {
 		defer close(lines)

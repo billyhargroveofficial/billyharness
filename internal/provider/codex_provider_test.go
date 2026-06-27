@@ -83,6 +83,49 @@ func TestCodexStreamSendsResponsesHeadersAndParsesEvents(t *testing.T) {
 	}
 }
 
+func TestCodexStreamDoesNotApplyRequestTimeoutAfterHeaders(t *testing.T) {
+	requestTimeout := 50 * time.Millisecond
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		_, _ = w.Write([]byte(`data: {"type":"response.output_text.delta","delta":"first"}` + "\n\n"))
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		time.Sleep(2 * requestTimeout)
+		_, _ = w.Write([]byte(`data: {"type":"response.output_text.delta","delta":"second"}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"type":"response.completed","response":{}}` + "\n\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	c := &Codex{
+		BaseURL:           server.URL,
+		RequestTimeout:    requestTimeout,
+		StreamIdleTimeout: time.Second,
+		Auth:              &codexAuth{AccessToken: "secret-token"},
+		Client:            server.Client(),
+	}
+	events, errs := c.Stream(context.Background(), Request{
+		Model:    "gpt-5.5",
+		Messages: []protocol.Message{{Role: protocol.RoleUser, Content: "ping"}},
+	})
+	var content string
+	for event := range events {
+		if event.Kind == EventContent {
+			content += event.Text
+		}
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	if content != "firstsecond" {
+		t.Fatalf("content = %q", content)
+	}
+}
+
 func TestCodexStreamRedactsAccessTokenOnHTTPError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "bad secret-token", http.StatusUnauthorized)

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -112,19 +113,19 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 	if len(tasks) == 0 {
 		return Summary{}, fmt.Errorf("no tasks")
 	}
-	if err := os.MkdirAll(rc.OutDir, 0o755); err != nil {
+	if err := ensurePrivateDir(rc.OutDir); err != nil {
 		return Summary{}, err
 	}
 	cfg = applyRunConfig(cfg, rc)
 	runID := time.Now().UTC().Format("20060102T150405Z")
 	resultsPath := filepath.Join(rc.OutDir, runID+"-results.jsonl")
 	eventsPath := filepath.Join(rc.OutDir, runID+"-events.jsonl")
-	resultsFile, err := os.Create(resultsPath)
+	resultsFile, err := createPrivateFile(resultsPath)
 	if err != nil {
 		return Summary{}, err
 	}
 	defer resultsFile.Close()
-	eventsFile, err := os.Create(eventsPath)
+	eventsFile, err := createPrivateFile(eventsPath)
 	if err != nil {
 		return Summary{}, err
 	}
@@ -136,7 +137,7 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 	startAll := time.Now()
 	for _, task := range tasks {
 		result := runTask(ctx, cfg, rc, runID, task, eventEnc)
-		if err := resultEnc.Encode(result); err != nil {
+		if err := encodeRedactedJSON(resultEnc, result); err != nil {
 			return summary, err
 		}
 		summary.ModelCalls += result.ModelCalls
@@ -276,7 +277,7 @@ func runTask(parent context.Context, cfg config.Config, rc RunConfig, runID stri
 	a := agent.New(taskCfg, prov, registry)
 	err = a.Run(ctx, task.Prompt, func(event protocol.Event) {
 		observe(&result, event)
-		_ = eventEnc.Encode(map[string]any{
+		_ = encodeRedactedJSON(eventEnc, map[string]any{
 			"run_id":  runID,
 			"task_id": task.ID,
 			"ts":      time.Now().UTC().Format(time.RFC3339Nano),
@@ -482,7 +483,7 @@ func prepareWorkspace(outDir, runID string, task Task) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		dst := filepath.Join(outDir, runID+"-workspaces", task.ID)
+		dst := filepath.Join(outDir, runID+"-workspaces", safeTaskOutputName(task.ID))
 		if err := os.RemoveAll(dst); err != nil {
 			return "", err
 		}
@@ -506,7 +507,7 @@ func copyDir(src, dst string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("workspace_template is not a directory: %s", src)
 	}
-	if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
+	if err := ensurePrivateDir(dst); err != nil {
 		return err
 	}
 	entries, err := os.ReadDir(src)
@@ -533,11 +534,175 @@ func copyDir(src, dst string) error {
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(to, bytes, entryInfo.Mode().Perm()); err != nil {
+		if err := writePrivateFile(to, bytes, privateRegularFileMode(entryInfo.Mode().Perm())); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func ensurePrivateDir(path string) error {
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o700)
+}
+
+func createPrivateFile(path string) (*os.File, error) {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
+func writePrivateFile(path string, bytes []byte, mode os.FileMode) error {
+	if err := os.WriteFile(path, bytes, mode); err != nil {
+		return err
+	}
+	return os.Chmod(path, mode)
+}
+
+func privateRegularFileMode(mode os.FileMode) os.FileMode {
+	private := os.FileMode(0o600)
+	if mode&0o111 != 0 {
+		private |= 0o100
+	}
+	return private
+}
+
+func safeTaskOutputName(id string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(id) {
+		if (r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '.' || r == '_' || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	name := strings.Trim(b.String(), "._-")
+	if name == "" {
+		name = "task"
+	}
+	if len(name) > 80 {
+		name = name[:80]
+	}
+	if name != strings.Trim(strings.TrimSpace(id), "._-") {
+		sum := sha256.Sum256([]byte(id))
+		name += "-" + hex.EncodeToString(sum[:4])
+	}
+	return name
+}
+
+func encodeRedactedJSON(enc *json.Encoder, value any) error {
+	return enc.Encode(redactForPersistence(value))
+}
+
+const redactedValue = "[REDACTED]"
+
+func redactForPersistence(value any) any {
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		if text, ok := value.(string); ok {
+			return redactSensitiveText(text)
+		}
+		return value
+	}
+	var generic any
+	if err := json.Unmarshal(bytes, &generic); err != nil {
+		return value
+	}
+	return redactJSONValue(generic, "")
+}
+
+func redactJSONValue(value any, key string) any {
+	if sensitivePersistenceKey(key) {
+		if value == nil {
+			return nil
+		}
+		return redactedValue
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for childKey, childValue := range typed {
+			out[childKey] = redactJSONValue(childValue, childKey)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, childValue := range typed {
+			out[i] = redactJSONValue(childValue, "")
+		}
+		return out
+	case string:
+		return redactSensitiveText(typed)
+	default:
+		return value
+	}
+}
+
+func sensitivePersistenceKey(key string) bool {
+	normalized := strings.ToLower(key)
+	normalized = strings.NewReplacer("_", "", "-", "", ".", "", " ", "").Replace(normalized)
+	if normalized == "" {
+		return false
+	}
+	switch {
+	case strings.Contains(normalized, "apikey"),
+		strings.Contains(normalized, "privatekey"),
+		strings.Contains(normalized, "password"),
+		strings.Contains(normalized, "secret"),
+		strings.Contains(normalized, "credential"),
+		strings.Contains(normalized, "authorization"),
+		strings.Contains(normalized, "bearertoken"),
+		strings.Contains(normalized, "accesstoken"),
+		strings.Contains(normalized, "refreshtoken"),
+		strings.HasSuffix(normalized, "token") && !strings.HasSuffix(normalized, "tokens"):
+		return true
+	default:
+		return false
+	}
+}
+
+var (
+	bearerTokenRE         = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/\-=]+`)
+	sensitiveAssignmentRE = regexp.MustCompile(`(?i)\b([A-Za-z0-9_.-]*(?:key|token|secret|password|credential|authorization)[A-Za-z0-9_.-]*)\s*([:=])\s*("[^"]*"|'[^']*'|[^\s,;]+)`)
+	sensitiveJSONFieldRE  = regexp.MustCompile(`(?i)"([^"]*(?:key|token|secret|password|credential|authorization)[^"]*)"\s*:\s*("[^"]*"|[^\s,}\]]+)`)
+)
+
+func redactSensitiveText(text string) string {
+	text = bearerTokenRE.ReplaceAllString(text, "Bearer "+redactedValue)
+	text = sensitiveAssignmentRE.ReplaceAllStringFunc(text, func(match string) string {
+		parts := sensitiveAssignmentRE.FindStringSubmatchIndex(match)
+		if len(parts) < 8 {
+			return match
+		}
+		key := match[parts[2]:parts[3]]
+		if !sensitivePersistenceKey(key) {
+			return match
+		}
+		return match[:parts[6]] + redactedValue
+	})
+	text = sensitiveJSONFieldRE.ReplaceAllStringFunc(text, func(match string) string {
+		parts := sensitiveJSONFieldRE.FindStringSubmatchIndex(match)
+		if len(parts) < 6 {
+			return match
+		}
+		key := match[parts[2]:parts[3]]
+		if !sensitivePersistenceKey(key) {
+			return match
+		}
+		return match[:parts[4]] + `"` + redactedValue + `"`
+	})
+	return text
 }
 
 func runCommands(ctx context.Context, cwd string, commands [][]string) error {

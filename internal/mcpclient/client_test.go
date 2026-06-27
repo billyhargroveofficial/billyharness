@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -150,6 +152,225 @@ func TestOptionalRequiredShellCWDAndCollisionRules(t *testing.T) {
 	})
 }
 
+func TestStdioLifecycleCleanupOnCollisionFailureAndClose(t *testing.T) {
+	root := t.TempDir()
+
+	t.Run("collision closes started clients", func(t *testing.T) {
+		pidOne := filepath.Join(root, "collision-one.pid")
+		pidTwo := filepath.Join(root, "collision-two.pid")
+		_, err := NewManager(context.Background(), config.Config{
+			WorkspaceRoots:     []string{root},
+			MaxToolOutputBytes: 64 * 1024,
+			MCPServers: []config.MCPServer{
+				{Name: "fake-one", Command: os.Args[0], Args: []string{"-test.run=TestFakeStdioMCPServer"}, Env: helperEnv("normal", map[string]string{"BILLYHARNESS_MCP_PID_FILE": pidOne}), CWD: root, Enabled: true, EnabledTools: []string{"echo"}},
+				{Name: "fake_one", Command: os.Args[0], Args: []string{"-test.run=TestFakeStdioMCPServer"}, Env: helperEnv("normal", map[string]string{"BILLYHARNESS_MCP_PID_FILE": pidTwo}), CWD: root, Enabled: true, EnabledTools: []string{"echo"}},
+			},
+		})
+		if err == nil || !strings.Contains(err.Error(), "collision") {
+			t.Fatalf("err = %v", err)
+		}
+		waitProcessGone(t, readPID(t, pidOne))
+		waitProcessGone(t, readPID(t, pidTwo))
+	})
+
+	t.Run("startup failure closes client", func(t *testing.T) {
+		pidFile := filepath.Join(root, "bad-list.pid")
+		manager, err := NewManager(context.Background(), config.Config{
+			WorkspaceRoots:     []string{root},
+			MaxToolOutputBytes: 64 * 1024,
+			MCPServers: []config.MCPServer{{
+				Name:           "bad-list",
+				Command:        os.Args[0],
+				Args:           []string{"-test.run=TestFakeStdioMCPServer"},
+				Env:            helperEnv("bad_list", map[string]string{"BILLYHARNESS_MCP_PID_FILE": pidFile}),
+				CWD:            root,
+				Enabled:        true,
+				StartupTimeout: 2 * time.Second,
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer manager.Close()
+		statuses := manager.Statuses()
+		if len(statuses) != 1 || statuses[0].Connected || statuses[0].Error == "" {
+			t.Fatalf("statuses = %#v", statuses)
+		}
+		waitProcessGone(t, readPID(t, pidFile))
+	})
+
+	t.Run("manager close disconnects status and process", func(t *testing.T) {
+		pidFile := filepath.Join(root, "close.pid")
+		manager, err := NewManager(context.Background(), config.Config{
+			WorkspaceRoots:     []string{root},
+			MaxToolOutputBytes: 64 * 1024,
+			MCPServers: []config.MCPServer{{
+				Name:           "fake",
+				Command:        os.Args[0],
+				Args:           []string{"-test.run=TestFakeStdioMCPServer"},
+				Env:            helperEnv("normal", map[string]string{"BILLYHARNESS_MCP_PID_FILE": pidFile}),
+				CWD:            root,
+				Enabled:        true,
+				StartupTimeout: 2 * time.Second,
+				EnabledTools:   []string{"echo"},
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pid := readPID(t, pidFile)
+		if statuses := manager.Statuses(); len(statuses) != 1 || !statuses[0].Connected {
+			t.Fatalf("statuses before close = %#v", statuses)
+		}
+		manager.Close()
+		if statuses := manager.Statuses(); len(statuses) != 1 || statuses[0].Connected {
+			t.Fatalf("statuses after close = %#v", statuses)
+		}
+		waitProcessGone(t, pid)
+	})
+}
+
+func TestStdioCallTimeoutAndTransportCloseDisconnectStatus(t *testing.T) {
+	root := t.TempDir()
+
+	t.Run("timeout", func(t *testing.T) {
+		pidFile := filepath.Join(root, "timeout.pid")
+		manager, err := NewManager(context.Background(), config.Config{
+			WorkspaceRoots:     []string{root},
+			MaxToolOutputBytes: 64 * 1024,
+			MCPServers: []config.MCPServer{{
+				Name:           "fake",
+				Command:        os.Args[0],
+				Args:           []string{"-test.run=TestFakeStdioMCPServer"},
+				Env:            helperEnv("hang", map[string]string{"BILLYHARNESS_MCP_PID_FILE": pidFile}),
+				CWD:            root,
+				Enabled:        true,
+				StartupTimeout: 2 * time.Second,
+				ToolTimeout:    50 * time.Millisecond,
+				EnabledTools:   []string{"hang"},
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer manager.Close()
+		pid := readPID(t, pidFile)
+		hang := findTool(t, manager, "mcp__fake__hang")
+		_, err = hang.Handler(context.Background(), json.RawMessage(`{}`))
+		if err == nil || !strings.Contains(err.Error(), "deadline exceeded") {
+			t.Fatalf("err = %v", err)
+		}
+		if statuses := manager.Statuses(); len(statuses) != 1 || statuses[0].Connected {
+			t.Fatalf("statuses = %#v", statuses)
+		}
+		waitProcessGone(t, pid)
+	})
+
+	t.Run("transport close", func(t *testing.T) {
+		pidFile := filepath.Join(root, "transport-close.pid")
+		manager, err := NewManager(context.Background(), config.Config{
+			WorkspaceRoots:     []string{root},
+			MaxToolOutputBytes: 64 * 1024,
+			MCPServers: []config.MCPServer{{
+				Name:           "fake",
+				Command:        os.Args[0],
+				Args:           []string{"-test.run=TestFakeStdioMCPServer"},
+				Env:            helperEnv("close_on_call", map[string]string{"BILLYHARNESS_MCP_PID_FILE": pidFile}),
+				CWD:            root,
+				Enabled:        true,
+				StartupTimeout: 2 * time.Second,
+				ToolTimeout:    2 * time.Second,
+				EnabledTools:   []string{"close"},
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer manager.Close()
+		pid := readPID(t, pidFile)
+		closeTool := findTool(t, manager, "mcp__fake__close")
+		_, err = closeTool.Handler(context.Background(), json.RawMessage(`{}`))
+		if err == nil || !strings.Contains(err.Error(), "transport") {
+			t.Fatalf("err = %v", err)
+		}
+		if statuses := manager.Statuses(); len(statuses) != 1 || statuses[0].Connected {
+			t.Fatalf("statuses = %#v", statuses)
+		}
+		waitProcessGone(t, pid)
+	})
+}
+
+func TestStdioToolOutputIsCappedBeforeReturning(t *testing.T) {
+	root := t.TempDir()
+	manager, err := NewManager(context.Background(), config.Config{
+		WorkspaceRoots:     []string{root},
+		MaxToolOutputBytes: 64,
+		MCPServers: []config.MCPServer{{
+			Name:           "fake",
+			Command:        os.Args[0],
+			Args:           []string{"-test.run=TestFakeStdioMCPServer"},
+			Env:            helperEnv("large", nil),
+			CWD:            root,
+			Enabled:        true,
+			StartupTimeout: 2 * time.Second,
+			ToolTimeout:    2 * time.Second,
+			EnabledTools:   []string{"large"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	large := findTool(t, manager, "mcp__fake__large")
+	text, err := large.Handler(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(text) > 160 || !strings.Contains(text, "truncated") {
+		t.Fatalf("expected capped output with truncation note, len=%d text=%q", len(text), text)
+	}
+	if strings.Count(text, "x") > 64 {
+		t.Fatalf("too much raw MCP output returned: %q", text)
+	}
+	if statuses := manager.Statuses(); len(statuses) != 1 || !statuses[0].Connected {
+		t.Fatalf("statuses = %#v", statuses)
+	}
+}
+
+func TestOversizedStdioToolResponseClosesTransport(t *testing.T) {
+	root := t.TempDir()
+	pidFile := filepath.Join(root, "huge-raw.pid")
+	manager, err := NewManager(context.Background(), config.Config{
+		WorkspaceRoots:     []string{root},
+		MaxToolOutputBytes: 64,
+		MCPServers: []config.MCPServer{{
+			Name:           "fake",
+			Command:        os.Args[0],
+			Args:           []string{"-test.run=TestFakeStdioMCPServer"},
+			Env:            helperEnv("huge_raw", map[string]string{"BILLYHARNESS_MCP_PID_FILE": pidFile}),
+			CWD:            root,
+			Enabled:        true,
+			StartupTimeout: 2 * time.Second,
+			ToolTimeout:    2 * time.Second,
+			EnabledTools:   []string{"huge_raw"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	pid := readPID(t, pidFile)
+	huge := findTool(t, manager, "mcp__fake__huge_raw")
+	_, err = huge.Handler(context.Background(), json.RawMessage(`{}`))
+	if err == nil || !strings.Contains(err.Error(), "response exceeded") {
+		t.Fatalf("err = %v", err)
+	}
+	if statuses := manager.Statuses(); len(statuses) != 1 || statuses[0].Connected {
+		t.Fatalf("statuses = %#v", statuses)
+	}
+	waitProcessGone(t, pid)
+}
+
 func TestMCPEnvVarsReadBillyharnessDotenv(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", root)
@@ -184,6 +405,43 @@ func helperEnv(mode string, extra map[string]string) map[string]string {
 	return env
 }
 
+func readPID(t *testing.T, path string) int {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		body, err := os.ReadFile(path)
+		if err == nil {
+			pid, err := strconv.Atoi(strings.TrimSpace(string(body)))
+			if err == nil && pid > 0 {
+				return pid
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("pid file %s was not written", path)
+	return 0
+}
+
+func waitProcessGone(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processAlive(pid) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("process %d still running", pid)
+}
+
+func processAlive(pid int) bool {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return process.Signal(syscall.Signal(0)) == nil
+}
+
 func TestFakeStdioMCPServer(t *testing.T) {
 	if os.Getenv("BILLYHARNESS_MCP_HELPER") != "1" {
 		return
@@ -193,6 +451,10 @@ func TestFakeStdioMCPServer(t *testing.T) {
 }
 
 func runFakeMCPServer() {
+	mode := os.Getenv("BILLYHARNESS_MCP_MODE")
+	if pidFile := os.Getenv("BILLYHARNESS_MCP_PID_FILE"); pidFile != "" {
+		_ = os.WriteFile(pidFile, []byte(fmt.Sprint(os.Getpid())), 0o600)
+	}
 	scanner := bufio.NewScanner(os.Stdin)
 	enc := json.NewEncoder(os.Stdout)
 	for scanner.Scan() {
@@ -216,11 +478,11 @@ func runFakeMCPServer() {
 				"instructions":    "Use echo for smoke tests.",
 			}))
 		case "tools/list":
-			_ = enc.Encode(response(req.ID, map[string]any{"tools": []map[string]any{
-				{"name": "echo", "description": "Echo text", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"text": map[string]any{"type": "string"}}, "required": []string{"text"}, "additionalProperties": false}},
-				{"name": "env", "description": "Show selected env", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}},
-				{"name": "fail", "description": "Fail with secret", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}},
-			}}))
+			if mode == "bad_list" {
+				_, _ = os.Stdout.Write([]byte("{not json\n"))
+				sleepForever()
+			}
+			_ = enc.Encode(response(req.ID, map[string]any{"tools": fakeToolsForMode(mode)}))
 		case "tools/call":
 			call := struct {
 				Name      string         `json:"name"`
@@ -239,11 +501,45 @@ func runFakeMCPServer() {
 				_ = enc.Encode(response(req.ID, toolResult(string(body), false)))
 			case "fail":
 				_ = enc.Encode(response(req.ID, toolResult("failed with sk-test-secret-1234567890", true)))
+			case "hang":
+				sleepForever()
+			case "close":
+				os.Exit(0)
+			case "large":
+				_ = enc.Encode(response(req.ID, toolResult(strings.Repeat("x", 512), false)))
+			case "huge_raw":
+				_ = enc.Encode(response(req.ID, toolResult(strings.Repeat("x", 300*1024), false)))
 			default:
 				_ = enc.Encode(rpcErrorResponse(req.ID, -32602, "unknown tool"))
 			}
 		default:
 			_ = enc.Encode(rpcErrorResponse(req.ID, -32601, "method not found"))
+		}
+	}
+}
+
+func sleepForever() {
+	for {
+		time.Sleep(time.Hour)
+	}
+}
+
+func fakeToolsForMode(mode string) []map[string]any {
+	emptyObject := map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}
+	switch mode {
+	case "hang":
+		return []map[string]any{{"name": "hang", "description": "Never responds", "inputSchema": emptyObject}}
+	case "close_on_call":
+		return []map[string]any{{"name": "close", "description": "Close transport", "inputSchema": emptyObject}}
+	case "large":
+		return []map[string]any{{"name": "large", "description": "Large text", "inputSchema": emptyObject}}
+	case "huge_raw":
+		return []map[string]any{{"name": "huge_raw", "description": "Oversized raw response", "inputSchema": emptyObject}}
+	default:
+		return []map[string]any{
+			{"name": "echo", "description": "Echo text", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"text": map[string]any{"type": "string"}}, "required": []string{"text"}, "additionalProperties": false}},
+			{"name": "env", "description": "Show selected env", "inputSchema": emptyObject},
+			{"name": "fail", "description": "Fail with secret", "inputSchema": emptyObject},
 		}
 	}
 }

@@ -47,6 +47,8 @@ type Bot struct {
 	cancel  map[string]context.CancelFunc
 }
 
+const telegramEditTimeout = 15 * time.Second
+
 func New(opts Options, client *Client, harness Harness) (*Bot, error) {
 	if strings.TrimSpace(opts.BotToken) == "" {
 		return nil, fmt.Errorf("TELEGRAM_BOT_TOKEN is required")
@@ -348,19 +350,32 @@ func (b *Bot) finishRich(ctx context.Context, msg Message, placeholder SentMessa
 	if len(chunks) == 0 {
 		return false
 	}
+	placeholderRich := false
+	var freshRichMessageIDs []int
 	if err := b.editRichMarkdown(ctx, msg.Chat.ID, placeholder.MessageID, chunks[0]); err != nil {
 		log.Printf("telegram final rich edit failed, trying fresh rich message: %v", err)
-		if _, sendErr := b.sendRichMarkdown(ctx, msg.Chat.ID, msg.ThreadID, chunks[0]); sendErr != nil {
+		created, sendErr := b.sendRichMarkdown(ctx, msg.Chat.ID, msg.ThreadID, chunks[0])
+		if sendErr != nil {
 			log.Printf("telegram final rich send failed, falling back to HTML: %v", sendErr)
 			return false
 		}
-		b.delete(ctx, msg.Chat.ID, placeholder.MessageID)
+		freshRichMessageIDs = append(freshRichMessageIDs, created.MessageID)
+	} else {
+		placeholderRich = true
 	}
 	for _, chunk := range chunks[1:] {
-		if _, err := b.sendRichMarkdown(ctx, msg.Chat.ID, msg.ThreadID, chunk); err != nil {
+		created, err := b.sendRichMarkdown(ctx, msg.Chat.ID, msg.ThreadID, chunk)
+		if err != nil {
 			log.Printf("telegram final rich chunk send failed: %v", err)
+			for _, messageID := range freshRichMessageIDs {
+				b.delete(ctx, msg.Chat.ID, messageID)
+			}
 			return false
 		}
+		freshRichMessageIDs = append(freshRichMessageIDs, created.MessageID)
+	}
+	if !placeholderRich {
+		b.delete(ctx, msg.Chat.ID, placeholder.MessageID)
 	}
 	return true
 }
@@ -462,7 +477,9 @@ func (b *Bot) edit(ctx context.Context, chatID int64, messageID int, text, parse
 		log.Printf("telegram dry-run edit chat=%d message=%d text=%q", chatID, messageID, preview(text, 300))
 		return nil
 	}
-	err := b.client.EditMessageText(ctx, chatID, messageID, text, parseMode)
+	editCtx, cancel := telegramEditContext(ctx)
+	defer cancel()
+	err := b.client.EditMessageText(editCtx, chatID, messageID, text, parseMode)
 	if err != nil && strings.Contains(strings.ToLower(err.Error()), "message is not modified") {
 		return nil
 	}
@@ -482,11 +499,17 @@ func (b *Bot) editRichMarkdown(ctx context.Context, chatID int64, messageID int,
 		log.Printf("telegram dry-run edit-rich chat=%d message=%d text=%q", chatID, messageID, preview(markdown, 300))
 		return nil
 	}
-	err := b.client.EditMessageRichMarkdown(ctx, chatID, messageID, markdown)
+	editCtx, cancel := telegramEditContext(ctx)
+	defer cancel()
+	err := b.client.EditMessageRichMarkdown(editCtx, chatID, messageID, markdown)
 	if err != nil && strings.Contains(strings.ToLower(err.Error()), "message is not modified") {
 		return nil
 	}
 	return err
+}
+
+func telegramEditContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, telegramEditTimeout)
 }
 
 func (b *Bot) delete(ctx context.Context, chatID int64, messageID int) {

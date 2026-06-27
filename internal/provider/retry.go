@@ -6,7 +6,10 @@ import (
 	"time"
 )
 
-const maxProviderBackoff = 5 * time.Second
+const (
+	maxProviderBackoff   = 5 * time.Second
+	maxProviderRetryWait = time.Minute
+)
 
 func withProviderRetry(ctx context.Context, maxRetries int, fn func(attempt int) error) error {
 	if maxRetries < 0 {
@@ -37,8 +40,8 @@ func retryableProviderError(err error) bool {
 func providerRetryDelay(err error, attempt int) time.Duration {
 	var providerErr *ProviderError
 	if errors.As(err, &providerErr) && providerErr.RetryAfter > 0 {
-		if providerErr.RetryAfter > maxProviderBackoff {
-			return maxProviderBackoff
+		if providerErr.RetryAfter > maxProviderRetryWait {
+			return maxProviderRetryWait
 		}
 		return providerErr.RetryAfter
 	}

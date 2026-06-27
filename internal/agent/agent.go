@@ -242,7 +242,7 @@ func (a *Agent) compactToolResult(index int, call protocol.ToolCall, out *protoc
 	if preview == "" {
 		preview = "[tool output omitted]"
 	}
-	note := fmt.Sprintf("\n...[truncated %d bytes; full tool output saved to %s. Use fs_read_file on output_ref if exact output is needed]", len(full)-len(preview), ref)
+	note := fmt.Sprintf("\n...[truncated %d bytes; full tool output saved as plaintext to %s with 0600 permissions. Use fs_read_file on output_ref if exact output is needed]", len(full)-len(preview), ref)
 	if err != nil {
 		ref = ""
 		note = fmt.Sprintf("\n...[truncated %d bytes; failed to save full tool output: %v]", len(full)-len(preview), err)
@@ -257,12 +257,18 @@ func (a *Agent) compactToolResult(index int, call protocol.ToolCall, out *protoc
 	out.Metadata["returned_output_bytes"] = len(out.Content)
 	if ref != "" {
 		out.Metadata["output_ref"] = ref
+		out.Metadata["output_ref_plaintext"] = true
+		out.Metadata["output_ref_permissions"] = "0600"
 	}
 }
 
 func storeManagedToolOutput(index int, call protocol.ToolCall, content string) (string, error) {
-	dir := filepath.Join(config.BillyHomeDir(), "tool-output", time.Now().UTC().Format("20060102"))
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	baseDir := filepath.Join(config.BillyHomeDir(), "tool-output")
+	if err := ensurePrivateDir(baseDir); err != nil {
+		return "", err
+	}
+	dir := filepath.Join(baseDir, time.Now().UTC().Format("20060102"))
+	if err := ensurePrivateDir(dir); err != nil {
 		return "", err
 	}
 	sum := sha256.Sum256([]byte(content))
@@ -277,7 +283,17 @@ func storeManagedToolOutput(index int, call protocol.ToolCall, content string) (
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return "", err
 	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return "", err
+	}
 	return path, nil
+}
+
+func ensurePrivateDir(path string) error {
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o700)
 }
 
 var unsafeOutputNameRE = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)

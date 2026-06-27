@@ -627,19 +627,24 @@ func findDotenv() string {
 }
 
 func findDotenvFiles() []string {
-	if explicit := os.Getenv("FAST_AGENT_ENV_FILE"); explicit != "" {
-		return []string{explicit}
-	}
 	seen := map[string]bool{}
 	var files []string
 	add := func(path string) {
-		if path == "" || seen[path] {
+		path = filepath.Clean(strings.TrimSpace(path))
+		if path == "." || path == "" || seen[path] {
 			return
 		}
 		seen[path] = true
 		if _, err := os.Stat(path); err == nil {
 			files = append(files, path)
 		}
+	}
+	add(filepath.Join(BillyHomeDir(), ".env"))
+	if dotenvHomeOnly() {
+		return files
+	}
+	if explicit := strings.TrimSpace(os.Getenv("FAST_AGENT_ENV_FILE")); explicit != "" {
+		return []string{explicit}
 	}
 	dir, err := os.Getwd()
 	if err == nil {
@@ -652,8 +657,11 @@ func findDotenvFiles() []string {
 			dir = parent
 		}
 	}
-	add(filepath.Join(BillyHomeDir(), ".env"))
 	return files
+}
+
+func dotenvHomeOnly() bool {
+	return envBool("BILLYHARNESS_DOTENV_HOME_ONLY", false)
 }
 
 func BillyHomeDir() string {

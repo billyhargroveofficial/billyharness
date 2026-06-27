@@ -3,11 +3,13 @@ package gateway
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -22,12 +24,17 @@ import (
 )
 
 type Server struct {
-	cfg      config.Config
-	agent    *agent.Agent
-	registry *tools.Registry
-	mux      *http.ServeMux
-	sessions map[string]*Session
-	mu       sync.Mutex
+	cfg       config.Config
+	agent     *agent.Agent
+	registry  *tools.Registry
+	mux       *http.ServeMux
+	authToken string
+	sessions  map[string]*Session
+	mu        sync.Mutex
+}
+
+type ServerOptions struct {
+	AuthToken string
 }
 
 type Session struct {
@@ -62,6 +69,10 @@ type CodexImportRequest struct {
 }
 
 func NewServer(cfg config.Config, prov provider.Provider, registry *tools.Registry) *Server {
+	return NewServerWithOptions(cfg, prov, registry, ServerOptions{})
+}
+
+func NewServerWithOptions(cfg config.Config, prov provider.Provider, registry *tools.Registry, opts ServerOptions) *Server {
 	s := &Server{
 		cfg:      cfg,
 		agent:    agent.New(cfg, prov, registry),
@@ -69,23 +80,35 @@ func NewServer(cfg config.Config, prov provider.Provider, registry *tools.Regist
 		mux:      http.NewServeMux(),
 		sessions: map[string]*Session{},
 	}
+	opts.AuthToken = strings.TrimSpace(opts.AuthToken)
+	s.authToken = opts.AuthToken
 	s.routes()
 	return s
 }
 
 func (s *Server) Handler() http.Handler {
+	if s.authToken != "" {
+		return s.authMiddleware(s.mux)
+	}
 	return s.mux
 }
 
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	return s.Serve(ctx, listener)
+}
+
+func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	server := &http.Server{
-		Addr:              addr,
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	errs := make(chan error, 1)
 	go func() {
-		errs <- server.ListenAndServe()
+		errs <- server.Serve(listener)
 	}()
 	select {
 	case <-ctx.Done():
@@ -99,6 +122,25 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 		}
 		return err
 	}
+}
+
+func (s *Server) authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" || isLoopbackRemoteAddr(r.RemoteAddr) || bearerTokenMatches(r.Header.Get("Authorization"), s.authToken) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("WWW-Authenticate", `Bearer realm="billyharness-gateway"`)
+		writeError(w, http.StatusUnauthorized, "gateway bearer token required")
+	})
+}
+
+func bearerTokenMatches(header, token string) bool {
+	fields := strings.Fields(strings.TrimSpace(header))
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(fields[1]), []byte(token)) == 1
 }
 
 func (s *Server) routes() {

@@ -17,19 +17,20 @@ const telegramLimit = 4096
 const telegramRichLimit = 32768
 
 type Renderer struct {
-	Content       strings.Builder
-	ThinkingChars int
-	ModelCalls    int
-	ToolCalls     int
-	InputTokens   int64
-	OutputTokens  int64
-	CacheHit      int64
-	CacheMiss     int64
-	Reasoning     int64
-	Started       time.Time
-	LastError     string
-	Done          bool
-	toolSummaries map[string]string
+	Content         strings.Builder
+	ThinkingChars   int
+	ModelCalls      int
+	ToolCalls       int
+	InputTokens     int64
+	OutputTokens    int64
+	CacheHit        int64
+	CacheMiss       int64
+	Reasoning       int64
+	usageAccounting usageAccumulator
+	Started         time.Time
+	LastError       string
+	Done            bool
+	toolSummaries   map[string]string
 }
 
 type RenderEvent struct {
@@ -46,9 +47,11 @@ func NewRenderer() *Renderer {
 func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
 	switch event.Type {
 	case protocol.EventRunStarted:
+		r.usageAccounting.Reset()
 		return []RenderEvent{{Kind: "status", Title: "Run", Body: "started"}}
 	case protocol.EventModelCallStarted:
 		r.ModelCalls++
+		r.usageAccounting.Reset()
 	case protocol.EventAssistantReasoning:
 		r.ThinkingChars += len(fmt.Sprint(event.Data))
 	case protocol.EventAssistantDelta:
@@ -67,12 +70,12 @@ func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
 		}
 		return []RenderEvent{{Kind: "tool", Title: "Tool", Body: summary, Key: key}}
 	case protocol.EventProviderUsageUpdate:
-		in, out, hit, miss, reasoning := usage(event.Data)
-		r.InputTokens += in
-		r.OutputTokens += out
-		r.CacheHit += hit
-		r.CacheMiss += miss
-		r.Reasoning += reasoning
+		delta := r.usageAccounting.Apply(usage(event.Data))
+		r.InputTokens += delta.InputTokens
+		r.OutputTokens += delta.OutputTokens
+		r.CacheHit += delta.CacheHitTokens
+		r.CacheMiss += delta.CacheMissTokens
+		r.Reasoning += delta.ReasoningTokens
 	case protocol.EventRunCompleted:
 		r.Done = true
 	case protocol.EventRunFailed:
@@ -130,9 +133,9 @@ func (r *Renderer) FinalRichMarkdownChunks(model, reasoning string) []string {
 	}
 	header := r.richHeaderInline(model, reasoning, elapsed)
 	footer := "\n\n_" + markdownInlineEscape(r.footerLine()) + "_"
-	budget := telegramRichLimit - len([]rune(header)) - len([]rune(footer)) - 128
-	if budget < 4096 {
-		budget = 4096
+	budget := telegramRichLimit - telegramUTF16Len(header) - telegramUTF16Len(footer) - 128
+	if budget < 1 {
+		budget = 1
 	}
 	parts := splitRichMarkdown(content, budget)
 	if len(parts) == 0 {
@@ -419,14 +422,7 @@ func splitTelegramPlain(text string, limit int) []string {
 	if text == "" {
 		return nil
 	}
-	runes := []rune(text)
-	var chunks []string
-	for len(runes) > 0 {
-		n := telegramRunePrefixLen(runes, limit)
-		chunks = append(chunks, string(runes[:n]))
-		runes = runes[n:]
-	}
-	return chunks
+	return splitTelegramUTF16Raw(text, limit)
 }
 
 func splitTelegramEscaped(text string, limit int) []string {
@@ -506,6 +502,9 @@ func splitRichMarkdown(text string, limit int) []string {
 	if limit <= 0 {
 		limit = telegramRichLimit - 512
 	}
+	if limit < 1 {
+		limit = 1
+	}
 	var chunks []string
 	var current strings.Builder
 	flush := func() {
@@ -520,29 +519,230 @@ func splitRichMarkdown(text string, limit int) []string {
 		if block == "" {
 			continue
 		}
-		extra := block
-		if current.Len() > 0 {
-			extra = "\n\n" + block
-		}
-		if current.Len() > 0 && len([]rune(current.String()+extra)) > limit {
-			flush()
-		}
-		if len([]rune(extra)) <= limit {
+		for _, part := range splitRichMarkdownBlock(block, limit) {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			partLen := telegramUTF16Len(part)
+			if partLen > limit {
+				if current.Len() > 0 {
+					flush()
+				}
+				for _, fallbackPart := range splitRichMarkdownPlain(part, limit) {
+					if strings.TrimSpace(fallbackPart) != "" {
+						chunks = append(chunks, strings.TrimSpace(fallbackPart))
+					}
+				}
+				continue
+			}
+			if current.Len() > 0 {
+				candidateLen := telegramUTF16Len(current.String()) + telegramUTF16Len("\n\n") + partLen
+				if candidateLen > limit {
+					flush()
+				}
+			}
 			if current.Len() > 0 {
 				current.WriteString("\n\n")
 			}
-			current.WriteString(block)
-			continue
-		}
-		for _, part := range splitTelegramPlain(block, limit) {
-			if current.Len() > 0 {
-				flush()
-			}
-			chunks = append(chunks, part)
+			current.WriteString(part)
 		}
 	}
 	flush()
 	return chunks
+}
+
+func splitRichMarkdownBlock(block string, limit int) []string {
+	if telegramUTF16Len(block) <= limit {
+		return []string{block}
+	}
+	if isFencedMarkdownBlock(block) {
+		if parts := splitRichMarkdownFence(block, limit); len(parts) > 0 {
+			return parts
+		}
+	}
+	if isMarkdownTableBlock(block) {
+		if parts := splitRichMarkdownTable(block, limit); len(parts) > 0 {
+			return parts
+		}
+	}
+	return splitRichMarkdownPlain(block, limit)
+}
+
+func splitRichMarkdownPlain(text string, limit int) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	return splitTelegramUTF16Raw(text, limit)
+}
+
+func splitRichMarkdownFence(block string, limit int) []string {
+	lines := strings.Split(block, "\n")
+	if len(lines) == 0 {
+		return nil
+	}
+	opener := lines[0]
+	closer := "```"
+	bodyLines := lines[1:]
+	if len(bodyLines) > 0 && strings.HasPrefix(strings.TrimSpace(bodyLines[len(bodyLines)-1]), "```") {
+		closer = bodyLines[len(bodyLines)-1]
+		bodyLines = bodyLines[:len(bodyLines)-1]
+	}
+	prefix := opener + "\n"
+	suffix := "\n" + closer
+	budget := limit - telegramUTF16Len(prefix) - telegramUTF16Len(suffix)
+	if budget < 1 {
+		return splitRichMarkdownPlain(block, limit)
+	}
+	body := strings.Join(bodyLines, "\n")
+	if body == "" {
+		chunk := prefix + suffix[1:]
+		if telegramUTF16Len(chunk) <= limit {
+			return []string{chunk}
+		}
+		return splitRichMarkdownPlain(block, limit)
+	}
+	parts := splitRichCodeContent(body, budget)
+	chunks := make([]string, 0, len(parts))
+	for _, part := range parts {
+		chunk := prefix + strings.TrimRight(part, "\n") + suffix
+		if strings.TrimSpace(part) == "" {
+			chunk = prefix + suffix[1:]
+		}
+		chunks = append(chunks, chunk)
+	}
+	return chunks
+}
+
+func splitRichCodeContent(text string, limit int) []string {
+	if text == "" {
+		return []string{""}
+	}
+	var chunks []string
+	var current strings.Builder
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+		chunks = append(chunks, current.String())
+		current.Reset()
+	}
+	for _, line := range strings.SplitAfter(text, "\n") {
+		lineLen := telegramUTF16Len(line)
+		if lineLen > limit {
+			flush()
+			chunks = append(chunks, splitTelegramUTF16Raw(line, limit)...)
+			continue
+		}
+		if current.Len() > 0 && telegramUTF16Len(current.String())+lineLen > limit {
+			flush()
+		}
+		current.WriteString(line)
+	}
+	flush()
+	if len(chunks) == 0 {
+		return []string{text}
+	}
+	return chunks
+}
+
+func splitRichMarkdownTable(block string, limit int) []string {
+	lines := strings.Split(block, "\n")
+	if len(lines) < 2 {
+		return nil
+	}
+	header := []string{lines[0], lines[1]}
+	base := strings.Join(header, "\n")
+	if telegramUTF16Len(base) > limit {
+		return splitRichMarkdownPlain(block, limit)
+	}
+	var chunks []string
+	current := append([]string{}, header...)
+	reset := func() {
+		current = append([]string{}, header...)
+	}
+	flush := func() {
+		if len(current) > len(header) {
+			chunks = append(chunks, strings.Join(current, "\n"))
+		}
+		reset()
+	}
+	for _, row := range lines[2:] {
+		if strings.TrimSpace(row) == "" {
+			continue
+		}
+		candidateLines := append(append([]string{}, current...), row)
+		if telegramUTF16Len(strings.Join(candidateLines, "\n")) <= limit {
+			current = append(current, row)
+			continue
+		}
+		if len(current) > len(header) {
+			flush()
+		}
+		rowCandidate := base + "\n" + row
+		if telegramUTF16Len(rowCandidate) <= limit {
+			current = append(current, row)
+			continue
+		}
+		available := limit - telegramUTF16Len(base+"\n")
+		if available < 1 {
+			for _, part := range splitRichMarkdownPlain(row, limit) {
+				chunks = append(chunks, part)
+			}
+			continue
+		}
+		for _, part := range splitTelegramUTF16Raw(row, available) {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				chunks = append(chunks, base+"\n"+part)
+			}
+		}
+		reset()
+	}
+	flush()
+	return chunks
+}
+
+func isFencedMarkdownBlock(block string) bool {
+	lines := strings.Split(block, "\n")
+	return len(lines) > 0 && strings.HasPrefix(strings.TrimSpace(lines[0]), "```")
+}
+
+func isMarkdownTableBlock(block string) bool {
+	lines := strings.Split(block, "\n")
+	return len(lines) >= 2 && strings.Contains(lines[0], "|") && isMarkdownTableSeparator(lines[1])
+}
+
+func isMarkdownTableSeparator(line string) bool {
+	line = strings.TrimSpace(line)
+	if !strings.Contains(line, "|") || !strings.Contains(line, "-") {
+		return false
+	}
+	cells := strings.Split(strings.Trim(line, "|"), "|")
+	if len(cells) < 2 {
+		return false
+	}
+	for _, cell := range cells {
+		cell = strings.TrimSpace(cell)
+		if cell == "" {
+			return false
+		}
+		hasDash := false
+		for _, r := range cell {
+			switch r {
+			case '-':
+				hasDash = true
+			case ':', ' ':
+			default:
+				return false
+			}
+		}
+		if !hasDash {
+			return false
+		}
+	}
+	return true
 }
 
 func markdownBlocks(text string) []string {
@@ -679,7 +879,20 @@ func esc(text string) string {
 	return html.EscapeString(text)
 }
 
-func usage(data any) (int64, int64, int64, int64, int64) {
+type tokenUsage struct {
+	InputTokens     int64
+	OutputTokens    int64
+	CacheHitTokens  int64
+	CacheMissTokens int64
+	ReasoningTokens int64
+}
+
+type usageAccumulator struct {
+	last    tokenUsage
+	hasLast bool
+}
+
+func usage(data any) tokenUsage {
 	bytes, _ := json.Marshal(data)
 	var u struct {
 		InputTokens     int64 `json:"input_tokens"`
@@ -689,7 +902,68 @@ func usage(data any) (int64, int64, int64, int64, int64) {
 		ReasoningTokens int64 `json:"reasoning_tokens"`
 	}
 	_ = json.Unmarshal(bytes, &u)
-	return u.InputTokens, u.OutputTokens, u.CacheHitTokens, u.CacheMissTokens, u.ReasoningTokens
+	return tokenUsage{
+		InputTokens:     nonNegativeUsage(u.InputTokens),
+		OutputTokens:    nonNegativeUsage(u.OutputTokens),
+		CacheHitTokens:  nonNegativeUsage(u.CacheHitTokens),
+		CacheMissTokens: nonNegativeUsage(u.CacheMissTokens),
+		ReasoningTokens: nonNegativeUsage(u.ReasoningTokens),
+	}
+}
+
+func (a *usageAccumulator) Reset() {
+	a.last = tokenUsage{}
+	a.hasLast = false
+}
+
+func (a *usageAccumulator) Apply(update tokenUsage) tokenUsage {
+	if update.zero() {
+		return tokenUsage{}
+	}
+	if !a.hasLast {
+		a.last = update
+		a.hasLast = true
+		return update
+	}
+	if update == a.last {
+		return tokenUsage{}
+	}
+	if update.atLeast(a.last) {
+		delta := update.minus(a.last)
+		a.last = update
+		return delta
+	}
+	a.last = update
+	return update
+}
+
+func (u tokenUsage) zero() bool {
+	return u == tokenUsage{}
+}
+
+func (u tokenUsage) atLeast(other tokenUsage) bool {
+	return u.InputTokens >= other.InputTokens &&
+		u.OutputTokens >= other.OutputTokens &&
+		u.CacheHitTokens >= other.CacheHitTokens &&
+		u.CacheMissTokens >= other.CacheMissTokens &&
+		u.ReasoningTokens >= other.ReasoningTokens
+}
+
+func (u tokenUsage) minus(other tokenUsage) tokenUsage {
+	return tokenUsage{
+		InputTokens:     u.InputTokens - other.InputTokens,
+		OutputTokens:    u.OutputTokens - other.OutputTokens,
+		CacheHitTokens:  u.CacheHitTokens - other.CacheHitTokens,
+		CacheMissTokens: u.CacheMissTokens - other.CacheMissTokens,
+		ReasoningTokens: u.ReasoningTokens - other.ReasoningTokens,
+	}
+}
+
+func nonNegativeUsage(value int64) int64 {
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 func compactInt(value int64) string {
@@ -789,6 +1063,20 @@ func joinToolParts(parts ...string) string {
 
 func telegramUTF16Len(text string) int {
 	return len(utf16.Encode([]rune(text)))
+}
+
+func splitTelegramUTF16Raw(text string, limit int) []string {
+	if limit <= 0 {
+		limit = 1
+	}
+	runes := []rune(text)
+	var chunks []string
+	for len(runes) > 0 {
+		n := telegramRunePrefixLen(runes, limit)
+		chunks = append(chunks, string(runes[:n]))
+		runes = runes[n:]
+	}
+	return chunks
 }
 
 func telegramRunePrefixLen(runes []rune, limit int) int {

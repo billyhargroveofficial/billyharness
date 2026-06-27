@@ -428,7 +428,7 @@ func TestRunMessagesStoresLargeToolOutputAndSendsPreview(t *testing.T) {
 	if !ok || !result.Truncated || result.OutputRef == "" {
 		t.Fatalf("tool result = %#v ok=%v", result, ok)
 	}
-	if strings.Contains(result.Content, fullOutput) || !strings.Contains(result.Content, "full tool output saved") {
+	if strings.Contains(result.Content, fullOutput) || !strings.Contains(result.Content, "full tool output saved as plaintext") {
 		t.Fatalf("result content should be preview with saved-output note: %q", result.Content)
 	}
 	bytes, err := os.ReadFile(result.OutputRef)
@@ -440,6 +440,12 @@ func TestRunMessagesStoresLargeToolOutputAndSendsPreview(t *testing.T) {
 	}
 	if !strings.HasPrefix(result.OutputRef, filepath.Join(home, "tool-output")) {
 		t.Fatalf("output ref = %q, want under billy home %q", result.OutputRef, home)
+	}
+	assertMode(t, filepath.Join(home, "tool-output"), 0o700)
+	assertMode(t, filepath.Dir(result.OutputRef), 0o700)
+	assertMode(t, result.OutputRef, 0o600)
+	if result.Metadata["output_ref_plaintext"] != true || result.Metadata["output_ref_permissions"] != "0600" {
+		t.Fatalf("metadata should make plaintext persistence explicit: %#v", result.Metadata)
 	}
 	var toolMessage protocol.Message
 	for _, msg := range next {
@@ -679,6 +685,17 @@ func hasToolSpec(specs []protocol.ToolSpec, name string) bool {
 		}
 	}
 	return false
+}
+
+func assertMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("%s mode = %o, want %o", path, got, want)
+	}
 }
 
 func TestAgentFakeStdioMCPServer(t *testing.T) {

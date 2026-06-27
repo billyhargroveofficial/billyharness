@@ -87,9 +87,13 @@ func parseMarkdownTableRow(line string) ([]string, bool) {
 	if !strings.Contains(trimmed, "|") {
 		return nil, false
 	}
-	trimmed = strings.TrimPrefix(trimmed, "|")
-	trimmed = strings.TrimSuffix(trimmed, "|")
-	cells := strings.Split(trimmed, "|")
+	cells := splitMarkdownTableCells(trimmed)
+	if len(cells) > 0 && strings.TrimSpace(cells[0]) == "" {
+		cells = cells[1:]
+	}
+	if len(cells) > 0 && strings.TrimSpace(cells[len(cells)-1]) == "" {
+		cells = cells[:len(cells)-1]
+	}
 	if len(cells) < 2 {
 		return nil, false
 	}
@@ -97,6 +101,37 @@ func parseMarkdownTableRow(line string) ([]string, bool) {
 		cells[i] = strings.TrimSpace(cells[i])
 	}
 	return cells, true
+}
+
+func splitMarkdownTableCells(line string) []string {
+	cells := []string{}
+	var cell strings.Builder
+	inCode := false
+	for i := 0; i < len(line); i++ {
+		switch line[i] {
+		case '\\':
+			if i+1 < len(line) && line[i+1] == '|' {
+				cell.WriteByte('|')
+				i++
+				continue
+			}
+			cell.WriteByte(line[i])
+		case '`':
+			inCode = !inCode
+			cell.WriteByte(line[i])
+		case '|':
+			if !inCode {
+				cells = append(cells, cell.String())
+				cell.Reset()
+				continue
+			}
+			cell.WriteByte(line[i])
+		default:
+			cell.WriteByte(line[i])
+		}
+	}
+	cells = append(cells, cell.String())
+	return cells
 }
 
 func isMarkdownTableSeparator(cells []string) bool {

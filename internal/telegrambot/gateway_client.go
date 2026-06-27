@@ -26,7 +26,7 @@ type GatewayClient struct {
 
 func NewGatewayClient(baseURL string) *GatewayClient {
 	return &GatewayClient{
-		BaseURL: strings.TrimRight(baseURL, "/"),
+		BaseURL: gateway.NormalizeBaseURL(baseURL),
 		Client:  &http.Client{Timeout: 0},
 	}
 }
@@ -36,12 +36,15 @@ func (c *GatewayClient) CreateSession(ctx context.Context, profile string) (stri
 	if err != nil {
 		return "", err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/sessions", bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.client().Do(req)
+	resp, err := gateway.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/sessions", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		gateway.SetAuthHeaderFromEnv(req)
+		return req, nil
+	})
 	if err != nil {
 		return "", err
 	}
@@ -67,12 +70,15 @@ func (c *GatewayClient) RunSession(ctx context.Context, sessionID string, run ga
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/sessions/"+sessionID+"/run", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.client().Do(req)
+	resp, err := gateway.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/sessions/"+sessionID+"/run", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		gateway.SetAuthHeaderFromEnv(req)
+		return req, nil
+	})
 	if err != nil {
 		return err
 	}
@@ -95,11 +101,14 @@ func (c *GatewayClient) RunSession(ctx context.Context, sessionID string, run ga
 }
 
 func (c *GatewayClient) MCPStatus(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/mcp", nil)
-	if err != nil {
-		return "", err
-	}
-	resp, err := c.client().Do(req)
+	resp, err := gateway.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/mcp", nil)
+		if err != nil {
+			return nil, err
+		}
+		gateway.SetAuthHeaderFromEnv(req)
+		return req, nil
+	})
 	if err != nil {
 		return "", err
 	}
