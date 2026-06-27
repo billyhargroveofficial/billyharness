@@ -42,6 +42,9 @@ func TestEventWriterRecordsContiguousEventsAndPayloadRefs(t *testing.T) {
 	if summary.Records != 2 || summary.FirstSeq != 1 || summary.LastSeq != 2 || summary.PayloadRefs != 1 {
 		t.Fatalf("summary = %#v", summary)
 	}
+	if summary.RunStarted != 1 || summary.ToolCallsFinished != 1 {
+		t.Fatalf("event counters = %#v", summary)
+	}
 
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	var second EventRecord
@@ -53,6 +56,50 @@ func TestEventWriterRecordsContiguousEventsAndPayloadRefs(t *testing.T) {
 	}
 	if _, err := os.Stat(second.PayloadRefs[0].Path); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
+	var out bytes.Buffer
+	writer := NewEventWriter("run-1", &out)
+	events := []protocol.Event{
+		{Type: protocol.EventRunStarted},
+		{Type: protocol.EventModelCallStarted},
+		{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
+			"input_tokens":      100,
+			"output_tokens":     7,
+			"cache_hit_tokens":  80,
+			"cache_miss_tokens": 20,
+		}},
+		{Type: protocol.EventContextCompacted},
+		{Type: protocol.EventToolCallStarted, Data: "time_now"},
+		{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{Name: "time_now", Content: "ok"}},
+		{Type: protocol.EventModelCallFinished},
+		{Type: protocol.EventRunCompleted},
+	}
+	for _, event := range events {
+		if _, err := writer.Record("task-1", event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	summary, err := ReplayEvents(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.RunStarted != 1 || summary.RunCompleted != 1 ||
+		summary.ModelCallsStarted != 1 || summary.ModelCallsFinished != 1 ||
+		summary.ToolCallsStarted != 1 || summary.ToolCallsFinished != 1 ||
+		summary.ContextCompactions != 1 {
+		t.Fatalf("event counters = %#v", summary)
+	}
+	if summary.InputTokens != 100 || summary.OutputTokens != 7 ||
+		summary.CacheHitTokens != 80 || summary.CacheMissTokens != 20 {
+		t.Fatalf("usage counters = %#v", summary)
 	}
 }
 

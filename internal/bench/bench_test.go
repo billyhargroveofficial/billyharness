@@ -361,6 +361,37 @@ func TestObserveCountsUsageToolErrorsAndNames(t *testing.T) {
 	}
 }
 
+func TestVerifyReplayAgainstResultsRejectsCounterMismatch(t *testing.T) {
+	results := []Result{{
+		ModelCalls:         2,
+		ToolCalls:          1,
+		ContextCompactions: 1,
+		InputTokens:        100,
+		OutputTokens:       8,
+		CacheHitTokens:     70,
+		CacheMissTokens:    30,
+	}}
+	replay := trace.ReplaySummary{
+		ModelCallsStarted:  2,
+		ToolCallsStarted:   1,
+		ToolCallsFinished:  1,
+		ContextCompactions: 1,
+		InputTokens:        100,
+		OutputTokens:       8,
+		CacheHitTokens:     70,
+		CacheMissTokens:    30,
+	}
+	if err := verifyReplayAgainstResults(replay, results); err != nil {
+		t.Fatalf("expected matching replay, got %v", err)
+	}
+
+	replay.ToolCallsFinished = 0
+	err := verifyReplayAgainstResults(replay, results)
+	if err == nil || !strings.Contains(err.Error(), "tool_calls_finished") {
+		t.Fatalf("expected tool_calls_finished mismatch, got %v", err)
+	}
+}
+
 func readTraceRecords(t *testing.T, path string) []trace.EventRecord {
 	t.Helper()
 	bytes, err := os.ReadFile(path)

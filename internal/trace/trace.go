@@ -193,13 +193,25 @@ func WriteManifest(path string, manifest Manifest) error {
 }
 
 type ReplaySummary struct {
-	RunID       string         `json:"run_id"`
-	Records     int            `json:"records"`
-	FirstSeq    int64          `json:"first_seq,omitempty"`
-	LastSeq     int64          `json:"last_seq,omitempty"`
-	PayloadRefs int            `json:"payload_refs,omitempty"`
-	EventTypes  map[string]int `json:"event_types"`
-	Tasks       map[string]int `json:"tasks"`
+	RunID              string         `json:"run_id"`
+	Records            int            `json:"records"`
+	FirstSeq           int64          `json:"first_seq,omitempty"`
+	LastSeq            int64          `json:"last_seq,omitempty"`
+	PayloadRefs        int            `json:"payload_refs,omitempty"`
+	EventTypes         map[string]int `json:"event_types"`
+	Tasks              map[string]int `json:"tasks"`
+	RunStarted         int            `json:"run_started,omitempty"`
+	RunCompleted       int            `json:"run_completed,omitempty"`
+	RunFailed          int            `json:"run_failed,omitempty"`
+	ModelCallsStarted  int            `json:"model_calls_started,omitempty"`
+	ModelCallsFinished int            `json:"model_calls_finished,omitempty"`
+	ToolCallsStarted   int            `json:"tool_calls_started,omitempty"`
+	ToolCallsFinished  int            `json:"tool_calls_finished,omitempty"`
+	ContextCompactions int            `json:"context_compactions,omitempty"`
+	InputTokens        int64          `json:"input_tokens,omitempty"`
+	OutputTokens       int64          `json:"output_tokens,omitempty"`
+	CacheHitTokens     int64          `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens    int64          `json:"cache_miss_tokens,omitempty"`
 }
 
 func ReplayEvents(path string) (ReplaySummary, error) {
@@ -244,10 +256,76 @@ func ReplayEvents(path string) (ReplaySummary, error) {
 			summary.Tasks[record.TaskID]++
 		}
 		summary.PayloadRefs += len(record.PayloadRefs)
+		if err := summary.observe(record); err != nil {
+			return summary, fmt.Errorf("%s:%d %w", path, lineNo, err)
+		}
 		expectedSeq++
 	}
 	if err := scanner.Err(); err != nil {
 		return summary, err
 	}
 	return summary, nil
+}
+
+func (s *ReplaySummary) observe(record EventRecord) error {
+	switch protocol.EventType(record.EventType) {
+	case protocol.EventRunStarted:
+		s.RunStarted++
+	case protocol.EventRunCompleted:
+		s.RunCompleted++
+	case protocol.EventRunFailed:
+		s.RunFailed++
+	case protocol.EventModelCallStarted:
+		s.ModelCallsStarted++
+	case protocol.EventModelCallFinished:
+		s.ModelCallsFinished++
+	case protocol.EventToolCallStarted:
+		s.ToolCallsStarted++
+	case protocol.EventToolCallFinished:
+		s.ToolCallsFinished++
+	case protocol.EventContextCompacted:
+		s.ContextCompactions++
+	case protocol.EventProviderUsageUpdate:
+		usage, err := usageFromEvent(record.Event)
+		if err != nil {
+			return err
+		}
+		s.InputTokens += usage.InputTokens
+		s.OutputTokens += usage.OutputTokens
+		s.CacheHitTokens += usage.CacheHitTokens
+		s.CacheMissTokens += usage.CacheMissTokens
+	}
+	return nil
+}
+
+type replayUsage struct {
+	InputTokens     int64 `json:"input_tokens"`
+	OutputTokens    int64 `json:"output_tokens"`
+	CacheHitTokens  int64 `json:"cache_hit_tokens"`
+	CacheMissTokens int64 `json:"cache_miss_tokens"`
+}
+
+func usageFromEvent(value any) (replayUsage, error) {
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return replayUsage{}, fmt.Errorf("invalid provider usage event: %w", err)
+	}
+	var event struct {
+		Type protocol.EventType `json:"type"`
+		Data json.RawMessage    `json:"data"`
+	}
+	if err := json.Unmarshal(bytes, &event); err != nil {
+		return replayUsage{}, fmt.Errorf("invalid provider usage event: %w", err)
+	}
+	if event.Type != "" && event.Type != protocol.EventProviderUsageUpdate {
+		return replayUsage{}, fmt.Errorf("invalid provider usage event type %q", event.Type)
+	}
+	if len(event.Data) == 0 {
+		return replayUsage{}, fmt.Errorf("provider usage event missing data")
+	}
+	var usage replayUsage
+	if err := json.Unmarshal(event.Data, &usage); err != nil {
+		return replayUsage{}, fmt.Errorf("invalid provider usage data: %w", err)
+	}
+	return usage, nil
 }

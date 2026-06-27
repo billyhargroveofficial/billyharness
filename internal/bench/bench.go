@@ -153,8 +153,10 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 		PayloadsDir:  payloadsDir,
 	}
 	startAll := time.Now()
+	results := make([]Result, 0, len(tasks))
 	for _, task := range tasks {
 		result := runTask(ctx, cfg, rc, runID, task, eventWriter)
+		results = append(results, result)
 		if err := encodeRedactedJSON(resultEnc, result); err != nil {
 			return summary, err
 		}
@@ -183,6 +185,9 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 		summary.PassRate = float64(summary.Passed) / float64(summary.Total)
 	}
 	if replay, err := trace.ReplayEvents(eventsPath); err == nil && replay.Records > 0 {
+		if err := verifyReplayAgainstResults(replay, results); err != nil {
+			return summary, err
+		}
 		summary.ReplayVerified = true
 	} else if err != nil {
 		return summary, err
@@ -201,6 +206,65 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 		return summary, err
 	}
 	return summary, nil
+}
+
+type replayExpectations struct {
+	ModelCalls         int
+	ToolCalls          int
+	ContextCompactions int
+	InputTokens        int64
+	OutputTokens       int64
+	CacheHitTokens     int64
+	CacheMissTokens    int64
+}
+
+func verifyReplayAgainstResults(replay trace.ReplaySummary, results []Result) error {
+	expected := replayExpectationsFromResults(results)
+	intChecks := []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"model_calls_started", replay.ModelCallsStarted, expected.ModelCalls},
+		{"tool_calls_started", replay.ToolCallsStarted, expected.ToolCalls},
+		{"tool_calls_finished", replay.ToolCallsFinished, expected.ToolCalls},
+		{"context_compactions", replay.ContextCompactions, expected.ContextCompactions},
+	}
+	for _, check := range intChecks {
+		if check.got != check.want {
+			return fmt.Errorf("trace replay mismatch %s: events=%d results=%d", check.name, check.got, check.want)
+		}
+	}
+	int64Checks := []struct {
+		name string
+		got  int64
+		want int64
+	}{
+		{"input_tokens", replay.InputTokens, expected.InputTokens},
+		{"output_tokens", replay.OutputTokens, expected.OutputTokens},
+		{"cache_hit_tokens", replay.CacheHitTokens, expected.CacheHitTokens},
+		{"cache_miss_tokens", replay.CacheMissTokens, expected.CacheMissTokens},
+	}
+	for _, check := range int64Checks {
+		if check.got != check.want {
+			return fmt.Errorf("trace replay mismatch %s: events=%d results=%d", check.name, check.got, check.want)
+		}
+	}
+	return nil
+}
+
+func replayExpectationsFromResults(results []Result) replayExpectations {
+	var expected replayExpectations
+	for _, result := range results {
+		expected.ModelCalls += result.ModelCalls
+		expected.ToolCalls += result.ToolCalls
+		expected.ContextCompactions += result.ContextCompactions
+		expected.InputTokens += result.InputTokens
+		expected.OutputTokens += result.OutputTokens
+		expected.CacheHitTokens += result.CacheHitTokens
+		expected.CacheMissTokens += result.CacheMissTokens
+	}
+	return expected
 }
 
 func applyRunConfig(cfg config.Config, rc RunConfig) config.Config {
