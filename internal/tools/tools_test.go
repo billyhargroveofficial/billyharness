@@ -416,6 +416,42 @@ func TestCompactFetchedPageLimitsDefaultOutput(t *testing.T) {
 	}
 }
 
+func TestWebCompactionDefaultsStaySmall(t *testing.T) {
+	page := fetchedPage{
+		URL:   "https://example.com",
+		Title: "Example",
+		Text:  strings.Repeat("Alpha beta gamma delta. ", 2000),
+	}
+	fetched := compactFetchedPage(page, webFetchOptions{})
+	if fetched.BudgetTextTokens != webDefaultTextTokens {
+		t.Fatalf("fetch default token budget = %d", fetched.BudgetTextTokens)
+	}
+	if webDefaultTextTokens != 900 {
+		t.Fatalf("webDefaultTextTokens = %d", webDefaultTextTokens)
+	}
+	if fetched.BudgetTextChars != 3600 || fetched.EstimatedTextTokens > 960 {
+		t.Fatalf("fetch default returned too much: %#v", fetched)
+	}
+
+	crawled := compactCrawlPages([]crawlPage{{
+		URL:   "https://example.com",
+		Title: "Example",
+		Text:  page.Text,
+	}}, webFetchOptions{})
+	if len(crawled) != 1 {
+		t.Fatalf("crawl pages = %d", len(crawled))
+	}
+	if crawled[0].BudgetTextTokens != webCrawlDefaultTokens {
+		t.Fatalf("crawl default token budget = %d", crawled[0].BudgetTextTokens)
+	}
+	if webCrawlDefaultTokens != 600 {
+		t.Fatalf("webCrawlDefaultTokens = %d", webCrawlDefaultTokens)
+	}
+	if crawled[0].EstimatedTextTokens > 660 {
+		t.Fatalf("crawl default returned too much: %#v", crawled[0])
+	}
+}
+
 func TestCompactFetchedPageHonorsTokenBudgetEvenForFullText(t *testing.T) {
 	text := strings.Repeat("Alpha beta gamma. ", 2000)
 	page := fetchedPage{

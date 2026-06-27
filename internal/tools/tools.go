@@ -28,11 +28,11 @@ const (
 	webTextChars             = 6 * 1024
 	webFullTextChars         = 24 * 1024
 	webHardTextChars         = 24 * 1024
-	webDefaultTextTokens     = 1800
+	webDefaultTextTokens     = 900
 	webMaxTextTokens         = 8000
 	webCrawlChars            = 3 * 1024
-	webCrawlDefaultTokens    = 900
-	webCrawlDefaultTotalToks = 4000
+	webCrawlDefaultTokens    = 600
+	webCrawlDefaultTotalToks = 2500
 	webCrawlMaxTotalToks     = 12000
 	webMaxLinks              = 20
 	maxWriteBytes            = 2 * 1024 * 1024
@@ -509,7 +509,7 @@ func (r *Registry) addWebFetch() {
 		Spec: protocol.ToolSpec{
 			Name:        "web_fetch",
 			Description: "Fetch a public HTTP(S) URL and return an extractive summary, capped text, and links. Use max_tokens/max_chars to control context cost. Set full_text only when exact page text is required; output is still capped.",
-			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"max_bytes":{"type":"integer","default":65536},"max_tokens":{"type":"integer","default":1800,"description":"Approximate output token budget for extracted text."},"max_chars":{"type":"integer","description":"Maximum extracted text characters returned; combined with max_tokens by taking the smaller budget."},"full_text":{"type":"boolean","default":false},"max_links":{"type":"integer","default":20}},"required":["url"],"additionalProperties":false}`),
+			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"max_bytes":{"type":"integer","default":65536},"max_tokens":{"type":"integer","default":900,"description":"Approximate output token budget for extracted text."},"max_chars":{"type":"integer","description":"Maximum extracted text characters returned; combined with max_tokens by taking the smaller budget."},"full_text":{"type":"boolean","default":false},"max_links":{"type":"integer","default":20}},"required":["url"],"additionalProperties":false}`),
 			Risk:        protocol.RiskNetwork,
 		},
 		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
@@ -577,7 +577,7 @@ func (r *Registry) addWebCrawl() {
 		Spec: protocol.ToolSpec{
 			Name:        "web_crawl",
 			Description: "Crawl public HTTP(S) pages breadth-first and return compact summaries plus capped text. max_total_tokens bounds total returned crawl text.",
-			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"max_pages":{"type":"integer","default":3},"max_depth":{"type":"integer","default":1},"same_host":{"type":"boolean","default":true},"max_bytes_per_page":{"type":"integer","default":65536},"max_tokens_per_page":{"type":"integer","default":900},"max_total_tokens":{"type":"integer","default":4000},"max_chars_per_page":{"type":"integer","description":"Maximum extracted text characters per page; combined with token budgets by taking the smaller budget."},"full_text":{"type":"boolean","default":false}},"required":["url"],"additionalProperties":false}`),
+			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"max_pages":{"type":"integer","default":3},"max_depth":{"type":"integer","default":1},"same_host":{"type":"boolean","default":true},"max_bytes_per_page":{"type":"integer","default":65536},"max_tokens_per_page":{"type":"integer","default":600},"max_total_tokens":{"type":"integer","default":2500},"max_chars_per_page":{"type":"integer","description":"Maximum extracted text characters per page; combined with token budgets by taking the smaller budget."},"full_text":{"type":"boolean","default":false}},"required":["url"],"additionalProperties":false}`),
 			Risk:        protocol.RiskNetwork,
 		},
 		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
