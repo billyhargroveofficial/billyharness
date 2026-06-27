@@ -8,8 +8,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	xansi "github.com/charmbracelet/x/ansi"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
@@ -545,6 +547,35 @@ func TestTranscriptSelectionHighlightsCorrectStyledLine(t *testing.T) {
 	}
 }
 
+func TestTranscriptSelectionHighlightMatchesSelectedGraphemes(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.height = 10
+	line := "\x1b[90mmeta\x1b[m привет 🏳️‍🌈 中 done"
+	target := "привет 🏳️‍🌈 中"
+	visible := xansi.Strip(line)
+	startByte := strings.Index(visible, target)
+	if startByte < 0 {
+		t.Fatalf("test target missing from %q", visible)
+	}
+	startCol := xansi.StringWidth(visible[:startByte])
+	endCol := startCol + xansi.StringWidth(target)
+	m.viewportContent = line
+	m.viewport.SetWidth(m.width)
+	m.viewport.SetHeight(m.height)
+	m.viewport.SetContent(line)
+	m.selectStart = selectionPoint{row: 0, col: startCol}
+	m.selectEnd = selectionPoint{row: 0, col: endCol}
+
+	if got := m.selectedTranscriptText(); got != target {
+		t.Fatalf("selected text = %q, want %q", got, target)
+	}
+	highlighted := m.selectionHighlightedContent()
+	if got := selectionBackgroundText(highlighted); got != target {
+		t.Fatalf("highlighted selection = %q, want %q; rendered=%q", got, target, highlighted)
+	}
+}
+
 func TestSlashPopupCompletesCommand(t *testing.T) {
 	m := newTestModel(t)
 	m.textarea.SetValue("/the")
@@ -829,4 +860,42 @@ func newTestModel(t *testing.T) Model {
 
 func stripANSITest(text string) string {
 	return regexp.MustCompile(`\x1b\[[0-9;:]*[A-Za-z]`).ReplaceAllString(text, "")
+}
+
+func selectionBackgroundText(text string) string {
+	var out strings.Builder
+	selected := false
+	for i := 0; i < len(text); {
+		if text[i] == '\x1b' {
+			end := i + 1
+			if end < len(text) && text[end] == '[' {
+				end++
+			}
+			for end < len(text) && (text[end] < '@' || text[end] > '~') {
+				end++
+			}
+			if end < len(text) {
+				seq := text[i : end+1]
+				if strings.HasSuffix(seq, "m") {
+					if seq == "\x1b[m" || strings.Contains(seq, "[0") {
+						selected = false
+					}
+					if strings.Contains(seq, "48;2;255;209;102") {
+						selected = true
+					}
+				}
+				i = end + 1
+				continue
+			}
+		}
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if r == utf8.RuneError && size == 0 {
+			break
+		}
+		if selected {
+			out.WriteRune(r)
+		}
+		i += size
+	}
+	return out.String()
 }

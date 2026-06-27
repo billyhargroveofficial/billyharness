@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
@@ -165,6 +166,7 @@ type tickMsg time.Time
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 const defaultTextareaPlaceholder = "Message billyharness. Type / for commands."
+const osc52MaxBytes = 100 * 1024
 
 func Run(opts Options) error {
 	cfg := config.Default()
@@ -3292,13 +3294,20 @@ func byteOffsetForDisplayCol(line string, col int) int {
 	if col <= 0 {
 		return 0
 	}
+	line = xansi.Strip(line)
 	width := 0
-	for idx, r := range line {
-		w := lipgloss.Width(string(r))
-		if width+w > col {
-			return idx
+	offset := 0
+	for offset < len(line) {
+		cluster, w := xansi.FirstGraphemeCluster(line[offset:], xansi.GraphemeWidth)
+		if cluster == "" {
+			break
 		}
-		width += max(1, w)
+		clusterWidth := max(1, w)
+		if width+clusterWidth > col {
+			return offset
+		}
+		width += clusterWidth
+		offset += len(cluster)
 	}
 	return len(line)
 }
@@ -3314,11 +3323,29 @@ func copySelectionCmd(text string) tea.Cmd {
 	return func() tea.Msg {
 		if err := clipboard.WriteAll(text); err == nil {
 			return clipboardCopiedMsg{chars: len([]rune(text)), method: "clipboard"}
-		} else if oscErr := writeOSC52(text); oscErr != nil {
+		} else if oscText := trimUTF8Bytes(text, osc52MaxBytes); oscText == "" {
+			return clipboardCopiedMsg{chars: 0, err: err.Error() + "; osc52: selection too large or empty"}
+		} else if oscErr := writeOSC52(oscText); oscErr != nil {
 			return clipboardCopiedMsg{chars: len([]rune(text)), err: err.Error() + "; osc52: " + oscErr.Error()}
+		} else if len(oscText) < len(text) {
+			return clipboardCopiedMsg{chars: len([]rune(oscText)), method: "osc52 truncated"}
 		}
 		return clipboardCopiedMsg{chars: len([]rune(text)), method: "osc52"}
 	}
+}
+
+func trimUTF8Bytes(text string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(text) <= maxBytes {
+		return text
+	}
+	text = text[:maxBytes]
+	for len(text) > 0 && !utf8.ValidString(text) {
+		text = text[:len(text)-1]
+	}
+	return text
 }
 
 func writeOSC52(text string) error {
