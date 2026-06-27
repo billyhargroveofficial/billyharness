@@ -28,6 +28,7 @@ type Config struct {
 	ReasoningEffort        string
 	MaxTokens              int
 	MaxToolRounds          int
+	MaxParallelTools       int
 	ContextCompactTokens   int
 	ContextCompactKeep     int
 	ContextCompactMaxChars int
@@ -84,6 +85,7 @@ func Default() Config {
 		ReasoningEffort:        env("DEEPSEEK_REASONING_EFFORT", "high"),
 		MaxTokens:              envInt("FAST_AGENT_MAX_TOKENS", 8192),
 		MaxToolRounds:          envInt("FAST_AGENT_MAX_TOOL_ROUNDS", 100),
+		MaxParallelTools:       envInt("FAST_AGENT_MAX_PARALLEL_TOOLS", 4),
 		ContextCompactTokens:   envInt("FAST_AGENT_CONTEXT_COMPACT_TOKENS", 600_000),
 		ContextCompactKeep:     envInt("FAST_AGENT_CONTEXT_COMPACT_KEEP", 32),
 		ContextCompactMaxChars: envInt("FAST_AGENT_CONTEXT_COMPACT_MAX_CHARS", 120_000),

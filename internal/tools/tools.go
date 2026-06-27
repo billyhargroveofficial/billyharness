@@ -150,14 +150,32 @@ func (r *Registry) Specs() []protocol.ToolSpec {
 }
 
 func (r *Registry) Call(ctx context.Context, call protocol.ToolCall) (Result, error) {
-	tool, ok := r.tools[call.Name]
-	if !ok {
-		tool, ok = r.mcpTools[call.Name]
-	}
+	tool, ok := r.lookup(call.Name)
 	if !ok {
 		return Result{}, fmt.Errorf("unknown tool %s", call.Name)
 	}
 	return tool.Handler(ctx, call.Arguments)
+}
+
+func (r *Registry) CanRunParallel(name string) bool {
+	tool, ok := r.lookup(name)
+	if !ok {
+		return false
+	}
+	switch tool.Spec.Risk {
+	case protocol.RiskReadOnly, protocol.RiskNetwork:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *Registry) lookup(name string) (Tool, bool) {
+	tool, ok := r.tools[name]
+	if !ok {
+		tool, ok = r.mcpTools[name]
+	}
+	return tool, ok
 }
 
 func (r *Registry) add(tool Tool) {

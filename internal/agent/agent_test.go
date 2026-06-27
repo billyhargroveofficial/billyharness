@@ -290,6 +290,87 @@ func TestRunMessagesExecutesToolAndContinuesLoop(t *testing.T) {
 	}
 }
 
+func TestRunMessagesExecutesParallelSafeToolsConcurrentlyAndPreservesOrder(t *testing.T) {
+	cfg := config.Default()
+	cfg.MaxToolRounds = 3
+	cfg.MaxParallelTools = 2
+	registry := tools.NewRegistry(cfg)
+	startedA := make(chan struct{})
+	startedB := make(chan struct{})
+	if err := registry.Register(tools.Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "slow_a",
+			Description: "Wait for slow_b.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+			Risk:        protocol.RiskReadOnly,
+		},
+		Handler: func(ctx context.Context, _ json.RawMessage) (tools.Result, error) {
+			close(startedA)
+			select {
+			case <-startedB:
+				return tools.Result{Content: "A"}, nil
+			case <-ctx.Done():
+				return tools.Result{}, ctx.Err()
+			}
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(tools.Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "slow_b",
+			Description: "Wait for slow_a.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+			Risk:        protocol.RiskReadOnly,
+		},
+		Handler: func(ctx context.Context, _ json.RawMessage) (tools.Result, error) {
+			close(startedB)
+			select {
+			case <-startedA:
+				return tools.Result{Content: "B"}, nil
+			case <-ctx.Done():
+				return tools.Result{}, ctx.Err()
+			}
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_a", ToolName: "slow_a", ArgsDelta: `{}`},
+			{Kind: provider.EventToolCallDelta, ToolIndex: 1, ToolID: "call_b", ToolName: "slow_b", ArgsDelta: `{}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "finished"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	a := New(cfg, prov, registry)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	next, err := a.RunMessages(ctx, []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "run tools"},
+	}, func(protocol.Event) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var toolMessages []protocol.Message
+	for _, msg := range next {
+		if msg.Role == protocol.RoleTool && (msg.Name == "slow_a" || msg.Name == "slow_b") {
+			toolMessages = append(toolMessages, msg)
+		}
+	}
+	if len(toolMessages) != 2 {
+		t.Fatalf("tool messages = %#v", toolMessages)
+	}
+	if toolMessages[0].Name != "slow_a" || toolMessages[0].Content != "A" ||
+		toolMessages[1].Name != "slow_b" || toolMessages[1].Content != "B" {
+		t.Fatalf("tool message order/content = %#v", toolMessages)
+	}
+}
+
 func TestRunMessagesExecutesMCPToolAndContinuesLoop(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Default()

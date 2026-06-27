@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/instructions"
@@ -106,25 +107,106 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 			ReasoningContent: optionalReasoning(a.cfg, reasoning),
 			ToolCalls:        calls,
 		})
-		for _, call := range calls {
-			emit(protocol.Event{Type: protocol.EventToolCallRequested, Data: call})
-			emit(protocol.Event{Type: protocol.EventToolCallStarted, Data: call.Name})
-			result, err := a.tools.Call(ctx, call)
-			if err != nil {
-				result.Content = "tool error: " + err.Error()
-			}
-			emit(protocol.Event{Type: protocol.EventToolCallFinished, Data: result.Content})
+		results := a.executeToolCalls(ctx, calls, emit)
+		for _, result := range results {
 			messages = append(messages, protocol.Message{
 				Role:       protocol.RoleTool,
 				Content:    result.Content,
-				ToolCallID: call.ID,
-				Name:       call.Name,
+				ToolCallID: result.Call.ID,
+				Name:       result.Call.Name,
 			})
 		}
 	}
 	err := fmt.Errorf("exceeded max tool rounds: %d", a.cfg.MaxToolRounds)
 	emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
 	return messages, err
+}
+
+type toolExecutionResult struct {
+	Index   int
+	Call    protocol.ToolCall
+	Content string
+}
+
+func (a *Agent) executeToolCalls(ctx context.Context, calls []protocol.ToolCall, emit func(protocol.Event)) []toolExecutionResult {
+	results := make([]toolExecutionResult, len(calls))
+	for _, call := range calls {
+		emit(protocol.Event{Type: protocol.EventToolCallRequested, Data: call})
+	}
+	for i := 0; i < len(calls); {
+		if !a.canRunToolParallel(calls[i]) {
+			results[i] = a.executeOneTool(ctx, i, calls[i], emit)
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(calls) && a.canRunToolParallel(calls[j]) {
+			j++
+		}
+		a.executeParallelToolBatch(ctx, calls, i, j, results, emit)
+		i = j
+	}
+	return results
+}
+
+func (a *Agent) executeParallelToolBatch(ctx context.Context, calls []protocol.ToolCall, start, end int, results []toolExecutionResult, emit func(protocol.Event)) {
+	limit := a.cfg.MaxParallelTools
+	if limit <= 1 || end-start == 1 {
+		for i := start; i < end; i++ {
+			results[i] = a.executeOneTool(ctx, i, calls[i], emit)
+		}
+		return
+	}
+	if limit > end-start {
+		limit = end - start
+	}
+	for i := start; i < end; i++ {
+		emit(protocol.Event{Type: protocol.EventToolCallStarted, Data: calls[i].Name})
+	}
+	jobs := make(chan int)
+	done := make(chan toolExecutionResult, end-start)
+	var wg sync.WaitGroup
+	for worker := 0; worker < limit; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				done <- a.callTool(ctx, idx, calls[idx])
+			}
+		}()
+	}
+	go func() {
+		for i := start; i < end; i++ {
+			jobs <- i
+		}
+		close(jobs)
+		wg.Wait()
+		close(done)
+	}()
+	for result := range done {
+		results[result.Index] = result
+		emit(protocol.Event{Type: protocol.EventToolCallFinished, Data: result.Content})
+	}
+}
+
+func (a *Agent) executeOneTool(ctx context.Context, index int, call protocol.ToolCall, emit func(protocol.Event)) toolExecutionResult {
+	emit(protocol.Event{Type: protocol.EventToolCallStarted, Data: call.Name})
+	result := a.callTool(ctx, index, call)
+	emit(protocol.Event{Type: protocol.EventToolCallFinished, Data: result.Content})
+	return result
+}
+
+func (a *Agent) callTool(ctx context.Context, index int, call protocol.ToolCall) toolExecutionResult {
+	result, err := a.tools.Call(ctx, call)
+	content := result.Content
+	if err != nil {
+		content = "tool error: " + err.Error()
+	}
+	return toolExecutionResult{Index: index, Call: call, Content: content}
+}
+
+func (a *Agent) canRunToolParallel(call protocol.ToolCall) bool {
+	return a != nil && a.tools != nil && a.cfg.MaxParallelTools > 1 && a.tools.CanRunParallel(call.Name)
 }
 
 func (a *Agent) withMCPInstructions(messages []protocol.Message) []protocol.Message {
