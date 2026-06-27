@@ -58,6 +58,44 @@ func TestRunEvaluatorFailure(t *testing.T) {
 	}
 }
 
+func TestRunMockScriptedLoopCountsRoundsAndCompactions(t *testing.T) {
+	root := t.TempDir()
+	tasksPath := filepath.Join(root, "tasks.jsonl")
+	line := `{"id":"stress-1","suite":"agent-loop-stress","prompt":"run scripted loop","scripted_tool_rounds":5,"context_compact_tokens":50,"context_compact_keep":2}` + "\n"
+	if err := os.WriteFile(tasksPath, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.MaxToolRounds = 10
+	summary, err := Run(context.Background(), cfg, RunConfig{TasksPath: tasksPath, OutDir: filepath.Join(root, "runs"), Mock: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Total != 1 || summary.Passed != 1 {
+		t.Fatalf("summary = %#v", summary)
+	}
+	if summary.ModelCalls != 6 || summary.ToolCalls != 5 {
+		t.Fatalf("calls = model %d tools %d, want 6/5", summary.ModelCalls, summary.ToolCalls)
+	}
+	if summary.ContextCompactions == 0 {
+		t.Fatalf("expected compactions in summary: %#v", summary)
+	}
+	events, err := os.ReadFile(summary.EventsJSONL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(events), string(protocol.EventContextCompacted)) {
+		t.Fatalf("events missing context.compacted: %s", events)
+	}
+	results, err := os.ReadFile(summary.ResultsJSONL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(results), `"context_compactions":`) {
+		t.Fatalf("results missing context compaction count: %s", results)
+	}
+}
+
 func TestApplyRunConfigSelectsProviderAfterModelOverride(t *testing.T) {
 	cfg := config.Config{Provider: "deepseek", Model: "deepseek-v4-flash"}
 	got := applyRunConfig(cfg, RunConfig{Model: "gpt-5.5"})

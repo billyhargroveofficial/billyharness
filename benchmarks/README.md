@@ -72,6 +72,19 @@ Example smoke run:
   -dangerous
 ```
 
+Fast deterministic 75-round agent loop and compaction stress, no API spend:
+
+```bash
+./bin/fast-agent-harness bench run \
+  -mock \
+  -tasks benchmarks/agent-loop-stress/tasks.jsonl \
+  -out bench-runs/agent-loop-stress \
+  -max-rounds 100 \
+  -timeout-sec 120
+```
+
+This uses a scripted mock provider that emits real tool calls through the normal agent loop, writes normal events/results JSONL, and forces context compaction with a low task-local threshold.
+
 ## Local Checks Performed
 
 Terminal-Bench infrastructure smoke:

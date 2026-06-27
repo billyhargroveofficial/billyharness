@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/agent"
@@ -21,67 +22,83 @@ import (
 )
 
 type Task struct {
-	ID                string     `json:"id"`
-	Suite             string     `json:"suite"`
-	Prompt            string     `json:"prompt"`
-	Workspace         string     `json:"workspace,omitempty"`
-	WorkspaceTemplate string     `json:"workspace_template,omitempty"`
-	Setup             [][]string `json:"setup,omitempty"`
-	Evaluator         []string   `json:"evaluator,omitempty"`
-	TimeoutSeconds    int        `json:"timeout_seconds,omitempty"`
-	Tags              []string   `json:"tags,omitempty"`
+	ID                     string     `json:"id"`
+	Suite                  string     `json:"suite"`
+	Prompt                 string     `json:"prompt"`
+	Workspace              string     `json:"workspace,omitempty"`
+	WorkspaceTemplate      string     `json:"workspace_template,omitempty"`
+	Setup                  [][]string `json:"setup,omitempty"`
+	Evaluator              []string   `json:"evaluator,omitempty"`
+	TimeoutSeconds         int        `json:"timeout_seconds,omitempty"`
+	Tags                   []string   `json:"tags,omitempty"`
+	ScriptedToolRounds     int        `json:"scripted_tool_rounds,omitempty"`
+	ScriptedToolName       string     `json:"scripted_tool_name,omitempty"`
+	ScriptedToolArgs       string     `json:"scripted_tool_args,omitempty"`
+	ContextCompactTokens   int        `json:"context_compact_tokens,omitempty"`
+	ContextCompactKeep     int        `json:"context_compact_keep,omitempty"`
+	ContextCompactMaxChars int        `json:"context_compact_max_chars,omitempty"`
 }
 
 type RunConfig struct {
-	TasksPath string
-	OutDir    string
-	Limit     int
-	Mock      bool
-	Model     string
-	Timeout   time.Duration
+	TasksPath              string
+	OutDir                 string
+	Limit                  int
+	Mock                   bool
+	Model                  string
+	Timeout                time.Duration
+	ScriptedToolRounds     int
+	ContextCompactTokens   int
+	ContextCompactKeep     int
+	ContextCompactMaxChars int
 }
 
 type Result struct {
-	RunID            string         `json:"run_id"`
-	TaskID           string         `json:"task_id"`
-	TaskSuite        string         `json:"task_suite"`
-	Model            string         `json:"model"`
-	Harness          string         `json:"harness"`
-	PromptHash       string         `json:"prompt_hash"`
-	Workspace        string         `json:"workspace,omitempty"`
-	Tags             []string       `json:"tags,omitempty"`
-	Outcome          string         `json:"outcome"`
-	WallTimeMS       int64          `json:"wall_time_ms"`
-	ModelCalls       int            `json:"model_calls"`
-	ToolCalls        int            `json:"tool_calls"`
-	ToolCallsByName  map[string]int `json:"tool_calls_by_name,omitempty"`
-	ToolErrors       int            `json:"tool_errors"`
-	InputTokens      int64          `json:"input_tokens,omitempty"`
-	OutputTokens     int64          `json:"output_tokens,omitempty"`
-	CacheHitTokens   int64          `json:"cache_hit_tokens,omitempty"`
-	CacheMissTokens  int64          `json:"cache_miss_tokens,omitempty"`
-	EvaluatorTimeMS  int64          `json:"evaluator_time_ms,omitempty"`
-	EvaluatorCommand []string       `json:"evaluator_command,omitempty"`
-	EvaluatorOutput  string         `json:"evaluator_output,omitempty"`
-	Error            string         `json:"error,omitempty"`
+	RunID                 string         `json:"run_id"`
+	TaskID                string         `json:"task_id"`
+	TaskSuite             string         `json:"task_suite"`
+	Model                 string         `json:"model"`
+	Harness               string         `json:"harness"`
+	PromptHash            string         `json:"prompt_hash"`
+	Workspace             string         `json:"workspace,omitempty"`
+	Tags                  []string       `json:"tags,omitempty"`
+	Outcome               string         `json:"outcome"`
+	WallTimeMS            int64          `json:"wall_time_ms"`
+	ModelCalls            int            `json:"model_calls"`
+	ToolCalls             int            `json:"tool_calls"`
+	ToolCallsByName       map[string]int `json:"tool_calls_by_name,omitempty"`
+	ToolErrors            int            `json:"tool_errors"`
+	InputTokens           int64          `json:"input_tokens,omitempty"`
+	OutputTokens          int64          `json:"output_tokens,omitempty"`
+	CacheHitTokens        int64          `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens       int64          `json:"cache_miss_tokens,omitempty"`
+	ContextCompactions    int            `json:"context_compactions,omitempty"`
+	ToolOutputTruncations int            `json:"tool_output_truncations,omitempty"`
+	ToolOutputRefs        int            `json:"tool_output_refs,omitempty"`
+	EvaluatorTimeMS       int64          `json:"evaluator_time_ms,omitempty"`
+	EvaluatorCommand      []string       `json:"evaluator_command,omitempty"`
+	EvaluatorOutput       string         `json:"evaluator_output,omitempty"`
+	Error                 string         `json:"error,omitempty"`
 }
 
 type Summary struct {
-	Total           int     `json:"total"`
-	Passed          int     `json:"passed"`
-	Failed          int     `json:"failed"`
-	Timeouts        int     `json:"timeouts"`
-	Crashes         int     `json:"crashes"`
-	PassRate        float64 `json:"pass_rate"`
-	WallTimeMS      int64   `json:"wall_time_ms"`
-	ModelCalls      int     `json:"model_calls"`
-	ToolCalls       int     `json:"tool_calls"`
-	InputTokens     int64   `json:"input_tokens,omitempty"`
-	OutputTokens    int64   `json:"output_tokens,omitempty"`
-	CacheHitTokens  int64   `json:"cache_hit_tokens,omitempty"`
-	CacheMissTokens int64   `json:"cache_miss_tokens,omitempty"`
-	ResultsJSONL    string  `json:"results_jsonl"`
-	EventsJSONL     string  `json:"events_jsonl"`
+	Total                 int     `json:"total"`
+	Passed                int     `json:"passed"`
+	Failed                int     `json:"failed"`
+	Timeouts              int     `json:"timeouts"`
+	Crashes               int     `json:"crashes"`
+	PassRate              float64 `json:"pass_rate"`
+	WallTimeMS            int64   `json:"wall_time_ms"`
+	ModelCalls            int     `json:"model_calls"`
+	ToolCalls             int     `json:"tool_calls"`
+	InputTokens           int64   `json:"input_tokens,omitempty"`
+	OutputTokens          int64   `json:"output_tokens,omitempty"`
+	CacheHitTokens        int64   `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens       int64   `json:"cache_miss_tokens,omitempty"`
+	ContextCompactions    int     `json:"context_compactions,omitempty"`
+	ToolOutputTruncations int     `json:"tool_output_truncations,omitempty"`
+	ToolOutputRefs        int     `json:"tool_output_refs,omitempty"`
+	ResultsJSONL          string  `json:"results_jsonl"`
+	EventsJSONL           string  `json:"events_jsonl"`
 }
 
 func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) {
@@ -128,6 +145,9 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 		summary.OutputTokens += result.OutputTokens
 		summary.CacheHitTokens += result.CacheHitTokens
 		summary.CacheMissTokens += result.CacheMissTokens
+		summary.ContextCompactions += result.ContextCompactions
+		summary.ToolOutputTruncations += result.ToolOutputTruncations
+		summary.ToolOutputRefs += result.ToolOutputRefs
 		switch result.Outcome {
 		case "pass":
 			summary.Passed++
@@ -153,6 +173,15 @@ func applyRunConfig(cfg config.Config, rc RunConfig) config.Config {
 	}
 	if rc.Model != "" {
 		cfg.Model = rc.Model
+	}
+	if rc.ContextCompactTokens > 0 {
+		cfg.ContextCompactTokens = rc.ContextCompactTokens
+	}
+	if rc.ContextCompactKeep > 0 {
+		cfg.ContextCompactKeep = rc.ContextCompactKeep
+	}
+	if rc.ContextCompactMaxChars > 0 {
+		cfg.ContextCompactMaxChars = rc.ContextCompactMaxChars
 	}
 	cfg.ApplyModelProviderDefaults()
 	return cfg
@@ -203,6 +232,7 @@ func runTask(parent context.Context, cfg config.Config, rc RunConfig, runID stri
 	workspace, workspaceErr := prepareWorkspace(rc.OutDir, runID, task)
 	taskCfg := cfg
 	taskCfg.WorkspaceRoots = []string{workspace}
+	applyTaskConfig(&taskCfg, task)
 	result := Result{
 		RunID:           runID,
 		TaskID:          task.ID,
@@ -228,7 +258,7 @@ func runTask(parent context.Context, cfg config.Config, rc RunConfig, runID stri
 		result.WallTimeMS = time.Since(start).Milliseconds()
 		return result
 	}
-	prov, err := provider.New(taskCfg)
+	prov, err := taskProvider(taskCfg, rc, task)
 	if err != nil {
 		result.Outcome = "crash"
 		result.Error = err.Error()
@@ -285,6 +315,8 @@ func runTask(parent context.Context, cfg config.Config, rc RunConfig, runID stri
 
 func observe(result *Result, event protocol.Event) {
 	switch event.Type {
+	case protocol.EventContextCompacted:
+		result.ContextCompactions++
 	case protocol.EventModelCallStarted:
 		result.ModelCalls++
 	case protocol.EventToolCallStarted:
@@ -294,6 +326,13 @@ func observe(result *Result, event protocol.Event) {
 			result.ToolCallsByName[name]++
 		}
 	case protocol.EventToolCallFinished:
+		toolResult, ok := decodeToolResult(event.Data)
+		if ok && toolResult.Truncated {
+			result.ToolOutputTruncations++
+		}
+		if ok && toolResult.OutputRef != "" {
+			result.ToolOutputRefs++
+		}
 		if toolResultIsError(event.Data) {
 			result.ToolErrors++
 		}
@@ -314,13 +353,122 @@ func observe(result *Result, event protocol.Event) {
 	}
 }
 
+func applyTaskConfig(cfg *config.Config, task Task) {
+	if task.ContextCompactTokens > 0 {
+		cfg.ContextCompactTokens = task.ContextCompactTokens
+	}
+	if task.ContextCompactKeep > 0 {
+		cfg.ContextCompactKeep = task.ContextCompactKeep
+	}
+	if task.ContextCompactMaxChars > 0 {
+		cfg.ContextCompactMaxChars = task.ContextCompactMaxChars
+	}
+}
+
+func taskProvider(cfg config.Config, rc RunConfig, task Task) (provider.Provider, error) {
+	rounds := task.ScriptedToolRounds
+	if rounds <= 0 {
+		rounds = rc.ScriptedToolRounds
+	}
+	if rc.Mock && rounds > 0 {
+		return newScriptedLoopProvider(rounds, task.ScriptedToolName, task.ScriptedToolArgs), nil
+	}
+	return provider.New(cfg)
+}
+
 func toolResultIsError(value any) bool {
 	if text, ok := value.(string); ok {
 		return strings.HasPrefix(text, "tool error:")
 	}
+	result, ok := decodeToolResult(value)
+	return ok && result.IsError
+}
+
+func decodeToolResult(value any) (protocol.ToolResult, bool) {
 	bytes, _ := json.Marshal(value)
 	var result protocol.ToolResult
-	return json.Unmarshal(bytes, &result) == nil && result.IsError
+	if err := json.Unmarshal(bytes, &result); err != nil {
+		return protocol.ToolResult{}, false
+	}
+	return result, result.Name != "" || result.CallID != "" || result.Content != ""
+}
+
+type scriptedLoopProvider struct {
+	rounds   int
+	toolName string
+	args     string
+	mu       sync.Mutex
+	calls    int
+}
+
+func newScriptedLoopProvider(rounds int, toolName, args string) *scriptedLoopProvider {
+	if rounds < 0 {
+		rounds = 0
+	}
+	toolName = strings.TrimSpace(toolName)
+	if toolName == "" {
+		toolName = "time_now"
+	}
+	args = strings.TrimSpace(args)
+	if args == "" {
+		args = `{}`
+	}
+	return &scriptedLoopProvider{rounds: rounds, toolName: toolName, args: args}
+}
+
+func (p *scriptedLoopProvider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, <-chan error) {
+	events := make(chan provider.Event, 4)
+	errs := make(chan error, 1)
+	p.mu.Lock()
+	p.calls++
+	call := p.calls
+	p.mu.Unlock()
+	go func() {
+		defer close(events)
+		defer close(errs)
+		usage := provider.Event{Kind: provider.EventUsage, Usage: provider.Usage{
+			InputTokens:     int64(100 + call*25),
+			OutputTokens:    4,
+			CacheHitTokens:  int64(max(0, call-1) * 20),
+			CacheMissTokens: int64(100 + call*5),
+		}}
+		if err := sendProviderEvent(ctx, events, usage); err != nil {
+			errs <- err
+			return
+		}
+		if call <= p.rounds {
+			if err := sendProviderEvent(ctx, events, provider.Event{
+				Kind:      provider.EventToolCallDelta,
+				ToolIndex: 0,
+				ToolID:    fmt.Sprintf("scripted_%03d", call),
+				ToolName:  p.toolName,
+				ArgsDelta: p.args,
+			}); err != nil {
+				errs <- err
+				return
+			}
+			_ = sendProviderEvent(ctx, events, provider.Event{Kind: provider.EventDone})
+			return
+		}
+		if err := sendProviderEvent(ctx, events, provider.Event{
+			Kind: provider.EventContent,
+			Text: fmt.Sprintf("scripted loop complete after %d tool rounds", p.rounds),
+		}); err != nil {
+			errs <- err
+			return
+		}
+		_ = sendProviderEvent(ctx, events, provider.Event{Kind: provider.EventDone})
+	}()
+	return events, errs
+}
+
+func sendProviderEvent(ctx context.Context, events chan<- provider.Event, event provider.Event) error {
+	select {
+	case events <- event:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func prepareWorkspace(outDir, runID string, task Task) (string, error) {

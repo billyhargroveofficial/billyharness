@@ -461,6 +461,10 @@ func benchCmd(args []string) error {
 	timeoutSec := fs.Int("timeout-sec", 0, "per-task timeout override")
 	maxRounds := fs.Int("max-rounds", 100, "max model/tool rounds per task")
 	allowDangerous := fs.Bool("dangerous", false, "enable write and shell tools for benchmark tasks")
+	scriptedRounds := fs.Int("scripted-rounds", 0, "mock-only scripted tool rounds for loop/compaction stress")
+	contextCompactTokens := fs.Int("context-compact-tokens", 0, "override context compaction trigger tokens")
+	contextCompactKeep := fs.Int("context-compact-keep", 0, "override context compaction keep count")
+	contextCompactMaxChars := fs.Int("context-compact-max-chars", 0, "override context compaction summary max chars")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -474,11 +478,15 @@ func benchCmd(args []string) error {
 		cfg.AutoApproveDangerous = true
 	}
 	rc := bench.RunConfig{
-		TasksPath: *tasksPath,
-		OutDir:    *outDir,
-		Limit:     *limit,
-		Mock:      *mock,
-		Model:     *model,
+		TasksPath:              *tasksPath,
+		OutDir:                 *outDir,
+		Limit:                  *limit,
+		Mock:                   *mock,
+		Model:                  *model,
+		ScriptedToolRounds:     *scriptedRounds,
+		ContextCompactTokens:   *contextCompactTokens,
+		ContextCompactKeep:     *contextCompactKeep,
+		ContextCompactMaxChars: *contextCompactMaxChars,
 	}
 	if *timeoutSec > 0 {
 		rc.Timeout = time.Duration(*timeoutSec) * time.Second
