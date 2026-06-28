@@ -101,6 +101,18 @@ func (w *EventWriter) Record(taskID string, event protocol.Event) (EventRecord, 
 		return EventRecord{}, fmt.Errorf("nil event writer")
 	}
 	w.seq++
+	now := w.now()
+	event = protocol.EnrichEvent(event, protocol.EventEnvelope{
+		Seq:    w.seq,
+		Source: protocol.EventSourceBench,
+		RunID:  w.runID,
+		TS:     now.UTC().Format(time.RFC3339Nano),
+	})
+	event.Seq = w.seq
+	event.RunID = w.runID
+	if err := protocol.ValidateEventEnvelope(event); err != nil {
+		return EventRecord{}, err
+	}
 	value := any(event)
 	if w.sanitize != nil {
 		value = w.sanitize(event)
@@ -111,14 +123,16 @@ func (w *EventWriter) Record(taskID string, event protocol.Event) (EventRecord, 
 	}
 	recordEvent := value
 	if len(payloadRefs) > 0 {
-		recordEvent = protocol.Event{Type: event.Type}
+		slim := event
+		slim.Data = nil
+		recordEvent = slim
 	}
 	record := EventRecord{
 		SchemaVersion: CurrentManifestVersion,
 		Seq:           w.seq,
 		RunID:         w.runID,
 		TaskID:        taskID,
-		Timestamp:     w.now(),
+		Timestamp:     now,
 		EventType:     string(event.Type),
 		Event:         recordEvent,
 		PayloadRefs:   payloadRefs,
@@ -275,6 +289,13 @@ func ReplayEvents(path string) (ReplaySummary, error) {
 			return summary, fmt.Errorf("%s:%d %w", path, lineNo, err)
 		}
 		summary.PayloadBytes += bytes
+		if event, ok, err := protocolEventFromRecord(record.Event); err != nil {
+			return summary, fmt.Errorf("%s:%d %w", path, lineNo, err)
+		} else if ok {
+			if err := protocol.ValidateEventEnvelope(event); err != nil {
+				return summary, fmt.Errorf("%s:%d invalid event envelope: %w", path, lineNo, err)
+			}
+		}
 		if err := summary.observe(record); err != nil {
 			return summary, fmt.Errorf("%s:%d %w", path, lineNo, err)
 		}
@@ -284,6 +305,24 @@ func ReplayEvents(path string) (ReplaySummary, error) {
 		return summary, err
 	}
 	return summary, nil
+}
+
+func protocolEventFromRecord(value any) (protocol.Event, bool, error) {
+	if value == nil {
+		return protocol.Event{}, false, nil
+	}
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return protocol.Event{}, false, fmt.Errorf("invalid protocol event: %w", err)
+	}
+	var event protocol.Event
+	if err := json.Unmarshal(bytes, &event); err != nil {
+		return protocol.Event{}, false, fmt.Errorf("invalid protocol event: %w", err)
+	}
+	if event.Type == "" {
+		return protocol.Event{}, false, nil
+	}
+	return event, true, nil
 }
 
 func verifyPayloadRefs(eventsPath string, refs []PayloadRef) (int64, error) {

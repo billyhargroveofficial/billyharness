@@ -52,6 +52,11 @@ func InitialMessages(cfgs ...config.Config) []protocol.Message {
 }
 
 func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
+	if emit == nil {
+		emit = func(protocol.Event) {}
+	}
+	runID := newAgentRunID()
+	emit = protocol.NewEventEnricher(runID, protocol.EventSourceAgent, emit).Emit
 	emit(protocol.Event{Type: protocol.EventRunStarted})
 	messages = a.withMCPInstructions(messages)
 	var lastPromptTokens int64
@@ -84,7 +89,12 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 			Name:         a.cfg.Model,
 			MessageCount: len(messages),
 		}})
-		emit(protocol.Event{Type: protocol.EventModelCallStarted, Data: map[string]any{"round": roundNum}})
+		emit(protocol.Event{
+			Type:   protocol.EventModelCallStarted,
+			TurnID: turnID,
+			StepID: modelStepID,
+			Data:   map[string]any{"round": roundNum},
+		})
 		events, errs := a.provider.Stream(ctx, provider.Request{
 			Model:    a.cfg.Model,
 			Messages: messages,
@@ -101,20 +111,35 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 					firstDeltaAt = time.Now()
 				}
 				content += event.Text
-				emit(protocol.Event{Type: protocol.EventAssistantDelta, Data: event.Text})
+				emit(protocol.Event{
+					Type:   protocol.EventAssistantDelta,
+					TurnID: turnID,
+					StepID: modelStepID,
+					Data:   event.Text,
+				})
 			case provider.EventReasoning:
 				if firstDeltaAt.IsZero() {
 					firstDeltaAt = time.Now()
 				}
 				reasoning += event.Text
-				emit(protocol.Event{Type: protocol.EventAssistantReasoning, Data: event.Text})
+				emit(protocol.Event{
+					Type:   protocol.EventAssistantReasoning,
+					TurnID: turnID,
+					StepID: modelStepID,
+					Data:   event.Text,
+				})
 			case provider.EventToolCallDelta:
 				acc.Push(event)
 			case provider.EventUsage:
 				if event.Usage.InputTokens > 0 {
 					lastPromptTokens = event.Usage.InputTokens
 				}
-				emit(protocol.Event{Type: protocol.EventProviderUsageUpdate, Data: event.Usage})
+				emit(protocol.Event{
+					Type:   protocol.EventProviderUsageUpdate,
+					TurnID: turnID,
+					StepID: modelStepID,
+					Data:   event.Usage,
+				})
 			case provider.EventDone:
 			}
 		}
@@ -141,7 +166,12 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 			emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
 			return messages, err
 		}
-		emit(protocol.Event{Type: protocol.EventModelCallFinished, Data: map[string]any{"round": roundNum}})
+		emit(protocol.Event{
+			Type:   protocol.EventModelCallFinished,
+			TurnID: turnID,
+			StepID: modelStepID,
+			Data:   map[string]any{"round": roundNum},
+		})
 		calls, err := acc.Finish()
 		if err != nil {
 			emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
@@ -292,7 +322,7 @@ func (o *toolOrchestrator) Request(call protocol.ToolCall) {
 	if o == nil || o.emit == nil {
 		return
 	}
-	o.emit(protocol.Event{Type: protocol.EventToolCallRequested, Data: call})
+	o.emit(protocol.Event{Type: protocol.EventToolCallRequested, CallID: call.ID, Data: call})
 	decision := o.permissionDecision(call)
 	o.decisions[call.ID] = decision
 	o.emit(protocol.Event{Type: protocol.EventToolPermissionRequested, Data: decision.requestEventData()})
@@ -306,7 +336,12 @@ func (o *toolOrchestrator) EmitAttemptStarted(call protocol.ToolCall, attemptID 
 	if o == nil || o.emit == nil {
 		return
 	}
-	o.emit(protocol.Event{Type: protocol.EventToolCallStarted, Data: call.Name})
+	o.emit(protocol.Event{
+		Type:      protocol.EventToolCallStarted,
+		CallID:    call.ID,
+		AttemptID: attemptID,
+		Data:      call.Name,
+	})
 }
 
 func (o *toolOrchestrator) Execute(ctx context.Context, index int, call protocol.ToolCall, attemptID string) toolExecutionResult {
@@ -389,9 +424,19 @@ func (o *toolOrchestrator) EmitAttemptFinished(result toolExecutionResult) {
 		if result.Result.ErrorCode == "tool_aborted" {
 			eventType = protocol.EventToolCallAborted
 		}
-		o.emit(protocol.Event{Type: eventType, Data: result.Result})
+		o.emit(protocol.Event{
+			Type:      eventType,
+			CallID:    result.Call.ID,
+			AttemptID: result.AttemptID,
+			Data:      result.Result,
+		})
 	}
-	o.emit(protocol.Event{Type: protocol.EventToolCallFinished, Data: result.Result})
+	o.emit(protocol.Event{
+		Type:      protocol.EventToolCallFinished,
+		CallID:    result.Call.ID,
+		AttemptID: result.AttemptID,
+		Data:      result.Result,
+	})
 }
 
 func (o *toolOrchestrator) StepMetadata(call protocol.ToolCall, attemptID string, base map[string]any) map[string]any {
@@ -687,6 +732,10 @@ func agentStepID(turnID, kind string, index int) string {
 
 func agentAttemptID(turnID string, index int) string {
 	return fmt.Sprintf("%s:attempt-001", agentStepID(turnID, protocol.StepKindToolCall, index+1))
+}
+
+func newAgentRunID() string {
+	return fmt.Sprintf("run-%s-%d", time.Now().UTC().Format("20060102T150405.000000000Z"), os.Getpid())
 }
 
 func durationMS(started time.Time) int64 {

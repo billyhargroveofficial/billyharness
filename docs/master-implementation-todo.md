@@ -198,18 +198,18 @@ Acceptance:
 
 ### 1.4 Runtime Event Envelope
 
-- [ ] Move stable ids to the event envelope, not only inside `Data`.
-- [ ] Add schema version to persisted events.
-- [ ] Add monotonic `seq` per session/run event stream.
-- [ ] Add `ts` and `duration_ms` where applicable.
-- [ ] Add `source`: `agent`, `gateway`, `tui`, `telegram`, `tool`, `provider`, `mcp`, `bench`.
-- [ ] Add replay validator for required ids by event type.
+- [x] Move stable ids to the event envelope, not only inside `Data`.
+- [x] Add schema version to persisted events.
+- [x] Add monotonic `seq` per session/run event stream.
+- [x] Add `ts` and `duration_ms` where applicable.
+- [x] Add `source`: `agent`, `gateway`, `tui`, `telegram`, `tool`, `provider`, `mcp`, `bench`.
+- [x] Add replay validator for required ids by event type.
 
 Acceptance:
 
-- [ ] Old events still load or have a documented migration fallback.
-- [ ] New events validate in tests.
-- [ ] Bench/replay output can count turns, steps, tool calls, retries, aborts, and compactions.
+- [x] Old events still load or have a documented migration fallback.
+- [x] New events validate in tests.
+- [x] Bench/replay output can count turns, steps, tool calls, retries, aborts, and compactions.
 
 ## Phase 2: Config, Profiles, Providers, Auth
 

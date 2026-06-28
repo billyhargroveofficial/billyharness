@@ -194,20 +194,35 @@ func (s *sessionStore) AppendEvent(session *Session, event protocol.Event) error
 	}
 	seq++
 	status := session.Status()
+	now := time.Now().UTC()
+	storedEvent := protocol.EnrichEvent(event, protocol.EventEnvelope{
+		Seq:    seq,
+		Source: protocol.EventSourceGateway,
+		RunID:  gatewaySessionRunID(id, status.RunSeq),
+		TS:     now.Format(time.RFC3339Nano),
+	})
+	storedEvent.Seq = seq
 	record := sessionEventRecord{
 		SchemaVersion: gatewaySessionSchemaVersion,
 		Seq:           seq,
 		SessionID:     id,
 		RunSeq:        status.RunSeq,
-		Timestamp:     time.Now().UTC(),
-		EventType:     string(event.Type),
-		Event:         event,
+		Timestamp:     now,
+		EventType:     string(storedEvent.Type),
+		Event:         storedEvent,
 	}
 	if err := appendJSONL(eventsPath, record); err != nil {
 		return err
 	}
 	s.eventSeq[id] = seq
 	return nil
+}
+
+func gatewaySessionRunID(sessionID string, runSeq int64) string {
+	if strings.TrimSpace(sessionID) == "" || runSeq <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s:run-%d", sessionID, runSeq)
 }
 
 func (s *sessionStore) saveLocked(session *Session) error {

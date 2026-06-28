@@ -26,7 +26,14 @@ func TestEventWriterRecordsContiguousEventsAndPayloadRefs(t *testing.T) {
 	}
 	if _, err := writer.Record("task-1", protocol.Event{
 		Type: protocol.EventToolCallFinished,
-		Data: protocol.ToolResult{Name: "fs_read_file", Content: "large"},
+		Data: protocol.ToolResult{
+			CallID:  "call-1",
+			Name:    "fs_read_file",
+			Content: "large",
+			Metadata: map[string]any{
+				"attempt_id": "turn-001:tool-call-001:attempt-001",
+			},
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -101,20 +108,29 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 		{Type: protocol.EventRunStarted},
 		{Type: protocol.EventTurnStarted, Data: protocol.TurnEvent{TurnID: "turn-001", Round: 1, Status: protocol.TurnStatusStarted}},
 		{Type: protocol.EventStepStarted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:model-call-001", Round: 1, Kind: protocol.StepKindModelCall, Status: protocol.StepStatusStarted}},
-		{Type: protocol.EventModelCallStarted},
+		{Type: protocol.EventModelCallStarted, TurnID: "turn-001", StepID: "turn-001:model-call-001"},
 		{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
 			"input_tokens":      100,
 			"output_tokens":     7,
 			"cache_hit_tokens":  80,
 			"cache_miss_tokens": 20,
+			"turn_id":           "turn-001",
+			"step_id":           "turn-001:model-call-001",
 		}},
 		{Type: protocol.EventContextCompacted},
 		{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:model-call-001", Round: 1, Kind: protocol.StepKindModelCall, Status: protocol.StepStatusCompleted, DurationMS: 11, Metadata: map[string]any{"first_delta_ms": 4}}},
 		{Type: protocol.EventStepStarted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:tool-batch-001", Round: 1, Kind: protocol.StepKindToolBatch, Status: protocol.StepStatusStarted, Parallel: true, BatchSize: 2}},
-		{Type: protocol.EventToolCallStarted, Data: "time_now"},
-		{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{Name: "time_now", Content: "ok"}},
+		{Type: protocol.EventToolCallStarted, CallID: "call-1", AttemptID: "turn-001:tool-call-001:attempt-001", Data: "time_now"},
+		{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
+			CallID:  "call-1",
+			Name:    "time_now",
+			Content: "ok",
+			Metadata: map[string]any{
+				"attempt_id": "turn-001:tool-call-001:attempt-001",
+			},
+		}},
 		{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:tool-batch-001", Round: 1, Kind: protocol.StepKindToolBatch, Status: protocol.StepStatusCompleted, Parallel: true, BatchSize: 2, DurationMS: 7}},
-		{Type: protocol.EventModelCallFinished},
+		{Type: protocol.EventModelCallFinished, TurnID: "turn-001", StepID: "turn-001:model-call-001"},
 		{Type: protocol.EventTurnCompleted, Data: protocol.TurnEvent{TurnID: "turn-001", Round: 1, Status: protocol.TurnStatusCompleted, StopReason: protocol.TurnStopToolResults}},
 		{Type: protocol.EventRunCompleted},
 	}
@@ -163,6 +179,21 @@ func TestReplayEventsRejectsSequenceGap(t *testing.T) {
 	_, err := ReplayEvents(path)
 	if err == nil || !strings.Contains(err.Error(), "sequence gap") {
 		t.Fatalf("expected sequence gap error, got %v", err)
+	}
+}
+
+func TestReplayEventsRejectsInvalidNewEventEnvelope(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	data := strings.Join([]string{
+		`{"schema_version":1,"seq":1,"run_id":"run-1","event_type":"tool.call_started","event":{"schema_version":1,"seq":1,"source":"agent","ts":"2026-06-28T10:00:00Z","run_id":"run-1","type":"tool.call_started","data":"fs_read_file"}}`,
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ReplayEvents(path)
+	if err == nil || !strings.Contains(err.Error(), "missing call_id") {
+		t.Fatalf("expected missing call_id error, got %v", err)
 	}
 }
 

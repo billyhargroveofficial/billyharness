@@ -83,8 +83,20 @@ const (
 )
 
 type Event struct {
-	Type EventType `json:"type"`
-	Data any       `json:"data,omitempty"`
+	SchemaVersion int         `json:"schema_version,omitempty"`
+	Seq           int64       `json:"seq,omitempty"`
+	Source        EventSource `json:"source,omitempty"`
+	TS            string      `json:"ts,omitempty"`
+	SubmissionID  string      `json:"submission_id,omitempty"`
+	RunID         string      `json:"run_id,omitempty"`
+	TurnID        string      `json:"turn_id,omitempty"`
+	StepID        string      `json:"step_id,omitempty"`
+	CallID        string      `json:"call_id,omitempty"`
+	AttemptID     string      `json:"attempt_id,omitempty"`
+	ParentStepID  string      `json:"parent_step_id,omitempty"`
+	DurationMS    int64       `json:"duration_ms,omitempty"`
+	Type          EventType   `json:"type"`
+	Data          any         `json:"data,omitempty"`
 }
 
 const (
