@@ -288,6 +288,27 @@ func actionRegistry() []actionSpec {
 			},
 		},
 		{
+			id:        "copy.semantic",
+			title:     "Copy",
+			category:  "ui",
+			slash:     "/copy",
+			slashArgs: "selected|last|tool|transcript|code|command",
+			summary:   "copy raw transcript text without UI chrome",
+			args: func(Model) []slashArg {
+				return []slashArg{
+					{"selected", "copy selected transcript cell"},
+					{"last", "copy last assistant answer"},
+					{"tool", "copy selected or last raw tool output"},
+					{"transcript", "copy full raw transcript"},
+					{"code", "copy selected or last fenced code block"},
+					{"command", "copy current command line"},
+				}
+			},
+			run: func(m *Model, arg string) (bool, tea.Cmd) {
+				return m.handleCopyCommand(arg)
+			},
+		},
+		{
 			id:       "chat.new",
 			title:    "New Chat",
 			category: "chat",

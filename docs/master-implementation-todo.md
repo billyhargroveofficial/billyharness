@@ -639,21 +639,21 @@ Acceptance:
 
 ### 5.6 Semantic Copy
 
-- [ ] Keep mouse selection copy.
-- [ ] Add semantic copy:
-  - [ ] selected cell
-  - [ ] last assistant answer
-  - [ ] raw tool output
-  - [ ] full transcript
-  - [ ] code block
-  - [ ] command line
-- [ ] Copy raw text without gutters, decorative bullets, ANSI, or UI chrome.
-- [ ] Show visible selection highlight in both themes.
+- [x] Keep mouse selection copy.
+- [x] Add semantic copy:
+  - [x] selected cell
+  - [x] last assistant answer
+  - [x] raw tool output
+  - [x] full transcript
+  - [x] code block
+  - [x] command line
+- [x] Copy raw text without gutters, decorative bullets, ANSI, or UI chrome.
+- [x] Show visible selection highlight in both themes.
 
 Acceptance:
 
-- [ ] Visual selection matches copied content.
-- [ ] Table/cell selection does not copy broken decorations unless explicitly raw UI copy.
+- [x] Visual selection matches copied content.
+- [x] Table/cell selection does not copy broken decorations unless explicitly raw UI copy.
 
 ## Phase 6: Telegram UX
 

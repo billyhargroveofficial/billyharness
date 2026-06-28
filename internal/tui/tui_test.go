@@ -151,6 +151,77 @@ func TestActionRegistryDispatchesSlashAliases(t *testing.T) {
 	}
 }
 
+func TestSemanticCopyTextUsesRawTranscriptFields(t *testing.T) {
+	m := newTestModel(t)
+	m.addBlock("user", "USER", "hello")
+	m.addBlock("assistant", "ASSISTANT", "answer **raw**")
+	m.addBlock("tool", "Done Read README.md", "rendered output")
+	m.blocks[2].rawCopy = "raw tool output"
+	m.selected = 2
+	m.textarea.SetValue("/model flash")
+
+	for _, tc := range []struct {
+		target string
+		want   string
+	}{
+		{"selected", "raw tool output"},
+		{"last", "answer **raw**"},
+		{"tool", "raw tool output"},
+		{"command", "/model flash"},
+	} {
+		got, _, ok := m.semanticCopyText(tc.target)
+		if !ok || got != tc.want {
+			t.Fatalf("semanticCopyText(%q) = %q ok=%v, want %q", tc.target, got, ok, tc.want)
+		}
+	}
+
+	transcript, _, ok := m.semanticCopyText("transcript")
+	if !ok {
+		t.Fatal("transcript copy returned false")
+	}
+	for _, want := range []string{"hello", "answer **raw**", "raw tool output"} {
+		if !strings.Contains(transcript, want) {
+			t.Fatalf("transcript copy missing %q: %q", want, transcript)
+		}
+	}
+	for _, bad := range []string{"USER", "ASSISTANT", "Done Read README.md"} {
+		if strings.Contains(transcript, bad) {
+			t.Fatalf("transcript copy should not include UI chrome %q: %q", bad, transcript)
+		}
+	}
+}
+
+func TestSemanticCopyCodeBlockUsesRawMarkdown(t *testing.T) {
+	m := newTestModel(t)
+	m.addBlock("assistant", "ASSISTANT", "intro\n```go\nfmt.Println(\"hi\")\n```\n")
+	m.addBlock("assistant", "ASSISTANT", "later\n~~~sh\nprintf hi\n~~~")
+	m.selected = 0
+
+	got, label, ok := m.semanticCopyText("code")
+	if !ok || label != "code block" || got != "fmt.Println(\"hi\")" {
+		t.Fatalf("selected code copy = %q label=%q ok=%v", got, label, ok)
+	}
+
+	m.selected = -1
+	got, _, ok = m.semanticCopyText("code")
+	if !ok || got != "printf hi" {
+		t.Fatalf("last code copy = %q ok=%v, want latest fenced block", got, ok)
+	}
+}
+
+func TestCopySlashCommandReturnsClipboardCommand(t *testing.T) {
+	m := newTestModel(t)
+	m.addBlock("assistant", "ASSISTANT", "answer")
+	m.selected = 0
+	handled, cmd := m.handleSlashCommand("/copy selected")
+	if !handled || cmd == nil {
+		t.Fatalf("/copy selected handled=%v cmd=%v", handled, cmd)
+	}
+	if !strings.Contains(m.status, "selected cell") {
+		t.Fatalf("status = %q", m.status)
+	}
+}
+
 func TestTUISelectsCodexProviderForGPTModels(t *testing.T) {
 	m := newTestModel(t)
 	handled, _ := m.handleSlashCommand("/model gpt")
@@ -1252,6 +1323,74 @@ func TestTranscriptSelectionIsVisiblyHighlighted(t *testing.T) {
 	}
 	if !strings.Contains(highlighted, "48;2;255;209;102") {
 		t.Fatalf("selection highlight should use visible yellow background, rendered=%q", highlighted)
+	}
+}
+
+func TestTranscriptSelectionHighlightBothThemes(t *testing.T) {
+	for _, theme := range []string{"dark", "light"} {
+		t.Run(theme, func(t *testing.T) {
+			m := newTestModel(t)
+			m.theme = theme
+			m.width = 80
+			m.height = 24
+			m.addBlock("assistant", "ASSISTANT", "alpha\nbeta")
+			m.resize(true)
+			firstLine := strings.Split(m.viewport.GetContent(), "\n")[0]
+			visible := stripANSITest(firstLine)
+			startByte := strings.Index(visible, "alpha")
+			if startByte < 0 {
+				t.Fatalf("rendered line missing alpha: %q", visible)
+			}
+			startCol := xansi.StringWidth(visible[:startByte])
+			m.selectStart = selectionPoint{row: 0, col: startCol}
+			m.selectEnd = selectionPoint{row: 0, col: startCol + len("alpha")}
+
+			highlighted := m.selectionHighlightedContent()
+			if got := selectionBackgroundText(highlighted); got != "alpha" {
+				t.Fatalf("highlighted selection = %q, want alpha; rendered=%q", got, highlighted)
+			}
+			if !strings.Contains(highlighted, "48;2;255;209;102") {
+				t.Fatalf("theme %s should use visible yellow selection, rendered=%q", theme, highlighted)
+			}
+		})
+	}
+}
+
+func TestTranscriptSelectionCopiesRenderedTableCellWithoutMarkdownDecorations(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.height = 24
+	m.addBlock("assistant", "ASSISTANT", "| Parameter | Value |\n| --- | --- |\n| **Temperature** | `+19 C` |\n")
+	m.resize(true)
+
+	lines := strings.Split(m.viewport.GetContent(), "\n")
+	targetRow := -1
+	targetCol := 0
+	for row, line := range lines {
+		visible := stripANSITest(line)
+		startByte := strings.Index(visible, "Temperature")
+		if startByte < 0 {
+			continue
+		}
+		targetRow = row
+		targetCol = xansi.StringWidth(visible[:startByte])
+		break
+	}
+	if targetRow < 0 {
+		t.Fatalf("rendered table missing target cell: %q", stripANSITest(m.viewport.GetContent()))
+	}
+	m.selectStart = selectionPoint{row: targetRow, col: targetCol}
+	m.selectEnd = selectionPoint{row: targetRow, col: targetCol + len("Temperature")}
+
+	if got := m.selectedTranscriptText(); got != "Temperature" {
+		t.Fatalf("selected table cell = %q, want Temperature", got)
+	}
+	highlighted := m.selectionHighlightedContent()
+	if got := selectionBackgroundText(highlighted); got != "Temperature" {
+		t.Fatalf("highlighted table cell = %q, want Temperature; rendered=%q", got, highlighted)
+	}
+	if strings.Contains(m.selectedTranscriptText(), "**") {
+		t.Fatalf("selected table cell should not include markdown decorations")
 	}
 }
 

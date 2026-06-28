@@ -2173,6 +2173,129 @@ func (m *Model) setThinkView(value string) bool {
 	return true
 }
 
+func (m *Model) handleCopyCommand(value string) (bool, tea.Cmd) {
+	target := strings.ToLower(strings.TrimSpace(value))
+	if target == "" {
+		target = "selected"
+	}
+	text, label, ok := m.semanticCopyText(target)
+	if !ok || strings.TrimSpace(text) == "" {
+		m.status = "copy target empty: " + target
+		return false, nil
+	}
+	m.status = "copying " + label
+	return true, copySelectionCmd(text)
+}
+
+func (m Model) semanticCopyText(target string) (text, label string, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(target)) {
+	case "selected", "cell", "selected-cell":
+		if m.selected < 0 || m.selected >= len(m.blocks) {
+			return "", "selected cell", false
+		}
+		return strings.TrimSpace(m.blocks[m.selected].rawCopy), "selected cell", true
+	case "last", "assistant", "last-assistant":
+		for i := len(m.blocks) - 1; i >= 0; i-- {
+			if m.blocks[i].kind == "assistant" {
+				return strings.TrimSpace(m.blocks[i].rawCopy), "last assistant", true
+			}
+		}
+		return "", "last assistant", false
+	case "tool", "raw-tool", "last-tool", "tool-output":
+		if text, ok := m.semanticToolCopyText(); ok {
+			return text, "raw tool output", true
+		}
+		return "", "raw tool output", false
+	case "transcript", "all", "full":
+		var parts []string
+		for _, block := range m.blocks {
+			text := strings.TrimSpace(block.rawCopy)
+			if text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n\n"), "full transcript", len(parts) > 0
+	case "code", "codeblock", "code-block":
+		if text, ok := m.semanticCodeBlockCopyText(); ok {
+			return text, "code block", true
+		}
+		return "", "code block", false
+	case "command", "input", "line":
+		return strings.TrimSpace(m.textarea.Value()), "command line", true
+	default:
+		return "", target, false
+	}
+}
+
+func (m Model) semanticToolCopyText() (string, bool) {
+	if m.selected >= 0 && m.selected < len(m.blocks) && isToolCopyBlock(m.blocks[m.selected]) {
+		text := strings.TrimSpace(m.blocks[m.selected].rawCopy)
+		return text, text != ""
+	}
+	for i := len(m.blocks) - 1; i >= 0; i-- {
+		if !isToolCopyBlock(m.blocks[i]) {
+			continue
+		}
+		text := strings.TrimSpace(m.blocks[i].rawCopy)
+		if text != "" {
+			return text, true
+		}
+	}
+	return "", false
+}
+
+func isToolCopyBlock(b block) bool {
+	return b.kind == "tool" || b.cellType == cellTypeToolCall || b.cellType == cellTypeToolBatch
+}
+
+func (m Model) semanticCodeBlockCopyText() (string, bool) {
+	if m.selected >= 0 && m.selected < len(m.blocks) {
+		if text, ok := lastFencedCodeBlock(m.blocks[m.selected].rawCopy); ok {
+			return text, true
+		}
+	}
+	for i := len(m.blocks) - 1; i >= 0; i-- {
+		if text, ok := lastFencedCodeBlock(m.blocks[i].rawCopy); ok {
+			return text, true
+		}
+	}
+	return "", false
+}
+
+func lastFencedCodeBlock(text string) (string, bool) {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	lines := strings.Split(text, "\n")
+	inFence := false
+	fenceMarker := ""
+	var current []string
+	last := ""
+	found := false
+	for _, line := range lines {
+		marker, ok := markdownFenceMarker(strings.TrimSpace(line))
+		if ok {
+			if !inFence {
+				inFence = true
+				fenceMarker = marker
+				current = current[:0]
+				continue
+			}
+			if marker == fenceMarker {
+				last = strings.Trim(strings.Join(current, "\n"), "\n")
+				found = true
+				inFence = false
+				fenceMarker = ""
+				current = nil
+				continue
+			}
+		}
+		if inFence {
+			current = append(current, line)
+		}
+	}
+	return last, found
+}
+
 func (m *Model) newChat() tea.Cmd {
 	if m.busy {
 		m.status = "busy"
