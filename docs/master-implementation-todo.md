@@ -595,26 +595,26 @@ Acceptance:
 
 ### 5.4 Status Line
 
-- [ ] Make status priority-based and width-aware.
+- [x] Make status priority-based and width-aware.
 - [ ] Include:
-  - [ ] run state
-  - [ ] elapsed turn time
-  - [ ] model
-  - [ ] reasoning
-  - [ ] access mode
-  - [ ] active context tokens/percent
-  - [ ] session turns/tools totals
-  - [ ] web summary metrics when present
-  - [ ] cached summary/cache status where meaningful
-  - [ ] cost/subscription
+  - [x] run state
+  - [x] elapsed turn time
+  - [x] model
+  - [x] reasoning
+  - [x] access mode
+  - [x] active context tokens/percent
+  - [x] session turns/tools totals
+  - [x] web summary metrics when present
+  - [x] cached summary/cache status where meaningful
+  - [x] cost/subscription
   - [ ] chat/profile
-- [ ] Remove confusing raw provider counters from default footer.
+- [x] Remove confusing raw provider counters from default footer.
 - [ ] Add detailed status view command.
 
 Acceptance:
 
-- [ ] Footer is useful at 80, 120, and 160 columns.
-- [ ] User can understand context versus provider cache metrics.
+- [x] Footer is useful at 80, 120, and 160 columns.
+- [x] User can understand context versus provider cache metrics.
 
 ### 5.5 Action Registry And Commands
 

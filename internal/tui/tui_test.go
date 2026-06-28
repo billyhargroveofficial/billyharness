@@ -1344,6 +1344,39 @@ func TestInlineStatusShowsModelAccessCacheCostAndSession(t *testing.T) {
 	}
 }
 
+func TestInlineStatusIsWidthAware(t *testing.T) {
+	for _, width := range []int{80, 120, 160} {
+		m := newTestModel(t)
+		m.width = width
+		m.version = "0.1.0"
+		m.dangerous = true
+		m.status = "completed"
+		m.modelCalls = 12
+		m.toolCalls = 34
+		m.lastInputTok = 420000
+		m.lastOutputTok = 1200
+		m.lastCacheHitTok = 390000
+		m.lastCacheMissTok = 30000
+		m.toolSummaryInTok = 37000
+		m.toolSummaryOutTok = 2500
+		status := m.inlineStatusView()
+		lines := strings.Split(status, "\n")
+		if len(lines) != 2 {
+			t.Fatalf("width %d: status should render as two lines, got %q", width, status)
+		}
+		for _, line := range lines {
+			if got := xansi.StringWidth(stripANSITest(line)); got > width {
+				t.Fatalf("width %d: status line width=%d exceeds viewport: %q", width, got, line)
+			}
+		}
+		for _, want := range []string{"completed", "deepseek-v4-flash", "Context"} {
+			if !strings.Contains(status, want) {
+				t.Fatalf("width %d: status missing priority segment %q: %q", width, want, status)
+			}
+		}
+	}
+}
+
 func TestCompactEventTextShowsStructuredCompactionFields(t *testing.T) {
 	text := compactEventText(map[string]any{
 		"compaction_id":               "abc123",
