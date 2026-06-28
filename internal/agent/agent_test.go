@@ -480,6 +480,48 @@ func TestModelCompactionStrategyReplacesSummaryAndReportsModel(t *testing.T) {
 	}
 }
 
+func TestDefaultDeepSeekCompactionThresholdTriggersAtSixHundredK(t *testing.T) {
+	cfg := config.Default()
+	cfg.ContextCompactKeep = 1
+	cfg.ContextCompactMaxChars = 2000
+	messages := []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "old context"},
+		{Role: protocol.RoleAssistant, Content: "old answer"},
+		{Role: protocol.RoleUser, Content: "latest task"},
+	}
+	compacted, report, ok := compactMessages(messages, cfg, 600_000)
+	if !ok {
+		t.Fatal("expected default 600k compaction trigger")
+	}
+	if report.ThresholdTokens != 600_000 || report.TriggerPromptTokens != 600_000 {
+		t.Fatalf("threshold report = %#v", report)
+	}
+	if compacted[len(compacted)-1].Content != "latest task" {
+		t.Fatalf("latest task not preserved: %#v", compacted)
+	}
+}
+
+func TestCompactionSummaryPreservesToolOutputRefs(t *testing.T) {
+	cfg := config.Default()
+	cfg.ContextCompactTokens = 1
+	cfg.ContextCompactKeep = 1
+	cfg.ContextCompactMaxChars = 2000
+	messages := []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleAssistant, ToolCalls: []protocol.ToolCall{{ID: "call_1", Name: "web_fetch", Arguments: json.RawMessage(`{"url":"https://example.com"}`)}}},
+		{Role: protocol.RoleTool, ToolCallID: "call_1", Name: "web_fetch", Content: "compact digest\noutput_ref=/root/billyharness/tool-output/20260628/ref.txt"},
+		{Role: protocol.RoleUser, Content: "latest task"},
+	}
+	compacted, _, ok := compactMessages(messages, cfg, 100)
+	if !ok {
+		t.Fatal("expected compaction")
+	}
+	if len(compacted) < 3 || !strings.Contains(compacted[1].Content, "output_ref=/root/billyharness/tool-output/20260628/ref.txt") {
+		t.Fatalf("summary did not preserve output_ref: %#v", compacted)
+	}
+}
+
 func TestCompactMessagesPreservesToolAdjacency(t *testing.T) {
 	cfg := config.Default()
 	cfg.ContextCompactTokens = 1

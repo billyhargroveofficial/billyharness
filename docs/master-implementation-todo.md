@@ -510,13 +510,13 @@ Acceptance:
   - [x] protected prefix count
   - [x] replacement id
   - [x] summary model if used
-- [ ] Preserve tool refs and important outputs.
+- [x] Preserve tool refs and important outputs.
 - [x] Add replay tests around compaction boundaries.
 
 Acceptance:
 
-- [ ] Approaching 600k tokens for DeepSeek triggers controlled compaction.
-- [ ] Compaction never silently drops current active task state.
+- [x] Approaching 600k tokens for DeepSeek triggers controlled compaction.
+- [x] Compaction never silently drops current active task state.
 
 ## Phase 5: TUI UX
 
