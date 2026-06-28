@@ -62,24 +62,26 @@ func (m thinkingMode) effortLabel() string {
 }
 
 type block struct {
-	id             string
-	kind           string
-	cellType       string
-	title          string
-	content        string
-	live           bool
-	eventType      protocol.EventType
-	turnID         string
-	stepID         string
-	callID         string
-	attemptID      string
-	parentStepID   string
-	rawCopy        string
-	renderCacheKey string
-	collapsed      bool
-	collapseSet    bool
-	started        time.Time
-	updated        time.Time
+	id                   string
+	kind                 string
+	cellType             string
+	title                string
+	content              string
+	live                 bool
+	eventType            protocol.EventType
+	turnID               string
+	stepID               string
+	callID               string
+	attemptID            string
+	parentStepID         string
+	rawCopy              string
+	renderCacheKey       string
+	richTerminalText     string
+	richTerminalCacheKey string
+	collapsed            bool
+	collapseSet          bool
+	started              time.Time
+	updated              time.Time
 }
 
 const (
@@ -3264,7 +3266,7 @@ func (m *Model) reflow(gotoBottom bool) {
 		if b.kind == "tool" && m.toolView == "hidden" {
 			continue
 		}
-		parts = append(parts, m.renderBlock(i, b))
+		parts = append(parts, m.renderBlockCached(i))
 	}
 	m.viewportContent = strings.Join(parts, "\n")
 	m.viewport.SetContent(m.viewportContent)
@@ -3274,6 +3276,32 @@ func (m *Model) reflow(gotoBottom bool) {
 	if gotoBottom {
 		m.viewport.GotoBottom()
 	}
+}
+
+func (m *Model) renderBlockCached(i int) string {
+	if i < 0 || i >= len(m.blocks) {
+		return ""
+	}
+	cacheKey := m.richTerminalCacheKey(i, m.blocks[i])
+	if m.blocks[i].richTerminalCacheKey == cacheKey && m.blocks[i].richTerminalText != "" {
+		return m.blocks[i].richTerminalText
+	}
+	rendered := m.renderBlock(i, m.blocks[i])
+	m.blocks[i].richTerminalText = rendered
+	m.blocks[i].richTerminalCacheKey = cacheKey
+	return rendered
+}
+
+func (m Model) richTerminalCacheKey(i int, b block) string {
+	return strings.Join([]string{
+		b.renderCacheKey,
+		strconv.Itoa(m.width),
+		m.theme,
+		m.toolView,
+		m.thinkView,
+		strconv.FormatBool(m.blockCollapsed(i)),
+		strconv.FormatBool(m.toolCollapsed(i)),
+	}, "\x00")
 }
 
 func (m Model) renderBlock(i int, b block) string {

@@ -697,6 +697,37 @@ func TestTranscriptBlocksCarryTypedCellMetadata(t *testing.T) {
 	}
 }
 
+func TestTranscriptCellsCarryRichTerminalTextCache(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: "A **bold** answer\n"})
+	m.applyEvent(protocol.Event{Type: protocol.EventRunCompleted})
+	m.reflow(true)
+
+	if len(m.blocks) == 0 || m.blocks[0].richTerminalText == "" || m.blocks[0].richTerminalCacheKey == "" {
+		t.Fatalf("expected rich terminal cache on first cell: %#v", m.blocks)
+	}
+	firstRender := m.blocks[0].richTerminalText
+	firstKey := m.blocks[0].richTerminalCacheKey
+	m.reflow(true)
+	if m.blocks[0].richTerminalText != firstRender || m.blocks[0].richTerminalCacheKey != firstKey {
+		t.Fatalf("rich terminal cache should be stable across identical reflow")
+	}
+	m.width = 60
+	m.reflow(true)
+	if m.blocks[0].richTerminalCacheKey == firstKey {
+		t.Fatalf("rich terminal cache key should include width")
+	}
+
+	decoded := decodeBlocks(encodeBlocks(m.blocks))
+	if len(decoded) == 0 {
+		t.Fatal("decoded blocks empty")
+	}
+	if decoded[0].richTerminalText != "" || decoded[0].richTerminalCacheKey != "" {
+		t.Fatalf("rich terminal cache must remain UI-only, decoded=%#v", decoded[0])
+	}
+}
+
 func TestRunSummaryCellUpdatesByRunLifecycle(t *testing.T) {
 	m := newTestModel(t)
 	m.runStartedAt = time.Now().Add(-2 * time.Second)

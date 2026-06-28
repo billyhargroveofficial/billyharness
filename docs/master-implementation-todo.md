@@ -536,13 +536,13 @@ Purpose: make the terminal feel like a serious agent UI rather than a pile of st
   - [x] MCP status
   - [x] run summary
   - [x] error
-- [ ] Each cell has:
+- [x] Each cell has:
   - [x] stable id
   - [x] turn id
   - [x] step id
   - [x] call id if tool-related
   - [x] raw copy text
-  - [ ] rich terminal text
+  - [x] rich terminal text
   - [x] collapsed/expanded state
   - [x] render cache key
 - [x] Keep old rendering path while migrating if needed.
