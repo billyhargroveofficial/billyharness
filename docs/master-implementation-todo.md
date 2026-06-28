@@ -416,28 +416,28 @@ Purpose: stop web/tool output from exploding context and token use.
 
 ### 4.1 Web Output Contract
 
-- [ ] Define output classes:
+- [x] Define output classes:
   - [ ] tiny direct answer
-  - [ ] extractive summary
+  - [x] extractive summary
   - [ ] model summary
-  - [ ] raw excerpt
-  - [ ] output ref
-- [ ] Default web fetch/extract/crawl to cheap extractive summaries.
-- [ ] Large raw pages must become output refs unless explicitly requested.
-- [ ] Add max chars, max tokens, and max links per tool.
+  - [x] raw excerpt
+  - [x] output ref
+- [x] Default web fetch/extract/crawl to cheap extractive summaries.
+- [x] Large raw pages must become output refs unless explicitly requested.
+- [x] Add max chars, max tokens, and max links per tool.
 - [ ] Add visible metrics:
-  - [ ] raw bytes fetched
-  - [ ] extracted chars
-  - [ ] summary chars
-  - [ ] estimated tokens saved
+  - [x] raw bytes fetched
+  - [x] extracted chars
+  - [x] summary chars
+  - [x] estimated tokens saved
   - [ ] cache hit/miss
-  - [ ] summarizer model/provider
-  - [ ] summary cost if model-based
+  - [x] summarizer model/provider
+  - [x] summary cost if model-based
 
 Acceptance:
 
-- [ ] A normal weather/news web fetch does not add tens or hundreds of thousands of tokens to context.
-- [ ] User can see whether model summarization was used.
+- [x] A normal weather/news web fetch does not add tens or hundreds of thousands of tokens to context.
+- [x] User can see whether model summarization was used.
 
 ### 4.2 External Summarizer
 

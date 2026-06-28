@@ -1041,13 +1041,15 @@ func sensitive(path string) bool {
 }
 
 type fetchedPage struct {
-	URL         string   `json:"url"`
-	Status      int      `json:"status"`
-	ContentType string   `json:"content_type"`
-	Title       string   `json:"title,omitempty"`
-	Text        string   `json:"text"`
-	Links       []string `json:"links,omitempty"`
-	Truncated   bool     `json:"truncated,omitempty"`
+	URL             string   `json:"url"`
+	Status          int      `json:"status"`
+	ContentType     string   `json:"content_type"`
+	Title           string   `json:"title,omitempty"`
+	Text            string   `json:"text"`
+	Links           []string `json:"links,omitempty"`
+	RawBytesFetched int      `json:"raw_bytes_fetched,omitempty"`
+	MaxBytes        int      `json:"max_bytes,omitempty"`
+	Truncated       bool     `json:"truncated,omitempty"`
 }
 
 type searchResult struct {
@@ -1061,11 +1063,14 @@ type crawlItem struct {
 }
 
 type crawlPage struct {
-	URL   string `json:"url"`
-	Depth int    `json:"depth"`
-	Title string `json:"title,omitempty"`
-	Text  string `json:"text"`
-	Error string `json:"error,omitempty"`
+	URL             string `json:"url"`
+	Depth           int    `json:"depth"`
+	Title           string `json:"title,omitempty"`
+	Text            string `json:"text"`
+	RawBytesFetched int    `json:"raw_bytes_fetched,omitempty"`
+	MaxBytes        int    `json:"max_bytes,omitempty"`
+	Truncated       bool   `json:"truncated,omitempty"`
+	Error           string `json:"error,omitempty"`
 }
 
 type webFetchOptions struct {
@@ -1080,56 +1085,75 @@ type webFetchOptions struct {
 }
 
 type compactPage struct {
-	URL                 string   `json:"url"`
-	Status              int      `json:"status,omitempty"`
-	ContentType         string   `json:"content_type,omitempty"`
-	Title               string   `json:"title,omitempty"`
-	Summary             string   `json:"summary,omitempty"`
-	KeyPoints           []string `json:"key_points,omitempty"`
-	Extract             string   `json:"extract,omitempty"`
-	Text                string   `json:"text,omitempty"`
-	Links               []string `json:"links,omitempty"`
-	OutputRef           string   `json:"output_ref,omitempty"`
-	Truncated           bool     `json:"truncated,omitempty"`
-	OriginalTextChars   int      `json:"original_text_chars,omitempty"`
-	OriginalTextTokens  int      `json:"original_text_tokens,omitempty"`
-	ReturnedTextChars   int      `json:"returned_text_chars,omitempty"`
-	EstimatedTextTokens int      `json:"estimated_text_tokens,omitempty"`
-	BudgetTextChars     int      `json:"budget_text_chars,omitempty"`
-	BudgetTextTokens    int      `json:"budget_text_tokens,omitempty"`
-	OutputTextTruncated bool     `json:"output_text_truncated,omitempty"`
-	CompactNote         string   `json:"compact_note,omitempty"`
+	URL                  string   `json:"url"`
+	Status               int      `json:"status,omitempty"`
+	ContentType          string   `json:"content_type,omitempty"`
+	OutputClass          string   `json:"output_class,omitempty"`
+	SummaryMode          string   `json:"summary_mode,omitempty"`
+	Title                string   `json:"title,omitempty"`
+	Summary              string   `json:"summary,omitempty"`
+	SummaryChars         int      `json:"summary_chars,omitempty"`
+	KeyPoints            []string `json:"key_points,omitempty"`
+	Extract              string   `json:"extract,omitempty"`
+	Text                 string   `json:"text,omitempty"`
+	Links                []string `json:"links,omitempty"`
+	OutputRef            string   `json:"output_ref,omitempty"`
+	Truncated            bool     `json:"truncated,omitempty"`
+	RawBytesFetched      int      `json:"raw_bytes_fetched,omitempty"`
+	MaxBytes             int      `json:"max_bytes,omitempty"`
+	OriginalTextChars    int      `json:"original_text_chars,omitempty"`
+	OriginalTextTokens   int      `json:"original_text_tokens,omitempty"`
+	ReturnedTextChars    int      `json:"returned_text_chars,omitempty"`
+	EstimatedTextTokens  int      `json:"estimated_text_tokens,omitempty"`
+	EstimatedTokensSaved int      `json:"estimated_tokens_saved,omitempty"`
+	BudgetTextChars      int      `json:"budget_text_chars,omitempty"`
+	BudgetTextTokens     int      `json:"budget_text_tokens,omitempty"`
+	OutputTextTruncated  bool     `json:"output_text_truncated,omitempty"`
+	CompactNote          string   `json:"compact_note,omitempty"`
 }
 
 type compactCrawlPage struct {
-	URL                 string   `json:"url"`
-	Depth               int      `json:"depth"`
-	Title               string   `json:"title,omitempty"`
-	Summary             string   `json:"summary,omitempty"`
-	KeyPoints           []string `json:"key_points,omitempty"`
-	Extract             string   `json:"extract,omitempty"`
-	Text                string   `json:"text,omitempty"`
-	Error               string   `json:"error,omitempty"`
-	OutputRef           string   `json:"output_ref,omitempty"`
-	OriginalTextChars   int      `json:"original_text_chars,omitempty"`
-	OriginalTextTokens  int      `json:"original_text_tokens,omitempty"`
-	ReturnedTextChars   int      `json:"returned_text_chars,omitempty"`
-	EstimatedTextTokens int      `json:"estimated_text_tokens,omitempty"`
-	BudgetTextChars     int      `json:"budget_text_chars,omitempty"`
-	BudgetTextTokens    int      `json:"budget_text_tokens,omitempty"`
-	OutputTextTruncated bool     `json:"output_text_truncated,omitempty"`
-	CompactNote         string   `json:"compact_note,omitempty"`
+	URL                  string   `json:"url"`
+	Depth                int      `json:"depth"`
+	OutputClass          string   `json:"output_class,omitempty"`
+	SummaryMode          string   `json:"summary_mode,omitempty"`
+	Title                string   `json:"title,omitempty"`
+	Summary              string   `json:"summary,omitempty"`
+	SummaryChars         int      `json:"summary_chars,omitempty"`
+	KeyPoints            []string `json:"key_points,omitempty"`
+	Extract              string   `json:"extract,omitempty"`
+	Text                 string   `json:"text,omitempty"`
+	Error                string   `json:"error,omitempty"`
+	OutputRef            string   `json:"output_ref,omitempty"`
+	RawBytesFetched      int      `json:"raw_bytes_fetched,omitempty"`
+	MaxBytes             int      `json:"max_bytes,omitempty"`
+	Truncated            bool     `json:"truncated,omitempty"`
+	OriginalTextChars    int      `json:"original_text_chars,omitempty"`
+	OriginalTextTokens   int      `json:"original_text_tokens,omitempty"`
+	ReturnedTextChars    int      `json:"returned_text_chars,omitempty"`
+	EstimatedTextTokens  int      `json:"estimated_text_tokens,omitempty"`
+	EstimatedTokensSaved int      `json:"estimated_tokens_saved,omitempty"`
+	BudgetTextChars      int      `json:"budget_text_chars,omitempty"`
+	BudgetTextTokens     int      `json:"budget_text_tokens,omitempty"`
+	OutputTextTruncated  bool     `json:"output_text_truncated,omitempty"`
+	CompactNote          string   `json:"compact_note,omitempty"`
 }
 
 type compactCrawlOutput struct {
-	Pages               []compactCrawlPage `json:"pages"`
-	OutputRef           string             `json:"output_ref,omitempty"`
-	OriginalTextChars   int                `json:"original_text_chars,omitempty"`
-	OriginalTextTokens  int                `json:"original_text_tokens,omitempty"`
-	ReturnedTextChars   int                `json:"returned_text_chars,omitempty"`
-	EstimatedTextTokens int                `json:"estimated_text_tokens,omitempty"`
-	OutputTextTruncated bool               `json:"output_text_truncated,omitempty"`
-	CompactNote         string             `json:"compact_note,omitempty"`
+	Pages                []compactCrawlPage `json:"pages"`
+	OutputClass          string             `json:"output_class,omitempty"`
+	SummaryMode          string             `json:"summary_mode,omitempty"`
+	SummaryChars         int                `json:"summary_chars,omitempty"`
+	OutputRef            string             `json:"output_ref,omitempty"`
+	RawBytesFetched      int                `json:"raw_bytes_fetched,omitempty"`
+	MaxBytesPerPage      int                `json:"max_bytes_per_page,omitempty"`
+	OriginalTextChars    int                `json:"original_text_chars,omitempty"`
+	OriginalTextTokens   int                `json:"original_text_tokens,omitempty"`
+	ReturnedTextChars    int                `json:"returned_text_chars,omitempty"`
+	EstimatedTextTokens  int                `json:"estimated_text_tokens,omitempty"`
+	EstimatedTokensSaved int                `json:"estimated_tokens_saved,omitempty"`
+	OutputTextTruncated  bool               `json:"output_text_truncated,omitempty"`
+	CompactNote          string             `json:"compact_note,omitempty"`
 }
 
 func compactFetchedPage(page fetchedPage, opts webFetchOptions) compactPage {
@@ -1150,25 +1174,36 @@ func compactFetchedPage(page fetchedPage, opts webFetchOptions) compactPage {
 	if len(links) > maxLinks {
 		links = links[:maxLinks]
 	}
+	summary := summarizeText(page.Title, page.Text, webDigestChars)
+	points := keyPoints(page.Text, opts.Query, 5, webKeyPointChars)
+	extract := extractSnippets(page.Text, opts.Query, webExtractChars)
+	estimatedTokens := estimateTokens(compactInlineText(text, page.Title, page.Text, opts.Query))
+	estimatedSaved := maxInt(0, estimateTokens(page.Text)-estimatedTokens)
 	return compactPage{
-		URL:                 page.URL,
-		Status:              page.Status,
-		ContentType:         page.ContentType,
-		Title:               page.Title,
-		Summary:             summarizeText(page.Title, page.Text, webDigestChars),
-		KeyPoints:           keyPoints(page.Text, opts.Query, 5, webKeyPointChars),
-		Extract:             extractSnippets(page.Text, opts.Query, webExtractChars),
-		Text:                text,
-		Links:               links,
-		Truncated:           page.Truncated,
-		OriginalTextChars:   len([]rune(page.Text)),
-		OriginalTextTokens:  estimateTokens(page.Text),
-		ReturnedTextChars:   len([]rune(text)),
-		EstimatedTextTokens: estimateTokens(compactInlineText(text, page.Title, page.Text, opts.Query)),
-		BudgetTextChars:     maxChars,
-		BudgetTextTokens:    budgetTokens,
-		OutputTextTruncated: outputTruncated || len(page.Links) > len(links),
-		CompactNote:         webCompactNote(outputTruncated || len(page.Links) > len(links), includeText, opts.FullText),
+		URL:                  page.URL,
+		Status:               page.Status,
+		ContentType:          page.ContentType,
+		OutputClass:          webOutputClass(includeText),
+		SummaryMode:          "extractive",
+		Title:                page.Title,
+		Summary:              summary,
+		SummaryChars:         webSummaryChars(summary, points, extract),
+		KeyPoints:            points,
+		Extract:              extract,
+		Text:                 text,
+		Links:                links,
+		Truncated:            page.Truncated,
+		RawBytesFetched:      page.RawBytesFetched,
+		MaxBytes:             page.MaxBytes,
+		OriginalTextChars:    len([]rune(page.Text)),
+		OriginalTextTokens:   estimateTokens(page.Text),
+		ReturnedTextChars:    len([]rune(text)),
+		EstimatedTextTokens:  estimatedTokens,
+		EstimatedTokensSaved: estimatedSaved,
+		BudgetTextChars:      maxChars,
+		BudgetTextTokens:     budgetTokens,
+		OutputTextTruncated:  outputTruncated || len(page.Links) > len(links),
+		CompactNote:          webCompactNote(outputTruncated || len(page.Links) > len(links), includeText, opts.FullText),
 	}
 }
 
@@ -1192,23 +1227,35 @@ func compactCrawlPages(pages []crawlPage, opts webFetchOptions) []compactCrawlPa
 		} else {
 			outputTruncated = strings.TrimSpace(page.Text) != ""
 		}
+		summary := summarizeText(page.Title, page.Text, webDigestChars)
+		points := keyPoints(page.Text, opts.Query, 4, webKeyPointChars)
+		extract := extractSnippets(page.Text, opts.Query, webExtractChars)
+		estimatedTokens := estimateTokens(compactInlineText(text, page.Title, page.Text, opts.Query))
+		originalTokens := estimateTokens(page.Text)
 		out = append(out, compactCrawlPage{
-			URL:                 page.URL,
-			Depth:               page.Depth,
-			Title:               page.Title,
-			Summary:             summarizeText(page.Title, page.Text, webDigestChars),
-			KeyPoints:           keyPoints(page.Text, opts.Query, 4, webKeyPointChars),
-			Extract:             extractSnippets(page.Text, opts.Query, webExtractChars),
-			Text:                text,
-			Error:               page.Error,
-			OriginalTextChars:   len([]rune(page.Text)),
-			OriginalTextTokens:  estimateTokens(page.Text),
-			ReturnedTextChars:   len([]rune(text)),
-			EstimatedTextTokens: estimateTokens(compactInlineText(text, page.Title, page.Text, opts.Query)),
-			BudgetTextChars:     maxChars,
-			BudgetTextTokens:    min(budgetTokens, totalTokens),
-			OutputTextTruncated: outputTruncated,
-			CompactNote:         webCompactNote(outputTruncated, includeText, opts.FullText),
+			URL:                  page.URL,
+			Depth:                page.Depth,
+			OutputClass:          webOutputClass(includeText),
+			SummaryMode:          "extractive",
+			Title:                page.Title,
+			Summary:              summary,
+			SummaryChars:         webSummaryChars(summary, points, extract),
+			KeyPoints:            points,
+			Extract:              extract,
+			Text:                 text,
+			Error:                page.Error,
+			RawBytesFetched:      page.RawBytesFetched,
+			MaxBytes:             page.MaxBytes,
+			Truncated:            page.Truncated,
+			OriginalTextChars:    len([]rune(page.Text)),
+			OriginalTextTokens:   originalTokens,
+			ReturnedTextChars:    len([]rune(text)),
+			EstimatedTextTokens:  estimatedTokens,
+			EstimatedTokensSaved: maxInt(0, originalTokens-estimatedTokens),
+			BudgetTextChars:      maxChars,
+			BudgetTextTokens:     min(budgetTokens, totalTokens),
+			OutputTextTruncated:  outputTruncated,
+			CompactNote:          webCompactNote(outputTruncated, includeText, opts.FullText),
 		})
 	}
 	return out
@@ -1241,6 +1288,8 @@ func compactCrawlResult(pages []crawlPage, opts webFetchOptions) (compactCrawlOu
 	ref, err := storeWebOutput("web_crawl", firstCrawlURL(pages), artifact)
 	var out compactCrawlOutput
 	out.Pages = compactPages
+	out.OutputClass = webOutputClass(opts.IncludeText || opts.FullText)
+	out.SummaryMode = "extractive"
 	out.OutputRef = ref
 	if err == nil && ref != "" {
 		for i := range out.Pages {
@@ -1250,10 +1299,16 @@ func compactCrawlResult(pages []crawlPage, opts webFetchOptions) (compactCrawlOu
 		}
 	}
 	for _, page := range out.Pages {
+		out.RawBytesFetched += page.RawBytesFetched
+		out.SummaryChars += page.SummaryChars
+		if page.MaxBytes > out.MaxBytesPerPage {
+			out.MaxBytesPerPage = page.MaxBytes
+		}
 		out.OriginalTextChars += page.OriginalTextChars
 		out.OriginalTextTokens += page.OriginalTextTokens
 		out.ReturnedTextChars += page.ReturnedTextChars
 		out.EstimatedTextTokens += page.EstimatedTextTokens
+		out.EstimatedTokensSaved += page.EstimatedTokensSaved
 		out.OutputTextTruncated = out.OutputTextTruncated || page.OutputTextTruncated
 	}
 	if out.OutputTextTruncated {
@@ -1265,11 +1320,19 @@ func compactCrawlResult(pages []crawlPage, opts webFetchOptions) (compactCrawlOu
 func crawlMetadata(out compactCrawlOutput) map[string]any {
 	savedTokens := maxInt(0, out.OriginalTextTokens-out.EstimatedTextTokens)
 	return map[string]any{
+		"output_class":                     out.OutputClass,
+		"summary_mode":                     out.SummaryMode,
+		"summary_chars":                    out.SummaryChars,
+		"summarizer_provider":              "native",
+		"summarizer_model":                 "extractive",
 		"pages":                            len(out.Pages),
+		"raw_bytes_fetched":                out.RawBytesFetched,
+		"max_bytes_per_page":               out.MaxBytesPerPage,
 		"original_text_chars":              out.OriginalTextChars,
 		"original_text_tokens":             out.OriginalTextTokens,
 		"returned_text_chars":              out.ReturnedTextChars,
 		"estimated_text_tokens":            out.EstimatedTextTokens,
+		"estimated_tokens_saved":           out.EstimatedTokensSaved,
 		"output_text_truncated":            out.OutputTextTruncated,
 		"output_ref":                       out.OutputRef,
 		"tool_summary_kind":                "extractive",
@@ -1630,13 +1693,32 @@ func webCompactNote(truncated, includeText, fullText bool) string {
 	return "inline text is capped; use output_ref if exact source text is required"
 }
 
+func webOutputClass(inlineText bool) string {
+	if inlineText {
+		return "raw_excerpt"
+	}
+	return "extractive_summary"
+}
+
+func webSummaryChars(summary string, keyPoints []string, extract string) int {
+	return len([]rune(strings.Join(nonEmptyStrings(summary, strings.Join(keyPoints, "\n"), extract), "\n")))
+}
+
 func webPageMetadata(page compactPage) map[string]any {
 	savedTokens := maxInt(0, page.OriginalTextTokens-page.EstimatedTextTokens)
 	return map[string]any{
+		"output_class":                     page.OutputClass,
+		"summary_mode":                     page.SummaryMode,
+		"summary_chars":                    page.SummaryChars,
+		"summarizer_provider":              "native",
+		"summarizer_model":                 "extractive",
+		"raw_bytes_fetched":                page.RawBytesFetched,
+		"max_bytes":                        page.MaxBytes,
 		"original_text_chars":              page.OriginalTextChars,
 		"original_text_tokens":             page.OriginalTextTokens,
 		"returned_text_chars":              page.ReturnedTextChars,
 		"estimated_text_tokens":            page.EstimatedTextTokens,
+		"estimated_tokens_saved":           page.EstimatedTokensSaved,
 		"budget_text_chars":                page.BudgetTextChars,
 		"budget_text_tokens":               page.BudgetTextTokens,
 		"output_text_truncated":            page.OutputTextTruncated,
@@ -1794,6 +1876,7 @@ func fetchPage(ctx context.Context, rawURL string, maxBytes int) (fetchedPage, e
 	if err != nil {
 		return fetchedPage{}, err
 	}
+	rawBytesFetched := len(body)
 	truncated := false
 	if len(body) > maxBytes {
 		truncated = true
@@ -1801,10 +1884,12 @@ func fetchPage(ctx context.Context, rawURL string, maxBytes int) (fetchedPage, e
 	}
 	textBody := string(body)
 	page := fetchedPage{
-		URL:         finalURL,
-		Status:      http.StatusOK,
-		ContentType: contentType,
-		Truncated:   truncated,
+		URL:             finalURL,
+		Status:          http.StatusOK,
+		ContentType:     contentType,
+		RawBytesFetched: rawBytesFetched,
+		MaxBytes:        maxBytes,
+		Truncated:       truncated,
 	}
 	if isHTML(contentType, textBody) {
 		page.Title = extractTitle(textBody)
@@ -1850,6 +1935,9 @@ func crawl(ctx context.Context, rawURL string, maxPages, maxDepth int, sameHost 
 		}
 		out.Title = page.Title
 		out.Text = page.Text
+		out.RawBytesFetched = page.RawBytesFetched
+		out.MaxBytes = page.MaxBytes
+		out.Truncated = page.Truncated
 		pages = append(pages, out)
 		if item.Depth >= maxDepth {
 			continue

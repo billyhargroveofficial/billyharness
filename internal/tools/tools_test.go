@@ -502,12 +502,14 @@ func TestWebCompactionStoresFullTextOutOfBand(t *testing.T) {
 	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
 	text := strings.Repeat("Full page sentence with important evidence. ", 300) + "TAIL_UNIQUE_EVIDENCE_THAT_SHOULD_ONLY_BE_IN_REF"
 	page := fetchedPage{
-		URL:         "https://example.com/article",
-		Status:      200,
-		ContentType: "text/html",
-		Title:       "Important Article",
-		Text:        text,
-		Links:       []string{"https://example.com/source"},
+		URL:             "https://example.com/article",
+		Status:          200,
+		ContentType:     "text/html",
+		Title:           "Important Article",
+		Text:            text,
+		Links:           []string{"https://example.com/source"},
+		RawBytesFetched: 12345,
+		MaxBytes:        65536,
 	}
 	compact := compactFetchedPage(page, webFetchOptions{})
 	ref, err := storeWebOutput("web_fetch", page.URL, renderFetchedPageArtifact(page))
@@ -525,11 +527,22 @@ func TestWebCompactionStoresFullTextOutOfBand(t *testing.T) {
 	if compact.Text != "" || compact.OutputRef == "" {
 		t.Fatalf("compact page should omit raw text and include output ref: %#v", compact)
 	}
+	if compact.OutputClass != "extractive_summary" || compact.SummaryMode != "extractive" ||
+		compact.SummaryChars <= 0 || compact.RawBytesFetched != 12345 || compact.MaxBytes != 65536 || compact.EstimatedTokensSaved <= 0 {
+		t.Fatalf("compact output contract missing metrics: %#v", compact)
+	}
 	meta := webPageMetadata(compact)
 	if meta["tool_summary_kind"] != "extractive" ||
 		meta["tool_summary_api_total_tokens"] != 0 ||
 		meta["tool_summary_external_model_used"] != false {
 		t.Fatalf("summary metadata missing extractive zero-cost fields: %#v", meta)
+	}
+	if meta["output_class"] != "extractive_summary" || meta["summary_mode"] != "extractive" ||
+		meta["summary_chars"].(int) <= 0 ||
+		meta["summarizer_provider"] != "native" || meta["summarizer_model"] != "extractive" ||
+		meta["raw_bytes_fetched"] != 12345 || meta["max_bytes"] != 65536 ||
+		meta["estimated_tokens_saved"].(int) <= 0 {
+		t.Fatalf("metadata missing web output contract metrics: %#v", meta)
 	}
 	if meta["tool_summary_input_tokens"].(int) <= meta["tool_summary_output_tokens"].(int) ||
 		meta["tool_summary_saved_tokens"].(int) <= 0 {
@@ -547,11 +560,29 @@ func TestWebCompactionStoresFullTextOutOfBand(t *testing.T) {
 	assertMode(t, ref, 0o600)
 }
 
+func TestWebIncludeTextMarksRawExcerptOutputClass(t *testing.T) {
+	page := fetchedPage{
+		URL:             "https://example.com/article",
+		Status:          200,
+		ContentType:     "text/plain",
+		Text:            strings.Repeat("short raw excerpt sentence. ", 200),
+		RawBytesFetched: 5600,
+		MaxBytes:        65536,
+	}
+	compact := compactFetchedPage(page, webFetchOptions{IncludeText: true, MaxTokens: 300})
+	if compact.OutputClass != "raw_excerpt" || compact.SummaryMode != "extractive" || compact.SummaryChars <= 0 {
+		t.Fatalf("compact output contract = %#v", compact)
+	}
+	if compact.Text == "" || compact.ReturnedTextChars == 0 || compact.BudgetTextTokens != 300 {
+		t.Fatalf("include_text should return capped text with metrics: %#v", compact)
+	}
+}
+
 func TestCompactCrawlResultReturnsSingleOutputRef(t *testing.T) {
 	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
 	pages := []crawlPage{
-		{URL: "https://example.com/a", Depth: 0, Title: "A", Text: strings.Repeat("A page sentence. ", 400)},
-		{URL: "https://example.com/b", Depth: 1, Title: "B", Text: strings.Repeat("B page sentence. ", 400)},
+		{URL: "https://example.com/a", Depth: 0, Title: "A", Text: strings.Repeat("A page sentence. ", 400), RawBytesFetched: 7000, MaxBytes: 65536},
+		{URL: "https://example.com/b", Depth: 1, Title: "B", Text: strings.Repeat("B page sentence. ", 400), RawBytesFetched: 8000, MaxBytes: 65536},
 	}
 	out, ref, err := compactCrawlResult(pages, webFetchOptions{})
 	if err != nil {
@@ -559,6 +590,18 @@ func TestCompactCrawlResultReturnsSingleOutputRef(t *testing.T) {
 	}
 	if ref == "" || out.OutputRef != ref || len(out.Pages) != 2 {
 		t.Fatalf("crawl compact output/ref = %#v ref=%q", out, ref)
+	}
+	if out.OutputClass != "extractive_summary" || out.SummaryMode != "extractive" ||
+		out.SummaryChars <= 0 || out.RawBytesFetched != 15000 || out.MaxBytesPerPage != 65536 || out.EstimatedTokensSaved <= 0 {
+		t.Fatalf("crawl output contract missing metrics: %#v", out)
+	}
+	meta := crawlMetadata(out)
+	if meta["output_class"] != "extractive_summary" || meta["summary_mode"] != "extractive" ||
+		meta["summary_chars"].(int) <= 0 ||
+		meta["summarizer_provider"] != "native" || meta["summarizer_model"] != "extractive" ||
+		meta["raw_bytes_fetched"] != 15000 || meta["max_bytes_per_page"] != 65536 ||
+		meta["estimated_tokens_saved"].(int) <= 0 {
+		t.Fatalf("crawl metadata missing web output contract metrics: %#v", meta)
 	}
 	for _, page := range out.Pages {
 		if page.Text != "" || page.OutputRef != ref || page.Extract == "" {
