@@ -397,6 +397,34 @@ func TestCompactMessagesReportsProtectedPrefixPolicyAndCompactedBudget(t *testin
 	}
 }
 
+func TestCompactMessagesReportsTopContextContributors(t *testing.T) {
+	cfg := config.Default()
+	cfg.ContextCompactTokens = 10
+	cfg.ContextCompactKeep = 1
+	cfg.ContextCompactMaxChars = 2000
+	messages := []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: strings.Repeat("small ", 20)},
+		{Role: protocol.RoleTool, Name: "web_fetch", ToolCallID: "call-web", Content: strings.Repeat("web summary ", 200)},
+		{Role: protocol.RoleTool, Name: "mcp_call", ToolCallID: "call-mcp", Content: strings.Repeat("mcp ", 50)},
+		{Role: protocol.RoleUser, Content: "latest"},
+	}
+	_, report, ok := compactMessages(messages, cfg, 1000)
+	if !ok {
+		t.Fatal("expected compaction")
+	}
+	if len(report.TopContextContributors) == 0 {
+		t.Fatalf("expected top contributors: %#v", report)
+	}
+	top := report.TopContextContributors[0]
+	if top.Source != "web_summaries" || top.Name != "web_fetch" || top.Role != string(protocol.RoleTool) || top.EstimatedTokens <= 0 {
+		t.Fatalf("top contributor = %#v", top)
+	}
+	if len(top.Preview) > 120 {
+		t.Fatalf("preview too long: %q", top.Preview)
+	}
+}
+
 func TestCompactMessagesPreservesToolAdjacency(t *testing.T) {
 	cfg := config.Default()
 	cfg.ContextCompactTokens = 1

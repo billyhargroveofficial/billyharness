@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
@@ -43,6 +44,7 @@ type compactionReport struct {
 	ActiveEstimatedTokens    int64                           `json:"active_estimated_tokens"`
 	SummaryChars             int                             `json:"summary_chars"`
 	SummaryEstimatedTokens   int64                           `json:"summary_estimated_tokens"`
+	TopContextContributors   []compactionContributor         `json:"top_context_contributors,omitempty"`
 }
 
 type compactionProtectedPrefixReport struct {
@@ -60,6 +62,16 @@ type compactionProtectedPrefixItem struct {
 	Reason          string `json:"reason"`
 	Chars           int    `json:"chars"`
 	EstimatedTokens int64  `json:"estimated_tokens"`
+}
+
+type compactionContributor struct {
+	Index           int    `json:"index"`
+	Role            string `json:"role"`
+	Source          string `json:"source"`
+	Name            string `json:"name,omitempty"`
+	Chars           int    `json:"chars"`
+	EstimatedTokens int64  `json:"estimated_tokens"`
+	Preview         string `json:"preview,omitempty"`
 }
 
 func compactMessages(messages []protocol.Message, cfg config.Config, observedPromptTokens int64) ([]protocol.Message, *compactionReport, bool) {
@@ -88,7 +100,7 @@ func compactMessages(messages []protocol.Message, cfg config.Config, observedPro
 	out = append(out, messages[:protected.EndIndex]...)
 	out = append(out, summary)
 	out = append(out, messages[cut:]...)
-	report := newCompactionReport(id, policy, triggerTokens, triggerSource, protected, compacted, summary, out)
+	report := newCompactionReport(id, policy, triggerTokens, triggerSource, protected, compacted, summary, out, messages)
 	return out, report, true
 }
 
@@ -303,6 +315,7 @@ func newCompactionReport(
 	compacted []protocol.Message,
 	summary protocol.Message,
 	active []protocol.Message,
+	before []protocol.Message,
 ) *compactionReport {
 	return &compactionReport{
 		CompactionID:             id,
@@ -324,5 +337,86 @@ func newCompactionReport(
 		ActiveEstimatedTokens:    estimateMessagesTokens(active),
 		SummaryChars:             len(summary.Content),
 		SummaryEstimatedTokens:   estimateMessagesTokens([]protocol.Message{summary}),
+		TopContextContributors:   topCompactionContributors(before, 5),
 	}
+}
+
+func topCompactionContributors(messages []protocol.Message, limit int) []compactionContributor {
+	if limit <= 0 {
+		return nil
+	}
+	out := make([]compactionContributor, 0, len(messages))
+	for i, msg := range messages {
+		chars := messageCompactionChars(msg)
+		if chars == 0 {
+			continue
+		}
+		out = append(out, compactionContributor{
+			Index:           i,
+			Role:            string(msg.Role),
+			Source:          compactionMessageSource(msg),
+			Name:            msg.Name,
+			Chars:           chars,
+			EstimatedTokens: int64((chars + 3) / 4),
+			Preview:         truncateForCompaction(compactionMessagePreview(msg), 120),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].EstimatedTokens == out[j].EstimatedTokens {
+			return out[i].Index < out[j].Index
+		}
+		return out[i].EstimatedTokens > out[j].EstimatedTokens
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+func compactionMessageSource(msg protocol.Message) string {
+	switch msg.Role {
+	case protocol.RoleSystem:
+		if isCompactionSummary(msg) {
+			return "compaction_summary"
+		}
+		return "system_instructions"
+	case protocol.RoleUser:
+		return "user_messages"
+	case protocol.RoleAssistant:
+		if len(msg.ToolCalls) > 0 {
+			return "assistant_tool_calls"
+		}
+		return "assistant_messages"
+	case protocol.RoleTool:
+		name := strings.ToLower(strings.TrimSpace(msg.Name))
+		switch {
+		case strings.HasPrefix(name, "web_"):
+			return "web_summaries"
+		case strings.HasPrefix(name, "mcp_") || strings.HasPrefix(name, "mcp "):
+			return "mcp_outputs"
+		default:
+			return "tool_outputs"
+		}
+	default:
+		return string(msg.Role)
+	}
+}
+
+func compactionMessagePreview(msg protocol.Message) string {
+	if strings.TrimSpace(msg.Content) != "" {
+		return msg.Content
+	}
+	if len(msg.ToolCalls) == 0 {
+		return ""
+	}
+	calls := make([]string, 0, len(msg.ToolCalls))
+	for _, call := range msg.ToolCalls {
+		args := strings.TrimSpace(string(call.Arguments))
+		if args != "" {
+			calls = append(calls, call.Name+" "+args)
+		} else {
+			calls = append(calls, call.Name)
+		}
+	}
+	return strings.Join(calls, "; ")
 }

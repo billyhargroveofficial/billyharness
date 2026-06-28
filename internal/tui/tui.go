@@ -3757,6 +3757,14 @@ func compactEventText(value any) string {
 		EstimatedTokens int64          `json:"estimated_tokens"`
 		Reasons         map[string]int `json:"reasons"`
 	}
+	type contributorData struct {
+		Index           int    `json:"index"`
+		Role            string `json:"role"`
+		Source          string `json:"source"`
+		Name            string `json:"name"`
+		EstimatedTokens int64  `json:"estimated_tokens"`
+		Preview         string `json:"preview"`
+	}
 	var data struct {
 		ActiveMessages           int                 `json:"active_messages"`
 		SummaryChars             int                 `json:"summary_chars"`
@@ -3772,6 +3780,7 @@ func compactEventText(value any) string {
 		CompactedChars           int                 `json:"compacted_chars"`
 		CompactedEstimatedTokens int64               `json:"compacted_estimated_tokens"`
 		ProtectedPrefix          protectedPrefixData `json:"protected_prefix"`
+		TopContextContributors   []contributorData   `json:"top_context_contributors"`
 	}
 	_ = json.Unmarshal(bytes, &data)
 	var lines []string
@@ -3811,6 +3820,20 @@ func compactEventText(value any) string {
 	}
 	if data.SummaryChars > 0 {
 		lines = append(lines, fmt.Sprintf("summary chars: %d", data.SummaryChars))
+	}
+	if len(data.TopContextContributors) > 0 {
+		lines = append(lines, "top contributors:")
+		for _, contributor := range data.TopContextContributors {
+			label := contributor.Source
+			if contributor.Name != "" {
+				label += "/" + contributor.Name
+			}
+			preview := contributor.Preview
+			if preview == "" {
+				preview = "(no text)"
+			}
+			lines = append(lines, fmt.Sprintf("  #%d %s %s ~%s - %s", contributor.Index, contributor.Role, label, compactNumber(contributor.EstimatedTokens), preview))
+		}
 	}
 	if len(lines) == 0 {
 		return "context compacted"

@@ -488,7 +488,7 @@ Acceptance:
   - [x] MCP outputs
   - [x] system/instructions
 - [x] Show active context as tokens and percent.
-- [ ] Show top context contributors before compaction.
+- [x] Show top context contributors before compaction.
 - [x] Add threshold events at 50%, 70%, 85%, 95%.
 - [x] Add `/context` in TUI and Telegram.
 

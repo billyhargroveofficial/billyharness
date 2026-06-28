@@ -1188,6 +1188,14 @@ func TestCompactEventTextShowsStructuredCompactionFields(t *testing.T) {
 		},
 		"active_messages": 35,
 		"summary_chars":   12000,
+		"top_context_contributors": []map[string]any{{
+			"index":            6,
+			"role":             "tool",
+			"source":           "web_summaries",
+			"name":             "web_fetch",
+			"estimated_tokens": 42000,
+			"preview":          "large web summary",
+		}},
 	})
 	for _, want := range []string{
 		"id: abc123",
@@ -1202,6 +1210,8 @@ func TestCompactEventTextShowsStructuredCompactionFields(t *testing.T) {
 		"system_prompt=1",
 		"active messages: 35",
 		"summary chars: 12000",
+		"top contributors:",
+		"#6 tool web_summaries/web_fetch ~42k - large web summary",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("compact text %q missing %q", text, want)
