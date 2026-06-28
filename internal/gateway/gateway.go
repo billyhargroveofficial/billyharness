@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -31,11 +33,13 @@ type Server struct {
 	mux       *http.ServeMux
 	authToken string
 	sessions  map[string]*Session
+	store     *sessionStore
 	mu        sync.Mutex
 }
 
 type ServerOptions struct {
-	AuthToken string
+	AuthToken       string
+	SessionStoreDir string
 }
 
 type Session struct {
@@ -80,10 +84,24 @@ func NewServerWithOptions(cfg config.Config, prov provider.Provider, registry *t
 		mux:      http.NewServeMux(),
 		sessions: map[string]*Session{},
 	}
+	if strings.TrimSpace(opts.SessionStoreDir) != "" {
+		s.store = newSessionStore(opts.SessionStoreDir)
+		loaded, err := s.store.LoadAll()
+		if err != nil {
+			log.Printf("gateway session store load failed: %v", err)
+		}
+		for _, session := range loaded {
+			s.sessions[session.ID] = session
+		}
+	}
 	opts.AuthToken = strings.TrimSpace(opts.AuthToken)
 	s.authToken = opts.AuthToken
 	s.routes()
 	return s
+}
+
+func DefaultSessionStoreDir() string {
+	return filepath.Join(config.BillyHomeDir(), "gateway-sessions")
 }
 
 func (s *Server) Handler() http.Handler {
@@ -246,6 +264,10 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		Created: time.Now().UTC(),
 		Thread:  sessionpkg.New(messages),
 	}
+	if err := s.saveSession(session); err != nil {
+		writeError(w, http.StatusInternalServerError, "session save failed: "+err.Error())
+		return
+	}
 	s.mu.Lock()
 	s.sessions[session.ID] = session
 	s.mu.Unlock()
@@ -307,7 +329,13 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		return session.Thread.Run(r.Context(), sessionpkg.RunnerFunc(a.RunMessages), req.Prompt, emit)
+		err = session.Thread.Run(r.Context(), sessionpkg.RunnerFunc(a.RunMessages), req.Prompt, emit)
+		if !errors.Is(err, sessionpkg.ErrBusy) {
+			if saveErr := s.saveSession(session); saveErr != nil {
+				log.Printf("gateway session save failed id=%s: %v", session.ID, saveErr)
+			}
+		}
+		return err
 	})
 }
 
@@ -327,6 +355,13 @@ func (s *Server) session(id string) (*Session, bool) {
 	defer s.mu.Unlock()
 	session, ok := s.sessions[id]
 	return session, ok
+}
+
+func (s *Server) saveSession(session *Session) error {
+	if s.store == nil {
+		return nil
+	}
+	return s.store.Save(session)
 }
 
 func (s *Server) agentFor(req RunRequest) (*agent.Agent, error) {

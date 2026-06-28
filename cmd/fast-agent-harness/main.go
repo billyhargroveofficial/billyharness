@@ -417,7 +417,10 @@ func serve(args []string) error {
 		return err
 	}
 	defer registry.Close()
-	server := gateway.NewServerWithOptions(cfg, provider.Mock{}, registry, gateway.ServerOptions{AuthToken: *authToken})
+	server := gateway.NewServerWithOptions(cfg, provider.Mock{}, registry, gateway.ServerOptions{
+		AuthToken:       *authToken,
+		SessionStoreDir: gateway.DefaultSessionStoreDir(),
+	})
 	listenURL := normalizeGatewayURL(listener.Addr().String())
 	status := "fast-agent-harness gateway listening on " + listenURL
 	if authRequired {
