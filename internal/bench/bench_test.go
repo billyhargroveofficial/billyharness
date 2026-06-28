@@ -40,6 +40,9 @@ func TestRunMockTaskWritesResults(t *testing.T) {
 	if !summary.ReplayVerified {
 		t.Fatalf("summary should mark replay verified: %#v", summary)
 	}
+	if summary.ProfileHash == "" {
+		t.Fatalf("summary missing profile hash: %#v", summary)
+	}
 	assertPerm(t, outDir, 0o700)
 	assertPerm(t, summary.ResultsJSONL, 0o600)
 	assertPerm(t, summary.EventsJSONL, 0o600)
@@ -58,8 +61,28 @@ func TestRunMockTaskWritesResults(t *testing.T) {
 		manifest.RunID == "" ||
 		manifest.ResultsJSONL != summary.ResultsJSONL ||
 		manifest.EventsJSONL != summary.EventsJSONL ||
-		manifest.PayloadsDir != summary.PayloadsDir {
+		manifest.PayloadsDir != summary.PayloadsDir ||
+		manifest.ProfileHash != summary.ProfileHash {
 		t.Fatalf("manifest = %#v summary = %#v", manifest, summary)
+	}
+
+	resultsBytes, err := os.ReadFile(summary.ResultsJSONL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result Result
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(resultsBytes))), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ProfileHash != summary.ProfileHash {
+		t.Fatalf("result profile hash = %q, want %q", result.ProfileHash, summary.ProfileHash)
+	}
+	replay, err := trace.ReplayEvents(summary.EventsJSONL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replay.ProfileHashes) != 1 || replay.ProfileHashes[0] != summary.ProfileHash {
+		t.Fatalf("replay profile hashes = %#v, want %q", replay.ProfileHashes, summary.ProfileHash)
 	}
 }
 

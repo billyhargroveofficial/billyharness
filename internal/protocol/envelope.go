@@ -29,6 +29,7 @@ type EventEnvelope struct {
 	TS           string
 	SubmissionID string
 	RunID        string
+	ProfileHash  string
 	Now          func() time.Time
 }
 
@@ -83,6 +84,9 @@ func EnrichEvent(event Event, env EventEnvelope) Event {
 	}
 	if env.RunID != "" && event.RunID == "" {
 		event.RunID = env.RunID
+	}
+	if env.ProfileHash != "" && event.ProfileHash == "" {
+		event.ProfileHash = env.ProfileHash
 	}
 	if event.TS == "" {
 		event.TS = env.TS
@@ -295,6 +299,9 @@ func copyMapEnvelope(event *Event, m map[string]any) {
 	}
 	if event.ParentStepID == "" {
 		event.ParentStepID = firstStringValue(m, "parent_step_id", "batch_id")
+	}
+	if event.ProfileHash == "" {
+		event.ProfileHash = firstStringValue(m, "profile_hash", "profile_instruction_hash")
 	}
 	if event.DurationMS == 0 {
 		event.DurationMS = int64Value(m, "duration_ms")

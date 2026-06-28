@@ -260,7 +260,7 @@ Acceptance:
 - [x] Add `/profile` support in TUI if missing or incomplete.
 - [x] Add `/profile` support in Telegram if missing or incomplete.
 - [x] Add profile persistence per session.
-- [ ] Add profile hash to events and trace bundles.
+- [x] Add profile hash to events and trace bundles.
 
 Acceptance:
 

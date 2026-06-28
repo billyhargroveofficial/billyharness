@@ -92,3 +92,28 @@ func TestEventEnricherExtractsToolProgressIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestEventEnricherExtractsProfileHashFromMetadata(t *testing.T) {
+	event := EnrichEvent(Event{
+		Type: EventTurnStarted,
+		Data: TurnEvent{
+			TurnID: "turn-001",
+			Round:  1,
+			Status: TurnStatusStarted,
+			Metadata: map[string]any{
+				"profile_instruction_hash": "profile-sha",
+			},
+		},
+	}, EventEnvelope{
+		Seq:    1,
+		Source: EventSourceAgent,
+		RunID:  "run-1",
+		TS:     time.Unix(10, 0).UTC().Format(time.RFC3339Nano),
+	})
+	if event.ProfileHash != "profile-sha" {
+		t.Fatalf("profile hash = %q, want profile-sha: %#v", event.ProfileHash, event)
+	}
+	if err := ValidateEventEnvelope(event); err != nil {
+		t.Fatal(err)
+	}
+}

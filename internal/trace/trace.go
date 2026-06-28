@@ -23,6 +23,7 @@ type Manifest struct {
 	CreatedAt     time.Time `json:"created_at"`
 	StartedAtMS   int64     `json:"started_at_unix_ms"`
 	Harness       string    `json:"harness"`
+	ProfileHash   string    `json:"profile_hash,omitempty"`
 	TasksPath     string    `json:"tasks_path,omitempty"`
 	TaskCount     int       `json:"task_count,omitempty"`
 	ResultsJSONL  string    `json:"results_jsonl"`
@@ -37,6 +38,7 @@ type EventRecord struct {
 	TaskID        string       `json:"task_id,omitempty"`
 	Timestamp     time.Time    `json:"ts"`
 	EventType     string       `json:"event_type,omitempty"`
+	ProfileHash   string       `json:"profile_hash,omitempty"`
 	Event         any          `json:"event"`
 	PayloadRefs   []PayloadRef `json:"payload_refs,omitempty"`
 }
@@ -134,6 +136,7 @@ func (w *EventWriter) Record(taskID string, event protocol.Event) (EventRecord, 
 		TaskID:        taskID,
 		Timestamp:     now,
 		EventType:     string(event.Type),
+		ProfileHash:   event.ProfileHash,
 		Event:         recordEvent,
 		PayloadRefs:   payloadRefs,
 	}
@@ -241,6 +244,7 @@ type ReplaySummary struct {
 	OutputTokens           int64                `json:"output_tokens,omitempty"`
 	CacheHitTokens         int64                `json:"cache_hit_tokens,omitempty"`
 	CacheMissTokens        int64                `json:"cache_miss_tokens,omitempty"`
+	ProfileHashes          []string             `json:"profile_hashes,omitempty"`
 	Timeline               []ReplayTimelineItem `json:"timeline,omitempty"`
 }
 
@@ -256,6 +260,7 @@ type ReplayTimelineItem struct {
 	ParentStepID string `json:"parent_step_id,omitempty"`
 	CallID       string `json:"call_id,omitempty"`
 	AttemptID    string `json:"attempt_id,omitempty"`
+	ProfileHash  string `json:"profile_hash,omitempty"`
 	Round        int    `json:"round,omitempty"`
 	Index        int    `json:"index,omitempty"`
 	Kind         string `json:"kind,omitempty"`
@@ -391,9 +396,12 @@ func resolvePayloadPath(eventsPath, payloadPath string) string {
 
 func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEvent bool) error {
 	if hasEvent {
+		s.addProfileHash(firstString(event.ProfileHash, record.ProfileHash))
 		if err := s.appendTimeline(record, event); err != nil {
 			return err
 		}
+	} else {
+		s.addProfileHash(record.ProfileHash)
 	}
 	switch protocol.EventType(record.EventType) {
 	case protocol.EventRunStarted:
@@ -484,6 +492,7 @@ func (s *ReplaySummary) appendTimeline(record EventRecord, event protocol.Event)
 		ParentStepID: event.ParentStepID,
 		CallID:       event.CallID,
 		AttemptID:    event.AttemptID,
+		ProfileHash:  firstString(event.ProfileHash, record.ProfileHash),
 		DurationMS:   event.DurationMS,
 	}
 
@@ -593,6 +602,19 @@ func isReplayTimelineEvent(eventType protocol.EventType) bool {
 	default:
 		return false
 	}
+}
+
+func (s *ReplaySummary) addProfileHash(hash string) {
+	hash = strings.TrimSpace(hash)
+	if hash == "" {
+		return
+	}
+	for _, existing := range s.ProfileHashes {
+		if existing == hash {
+			return
+		}
+	}
+	s.ProfileHashes = append(s.ProfileHashes, hash)
 }
 
 func applyTimelineToolCallData(item *ReplayTimelineItem, data any) {

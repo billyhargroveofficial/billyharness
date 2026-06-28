@@ -95,6 +95,7 @@ type Event struct {
 	CallID        string      `json:"call_id,omitempty"`
 	AttemptID     string      `json:"attempt_id,omitempty"`
 	ParentStepID  string      `json:"parent_step_id,omitempty"`
+	ProfileHash   string      `json:"profile_hash,omitempty"`
 	DurationMS    int64       `json:"duration_ms,omitempty"`
 	Type          EventType   `json:"type"`
 	Data          any         `json:"data,omitempty"`

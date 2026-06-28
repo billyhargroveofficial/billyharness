@@ -104,9 +104,10 @@ func TestReplayEventsRejectsPayloadHashMismatch(t *testing.T) {
 func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 	var out bytes.Buffer
 	writer := NewEventWriter("run-1", &out)
+	profileHash := "profile-sha"
 	events := []protocol.Event{
 		{Type: protocol.EventRunStarted},
-		{Type: protocol.EventTurnStarted, Data: protocol.TurnEvent{TurnID: "turn-001", Round: 1, Status: protocol.TurnStatusStarted}},
+		{Type: protocol.EventTurnStarted, Data: protocol.TurnEvent{TurnID: "turn-001", Round: 1, Status: protocol.TurnStatusStarted, Metadata: map[string]any{"profile_instruction_hash": profileHash}}},
 		{Type: protocol.EventStepStarted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:model-call-001", Round: 1, Kind: protocol.StepKindModelCall, Status: protocol.StepStatusStarted}},
 		{Type: protocol.EventModelCallStarted, TurnID: "turn-001", StepID: "turn-001:model-call-001"},
 		{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
@@ -171,6 +172,9 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 		summary.CacheHitTokens != 80 || summary.CacheMissTokens != 20 {
 		t.Fatalf("usage counters = %#v", summary)
 	}
+	if len(summary.ProfileHashes) != 1 || summary.ProfileHashes[0] != profileHash {
+		t.Fatalf("profile hashes = %#v", summary.ProfileHashes)
+	}
 	wantTimeline := []string{
 		string(protocol.EventRunStarted),
 		string(protocol.EventTurnStarted),
@@ -198,6 +202,9 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 	if summary.Timeline[1].TurnID != "turn-001" || summary.Timeline[1].Round != 1 || summary.Timeline[1].Status != protocol.TurnStatusStarted {
 		t.Fatalf("turn timeline item = %#v", summary.Timeline[1])
 	}
+	if summary.Timeline[1].ProfileHash != profileHash {
+		t.Fatalf("turn timeline profile hash = %#v", summary.Timeline[1])
+	}
 	if summary.Timeline[2].StepID != "turn-001:model-call-001" ||
 		summary.Timeline[2].Kind != protocol.StepKindModelCall ||
 		summary.Timeline[2].Status != protocol.StepStatusStarted {
@@ -222,6 +229,15 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 		summary.Timeline[9].AttemptID != "turn-001:tool-call-001:attempt-001" ||
 		summary.Timeline[9].Name != "time_now" {
 		t.Fatalf("tool finish timeline item = %#v", summary.Timeline[9])
+	}
+
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	var turnRecord EventRecord
+	if err := json.Unmarshal([]byte(lines[1]), &turnRecord); err != nil {
+		t.Fatal(err)
+	}
+	if turnRecord.ProfileHash != profileHash {
+		t.Fatalf("event record profile hash = %q, want %q", turnRecord.ProfileHash, profileHash)
 	}
 }
 
@@ -261,6 +277,7 @@ func TestWriteManifestUsesPrivateAtomicJSON(t *testing.T) {
 	err := WriteManifest(path, Manifest{
 		RunID:        "run-1",
 		Harness:      "fast-agent-harness-go",
+		ProfileHash:  "profile-sha",
 		ResultsJSONL: "results.jsonl",
 		EventsJSONL:  "events.jsonl",
 	})
@@ -282,7 +299,7 @@ func TestWriteManifestUsesPrivateAtomicJSON(t *testing.T) {
 	if err := json.Unmarshal(bytes, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.SchemaVersion != CurrentManifestVersion || manifest.RunID != "run-1" || manifest.StartedAtMS == 0 {
+	if manifest.SchemaVersion != CurrentManifestVersion || manifest.RunID != "run-1" || manifest.ProfileHash != "profile-sha" || manifest.StartedAtMS == 0 {
 		t.Fatalf("manifest = %#v", manifest)
 	}
 }

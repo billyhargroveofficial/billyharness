@@ -19,6 +19,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
+	"github.com/billyhargroveofficial/billyharness/internal/runstate"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 	"github.com/billyhargroveofficial/billyharness/internal/trace"
 )
@@ -60,6 +61,7 @@ type Result struct {
 	TaskSuite              string         `json:"task_suite"`
 	Model                  string         `json:"model"`
 	Harness                string         `json:"harness"`
+	ProfileHash            string         `json:"profile_hash,omitempty"`
 	PromptHash             string         `json:"prompt_hash"`
 	Workspace              string         `json:"workspace,omitempty"`
 	Tags                   []string       `json:"tags,omitempty"`
@@ -119,6 +121,7 @@ type Summary struct {
 	ResultsJSONL           string  `json:"results_jsonl"`
 	EventsJSONL            string  `json:"events_jsonl"`
 	PayloadsDir            string  `json:"payloads_dir,omitempty"`
+	ProfileHash            string  `json:"profile_hash,omitempty"`
 	ReplayVerified         bool    `json:"replay_verified,omitempty"`
 }
 
@@ -137,6 +140,7 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 		return Summary{}, err
 	}
 	cfg = applyRunConfig(cfg, rc)
+	profileHash := runProfileHash(cfg)
 	runID := time.Now().UTC().Format("20060102T150405Z")
 	manifestPath := filepath.Join(rc.OutDir, runID+"-manifest.json")
 	resultsPath := filepath.Join(rc.OutDir, runID+"-results.jsonl")
@@ -167,6 +171,7 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 		ResultsJSONL: resultsPath,
 		EventsJSONL:  eventsPath,
 		PayloadsDir:  payloadsDir,
+		ProfileHash:  profileHash,
 	}
 	startAll := time.Now()
 	results := make([]Result, 0, len(tasks))
@@ -228,6 +233,7 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 		CreatedAt:    startAll.UTC(),
 		StartedAtMS:  startAll.UTC().UnixMilli(),
 		Harness:      "fast-agent-harness-go",
+		ProfileHash:  profileHash,
 		TasksPath:    rc.TasksPath,
 		TaskCount:    len(tasks),
 		ResultsJSONL: resultsPath,
@@ -258,6 +264,9 @@ type replayExpectations struct {
 
 func verifyReplayAgainstResults(replay trace.ReplaySummary, results []Result) error {
 	expected := replayExpectationsFromResults(results)
+	if err := verifyReplayProfileHashes(replay, results); err != nil {
+		return err
+	}
 	intChecks := []struct {
 		name string
 		got  int
@@ -295,6 +304,30 @@ func verifyReplayAgainstResults(replay trace.ReplaySummary, results []Result) er
 	for _, check := range int64Checks {
 		if check.got != check.want {
 			return fmt.Errorf("trace replay mismatch %s: events=%d results=%d", check.name, check.got, check.want)
+		}
+	}
+	return nil
+}
+
+func verifyReplayProfileHashes(replay trace.ReplaySummary, results []Result) error {
+	expected := map[string]bool{}
+	for _, result := range results {
+		if strings.TrimSpace(result.ProfileHash) != "" {
+			expected[result.ProfileHash] = true
+		}
+	}
+	if len(expected) == 0 {
+		return nil
+	}
+	got := map[string]bool{}
+	for _, hash := range replay.ProfileHashes {
+		if strings.TrimSpace(hash) != "" {
+			got[hash] = true
+		}
+	}
+	for hash := range expected {
+		if !got[hash] {
+			return fmt.Errorf("trace replay missing profile_hash %s", hash)
 		}
 	}
 	return nil
@@ -340,6 +373,10 @@ func applyRunConfig(cfg config.Config, rc RunConfig) config.Config {
 	}
 	cfg.ApplyModelProviderDefaults()
 	return cfg
+}
+
+func runProfileHash(cfg config.Config) string {
+	return runstate.NewSnapshot(cfg, agent.InitialMessages(cfg), nil).ProfileInstructionHash
 }
 
 func LoadTasks(path string) ([]Task, error) {
@@ -394,6 +431,7 @@ func runTask(parent context.Context, cfg config.Config, rc RunConfig, runID stri
 		TaskSuite:       task.Suite,
 		Model:           taskCfg.Model,
 		Harness:         "fast-agent-harness-go",
+		ProfileHash:     runProfileHash(taskCfg),
 		PromptHash:      promptHash(task.Prompt),
 		Workspace:       workspace,
 		Tags:            task.Tags,
