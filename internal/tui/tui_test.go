@@ -954,6 +954,8 @@ func TestMarkdownTableRowKeepsEscapedAndCodePipesInCells(t *testing.T) {
 }
 
 func TestFormatMCPStatusShowsOwnConfigAndNativeWebTools(t *testing.T) {
+	startedAt := time.Date(2026, 6, 28, 8, 0, 0, 0, time.Local)
+	lastErrorAt := time.Date(2026, 6, 28, 8, 1, 0, 0, time.Local)
 	text := formatMCPStatus(mcpStatusResponse{
 		ConfigFiles: []string{"/root/billyharness/mcp.config.toml"},
 		Allowed:     []string{"telegram", "telegram-parilka", "github", "context7"},
@@ -965,7 +967,7 @@ func TestFormatMCPStatusShowsOwnConfigAndNativeWebTools(t *testing.T) {
 			Connected: true,
 			ToolCount: 7,
 			PID:       4242,
-			StartedAt: time.Date(2026, 6, 28, 8, 0, 0, 0, time.Local),
+			StartedAt: &startedAt,
 		}, {
 			Name:        "context7",
 			Transport:   "stdio",
@@ -973,7 +975,7 @@ func TestFormatMCPStatusShowsOwnConfigAndNativeWebTools(t *testing.T) {
 			Connected:   false,
 			Error:       "MCP context7 transport: EOF",
 			LastError:   "MCP context7 transport: EOF",
-			LastErrorAt: time.Date(2026, 6, 28, 8, 1, 0, 0, time.Local),
+			LastErrorAt: &lastErrorAt,
 			StderrTail:  "server closed",
 		}},
 	})

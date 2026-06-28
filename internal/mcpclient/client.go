@@ -40,18 +40,18 @@ type ExternalTool struct {
 }
 
 type ServerStatus struct {
-	Name        string    `json:"name"`
-	Transport   string    `json:"transport"`
-	Enabled     bool      `json:"enabled"`
-	Required    bool      `json:"required"`
-	Connected   bool      `json:"connected"`
-	ToolCount   int       `json:"tool_count"`
-	PID         int       `json:"pid,omitempty"`
-	StartedAt   time.Time `json:"started_at,omitempty"`
-	LastError   string    `json:"last_error,omitempty"`
-	LastErrorAt time.Time `json:"last_error_at,omitempty"`
-	StderrTail  string    `json:"stderr_tail,omitempty"`
-	Error       string    `json:"error,omitempty"`
+	Name        string     `json:"name"`
+	Transport   string     `json:"transport"`
+	Enabled     bool       `json:"enabled"`
+	Required    bool       `json:"required"`
+	Connected   bool       `json:"connected"`
+	ToolCount   int        `json:"tool_count"`
+	PID         int        `json:"pid,omitempty"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	LastError   string     `json:"last_error,omitempty"`
+	LastErrorAt *time.Time `json:"last_error_at,omitempty"`
+	StderrTail  string     `json:"stderr_tail,omitempty"`
+	Error       string     `json:"error,omitempty"`
 }
 
 type Manager struct {
@@ -169,8 +169,15 @@ func (m *Manager) Statuses() []ServerStatus {
 		if client != nil && i < len(statuses) {
 			statuses[i].Connected = client.connected.Load()
 			statuses[i].PID = client.pid()
-			statuses[i].StartedAt = client.startedAt
-			statuses[i].LastError, statuses[i].LastErrorAt = client.lastError()
+			if !client.startedAt.IsZero() {
+				startedAt := client.startedAt
+				statuses[i].StartedAt = &startedAt
+			}
+			lastErr, lastErrAt := client.lastError()
+			statuses[i].LastError = lastErr
+			if !lastErrAt.IsZero() {
+				statuses[i].LastErrorAt = &lastErrAt
+			}
 			if !statuses[i].Connected {
 				if statuses[i].Error == "" {
 					statuses[i].Error = statuses[i].LastError

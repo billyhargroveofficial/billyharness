@@ -260,7 +260,7 @@ func TestStdioCallTimeoutAndTransportCloseDisconnectStatus(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "deadline exceeded") {
 			t.Fatalf("err = %v", err)
 		}
-		if statuses := manager.Statuses(); len(statuses) != 1 || statuses[0].Connected || statuses[0].LastError == "" || statuses[0].Error == "" || statuses[0].LastErrorAt.IsZero() {
+		if statuses := manager.Statuses(); len(statuses) != 1 || statuses[0].Connected || statuses[0].LastError == "" || statuses[0].Error == "" || statuses[0].LastErrorAt == nil || statuses[0].LastErrorAt.IsZero() {
 			t.Fatalf("statuses = %#v", statuses)
 		} else if !strings.Contains(statuses[0].LastError, "deadline exceeded") {
 			t.Fatalf("last error = %q", statuses[0].LastError)
@@ -295,7 +295,7 @@ func TestStdioCallTimeoutAndTransportCloseDisconnectStatus(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "transport") {
 			t.Fatalf("err = %v", err)
 		}
-		if statuses := manager.Statuses(); len(statuses) != 1 || statuses[0].Connected || statuses[0].LastError == "" || statuses[0].Error == "" || statuses[0].LastErrorAt.IsZero() {
+		if statuses := manager.Statuses(); len(statuses) != 1 || statuses[0].Connected || statuses[0].LastError == "" || statuses[0].Error == "" || statuses[0].LastErrorAt == nil || statuses[0].LastErrorAt.IsZero() {
 			t.Fatalf("statuses = %#v", statuses)
 		} else if !strings.Contains(statuses[0].LastError, "transport") {
 			t.Fatalf("last error = %q", statuses[0].LastError)
