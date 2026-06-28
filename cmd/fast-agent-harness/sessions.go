@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 )
@@ -24,6 +25,8 @@ func sessionsCommand(args []string, out io.Writer) error {
 		return sessionsListCommand(args[1:], out)
 	case "inspect", "show":
 		return sessionsInspectCommand(args[1:], out)
+	case "index":
+		return sessionsIndexCommand(args[1:], out)
 	default:
 		return fmt.Errorf("unknown sessions command %q", args[0])
 	}
@@ -91,6 +94,88 @@ func sessionsInspectCommand(args []string, out io.Writer) error {
 		return enc.Encode(inspection)
 	}
 	printSessionInspection(out, inspection)
+	return nil
+}
+
+func sessionsIndexCommand(args []string, out io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: sessions index rebuild|show|delete [-dir DIR] [-json]")
+	}
+	switch strings.ToLower(strings.TrimSpace(args[0])) {
+	case "rebuild":
+		return sessionsIndexRebuildCommand(args[1:], out)
+	case "show":
+		return sessionsIndexShowCommand(args[1:], out)
+	case "delete", "rm":
+		return sessionsIndexDeleteCommand(args[1:], out)
+	default:
+		return fmt.Errorf("unknown sessions index command %q", args[0])
+	}
+}
+
+func sessionsIndexRebuildCommand(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("sessions index rebuild", flag.ExitOnError)
+	dir := fs.String("dir", gateway.DefaultSessionStoreDir(), "gateway session store directory")
+	jsonOut := fs.Bool("json", false, "print JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	index, err := gateway.RebuildStoredSessionIndex(*dir)
+	if err != nil {
+		return err
+	}
+	return printSessionIndex(out, index, *jsonOut)
+}
+
+func sessionsIndexShowCommand(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("sessions index show", flag.ExitOnError)
+	dir := fs.String("dir", gateway.DefaultSessionStoreDir(), "gateway session store directory")
+	jsonOut := fs.Bool("json", false, "print JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	index, err := gateway.ReadStoredSessionIndex(*dir)
+	if err != nil {
+		return err
+	}
+	return printSessionIndex(out, index, *jsonOut)
+}
+
+func sessionsIndexDeleteCommand(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("sessions index delete", flag.ExitOnError)
+	dir := fs.String("dir", gateway.DefaultSessionStoreDir(), "gateway session store directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := gateway.DeleteStoredSessionIndex(*dir); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "deleted session index")
+	return nil
+}
+
+func printSessionIndex(out io.Writer, index gateway.StoredSessionIndex, jsonOut bool) error {
+	if jsonOut {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(index)
+	}
+	fmt.Fprintf(out, "billyharness session index\n")
+	fmt.Fprintf(out, "dir: %s\n", index.Dir)
+	fmt.Fprintf(out, "built: %s\n", index.BuiltAt.Format(time.RFC3339))
+	fmt.Fprintf(out, "sessions: %d\n", index.SessionCount)
+	for _, session := range index.Sessions {
+		fmt.Fprintf(out, "- %s messages=%d history=%d events=%d replay=%t\n",
+			session.ID,
+			session.MessageCount,
+			session.HistorySeq,
+			session.EventSeq,
+			session.OfflineReplayReady,
+		)
+	}
+	for _, warning := range index.Warnings {
+		fmt.Fprintf(out, "warning: %s\n", warning)
+	}
 	return nil
 }
 

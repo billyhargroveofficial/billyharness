@@ -533,6 +533,43 @@ func TestGatewaySessionStoreRestoresSessionAfterRestart(t *testing.T) {
 		!listed.Sessions[0].OfflineReplayReady {
 		t.Fatalf("listed sessions = %#v warnings=%#v", listed.Sessions, listed.Warnings)
 	}
+	index, err := RebuildStoredSessionIndex(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if index.SessionCount != len(listed.Sessions) || index.Sessions[0].ID != listed.Sessions[0].ID {
+		t.Fatalf("index = %#v listed = %#v", index, listed)
+	}
+	indexFile := filepath.Join(storeDir, sessionIndexDirName, sessionIndexFileName)
+	assertPerm(t, filepath.Dir(indexFile), 0o700)
+	assertPerm(t, indexFile, 0o600)
+	if err := DeleteStoredSessionIndex(storeDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(indexFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("index file after delete err = %v", err)
+	}
+	if err := os.WriteFile(indexFile, []byte("{not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	listedAfterCorruption, err := ListStoredSessions(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listedAfterCorruption.Sessions) != len(listed.Sessions) || listedAfterCorruption.Sessions[0].ID != created.ID {
+		t.Fatalf("canonical list after corrupt index = %#v", listedAfterCorruption)
+	}
+	rebuilt, err := RebuildStoredSessionIndex(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readBack, err := ReadStoredSessionIndex(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebuilt.SessionCount != readBack.SessionCount || readBack.Sessions[0].ID != created.ID {
+		t.Fatalf("rebuilt=%#v readBack=%#v", rebuilt, readBack)
+	}
 
 	if err := writeLegacySnapshot(filepath.Join(storeDir, created.ID+".json"), storedSession{
 		ID:       created.ID,

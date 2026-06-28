@@ -113,6 +113,9 @@ func ListStoredSessions(dir string) (StoredSessionList, error) {
 		if !entry.IsDir() {
 			continue
 		}
+		if entry.Name() == sessionIndexDirName {
+			continue
+		}
 		id := entry.Name()
 		inspection, err := InspectStoredSession(dir, id)
 		if err != nil {

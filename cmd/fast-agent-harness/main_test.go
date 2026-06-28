@@ -179,6 +179,32 @@ func TestSessionsCommandListsAndInspectsStore(t *testing.T) {
 	if inspection.SessionID != created.ID || !inspection.OfflineReplayReady || inspection.Events.Records == 0 {
 		t.Fatalf("inspection = %#v", inspection)
 	}
+
+	var indexOut bytes.Buffer
+	if err := sessionsCommand([]string{"index", "rebuild", "-dir", storeDir}, &indexOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(indexOut.String(), "session index") || !strings.Contains(indexOut.String(), created.ID) {
+		t.Fatalf("index rebuild output:\n%s", indexOut.String())
+	}
+	var indexJSON bytes.Buffer
+	if err := sessionsCommand([]string{"index", "show", "-dir", storeDir, "-json"}, &indexJSON); err != nil {
+		t.Fatal(err)
+	}
+	var index gateway.StoredSessionIndex
+	if err := json.Unmarshal(indexJSON.Bytes(), &index); err != nil {
+		t.Fatal(err)
+	}
+	if index.SessionCount != 1 || index.Sessions[0].ID != created.ID {
+		t.Fatalf("index = %#v", index)
+	}
+	var deleteOut bytes.Buffer
+	if err := sessionsCommand([]string{"index", "delete", "-dir", storeDir}, &deleteOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(deleteOut.String(), "deleted") {
+		t.Fatalf("index delete output: %s", deleteOut.String())
+	}
 }
 
 func TestParseChatIDs(t *testing.T) {

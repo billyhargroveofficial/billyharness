@@ -835,18 +835,18 @@ Acceptance:
 
 ### 8.3 Optional Indexes
 
-- [ ] Add rebuildable indexes only after JSONL replay is stable.
+- [x] Add rebuildable indexes only after JSONL replay is stable.
 - [ ] Possible indexes:
-  - [ ] session list
+  - [x] session list
   - [ ] search
   - [ ] tool calls
   - [ ] cost/usage
   - [ ] errors
-- [ ] Index corruption must not destroy canonical session data.
+- [x] Index corruption must not destroy canonical session data.
 
 Acceptance:
 
-- [ ] Deleting indexes and rebuilding restores same visible session list.
+- [x] Deleting indexes and rebuilding restores same visible session list.
 
 ## Phase 9: Benchmarks And Performance
 
