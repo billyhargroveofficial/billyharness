@@ -627,6 +627,50 @@ func TestWebIncludeTextMarksRawExcerptOutputClass(t *testing.T) {
 	}
 }
 
+func TestWebPageMetadataIncludesPhaseTimings(t *testing.T) {
+	page := compactPage{
+		URL:              "https://example.com/timing",
+		OutputClass:      "extractive_summary",
+		SummaryMode:      "extractive",
+		WebCacheLookupMS: 1,
+		WebHTTPFetchMS:   2,
+		WebCompactMS:     3,
+		WebSummaryMS:     4,
+		WebOutputRefMS:   5,
+		WebCacheSaveMS:   6,
+		WebTotalMS:       21,
+	}
+	meta := webPageMetadata(page)
+	for key, want := range map[string]int64{
+		"web_cache_lookup_ms": 1,
+		"web_http_fetch_ms":   2,
+		"web_compact_ms":      3,
+		"web_summary_ms":      4,
+		"web_output_ref_ms":   5,
+		"web_cache_save_ms":   6,
+		"web_total_ms":        21,
+	} {
+		if got := anyInt64(meta[key]); got != want {
+			t.Fatalf("%s = %d, want %d in %#v", key, got, want, meta)
+		}
+	}
+
+	page.resetWebPhaseTimings()
+	for _, got := range []int64{
+		page.WebCacheLookupMS,
+		page.WebHTTPFetchMS,
+		page.WebCompactMS,
+		page.WebSummaryMS,
+		page.WebOutputRefMS,
+		page.WebCacheSaveMS,
+		page.WebTotalMS,
+	} {
+		if got != 0 {
+			t.Fatalf("reset should clear web phase timings: %#v", page)
+		}
+	}
+}
+
 func TestModelWebSummarizerRunsOutsideMainLoopAndRecordsMetrics(t *testing.T) {
 	oldProvider := newWebSummaryProvider
 	newWebSummaryProvider = func(cfg config.Config) (provider.Provider, error) {

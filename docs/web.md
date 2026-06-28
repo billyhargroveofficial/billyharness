@@ -45,3 +45,5 @@ Inspect and clear the cache through tools:
 ```
 
 Tool results expose `web_cache_hit`, `web_cache_miss`, `web_cache_key`, `web_cache_age_ms`, and `web_cache_ttl_ms` in metadata.
+
+`web_fetch` and `web_extract` also expose phase timings in metadata: `web_cache_lookup_ms`, `web_http_fetch_ms`, `web_compact_ms`, `web_summary_ms`, `web_output_ref_ms`, `web_cache_save_ms`, and `web_total_ms`. Cache hits reset old miss timings and report the current lookup/total timing for that call.

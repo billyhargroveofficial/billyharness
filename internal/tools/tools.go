@@ -1711,6 +1711,13 @@ type compactPage struct {
 	WebCacheKey          string   `json:"web_cache_key,omitempty"`
 	WebCacheAgeMS        int64    `json:"web_cache_age_ms,omitempty"`
 	WebCacheTTLMS        int64    `json:"web_cache_ttl_ms,omitempty"`
+	WebCacheLookupMS     int64    `json:"web_cache_lookup_ms,omitempty"`
+	WebHTTPFetchMS       int64    `json:"web_http_fetch_ms,omitempty"`
+	WebCompactMS         int64    `json:"web_compact_ms,omitempty"`
+	WebSummaryMS         int64    `json:"web_summary_ms,omitempty"`
+	WebOutputRefMS       int64    `json:"web_output_ref_ms,omitempty"`
+	WebCacheSaveMS       int64    `json:"web_cache_save_ms,omitempty"`
+	WebTotalMS           int64    `json:"web_total_ms,omitempty"`
 	KeyPoints            []string `json:"key_points,omitempty"`
 	Extract              string   `json:"extract,omitempty"`
 	Text                 string   `json:"text,omitempty"`
@@ -1947,10 +1954,16 @@ func compactCrawlPages(pages []crawlPage, opts webFetchOptions) []compactCrawlPa
 }
 
 func (r *Registry) fetchCompactPageResult(ctx context.Context, toolName, rawURL string, opts webFetchOptions) (Result, error) {
+	totalStart := time.Now()
 	opts.MaxBytes = boundedBytes(opts.MaxBytes)
+	cacheLookupStart := time.Now()
 	cacheKey, cacheOK := r.webCacheKey(ctx, toolName, rawURL, opts, nil)
+	cacheLookupMS := elapsedMillis(cacheLookupStart)
 	if cacheOK {
 		if compact, hit := r.loadWebPageCache(cacheKey); hit {
+			compact.resetWebPhaseTimings()
+			compact.WebCacheLookupMS = cacheLookupMS
+			compact.WebTotalMS = elapsedMillis(totalStart)
 			out, _ := json.MarshalIndent(compact, "", "  ")
 			return Result{
 				Content:   string(out),
@@ -1960,22 +1973,35 @@ func (r *Registry) fetchCompactPageResult(ctx context.Context, toolName, rawURL 
 			}, nil
 		}
 	}
+	fetchStart := time.Now()
 	page, err := fetchPage(ctx, rawURL, opts.MaxBytes)
 	if err != nil {
 		return Result{}, err
 	}
+	fetchMS := elapsedMillis(fetchStart)
+	compactStart := time.Now()
 	compact := compactFetchedPage(page, opts)
+	compact.WebCacheLookupMS = cacheLookupMS
+	compact.WebHTTPFetchMS = fetchMS
+	compact.WebCompactMS = elapsedMillis(compactStart)
+	summaryStart := time.Now()
 	r.applyModelSummaryToPage(ctx, &compact, page, opts)
+	compact.WebSummaryMS = elapsedMillis(summaryStart)
+	outputRefStart := time.Now()
 	ref, err := storeWebOutput(toolName, page.URL, renderFetchedPageArtifact(page))
+	compact.WebOutputRefMS = elapsedMillis(outputRefStart)
 	if err != nil {
 		compact.CompactNote = strings.TrimSpace(compact.CompactNote + " full extracted text save failed: " + err.Error())
 	} else {
 		compact.OutputRef = ref
 	}
 	if cacheOK {
+		cacheSaveStart := time.Now()
 		compact.applyWebCache(cacheKey, false, 0, r.cfg.WebCacheTTL)
 		_ = r.saveWebPageCache(cacheKey, compact)
+		compact.WebCacheSaveMS = elapsedMillis(cacheSaveStart)
 	}
+	compact.WebTotalMS = elapsedMillis(totalStart)
 	out, _ := json.MarshalIndent(compact, "", "  ")
 	return Result{
 		Content:   string(out),
@@ -2310,6 +2336,26 @@ func crawlMetadata(out compactCrawlOutput) map[string]any {
 		"tool_summary_estimated_cost_usd":  out.WebsumCost,
 		"tool_summary_external_model_used": out.SummaryMode == "model",
 	}
+}
+
+func (page *compactPage) resetWebPhaseTimings() {
+	if page == nil {
+		return
+	}
+	page.WebCacheLookupMS = 0
+	page.WebHTTPFetchMS = 0
+	page.WebCompactMS = 0
+	page.WebSummaryMS = 0
+	page.WebOutputRefMS = 0
+	page.WebCacheSaveMS = 0
+	page.WebTotalMS = 0
+}
+
+func elapsedMillis(start time.Time) int64 {
+	if start.IsZero() {
+		return 0
+	}
+	return maxInt64(0, time.Since(start).Milliseconds())
 }
 
 func firstCrawlURL(pages []crawlPage) string {
@@ -2734,6 +2780,13 @@ func webPageMetadata(page compactPage) map[string]any {
 		"web_cache_key":                    page.WebCacheKey,
 		"web_cache_age_ms":                 page.WebCacheAgeMS,
 		"web_cache_ttl_ms":                 page.WebCacheTTLMS,
+		"web_cache_lookup_ms":              page.WebCacheLookupMS,
+		"web_http_fetch_ms":                page.WebHTTPFetchMS,
+		"web_compact_ms":                   page.WebCompactMS,
+		"web_summary_ms":                   page.WebSummaryMS,
+		"web_output_ref_ms":                page.WebOutputRefMS,
+		"web_cache_save_ms":                page.WebCacheSaveMS,
+		"web_total_ms":                     page.WebTotalMS,
 		"raw_bytes_fetched":                page.RawBytesFetched,
 		"max_bytes":                        page.MaxBytes,
 		"original_text_chars":              page.OriginalTextChars,
