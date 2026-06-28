@@ -19,6 +19,7 @@ const (
 	SourceHomeConfig  = "$BILLYHARNESS_HOME/config.toml"
 	SourceProject     = "project .billyharness/config.toml"
 	SourceSettings    = "$BILLYHARNESS_HOME/settings.json"
+	SourceProfile     = "$BILLYHARNESS_HOME/profiles/<profile>/profile.toml"
 	SourceDotenv      = ".env"
 	SourceEnvironment = "environment"
 	SourceCLI         = "cli flag"
@@ -86,6 +87,9 @@ func Resolve(overrides ...ResolveOverride) (ResolvedConfig, error) {
 	state.applyEnvironment()
 	for _, override := range overrides {
 		state.applyOverride(override)
+	}
+	if err := state.applyProfileMetadata(); err != nil {
+		return ResolvedConfig{}, err
 	}
 	state.finalizeDerivedValues()
 	return ResolvedConfig{
@@ -396,6 +400,74 @@ func (s *resolveState) applyBillySettings() {
 	}
 	if strings.TrimSpace(settings.LastProfile) != "" {
 		s.applyValue("profile", settings.LastProfile, SourceSettings, path, "last_profile")
+	}
+}
+
+func (s *resolveState) applyProfileMetadata() error {
+	meta, path, ok, err := LoadProfileMetadata(s.cfg.Profile)
+	if err != nil || !ok {
+		return err
+	}
+	source := SourceProfile
+	s.record("profile_name", meta.Name, source, path, "name", false, "", "")
+	if strings.TrimSpace(meta.ToolPolicy) != "" {
+		s.record("profile_tool_policy", meta.ToolPolicy, source, path, "tool_policy", false, "", "")
+	}
+	if len(meta.InstructionFragments) > 0 {
+		s.record("profile_instruction_fragments", append([]string(nil), meta.InstructionFragments...), source, path, "instruction_fragments", false, "", "")
+	}
+	if len(meta.CostBudgetHints) > 0 {
+		s.record("profile_cost_budget_hints", append([]string(nil), meta.CostBudgetHints...), source, path, "cost_budget_hints", false, "", "")
+	}
+	if strings.TrimSpace(meta.Provider) != "" {
+		s.applyProfileValue("provider", meta.Provider, source, path, "provider")
+	}
+	if strings.TrimSpace(meta.Model) != "" {
+		s.applyProfileValue("model", meta.Model, source, path, "model")
+	}
+	if strings.TrimSpace(meta.Thinking) != "" {
+		s.applyProfileValue("thinking", meta.Thinking, source, path, "thinking")
+	}
+	if strings.TrimSpace(meta.ReasoningEffort) != "" {
+		s.applyProfileValue("reasoning_effort", meta.ReasoningEffort, source, path, "reasoning_effort")
+	}
+	if meta.ContextWindowTokens > 0 {
+		s.applyProfileValue("context_window_tokens", meta.ContextWindowTokens, source, path, "context_window_tokens")
+	}
+	if strings.TrimSpace(meta.WebSummaryMode) != "" {
+		s.applyProfileValue("web_summary_mode", meta.WebSummaryMode, source, path, "web_summary_mode")
+	}
+	if len(meta.MCPAllowlist) > 0 {
+		s.applyProfileValue("mcp_allowed_servers", meta.MCPAllowlist, source, path, "mcp_allowlist")
+	}
+	return nil
+}
+
+func (s *resolveState) applyProfileValue(key string, value any, source, sourcePath, sourceKey string) {
+	current, ok := s.values[normalizeConfigKey(key)]
+	if ok {
+		switch current.Source {
+		case SourceDotenv, SourceEnvironment, SourceCLI, SourceGateway:
+			return
+		case SourceSettings:
+			if !s.profileSelectedExplicitly() {
+				return
+			}
+		}
+	}
+	s.applyValue(key, value, source, sourcePath, sourceKey)
+}
+
+func (s *resolveState) profileSelectedExplicitly() bool {
+	value, ok := s.values["profile"]
+	if !ok {
+		return false
+	}
+	switch value.Source {
+	case SourceHomeConfig, SourceProject, SourceDotenv, SourceEnvironment, SourceCLI, SourceGateway:
+		return true
+	default:
+		return false
 	}
 }
 

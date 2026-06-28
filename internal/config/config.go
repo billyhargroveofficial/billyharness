@@ -265,6 +265,9 @@ func DefaultProfileFile(profile string) string {
 func EnsureDefaultProfileFile(profile string) (string, error) {
 	name := NormalizeProfileName(profile)
 	path := DefaultProfileFile(name)
+	if _, err := EnsureDefaultProfileMetadataFile(name); err != nil {
+		return "", err
+	}
 	if _, err := os.Stat(path); err == nil {
 		return path, nil
 	} else if !os.IsNotExist(err) {

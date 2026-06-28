@@ -244,29 +244,29 @@ Acceptance:
 
 ### 2.2 Profiles
 
-- [ ] Keep `SOUL.md` as the persona/instruction body.
-- [ ] Add profile metadata file, likely `profile.toml`.
-- [ ] Profile fields:
-  - [ ] name
-  - [ ] provider
-  - [ ] model
-  - [ ] reasoning
-  - [ ] context limit
-  - [ ] web summary mode
-  - [ ] tool policy
-  - [ ] MCP allowlist
-  - [ ] instruction fragments
-  - [ ] cost budget hints
-- [ ] Add `/profile` support in TUI if missing or incomplete.
-- [ ] Add `/profile` support in Telegram if missing or incomplete.
-- [ ] Add profile persistence per session.
+- [x] Keep `SOUL.md` as the persona/instruction body.
+- [x] Add profile metadata file, likely `profile.toml`.
+- [x] Profile fields:
+  - [x] name
+  - [x] provider
+  - [x] model
+  - [x] reasoning
+  - [x] context limit
+  - [x] web summary mode
+  - [x] tool policy
+  - [x] MCP allowlist
+  - [x] instruction fragments
+  - [x] cost budget hints
+- [x] Add `/profile` support in TUI if missing or incomplete.
+- [x] Add `/profile` support in Telegram if missing or incomplete.
+- [x] Add profile persistence per session.
 - [ ] Add profile hash to events and trace bundles.
 
 Acceptance:
 
-- [ ] Switching profile changes provider/model/reasoning/instructions consistently.
-- [ ] Existing `billy` profile remains default.
-- [ ] Sessions record which profile was active.
+- [x] Switching profile changes provider/model/reasoning/instructions consistently.
+- [x] Existing `billy` profile remains default.
+- [x] Sessions record which profile was active.
 
 ### 2.3 Provider Catalog
 

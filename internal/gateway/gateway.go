@@ -455,14 +455,17 @@ func (s *Server) attachSessionStore(session *Session) {
 
 func (s *Server) agentFor(req RunRequest) (*agent.Agent, error) {
 	cfg := s.cfg
+	if strings.TrimSpace(req.Profile) != "" {
+		cfg.Profile = config.NormalizeProfileName(req.Profile)
+		if err := cfg.ApplyProfileMetadata(); err != nil {
+			return nil, err
+		}
+	}
 	if req.Provider != "" {
 		cfg.Provider = req.Provider
 	}
 	if req.Model != "" {
 		cfg.Model = req.Model
-	}
-	if strings.TrimSpace(req.Profile) != "" {
-		cfg.Profile = config.NormalizeProfileName(req.Profile)
 	}
 	cfg.ApplyModelProviderDefaults()
 	if req.Thinking != "" {
@@ -483,14 +486,15 @@ func (s *Server) agentFor(req RunRequest) (*agent.Agent, error) {
 
 func (s *Server) statusRunRequest(req RunRequest) RunRequest {
 	cfg := s.cfg
+	if strings.TrimSpace(req.Profile) != "" {
+		cfg.Profile = config.NormalizeProfileName(req.Profile)
+		_ = cfg.ApplyProfileMetadata()
+	}
 	if req.Provider != "" {
 		cfg.Provider = req.Provider
 	}
 	if req.Model != "" {
 		cfg.Model = req.Model
-	}
-	if strings.TrimSpace(req.Profile) != "" {
-		cfg.Profile = config.NormalizeProfileName(req.Profile)
 	}
 	cfg.ApplyModelProviderDefaults()
 	if req.ReasoningEffort != "" {

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -184,6 +186,33 @@ func TestProfileSlashCommandStartsNewProfileChat(t *testing.T) {
 	}
 	if len(m.messages) != 2 || !strings.Contains(m.messages[1].Content, "# Billyharness profile: billy") {
 		t.Fatalf("billy profile not injected: %#v", m.messages)
+	}
+}
+
+func TestProfileSlashCommandAppliesProfileMetadata(t *testing.T) {
+	m := newTestModel(t)
+	dir := filepath.Join(config.BillyHomeDir(), "profiles", "pro")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "profile.toml"), []byte(`
+name = "pro"
+model = "deepseek-v4-pro"
+thinking = "enabled"
+reasoning_effort = "max"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	handled, cmd := m.handleSlashCommand("/profile pro")
+	if !handled || cmd != nil {
+		t.Fatalf("/profile pro handled=%t cmd=%v", handled, cmd)
+	}
+	if got := m.currentModel(); got != "deepseek-v4-pro" {
+		t.Fatalf("model = %q", got)
+	}
+	if got := m.currentThinking().effort; got != "max" {
+		t.Fatalf("reasoning = %q", got)
 	}
 }
 

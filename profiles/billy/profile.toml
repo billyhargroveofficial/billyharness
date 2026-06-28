@@ -1,0 +1,11 @@
+name = "billy"
+provider = "deepseek"
+model = "deepseek-v4-flash"
+thinking = "enabled"
+reasoning_effort = "high"
+context_window_tokens = 1000000
+web_summary_mode = "extractive"
+tool_policy = "solo-full-access"
+mcp_allowlist = ["telegram", "telegram-parilka", "github", "context7"]
+instruction_fragments = ["SOUL.md"]
+cost_budget_hints = ["Keep native extractive web summaries by default; use model web summaries only when explicitly enabled."]

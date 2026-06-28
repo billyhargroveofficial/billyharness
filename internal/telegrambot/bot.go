@@ -396,7 +396,19 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 			_ = b.sendPlain(ctx, msg, "Current profile: "+fallback(state.Profile, b.opts.Profile))
 			return
 		}
-		state.Profile = config.NormalizeProfileName(arg)
+		profile := config.NormalizeProfileName(arg)
+		cfg := config.Config{Profile: profile}
+		if err := cfg.ApplyProfileMetadata(); err != nil {
+			_ = b.sendPlain(ctx, msg, "Profile error: "+err.Error())
+			return
+		}
+		state.Profile = profile
+		if cfg.Model != "" {
+			state.Model = modelAlias(cfg.Model)
+		}
+		if strings.TrimSpace(cfg.ReasoningEffort) != "" {
+			state.ReasoningEffort = strings.ToLower(strings.TrimSpace(cfg.ReasoningEffort))
+		}
 		state.SessionID = ""
 		state.AgentTurns = 0
 		state.ToolCalls = 0

@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -144,6 +146,47 @@ func TestCancelCommandBypassesActiveRunLock(t *testing.T) {
 	case <-runDone:
 	case <-time.After(time.Second):
 		t.Fatal("run handler did not finish after cancel")
+	}
+}
+
+func TestProfileCommandAppliesProfileMetadata(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	dir := filepath.Join(home, "profiles", "pro")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "profile.toml"), []byte(`
+name = "pro"
+model = "deepseek-v4-pro"
+reasoning_effort = "max"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(home, "state.json")
+	bot, err := New(Options{
+		BotToken:        "token",
+		StatePath:       statePath,
+		Model:           "deepseek-v4-flash",
+		Profile:         "billy",
+		ReasoningEffort: "high",
+		EditInterval:    time.Millisecond,
+		AllowedChatIDs:  map[int64]bool{123: true},
+		SendEnabled:     false,
+		DryRunDefault:   true,
+	}, nil, scriptedHarness{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/profile pro"})
+	state, err := (Store{Path: statePath}).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat := state.Chats["123"]
+	if chat.Profile != "pro" || chat.Model != "deepseek-v4-pro" || chat.ReasoningEffort != "max" {
+		t.Fatalf("chat profile state = %#v", chat)
 	}
 }
 

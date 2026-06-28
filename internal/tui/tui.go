@@ -1968,6 +1968,12 @@ func (m *Model) setProfile(value string) tea.Cmd {
 	}
 	_ = m.saveCurrentSession()
 	m.cfg.Profile = profile
+	if err := m.cfg.ApplyProfileMetadata(); err != nil {
+		m.status = "profile metadata error: " + err.Error()
+		m.addBlock("error", "ERROR", err.Error())
+		return nil
+	}
+	m.applyConfigSelection(m.cfg)
 	m.localChatID = newChatID()
 	m.chatTitle = "new chat"
 	m.chatCreated = time.Now().UTC()
@@ -1999,6 +2005,31 @@ func (m *Model) setProfile(value string) tea.Cmd {
 		return m.createSessionCmd()
 	}
 	return nil
+}
+
+func (m *Model) applyConfigSelection(cfg config.Config) {
+	model := modelinfo.NormalizeAlias(cfg.Model)
+	if model != "" {
+		m.models = appendIfMissing(m.models, model)
+		for i, candidate := range m.models {
+			if candidate == model {
+				m.modelIndex = i
+				break
+			}
+		}
+	}
+	for i, mode := range m.thinking {
+		if mode.kind == cfg.Thinking && mode.effort == cfg.ReasoningEffort {
+			m.thinkingIdx = i
+			return
+		}
+	}
+	for i, mode := range m.thinking {
+		if mode.effort == cfg.ReasoningEffort || (cfg.Thinking == "disabled" && mode.kind == "disabled") {
+			m.thinkingIdx = i
+			return
+		}
+	}
 }
 
 func (m *Model) cycleReasoning() {

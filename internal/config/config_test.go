@@ -156,6 +156,52 @@ func TestEnsureDefaultProfileFileCreatesBillySoul(t *testing.T) {
 	if !strings.Contains(string(body), "Формулы пиши в LaTeX") {
 		t.Fatalf("profile body = %s", body)
 	}
+	if _, err := os.Stat(filepath.Join(root, "profiles", "billy", "profile.toml")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProfileMetadataAppliesRuntimeDefaults(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	profileDir := filepath.Join(root, "profiles", "teacher")
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "profile.toml"), []byte(`
+name = "teacher"
+provider = "deepseek"
+model = "deepseek-v4-pro"
+thinking = "enabled"
+reasoning_effort = "max"
+context_window_tokens = 700000
+web_summary_mode = "model"
+mcp_allowlist = ["context7"]
+tool_policy = "solo-full-access"
+instruction_fragments = ["SOUL.md"]
+cost_budget_hints = ["prefer flash summaries"]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{Profile: "teacher"}
+	if err := cfg.ApplyProfileMetadata(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model != "deepseek-v4-pro" || cfg.Provider != "deepseek" || cfg.ReasoningEffort != "max" ||
+		cfg.ContextWindowTokens != 700000 || cfg.WebSummaryMode != "model" || cfg.WebSummaryModel != "deepseek-v4-flash" ||
+		len(cfg.MCPAllowedServers) != 1 || cfg.MCPAllowedServers[0] != "context7" {
+		t.Fatalf("profile metadata config = %#v", cfg)
+	}
+
+	resolved, err := Resolve(ResolveOverride{Key: "profile", Value: "teacher", Source: SourceCLI, SourceKey: "-profile"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertResolvedSource(t, resolved, "model", SourceProfile, "model")
+	assertResolvedSource(t, resolved, "web_summary_mode", SourceProfile, "web_summary_mode")
+	if value, ok := resolved.Value("profile_tool_policy"); !ok || value.Value != "solo-full-access" {
+		t.Fatalf("missing profile tool policy: %#v", resolved.Values)
+	}
 }
 
 func TestFastAgentModelEnvOverridesBillySettings(t *testing.T) {
