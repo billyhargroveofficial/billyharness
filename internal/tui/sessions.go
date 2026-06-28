@@ -36,9 +36,17 @@ type chatSession struct {
 }
 
 type savedBlock struct {
-	Kind    string `json:"kind"`
-	Title   string `json:"title"`
-	Content string `json:"content"`
+	ID           string `json:"id,omitempty"`
+	Kind         string `json:"kind"`
+	Title        string `json:"title"`
+	Content      string `json:"content"`
+	EventType    string `json:"event_type,omitempty"`
+	TurnID       string `json:"turn_id,omitempty"`
+	StepID       string `json:"step_id,omitempty"`
+	CallID       string `json:"call_id,omitempty"`
+	AttemptID    string `json:"attempt_id,omitempty"`
+	ParentStepID string `json:"parent_step_id,omitempty"`
+	RawCopy      string `json:"raw_copy,omitempty"`
 }
 
 func newChatID() string {

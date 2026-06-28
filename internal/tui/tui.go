@@ -57,14 +57,21 @@ func (m thinkingMode) effortLabel() string {
 }
 
 type block struct {
-	id        string
-	kind      string
-	title     string
-	content   string
-	live      bool
-	eventType protocol.EventType
-	started   time.Time
-	updated   time.Time
+	id             string
+	kind           string
+	title          string
+	content        string
+	live           bool
+	eventType      protocol.EventType
+	turnID         string
+	stepID         string
+	callID         string
+	attemptID      string
+	parentStepID   string
+	rawCopy        string
+	renderCacheKey string
+	started        time.Time
+	updated        time.Time
 }
 
 type selectionPoint struct {
@@ -106,38 +113,39 @@ type Model struct {
 	width           int
 	height          int
 
-	blocks            []block
-	nextBlockSeq      int64
-	collapsed         map[int]bool
-	selected          int
-	busy              bool
-	status            string
-	err               string
-	events            chan tea.Msg
-	modelCalls        int
-	toolCalls         int
-	inputTok          int64
-	outputTok         int64
-	cacheHitTok       int64
-	cacheMissTok      int64
-	reasoningTok      int64
-	lastInputTok      int64
-	lastOutputTok     int64
-	lastCacheHitTok   int64
-	lastCacheMissTok  int64
-	toolSummaryInTok  int64
-	toolSummaryOutTok int64
-	toolSummaryAPITok int64
-	usageAccounting   usageAccumulator
-	slashIndex        int
-	slashDismissed    string
-	authInputProvider string
-	selecting         bool
-	selectStart       selectionPoint
-	selectEnd         selectionPoint
-	runStartedAt      time.Time
-	lastRunDuration   time.Duration
-	spinnerFrame      int
+	blocks             []block
+	nextBlockSeq       int64
+	collapsed          map[int]bool
+	toolBlocksByCallID map[string]int
+	selected           int
+	busy               bool
+	status             string
+	err                string
+	events             chan tea.Msg
+	modelCalls         int
+	toolCalls          int
+	inputTok           int64
+	outputTok          int64
+	cacheHitTok        int64
+	cacheMissTok       int64
+	reasoningTok       int64
+	lastInputTok       int64
+	lastOutputTok      int64
+	lastCacheHitTok    int64
+	lastCacheMissTok   int64
+	toolSummaryInTok   int64
+	toolSummaryOutTok  int64
+	toolSummaryAPITok  int64
+	usageAccounting    usageAccumulator
+	slashIndex         int
+	slashDismissed     string
+	authInputProvider  string
+	selecting          bool
+	selectStart        selectionPoint
+	selectEnd          selectionPoint
+	runStartedAt       time.Time
+	lastRunDuration    time.Duration
+	spinnerFrame       int
 }
 
 type sessionReadyMsg struct {
@@ -284,33 +292,34 @@ func NewModel(cfg config.Config, opts Options) Model {
 		version = "dev"
 	}
 	m := Model{
-		cfg:          cfg,
-		gatewayURL:   strings.TrimRight(opts.GatewayURL, "/"),
-		messages:     agent.InitialMessages(cfg),
-		version:      version,
-		models:       models,
-		modelIndex:   modelIndex,
-		thinking:     thinking,
-		thinkingIdx:  thinkingIdx,
-		theme:        theme,
-		toolView:     toolView,
-		thinkView:    thinkView,
-		showThinking: thinkView != "hidden",
-		dangerous:    opts.Dangerous || cfg.AutoApproveDangerous,
-		maxRounds:    cfg.MaxToolRounds,
-		followOutput: true,
-		plain:        plain,
-		settings:     settings,
-		settingsPath: settingsPath,
-		sessionsDir:  sessionsDir,
-		localChatID:  localChatID,
-		chatTitle:    "new chat",
-		chatCreated:  createdAt,
-		textarea:     ta,
-		viewport:     vp,
-		collapsed:    map[int]bool{},
-		events:       make(chan tea.Msg, 256),
-		status:       status,
+		cfg:                cfg,
+		gatewayURL:         strings.TrimRight(opts.GatewayURL, "/"),
+		messages:           agent.InitialMessages(cfg),
+		version:            version,
+		models:             models,
+		modelIndex:         modelIndex,
+		thinking:           thinking,
+		thinkingIdx:        thinkingIdx,
+		theme:              theme,
+		toolView:           toolView,
+		thinkView:          thinkView,
+		showThinking:       thinkView != "hidden",
+		dangerous:          opts.Dangerous || cfg.AutoApproveDangerous,
+		maxRounds:          cfg.MaxToolRounds,
+		followOutput:       true,
+		plain:              plain,
+		settings:           settings,
+		settingsPath:       settingsPath,
+		sessionsDir:        sessionsDir,
+		localChatID:        localChatID,
+		chatTitle:          "new chat",
+		chatCreated:        createdAt,
+		textarea:           ta,
+		viewport:           vp,
+		collapsed:          map[int]bool{},
+		toolBlocksByCallID: map[string]int{},
+		events:             make(chan tea.Msg, 256),
+		status:             status,
 	}
 	_ = m.saveCurrentSession()
 	return m
@@ -1965,6 +1974,7 @@ func (m *Model) setProfile(value string) tea.Cmd {
 	m.messages = agent.InitialMessages(m.currentConfig())
 	m.blocks = nil
 	m.collapsed = map[int]bool{}
+	m.toolBlocksByCallID = map[string]int{}
 	m.selected = 0
 	m.modelCalls = 0
 	m.toolCalls = 0
@@ -2132,6 +2142,7 @@ func (m *Model) newChat() tea.Cmd {
 	m.messages = agent.InitialMessages(m.currentConfig())
 	m.blocks = nil
 	m.collapsed = map[int]bool{}
+	m.toolBlocksByCallID = map[string]int{}
 	m.selected = 0
 	m.modelCalls = 0
 	m.toolCalls = 0
@@ -2242,6 +2253,7 @@ func (m *Model) applyChatSession(session chatSession) {
 	m.blocks = decodeBlocks(session.Blocks)
 	m.ensureBlockMetadata()
 	m.collapsed = map[int]bool{}
+	m.rebuildToolBlockIndex()
 	m.selected = max(0, len(m.blocks)-1)
 	m.inputTok = session.InputTokens
 	m.outputTok = session.OutputTokens
@@ -2361,7 +2373,19 @@ func (m *Model) saveCurrentSession() error {
 func encodeBlocks(blocks []block) []savedBlock {
 	out := make([]savedBlock, 0, len(blocks))
 	for _, b := range blocks {
-		out = append(out, savedBlock{Kind: b.kind, Title: b.title, Content: b.content})
+		out = append(out, savedBlock{
+			ID:           b.id,
+			Kind:         b.kind,
+			Title:        b.title,
+			Content:      b.content,
+			EventType:    string(b.eventType),
+			TurnID:       b.turnID,
+			StepID:       b.stepID,
+			CallID:       b.callID,
+			AttemptID:    b.attemptID,
+			ParentStepID: b.parentStepID,
+			RawCopy:      b.rawCopy,
+		})
 	}
 	return out
 }
@@ -2369,7 +2393,19 @@ func encodeBlocks(blocks []block) []savedBlock {
 func decodeBlocks(blocks []savedBlock) []block {
 	out := make([]block, 0, len(blocks))
 	for _, b := range blocks {
-		out = append(out, block{kind: b.Kind, title: b.Title, content: b.Content})
+		out = append(out, block{
+			id:           b.ID,
+			kind:         b.Kind,
+			title:        b.Title,
+			content:      b.Content,
+			eventType:    protocol.EventType(b.EventType),
+			turnID:       b.TurnID,
+			stepID:       b.StepID,
+			callID:       b.CallID,
+			attemptID:    b.AttemptID,
+			parentStepID: b.ParentStepID,
+			rawCopy:      b.RawCopy,
+		})
 	}
 	return out
 }
@@ -2382,6 +2418,7 @@ func (m *Model) newBlock(kind, title, content string) block {
 		kind:    normalizeBlockKind(kind),
 		title:   title,
 		content: content,
+		rawCopy: content,
 		started: now,
 		updated: now,
 	}
@@ -2401,7 +2438,11 @@ func (m *Model) ensureBlockMetadata() {
 		if m.blocks[i].updated.IsZero() {
 			m.blocks[i].updated = m.blocks[i].started
 		}
+		if m.blocks[i].rawCopy == "" {
+			m.blocks[i].rawCopy = m.blocks[i].content
+		}
 	}
+	m.rebuildToolBlockIndex()
 }
 
 func normalizeBlockKind(kind string) string {
@@ -2517,15 +2558,15 @@ func (m *Model) applyEvent(event protocol.Event) {
 		m.appendToOpenBlock("assistant", "ASSISTANT", fmt.Sprint(event.Data), event.Type)
 	case protocol.EventToolAudit:
 		m.status = "tool audit " + auditToolName(event.Data)
-		m.appendToolAudit(auditEventText(event.Data))
+		m.appendToolAudit(event, auditEventText(event.Data))
 	case protocol.EventToolCallRequested:
 		m.toolCalls++
 		m.status = "running tool " + toolName(event.Data)
-		m.addEventBlock(event.Type, toolTitle(event.Data), toolBody(event.Data))
+		m.addProtocolEventBlock(event, toolTitle(event.Data), toolBody(event.Data))
 	case protocol.EventToolCallFinished:
 		m.observeToolSummary(event.Data)
-		m.appendToolResult(toolResultText(event.Data))
-		m.collapseLastToolBlockIfLarge()
+		m.appendToolResult(event, toolResultText(event.Data))
+		m.collapseToolBlockIfLarge(eventCallID(event))
 	case protocol.EventContextCompacted:
 		m.status = "context compacted"
 		m.addInfoBlock("COMPACT", compactEventText(event.Data))
@@ -2562,6 +2603,20 @@ func toolResultText(value any) string {
 		return fmt.Sprint(value)
 	}
 	return fmt.Sprint(value)
+}
+
+func eventCallID(event protocol.Event) string {
+	event = protocol.EnrichEvent(event, protocol.EventEnvelope{})
+	return strings.TrimSpace(event.CallID)
+}
+
+func fallbackToolResultTitle(event protocol.Event) string {
+	bytes, _ := json.Marshal(event.Data)
+	var result protocol.ToolResult
+	if err := json.Unmarshal(bytes, &result); err == nil && strings.TrimSpace(result.Name) != "" {
+		return "Called " + result.Name
+	}
+	return "Called tool"
 }
 
 func (m *Model) observeToolSummary(value any) {
@@ -2621,49 +2676,86 @@ func (m *Model) appendToOpenBlock(kind, title, text string, eventType protocol.E
 	}
 	i := len(m.blocks) - 1
 	m.blocks[i].content += text
+	m.blocks[i].rawCopy += text
 	m.blocks[i].live = kind == "assistant" || kind == "reasoning"
 	m.blocks[i].eventType = eventType
 	m.blocks[i].updated = time.Now().UTC()
 	m.selected = i
 }
 
-func (m *Model) appendToolResult(text string) {
+func (m *Model) appendToolResult(event protocol.Event, text string) {
 	text = strings.TrimRight(text, "\n")
 	if strings.TrimSpace(text) == "" {
 		text = "[no output]"
 	}
-	if len(m.blocks) == 0 || m.blocks[len(m.blocks)-1].kind != "tool" {
-		m.addBlock("tool", "Called tool", text)
+	callID := eventCallID(event)
+	i, ok := m.toolBlockIndex(callID)
+	if !ok {
+		if len(m.blocks) == 0 || m.blocks[len(m.blocks)-1].kind != "tool" {
+			m.addProtocolEventBlock(event, fallbackToolResultTitle(event), text)
+			return
+		}
+		i = len(m.blocks) - 1
+		m.applyEventIdentityToBlock(i, event)
+		if m.blocks[i].callID != "" {
+			m.registerToolBlock(i)
+		}
+	}
+	m.appendToolTextAt(i, text)
+}
+
+func (m *Model) appendToolTextAt(i int, text string) {
+	if i < 0 || i >= len(m.blocks) {
 		return
 	}
-	i := len(m.blocks) - 1
 	content := strings.TrimRight(m.blocks[i].content, "\n")
 	if strings.TrimSpace(content) == "" {
 		m.blocks[i].content = text
 	} else {
 		m.blocks[i].content = content + "\n" + text
 	}
+	m.blocks[i].rawCopy = m.blocks[i].content
 	m.blocks[i].updated = time.Now().UTC()
 	m.selected = i
 }
 
-func (m *Model) appendToolAudit(text string) {
+func (m *Model) appendToolAudit(event protocol.Event, text string) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return
 	}
-	if len(m.blocks) == 0 || m.blocks[len(m.blocks)-1].kind != "tool" {
-		m.addEventBlock(protocol.EventToolAudit, "AUDIT", text)
-		return
+	callID := eventCallID(event)
+	i, ok := m.toolBlockIndex(callID)
+	if !ok {
+		if len(m.blocks) == 0 || m.blocks[len(m.blocks)-1].kind != "tool" {
+			m.addProtocolEventBlock(event, "AUDIT", text)
+			return
+		}
+		i = len(m.blocks) - 1
+		m.applyEventIdentityToBlock(i, event)
+		if m.blocks[i].callID != "" {
+			m.registerToolBlock(i)
+		}
 	}
-	i := len(m.blocks) - 1
 	if strings.TrimSpace(m.blocks[i].content) == "" {
 		m.blocks[i].content = "audit: " + text
 	} else {
 		m.blocks[i].content = strings.TrimRight(m.blocks[i].content, "\n") + "\naudit: " + text
 	}
+	m.blocks[i].rawCopy = m.blocks[i].content
 	m.blocks[i].updated = time.Now().UTC()
 	m.selected = i
+}
+
+func (m *Model) collapseToolBlockIfLarge(callID string) {
+	i, ok := m.toolBlockIndex(callID)
+	if !ok {
+		m.collapseLastToolBlockIfLarge()
+		return
+	}
+	if len(m.blocks[i].content) > 8000 || strings.Count(m.blocks[i].content, "\n") > 40 {
+		m.collapsed[i] = true
+	}
 }
 
 func (m *Model) collapseLastToolBlockIfLarge() {
@@ -2680,7 +2772,8 @@ func (m *Model) collapseLastToolBlockIfLarge() {
 }
 
 func (m *Model) addBlock(kind, title, content string) {
-	m.blocks = append(m.blocks, m.newBlock(kind, title, content))
+	b := m.newBlock(kind, title, content)
+	m.blocks = append(m.blocks, b)
 	m.selected = len(m.blocks) - 1
 }
 
@@ -2690,6 +2783,79 @@ func (m *Model) addEventBlock(eventType protocol.EventType, title, content strin
 	b.live = b.kind == "assistant" || b.kind == "reasoning"
 	m.blocks = append(m.blocks, b)
 	m.selected = len(m.blocks) - 1
+}
+
+func (m *Model) addProtocolEventBlock(event protocol.Event, title, content string) {
+	b := m.newBlock(blockKindForEvent(event.Type), title, content)
+	b.eventType = event.Type
+	b.live = b.kind == "assistant" || b.kind == "reasoning"
+	applyEventIdentity(&b, event)
+	m.blocks = append(m.blocks, b)
+	m.selected = len(m.blocks) - 1
+	m.registerToolBlock(m.selected)
+}
+
+func (m *Model) rebuildToolBlockIndex() {
+	m.toolBlocksByCallID = map[string]int{}
+	for i := range m.blocks {
+		m.registerToolBlock(i)
+	}
+}
+
+func (m *Model) registerToolBlock(i int) {
+	if i < 0 || i >= len(m.blocks) || m.blocks[i].kind != "tool" || strings.TrimSpace(m.blocks[i].callID) == "" {
+		return
+	}
+	if m.toolBlocksByCallID == nil {
+		m.toolBlocksByCallID = map[string]int{}
+	}
+	m.toolBlocksByCallID[m.blocks[i].callID] = i
+}
+
+func (m *Model) toolBlockIndex(callID string) (int, bool) {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return 0, false
+	}
+	if m.toolBlocksByCallID == nil {
+		m.rebuildToolBlockIndex()
+	}
+	i, ok := m.toolBlocksByCallID[callID]
+	if !ok || i < 0 || i >= len(m.blocks) || m.blocks[i].kind != "tool" || m.blocks[i].callID != callID {
+		delete(m.toolBlocksByCallID, callID)
+		return 0, false
+	}
+	return i, true
+}
+
+func (m *Model) applyEventIdentityToBlock(i int, event protocol.Event) {
+	if i < 0 || i >= len(m.blocks) {
+		return
+	}
+	applyEventIdentity(&m.blocks[i], event)
+	m.registerToolBlock(i)
+}
+
+func applyEventIdentity(b *block, event protocol.Event) {
+	if b == nil {
+		return
+	}
+	event = protocol.EnrichEvent(event, protocol.EventEnvelope{})
+	if event.TurnID != "" && b.turnID == "" {
+		b.turnID = event.TurnID
+	}
+	if event.StepID != "" && b.stepID == "" {
+		b.stepID = event.StepID
+	}
+	if event.CallID != "" && b.callID == "" {
+		b.callID = event.CallID
+	}
+	if event.AttemptID != "" && b.attemptID == "" {
+		b.attemptID = event.AttemptID
+	}
+	if event.ParentStepID != "" && b.parentStepID == "" {
+		b.parentStepID = event.ParentStepID
+	}
 }
 
 func (m *Model) finishLiveBlocks() {

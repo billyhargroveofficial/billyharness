@@ -545,12 +545,12 @@ Purpose: make the terminal feel like a serious agent UI rather than a pile of st
   - [ ] rich terminal text
   - [ ] collapsed/expanded state
   - [ ] render cache key
-- [ ] Keep old rendering path while migrating if needed.
+- [x] Keep old rendering path while migrating if needed.
 
 Acceptance:
 
-- [ ] Tool result updates the right cell by `call_id`.
-- [ ] Parallel tools do not scramble UI output.
+- [x] Tool result updates the right cell by `call_id`.
+- [x] Parallel tools do not scramble UI output.
 
 ### 5.2 Streaming Controller
 

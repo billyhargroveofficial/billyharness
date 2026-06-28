@@ -335,6 +335,74 @@ func TestToolBlocksAreOneLineByDefault(t *testing.T) {
 	}
 }
 
+func TestToolResultsUpdateMatchingBlockByCallID(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.toolView = "expanded"
+	m.applyEvent(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{
+			ID:        "call-a",
+			Name:      "fs_read_file",
+			Arguments: json.RawMessage(`{"path":"a.txt"}`),
+		},
+	})
+	m.applyEvent(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{
+			ID:        "call-b",
+			Name:      "fs_read_file",
+			Arguments: json.RawMessage(`{"path":"b.txt"}`),
+		},
+	})
+
+	m.applyEvent(protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{CallID: "call-a", Name: "fs_read_file", Content: "alpha"}})
+	m.applyEvent(protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{CallID: "call-b", Name: "fs_read_file", Content: "beta"}})
+
+	if len(m.blocks) != 2 {
+		t.Fatalf("blocks = %d, want 2", len(m.blocks))
+	}
+	if !strings.Contains(m.blocks[0].content, "alpha") || strings.Contains(m.blocks[0].content, "beta") {
+		t.Fatalf("call-a block content = %q", m.blocks[0].content)
+	}
+	if !strings.Contains(m.blocks[1].content, "beta") || strings.Contains(m.blocks[1].content, "alpha") {
+		t.Fatalf("call-b block content = %q", m.blocks[1].content)
+	}
+	if m.blocks[0].callID != "call-a" || m.blocks[1].callID != "call-b" {
+		t.Fatalf("call ids = %q %q", m.blocks[0].callID, m.blocks[1].callID)
+	}
+}
+
+func TestToolAuditUpdatesMatchingBlockByCallID(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.toolView = "expanded"
+	m.applyEvent(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{ID: "call-a", Name: "fs_write_file", Arguments: json.RawMessage(`{"path":"a.txt"}`)},
+	})
+	m.applyEvent(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{ID: "call-b", Name: "fs_read_file", Arguments: json.RawMessage(`{"path":"b.txt"}`)},
+	})
+	m.applyEvent(protocol.Event{
+		Type: protocol.EventToolAudit,
+		Data: map[string]any{
+			"call_id":       "call-a",
+			"name":          "fs_write_file",
+			"risk":          "write",
+			"auto_approved": true,
+		},
+	})
+
+	if !strings.Contains(m.blocks[0].content, "audit: write fs_write_file auto-approved") {
+		t.Fatalf("call-a block content = %q", m.blocks[0].content)
+	}
+	if strings.Contains(m.blocks[1].content, "audit:") {
+		t.Fatalf("call-b should not receive call-a audit: %q", m.blocks[1].content)
+	}
+}
+
 func TestToolBlocksCompactLongWebFetchURL(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 160
