@@ -12,6 +12,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
+	"github.com/billyhargroveofficial/billyharness/internal/mcpstatus"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -124,12 +125,11 @@ func (c *GatewayClient) MCPStatus(ctx context.Context) (string, error) {
 		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return "", fmt.Errorf("gateway mcp HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(limited)))
 	}
-	var raw any
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	var out mcpstatus.Response
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return "", err
 	}
-	pretty, _ := json.MarshalIndent(raw, "", "  ")
-	return string(pretty), nil
+	return mcpstatus.Format(out), nil
 }
 
 func (c *GatewayClient) ConfigStatus(ctx context.Context) (string, error) {

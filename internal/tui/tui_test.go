@@ -1248,28 +1248,48 @@ func TestMarkdownTableRowKeepsEscapedAndCodePipesInCells(t *testing.T) {
 
 func TestFormatMCPStatusShowsOwnConfigAndNativeWebTools(t *testing.T) {
 	startedAt := time.Date(2026, 6, 28, 8, 0, 0, 0, time.Local)
+	connectedAt := time.Date(2026, 6, 28, 8, 0, 2, 0, time.Local)
+	eventAt := time.Date(2026, 6, 28, 8, 0, 3, 0, time.Local)
 	lastErrorAt := time.Date(2026, 6, 28, 8, 1, 0, 0, time.Local)
+	nextRetryAt := time.Date(2026, 6, 28, 8, 1, 5, 0, time.Local)
 	text := formatMCPStatus(mcpStatusResponse{
 		ConfigFiles: []string{"/root/billyharness/mcp.config.toml"},
 		Allowed:     []string{"telegram", "telegram-parilka", "github", "context7"},
 		Enabled:     true,
 		Servers: []mcpclient.ServerStatus{{
-			Name:      "github",
-			Transport: "stdio",
-			Enabled:   true,
-			Connected: true,
-			ToolCount: 7,
-			PID:       4242,
-			StartedAt: &startedAt,
+			Name:            "github",
+			Transport:       "stdio",
+			Command:         "npx",
+			Enabled:         true,
+			Connected:       true,
+			State:           "reconnected",
+			ToolCount:       7,
+			PID:             4242,
+			StartedAt:       &startedAt,
+			LastConnectedAt: &connectedAt,
+			LastEventAt:     &eventAt,
+			RestartCount:    1,
+			RetryCount:      1,
 		}, {
-			Name:        "context7",
-			Transport:   "stdio",
-			Enabled:     true,
-			Connected:   false,
-			Error:       "MCP context7 transport: EOF",
-			LastError:   "MCP context7 transport: EOF",
-			LastErrorAt: &lastErrorAt,
-			StderrTail:  "server closed",
+			Name:           "context7",
+			Transport:      "stdio",
+			Command:        "npx",
+			Enabled:        true,
+			Connected:      false,
+			State:          "failed",
+			Error:          "MCP context7 transport: EOF",
+			LastError:      "MCP context7 transport: EOF",
+			LastErrorAt:    &lastErrorAt,
+			StderrTail:     "server closed",
+			RetryBackoffMS: 5000,
+			NextRetryAt:    &nextRetryAt,
+		}, {
+			Name:      "remote",
+			Transport: "streamable-http",
+			URL:       "https://example.com/mcp",
+			Enabled:   true,
+			State:     "unsupported",
+			Error:     "MCP server remote uses streamable HTTP; billyharness currently supports stdio MCP only",
 		}},
 	})
 	for _, want := range []string{
@@ -1277,14 +1297,25 @@ func TestFormatMCPStatusShowsOwnConfigAndNativeWebTools(t *testing.T) {
 		"allowed: telegram, telegram-parilka, github, context7",
 		"native: web_search, web_fetch, web_extract, web_crawl",
 		"github",
-		"connected",
+		"reconnected",
+		"command:npx",
 		"tools:7",
 		"pid:4242",
+		"restarts:1",
+		"retries:1",
+		"connected_at:08:00:02",
+		"event_at:08:00:03",
 		"context7",
-		"error",
+		"failed",
 		"MCP context7 transport: EOF",
+		"backoff:5000ms",
+		"next_retry:08:01:05",
 		"last_error_at: 2026-06-28 08:01:00",
 		"stderr: server closed",
+		"remote",
+		"unsupported",
+		"streamable-http",
+		"url:https://example.com/mcp",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("mcp status missing %q: %q", want, text)

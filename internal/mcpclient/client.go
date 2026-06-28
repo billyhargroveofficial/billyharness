@@ -43,6 +43,7 @@ const (
 	mcpStateRestarting   = "restarting"
 	mcpStateReconnected  = "reconnected"
 	mcpStateDisconnected = "disconnected"
+	mcpStateUnsupported  = "unsupported"
 )
 
 type ExternalTool struct {
@@ -53,6 +54,8 @@ type ExternalTool struct {
 type ServerStatus struct {
 	Name            string     `json:"name"`
 	Transport       string     `json:"transport"`
+	Command         string     `json:"command,omitempty"`
+	URL             string     `json:"url,omitempty"`
 	Enabled         bool       `json:"enabled"`
 	Required        bool       `json:"required"`
 	Connected       bool       `json:"connected"`
@@ -91,7 +94,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		}
 		if server.URL != "" {
 			err := fmt.Errorf("MCP server %s uses streamable HTTP; billyharness currently supports stdio MCP only", server.Name)
-			runtime.recordStaticError(err)
+			runtime.recordStaticErrorState(mcpStateUnsupported, err)
 			manager.addServer(runtime)
 			if server.Required {
 				errs = append(errs, err.Error())
@@ -246,6 +249,8 @@ func newManagedServer(cfg config.Config, server config.MCPServer) *managedServer
 		status: ServerStatus{
 			Name:      server.Name,
 			Transport: mcpTransport(server),
+			Command:   strings.TrimSpace(server.Command),
+			URL:       strings.TrimSpace(server.URL),
 			Enabled:   server.Enabled,
 			Required:  server.Required,
 			State:     state,
@@ -424,9 +429,13 @@ func (s *managedServer) close() {
 }
 
 func (s *managedServer) recordStaticError(err error) {
+	s.recordStaticErrorState(mcpStateFailed, err)
+}
+
+func (s *managedServer) recordStaticErrorState(state string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.recordFailureLocked(mcpStateFailed, err, false)
+	s.recordFailureLocked(state, err, false)
 }
 
 func (s *managedServer) recordFailureLocked(state string, err error, retryable bool) {

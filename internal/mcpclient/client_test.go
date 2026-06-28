@@ -98,6 +98,49 @@ func TestOptionalRequiredShellCWDAndCollisionRules(t *testing.T) {
 		if len(statuses) != 1 || statuses[0].Name != "missing" || statuses[0].Connected || statuses[0].Error == "" {
 			t.Fatalf("statuses = %#v", statuses)
 		}
+		if statuses[0].Command == "" || statuses[0].Transport != "stdio" || statuses[0].State != mcpStateFailed {
+			t.Fatalf("status command/transport/state = %#v", statuses[0])
+		}
+	})
+
+	t.Run("unsupported url transport is visible", func(t *testing.T) {
+		manager, err := NewManager(context.Background(), config.Config{
+			WorkspaceRoots: []string{root},
+			MCPServers:     []config.MCPServer{{Name: "remote", URL: "https://example.com/mcp", Enabled: true}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer manager.Close()
+		statuses := manager.Statuses()
+		if len(statuses) != 1 || statuses[0].Name != "remote" || statuses[0].State != mcpStateUnsupported ||
+			statuses[0].Transport != "streamable-http" || statuses[0].URL != "https://example.com/mcp" ||
+			!strings.Contains(statuses[0].Error, "currently supports stdio") {
+			t.Fatalf("unsupported status = %#v", statuses)
+		}
+	})
+
+	t.Run("optional failure does not poison working servers", func(t *testing.T) {
+		manager, err := NewManager(context.Background(), config.Config{
+			WorkspaceRoots: []string{root},
+			MCPServers: []config.MCPServer{
+				{Name: "missing", Command: filepath.Join(root, "does-not-exist"), Enabled: true},
+				{Name: "fake", Command: os.Args[0], Args: []string{"-test.run=TestFakeStdioMCPServer"}, Env: helperEnv("normal", nil), Enabled: true},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer manager.Close()
+		echo := findTool(t, manager, "mcp__fake__echo")
+		text, err := echo.Handler(context.Background(), json.RawMessage(`{"text":"still works"}`))
+		if err != nil || text != "still works" {
+			t.Fatalf("working MCP tool after optional failure = %q err=%v", text, err)
+		}
+		statuses := manager.Statuses()
+		if len(statuses) != 2 || statuses[0].State != mcpStateFailed || statuses[1].State != mcpStateConnected {
+			t.Fatalf("mixed statuses = %#v", statuses)
+		}
 	})
 
 	t.Run("required failure errors", func(t *testing.T) {

@@ -28,7 +28,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/agent"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
-	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
+	"github.com/billyhargroveofficial/billyharness/internal/mcpstatus"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
@@ -1564,12 +1564,7 @@ func (m Model) fetchGatewayMessages() ([]protocol.Message, error) {
 	return out.Messages, nil
 }
 
-type mcpStatusResponse struct {
-	ConfigFiles []string                 `json:"config_files"`
-	Allowed     []string                 `json:"allowed"`
-	Enabled     bool                     `json:"enabled"`
-	Servers     []mcpclient.ServerStatus `json:"servers"`
-}
+type mcpStatusResponse = mcpstatus.Response
 
 type configStatusResponse struct {
 	Config   map[string]any         `json:"config"`
@@ -1660,62 +1655,7 @@ func (m Model) fetchGatewayMCPStatus() (mcpStatusResponse, error) {
 }
 
 func formatMCPStatus(status mcpStatusResponse) string {
-	configFiles := strings.Join(status.ConfigFiles, ", ")
-	if configFiles == "" {
-		configFiles = "(none)"
-	}
-	allowed := strings.Join(status.Allowed, ", ")
-	if allowed == "" {
-		allowed = "(all)"
-	}
-	lines := []string{
-		"config: " + configFiles,
-		"allowed: " + allowed,
-		"native: web_search, web_fetch, web_extract, web_crawl",
-	}
-	if !status.Enabled {
-		lines = append(lines, "mcp: disabled")
-		return strings.Join(lines, "\n")
-	}
-	if len(status.Servers) == 0 {
-		lines = append(lines, "servers: none connected")
-		return strings.Join(lines, "\n")
-	}
-	lines = append(lines, "")
-	for _, server := range status.Servers {
-		state := "disabled"
-		if server.Enabled && server.Connected {
-			state = "connected"
-		} else if server.Enabled && server.Error != "" {
-			state = "error"
-		} else if server.Enabled {
-			state = "not connected"
-		}
-		line := fmt.Sprintf("%-10s %-10s %s tools:%d", server.Name, state, server.Transport, server.ToolCount)
-		if server.Required {
-			line += " required"
-		}
-		if server.PID > 0 {
-			line += fmt.Sprintf(" pid:%d", server.PID)
-		}
-		if server.StartedAt != nil && !server.StartedAt.IsZero() {
-			line += " started:" + server.StartedAt.Local().Format("15:04:05")
-		}
-		if server.Error != "" {
-			line += "\n  " + oneLinePreview(server.Error, 180)
-		}
-		if server.LastError != "" && server.LastError != server.Error {
-			line += "\n  last: " + oneLinePreview(server.LastError, 180)
-		}
-		if server.LastErrorAt != nil && !server.LastErrorAt.IsZero() {
-			line += "\n  last_error_at: " + server.LastErrorAt.Local().Format("2006-01-02 15:04:05")
-		}
-		if server.StderrTail != "" {
-			line += "\n  stderr: " + oneLinePreview(server.StderrTail, 180)
-		}
-		lines = append(lines, line)
-	}
-	return strings.Join(lines, "\n")
+	return mcpstatus.Format(status)
 }
 
 type authStatusResponse = credentials.Status

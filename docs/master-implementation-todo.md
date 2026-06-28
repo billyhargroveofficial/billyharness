@@ -324,22 +324,22 @@ Purpose: make MCP owned by billyharness, visible, lazy, safe, and easy to extend
 
 ### 3.1 MCP Config Ownership
 
-- [ ] Keep billyharness MCP config independent from random external tool configs.
-- [ ] Document `$BILLYHARNESS_HOME/mcp.config.toml`.
-- [ ] Support curated built-ins:
-  - [ ] telegram
-  - [ ] telegram-parilka
-  - [ ] github
-  - [ ] context7
-- [ ] Show configured, connected, failed, disabled, and unsupported servers.
-- [ ] Show server transport, command/url, tool count, last error, restart count, reconnect backoff.
-- [ ] Ensure `/mcp` in TUI and Telegram use the same status model.
+- [x] Keep billyharness MCP config independent from random external tool configs.
+- [x] Document `$BILLYHARNESS_HOME/mcp.config.toml`.
+- [x] Support curated built-ins:
+  - [x] telegram
+  - [x] telegram-parilka
+  - [x] github
+  - [x] context7
+- [x] Show configured, connected, failed, disabled, and unsupported servers.
+- [x] Show server transport, command/url, tool count, last error, restart count, reconnect backoff.
+- [x] Ensure `/mcp` in TUI and Telegram use the same status model.
 
 Acceptance:
 
-- [ ] User can see exactly which MCP servers are connected.
-- [ ] Failed MCP server does not poison all tools.
-- [ ] Reconnect behavior is tested.
+- [x] User can see exactly which MCP servers are connected.
+- [x] Failed MCP server does not poison all tools.
+- [x] Reconnect behavior is tested.
 
 ### 3.2 Remote MCP
 
