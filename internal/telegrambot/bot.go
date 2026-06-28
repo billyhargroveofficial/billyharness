@@ -480,6 +480,18 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 			return
 		}
 		_ = b.sendHTML(ctx, msg, "<b>MCP</b>\n<pre>"+esc(status)+"</pre>")
+	case "/toolview", "/tools":
+		state := b.chatStateWithLegacy(key, legacyKey)
+		if state.SessionID == "" {
+			_ = b.sendPlain(ctx, msg, "No active session. Send a message first or use /new.")
+			return
+		}
+		body, err := b.toolViewHTML(ctx, state.SessionID)
+		if err != nil {
+			_ = b.sendPlain(ctx, msg, "Toolview failed: "+err.Error())
+			return
+		}
+		_ = b.sendHTML(ctx, msg, body)
 	case "/config":
 		status, err := b.harness.ConfigStatus(ctx)
 		if err != nil {
@@ -517,6 +529,41 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 	default:
 		_ = b.sendPlain(ctx, msg, "Unknown command. Use /help.")
 	}
+}
+
+func (b *Bot) toolViewHTML(ctx context.Context, sessionID string) (string, error) {
+	renderer := NewRenderer()
+	tools := NewToolProgress()
+	seenRun := false
+	if err := b.harness.ReplaySessionEvents(ctx, sessionID, 0, func(event protocol.Event) {
+		if event.Type == protocol.EventRunStarted {
+			renderer = NewRenderer()
+			tools = NewToolProgress()
+			seenRun = true
+		}
+		for _, rendered := range renderer.Apply(event) {
+			if rendered.Kind == "tool" {
+				tools.Add(rendered)
+			}
+		}
+	}); err != nil {
+		return "", err
+	}
+	if tools == nil || len(tools.lines) == 0 {
+		if seenRun {
+			return "<b>Toolview</b>\nNo tool calls in the last run.", nil
+		}
+		return "<b>Toolview</b>\nNo replayed tool calls for this session.", nil
+	}
+	var lines []string
+	for _, line := range tools.lines {
+		lines = append(lines, line.text)
+	}
+	if len(lines) >= 24 {
+		lines = append([]string{"showing latest compact tool lines"}, lines...)
+	}
+	body := strings.Join(lines, "\n")
+	return trimTelegram("<b>Toolview</b>\n<pre>" + esc(body) + "</pre>"), nil
 }
 
 func (b *Bot) handleAuthCommand(ctx context.Context, msg Message, arg string) {
@@ -756,6 +803,8 @@ func bypassActiveRunLock(text string) bool {
 	switch cmd {
 	case "/cancel", "/status", "/context", "/config", "/auth", "/start", "/help":
 		return true
+	case "/toolview", "/tools":
+		return true
 	default:
 		return false
 	}
@@ -818,6 +867,7 @@ Commands:
 <code>/reasoning low|medium|high|xhigh|off</code>
 <code>/mcp</code> MCP status
 <code>/context</code> active context and contributors
+<code>/toolview</code> compact tool details for current session
 <code>/config</code> resolved config summary
 <code>/auth</code> auth status
 <code>/auth deepseek sk-...</code> save DeepSeek key

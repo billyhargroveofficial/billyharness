@@ -625,6 +625,84 @@ func TestTelegramContextCommandShowsSessionContext(t *testing.T) {
 	}
 }
 
+func TestTelegramToolViewShowsCompactLastRunTools(t *testing.T) {
+	var sentText string
+	var parseMode string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/botbottoken/sendMessage" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		sentText, _ = payload["text"].(string)
+		parseMode, _ = payload["parse_mode"].(string)
+		writeTelegramResult(w, SentMessage{MessageID: 12, Chat: Chat{ID: 123}})
+	}))
+	defer server.Close()
+
+	harness := &replayScriptedHarness{
+		replayFrom: []protocol.Event{
+			{RunID: "old-run", Type: protocol.EventRunStarted},
+			{RunID: "old-run", Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{ID: "old-search", Name: "web_search", Arguments: json.RawMessage(`{"query":"old query"}`)}},
+			{RunID: "new-run", Type: protocol.EventRunStarted},
+			{RunID: "new-run", Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{ID: "search-1", Name: "web_search", Arguments: json.RawMessage(`{"query":"telegram bot api"}`)}},
+			{RunID: "new-run", Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
+				CallID:  "search-1",
+				Name:    "web_search",
+				Content: "raw output that should stay hidden",
+				Metadata: map[string]any{
+					"duration_ms":           int64(42),
+					"web_cache_hit":         true,
+					"estimated_text_tokens": int64(1200),
+				},
+			}},
+			{RunID: "new-run", CallID: "shell-1", Type: protocol.EventToolCallFailed, Data: protocol.ToolProgressEvent{CallID: "shell-1", Name: "shell_exec", Message: "exit status 1"}},
+		},
+	}
+	client := NewClient(ClientOptions{BaseURL: server.URL, Token: "bottoken", MinInterval: time.Nanosecond})
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      t.TempDir() + "/state.json",
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bot.setChatState(userChatKey(123, 0, 1001), ChatState{SessionID: "session-1"})
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, From: &User{ID: 1001}, Text: "/toolview"})
+
+	if parseMode != "HTML" || !strings.Contains(sentText, "<b>Toolview</b>") {
+		t.Fatalf("toolview parse=%q text=%q", parseMode, sentText)
+	}
+	for _, want := range []string{"web_search", "telegram bot api", "cache hit", "~1.2k tok", "shell_exec failed"} {
+		if !strings.Contains(sentText, want) {
+			t.Fatalf("toolview missing %q: %q", want, sentText)
+		}
+	}
+	for _, notWant := range []string{"old query", "raw output that should stay hidden"} {
+		if strings.Contains(sentText, notWant) {
+			t.Fatalf("toolview leaked %q: %q", notWant, sentText)
+		}
+	}
+	harness.mu.Lock()
+	replaySeq := harness.replaySeq
+	harness.mu.Unlock()
+	if replaySeq != 0 {
+		t.Fatalf("toolview should replay current session from start, got after_seq=%d", replaySeq)
+	}
+}
+
 func TestTelegramAuthDeepSeekDeletesSecretMessageAndDoesNotRenderKey(t *testing.T) {
 	var (
 		mu             sync.Mutex

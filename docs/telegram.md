@@ -60,6 +60,7 @@ Older state files used only `chat_id[:message_thread_id]`. Billyharness still re
 /reasoning low|medium|high|xhigh|off
 /mcp
 /context
+/toolview
 /config
 /auth
 /auth deepseek sk-...
@@ -67,7 +68,7 @@ Older state files used only `chat_id[:message_thread_id]`. Billyharness still re
 /cancel
 ```
 
-`/new` starts a fresh gateway session for the current Telegram state key and resets that key's turn/tool totals. `/context` shows active context and contributors for the current session. `/mcp`, `/config`, and `/auth` show sanitized status.
+`/new` starts a fresh gateway session for the current Telegram state key and resets that key's turn/tool totals. `/context` shows active context and contributors for the current session. `/toolview` replays the current session and shows compact tool details for the latest run without raw tool output. `/mcp`, `/config`, and `/auth` show sanitized status.
 
 `/resume` and `/fork` are not Telegram commands yet. Resuming and forking are currently handled through the TUI/gateway session tooling.
 

@@ -719,20 +719,20 @@ Acceptance:
 
 ### 6.4 Telegram Tool UX
 
-- [ ] Reuse shared compact tool renderer.
-- [ ] Show one-line tool summaries:
-  - [ ] fs path
-  - [ ] web query/url
-  - [ ] MCP server/tool
-  - [ ] shell command summary
-  - [ ] duration/status
-- [ ] Hide raw args/output by default.
-- [ ] Add command to request detailed tool view for last run.
+- [x] Reuse shared compact tool renderer.
+- [x] Show one-line tool summaries:
+  - [x] fs path
+  - [x] web query/url
+  - [x] MCP server/tool
+  - [x] shell command summary
+  - [x] duration/status
+- [x] Hide raw args/output by default.
+- [x] Add command to request detailed tool view for last run.
 
 Acceptance:
 
-- [ ] Telegram remains readable during 10+ tool calls.
-- [ ] User can still inspect failures.
+- [x] Telegram remains readable during 10+ tool calls.
+- [x] User can still inspect failures.
 
 ## Phase 7: Gateway And API
 

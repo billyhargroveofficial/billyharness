@@ -99,6 +99,13 @@ func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
 			return nil
 		}
 		return []RenderEvent{{Kind: "tool", Title: "Tool", Body: summary, Key: key}}
+	case protocol.EventToolCallFailed, protocol.EventToolCallAborted:
+		r.observeToolSummary(event.Data)
+		key, summary := toolFailureSummary(event)
+		if summary == "" {
+			return nil
+		}
+		return []RenderEvent{{Kind: "tool", Title: "Tool", Body: summary, Key: key}}
 	case protocol.EventContextThreshold:
 		return []RenderEvent{{Kind: "status", Title: "Context", Body: telegramContextThresholdText(event.Data), Key: telegramContextThresholdKey(event.Data)}}
 	case protocol.EventProviderUsageUpdate:
@@ -409,6 +416,61 @@ func (r *Renderer) toolResultSummary(data any) (string, string) {
 		return "", ""
 	}
 	return toolrender.ResultKeyAndLine(data, r.toolSummaries[key], toolrender.StyleTelegram)
+}
+
+func toolFailureSummary(event protocol.Event) (string, string) {
+	bytes, _ := json.Marshal(event.Data)
+	var result protocol.ToolResult
+	if err := json.Unmarshal(bytes, &result); err == nil && toolResultHasFailureDetails(result) {
+		if result.CallID == "" {
+			result.CallID = event.CallID
+		}
+		if result.Name == "" {
+			result.Name = "tool"
+		}
+		result.IsError = true
+		return toolrender.ResultKeyAndLine(result, "", toolrender.StyleTelegram)
+	}
+	return toolLifecycleFailureSummary(event)
+}
+
+func toolResultHasFailureDetails(result protocol.ToolResult) bool {
+	return result.Content != "" ||
+		result.ErrorCode != "" ||
+		result.OutputRef != "" ||
+		result.Truncated ||
+		len(result.Metadata) > 0 ||
+		result.IsError
+}
+
+func toolLifecycleFailureSummary(event protocol.Event) (string, string) {
+	key := strings.TrimSpace(event.CallID)
+	var progress protocol.ToolProgressEvent
+	bytes, _ := json.Marshal(event.Data)
+	_ = json.Unmarshal(bytes, &progress)
+	if key == "" {
+		key = strings.TrimSpace(progress.CallID)
+	}
+	name := strings.TrimSpace(progress.Name)
+	if name == "" {
+		name = "tool"
+	}
+	status := "failed"
+	if event.Type == protocol.EventToolCallAborted {
+		status = "aborted"
+	}
+	message := strings.TrimSpace(progress.Message)
+	if message == "" {
+		message = strings.TrimSpace(progress.Status)
+	}
+	line := "⛔ " + name + " " + status
+	if message != "" {
+		line += " · " + toolrender.CompactText(message, 96)
+	}
+	if key == "" {
+		key = name + ":" + status
+	}
+	return key, line
 }
 
 func (r *Renderer) observeToolSummary(data any) {

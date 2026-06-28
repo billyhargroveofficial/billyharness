@@ -49,6 +49,58 @@ func TestCallLineFormatsWebExtract(t *testing.T) {
 	}
 }
 
+func TestTelegramCallLineCoversCommonToolTargets(t *testing.T) {
+	tests := []struct {
+		name string
+		call protocol.ToolCall
+		want []string
+	}{
+		{
+			name: "fs path",
+			call: protocol.ToolCall{Name: "fs_read_file", Arguments: []byte(`{"path":"/root/billyharness/README.md"}`)},
+			want: []string{"📖 read", "/root/billyharness/README.md"},
+		},
+		{
+			name: "web query",
+			call: protocol.ToolCall{Name: "web_search", Arguments: []byte(`{"query":"telegram rich messages"}`)},
+			want: []string{"🔎 web_search", "telegram rich messages"},
+		},
+		{
+			name: "web url",
+			call: protocol.ToolCall{Name: "web_fetch", Arguments: []byte(`{"url":"https://example.com/a/very/long/page?secret=hidden"}`)},
+			want: []string{"🌐 web_fetch", "example.com"},
+		},
+		{
+			name: "mcp server and tool",
+			call: protocol.ToolCall{Name: "mcp_list_tools", Arguments: []byte(`{"server":"telegram-parilka","query":"history"}`)},
+			want: []string{"🔌 mcp tools", "server=telegram-parilka", "query=history"},
+		},
+		{
+			name: "mcp call",
+			call: protocol.ToolCall{Name: "mcp_call", Arguments: []byte(`{"name":"mcp__telegram_parilka__read_history"}`)},
+			want: []string{"🔌 mcp call", "mcp__telegram_parilka__read_history"},
+		},
+		{
+			name: "shell argv",
+			call: protocol.ToolCall{Name: "shell_exec", Arguments: []byte(`{"argv":["rg","-n","toolview","internal/telegrambot"]}`)},
+			want: []string{"⚙️ shell", "rg -n toolview internal/telegrambot"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CallLine(tt.call, StyleTelegram)
+			for _, want := range tt.want {
+				if !strings.Contains(got, want) {
+					t.Fatalf("line missing %q: %q", want, got)
+				}
+			}
+			if strings.Contains(got, "secret=hidden") {
+				t.Fatalf("line leaked URL query: %q", got)
+			}
+		})
+	}
+}
+
 func TestResultKeyAndLineCompactsMetadata(t *testing.T) {
 	key, line := ResultKeyAndLine(protocol.ToolResult{
 		CallID:    "call_fetch",
