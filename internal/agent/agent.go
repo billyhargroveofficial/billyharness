@@ -452,6 +452,34 @@ func (o *toolOrchestrator) Execute(ctx context.Context, index int, call protocol
 	return toolExecutionResult{Index: index, Call: call, Result: out, DurationMS: duration, AttemptID: attemptID}
 }
 
+func (o *toolOrchestrator) AbortBeforeExecute(index int, call protocol.ToolCall, attemptID string, err error) toolExecutionResult {
+	if err == nil {
+		err = context.Canceled
+	}
+	out := protocol.ToolResult{
+		CallID:    call.ID,
+		Name:      call.Name,
+		Content:   err.Error(),
+		IsError:   true,
+		ErrorCode: "tool_aborted",
+		Metadata:  map[string]any{},
+	}
+	decision := o.decision(call)
+	out.Metadata["tool_name"] = call.Name
+	out.Metadata["args_summary"] = summarizeToolArgs(call.Arguments)
+	out.Metadata["attempt_id"] = attemptID
+	out.Metadata["permission_decision"] = decision.Decision
+	out.Metadata["permission_source"] = decision.Source
+	out.Metadata["permission_reason"] = decision.Reason
+	if decision.KnownRisk {
+		out.Metadata["risk"] = decision.Risk
+	}
+	out.Metadata["output_bytes"] = len(out.Content)
+	out.Metadata["output_estimated_tokens"] = estimateMessagesTokens([]protocol.Message{{Role: protocol.RoleTool, Content: out.Content}})
+	out.Metadata["truncated"] = false
+	return toolExecutionResult{Index: index, Call: call, Result: out, AttemptID: attemptID}
+}
+
 func (o *toolOrchestrator) EmitAttemptFinished(result toolExecutionResult) {
 	if o == nil || o.emit == nil {
 		return
@@ -740,6 +768,7 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, orchestrator *tool
 	batchID := agentStepID(turnID, protocol.StepKindToolBatch, start+1)
 	batchStarted := time.Now()
 	batchSize := end - start
+	rateBuckets := a.toolRateBuckets(calls, start, end)
 	emit(protocol.Event{Type: protocol.EventStepStarted, Data: protocol.StepEvent{
 		TurnID:        turnID,
 		StepID:        batchID,
@@ -765,7 +794,21 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, orchestrator *tool
 		go func() {
 			defer wg.Done()
 			for idx := range jobs {
-				done <- orchestrator.Execute(ctx, idx, calls[idx], agentAttemptID(turnID, idx))
+				call := calls[idx]
+				release, waitMS, acquired := a.acquireToolRateBucket(ctx, rateBuckets, call)
+				if !acquired {
+					done <- orchestrator.AbortBeforeExecute(idx, call, agentAttemptID(turnID, idx), ctx.Err())
+					continue
+				}
+				result := orchestrator.Execute(ctx, idx, call, agentAttemptID(turnID, idx))
+				if release != nil {
+					release()
+				}
+				if waitMS > 0 {
+					ensureToolMetadata(&result.Result)
+					result.Result.Metadata["rate_limit_wait_ms"] = waitMS
+				}
+				done <- result
 			}
 		}()
 	}
@@ -805,6 +848,54 @@ func (a *Agent) executeOneTool(ctx context.Context, orchestrator *toolOrchestrat
 	emitToolStepCompleted(emit, turnID, round, result, parallel, batchID, batchSize, limit)
 	orchestrator.EmitAttemptFinished(result)
 	return result
+}
+
+func (a *Agent) toolRateBuckets(calls []protocol.ToolCall, start, end int) map[string]chan struct{} {
+	if a == nil || a.tools == nil {
+		return nil
+	}
+	limits := map[string]int{}
+	for i := start; i < end; i++ {
+		meta, ok := a.tools.ParallelMetadata(calls[i].Name)
+		if !ok || meta.RateLimitKey == "" || meta.MaxConcurrency <= 0 {
+			continue
+		}
+		if existing, ok := limits[meta.RateLimitKey]; !ok || meta.MaxConcurrency < existing {
+			limits[meta.RateLimitKey] = meta.MaxConcurrency
+		}
+	}
+	if len(limits) == 0 {
+		return nil
+	}
+	buckets := make(map[string]chan struct{}, len(limits))
+	for key, limit := range limits {
+		if limit < 1 {
+			limit = 1
+		}
+		buckets[key] = make(chan struct{}, limit)
+	}
+	return buckets
+}
+
+func (a *Agent) acquireToolRateBucket(ctx context.Context, buckets map[string]chan struct{}, call protocol.ToolCall) (func(), int64, bool) {
+	if len(buckets) == 0 || a == nil || a.tools == nil {
+		return nil, 0, true
+	}
+	meta, ok := a.tools.ParallelMetadata(call.Name)
+	if !ok || meta.RateLimitKey == "" {
+		return nil, 0, true
+	}
+	bucket := buckets[meta.RateLimitKey]
+	if bucket == nil {
+		return nil, 0, true
+	}
+	started := time.Now()
+	select {
+	case bucket <- struct{}{}:
+		return func() { <-bucket }, elapsedMS(started, time.Now()), true
+	case <-ctx.Done():
+		return nil, elapsedMS(started, time.Now()), false
+	}
 }
 
 func emitToolStepStarted(emit func(protocol.Event), turnID string, round, index int, call protocol.ToolCall, parallel bool, batchID string, batchSize, limit int, metadata map[string]any) {

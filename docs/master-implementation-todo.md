@@ -185,7 +185,7 @@ Acceptance:
   - [x] `cancellable`
   - [x] `max_concurrency`
 - [x] Make read-only fs tools parallel safe.
-- [ ] Make web search/fetch/crawl parallel safe only through rate-limited buckets.
+- [x] Make web search/fetch/crawl parallel safe only through rate-limited buckets.
 - [x] Treat shell/write/mkdir as exclusive unless explicitly allowed.
 - [x] Treat MCP tools as unknown/exclusive unless config or server metadata says otherwise.
 - [x] Add trace metadata for why a batch was or was not parallelized.
@@ -194,7 +194,7 @@ Acceptance:
 
 - [x] Parallel tests cover safe grouping.
 - [x] Exclusive tools break batches.
-- [ ] Rate-limited network tools do not exceed configured concurrency.
+- [x] Rate-limited network tools do not exceed configured concurrency.
 
 ### 1.4 Runtime Event Envelope
 

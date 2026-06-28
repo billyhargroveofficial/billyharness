@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -741,6 +742,91 @@ func TestRunMessagesExclusiveToolBreaksParallelBatches(t *testing.T) {
 	}
 	if parallelBatches != 2 || !sawExclusiveWrite {
 		t.Fatalf("parallelBatches=%d sawExclusiveWrite=%v events=%#v", parallelBatches, sawExclusiveWrite, events)
+	}
+}
+
+func TestRunMessagesRateLimitsNetworkParallelBatch(t *testing.T) {
+	cfg := config.Default()
+	cfg.MaxToolRounds = 3
+	cfg.MaxParallelTools = 5
+	registry := tools.NewRegistry(cfg)
+	var active int32
+	var maxActive int32
+	for i := 0; i < 5; i++ {
+		name := fmt.Sprintf("web_like_%d", i)
+		if err := registry.Register(tools.Tool{
+			Spec: protocol.ToolSpec{
+				Name:        name,
+				Description: "Rate-limited network test tool.",
+				Parameters:  json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+				Risk:        protocol.RiskNetwork,
+			},
+			Parallel: tools.ParallelMetadata{
+				Policy:         tools.ParallelPolicyNetworkRateLimited,
+				Idempotent:     true,
+				RateLimitKey:   "webtest",
+				Cancellable:    true,
+				MaxConcurrency: 2,
+			},
+			Handler: func(context.Context, json.RawMessage) (tools.Result, error) {
+				now := atomic.AddInt32(&active, 1)
+				for {
+					seen := atomic.LoadInt32(&maxActive)
+					if now <= seen || atomic.CompareAndSwapInt32(&maxActive, seen, now) {
+						break
+					}
+				}
+				time.Sleep(20 * time.Millisecond)
+				atomic.AddInt32(&active, -1)
+				return tools.Result{Content: "ok"}, nil
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_0", ToolName: "web_like_0", ArgsDelta: `{}`},
+			{Kind: provider.EventToolCallDelta, ToolIndex: 1, ToolID: "call_1", ToolName: "web_like_1", ArgsDelta: `{}`},
+			{Kind: provider.EventToolCallDelta, ToolIndex: 2, ToolID: "call_2", ToolName: "web_like_2", ArgsDelta: `{}`},
+			{Kind: provider.EventToolCallDelta, ToolIndex: 3, ToolID: "call_3", ToolName: "web_like_3", ArgsDelta: `{}`},
+			{Kind: provider.EventToolCallDelta, ToolIndex: 4, ToolID: "call_4", ToolName: "web_like_4", ArgsDelta: `{}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "finished"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	a := New(cfg, prov, registry)
+	var events []protocol.Event
+	_, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "network batch"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(&maxActive); got > 2 {
+		t.Fatalf("network tools exceeded bucket concurrency: maxActive=%d events=%#v", got, events)
+	}
+	batchStarted, ok := firstStepEvent(events, protocol.EventStepStarted, protocol.StepKindToolBatch)
+	if !ok || batchStarted.ParallelLimit != 5 || batchStarted.BatchSize != 5 {
+		t.Fatalf("batch started = %#v ok=%v", batchStarted, ok)
+	}
+	var sawRateLimitedTool bool
+	for _, event := range events {
+		step, ok := stepEvent(event, protocol.EventStepStarted)
+		if ok && step.Kind == protocol.StepKindToolCall && step.Name == "web_like_0" {
+			sawRateLimitedTool = step.Metadata["rate_limit_key"] == "webtest" &&
+				step.Metadata["max_concurrency"] == float64(2) &&
+				step.Metadata["parallel_policy"] == tools.ParallelPolicyNetworkRateLimited
+		}
+	}
+	if !sawRateLimitedTool {
+		t.Fatalf("rate-limited tool metadata missing: %#v", events)
 	}
 }
 
