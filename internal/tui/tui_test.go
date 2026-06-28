@@ -490,6 +490,47 @@ func TestToolBlocksAreOneLineByDefault(t *testing.T) {
 	}
 }
 
+func TestToolCollapsedLineUsesFinishedSummary(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 160
+	m.applyEvent(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{
+			ID:        "call-fetch",
+			Name:      "web_fetch",
+			Arguments: json.RawMessage(`{"url":"https://example.com/long/path?secret=query"}`),
+		},
+	})
+	m.applyEvent(protocol.Event{
+		Type: protocol.EventToolCallFinished,
+		Data: protocol.ToolResult{
+			CallID:    "call-fetch",
+			Name:      "web_fetch",
+			Content:   strings.Repeat("payload ", 200),
+			Truncated: true,
+			OutputRef: "/root/billyharness/tool-output/20260627/123456-web_fetch-call-fetch-abcd.txt",
+			Metadata: map[string]any{
+				"estimated_text_tokens": int64(1800),
+				"duration_ms":           int64(123),
+				"web_cache_hit":         true,
+			},
+		},
+	})
+
+	rendered := stripANSITest(m.renderBlock(0, m.blocks[0]))
+	if got := strings.Count(strings.TrimSpace(rendered), "\n"); got != 0 {
+		t.Fatalf("collapsed finished tool block should be one line, got %d newlines: %q", got, rendered)
+	}
+	for _, want := range []string{"Done Fetched example.com/long/path?…", "truncated", "123456-web_fetch-call-fetch-abcd.txt", "123ms", "cache hit", "~1.8k tok"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("finished tool summary missing %q: %q", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "payload payload") || strings.Contains(rendered, "secret=query") {
+		t.Fatalf("collapsed finished tool line leaked payload or raw query: %q", rendered)
+	}
+}
+
 func TestToolResultsUpdateMatchingBlockByCallIDOutOfOrder(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 120

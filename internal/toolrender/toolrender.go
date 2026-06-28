@@ -123,6 +123,9 @@ func ResultKeyAndLine(data any, base string, style Style) (string, string) {
 	if result.OutputRef != "" {
 		parts = append(parts, "ref "+CompactText(filepathBase(result.OutputRef), 56))
 	}
+	if durationMS := metadataInt(result.Metadata, "duration_ms"); durationMS > 0 {
+		parts = append(parts, CompactDurationMS(durationMS))
+	}
 	if cacheLabel := webCacheLabel(result.Metadata); cacheLabel != "" {
 		parts = append(parts, cacheLabel)
 	}
@@ -296,6 +299,21 @@ func JoinParts(parts ...string) string {
 		}
 	}
 	return strings.Join(out, " ")
+}
+
+func CompactDurationMS(ms int64) string {
+	switch {
+	case ms <= 0:
+		return ""
+	case ms < 1000:
+		return fmt.Sprintf("%dms", ms)
+	case ms < 60_000:
+		return trimFloat(float64(ms)/1000) + "s"
+	default:
+		minutes := ms / 60_000
+		seconds := (ms % 60_000) / 1000
+		return fmt.Sprintf("%dm%02ds", minutes, seconds)
+	}
 }
 
 func CompactInt(value int64) string {

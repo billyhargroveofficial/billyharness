@@ -573,25 +573,25 @@ Acceptance:
 
 ### 5.3 Tool Presentation
 
-- [ ] Default tool calls collapsed.
-- [ ] One-line compact summary:
-  - [ ] status
-  - [ ] tool name
-  - [ ] target file/url/query/server
-  - [ ] duration
-  - [ ] truncation/ref indicator
+- [x] Default tool calls collapsed.
+- [x] One-line compact summary:
+  - [x] status
+  - [x] tool name
+  - [x] target file/url/query/server
+  - [x] duration
+  - [x] truncation/ref indicator
 - [ ] Group context-gathering tools when possible.
 - [ ] Expand/collapse:
-  - [ ] by selected cell
+  - [x] by selected cell
   - [ ] all tools
   - [ ] current turn tools
   - [ ] errors only
-- [ ] Keep `/toolview` modes.
+- [x] Keep `/toolview` modes.
 
 Acceptance:
 
 - [ ] A long multi-tool run remains readable.
-- [ ] Full output is available on demand without dominating default view.
+- [x] Full output is available on demand without dominating default view.
 
 ### 5.4 Status Line
 

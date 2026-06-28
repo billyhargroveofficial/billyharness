@@ -2978,6 +2978,14 @@ func fallbackToolResultTitle(event protocol.Event) string {
 	return "Called tool"
 }
 
+func toolResultTitle(value any, base string) string {
+	_, line := toolrender.ResultKeyAndLine(value, base, toolrender.StyleTUI)
+	if strings.TrimSpace(line) == "" {
+		return base
+	}
+	return line
+}
+
 func (m *Model) observeToolSummary(value any) {
 	inTok, outTok, apiTok := toolSummaryTokens(value)
 	if inTok <= 0 && outTok <= 0 && apiTok <= 0 {
@@ -3052,7 +3060,7 @@ func (m *Model) appendToolResult(event protocol.Event, text string) {
 	i, ok := m.toolBlockIndex(callID)
 	if !ok {
 		if len(m.blocks) == 0 || m.blocks[len(m.blocks)-1].kind != "tool" {
-			m.addProtocolEventBlock(event, fallbackToolResultTitle(event), text)
+			m.addProtocolEventBlock(event, toolResultTitle(event.Data, fallbackToolResultTitle(event)), text)
 			return
 		}
 		i = len(m.blocks) - 1
@@ -3061,6 +3069,7 @@ func (m *Model) appendToolResult(event protocol.Event, text string) {
 			m.registerToolBlock(i)
 		}
 	}
+	m.blocks[i].title = toolResultTitle(event.Data, m.blocks[i].title)
 	m.appendToolTextAt(i, text)
 }
 
