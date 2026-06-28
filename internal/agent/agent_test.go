@@ -364,8 +364,14 @@ func TestCompactMessagesReportsProtectedPrefixPolicyAndCompactedBudget(t *testin
 		report.TriggerSource != "provider_usage" ||
 		report.TriggerPromptTokens != 1234 ||
 		report.ThresholdTokens != 50 ||
+		report.BeforeEstimatedTokens <= 0 ||
+		report.AfterEstimatedTokens <= 0 ||
+		report.CutStartIndex != 4 ||
+		report.CutEndIndex <= report.CutStartIndex ||
+		report.ReplacementIndex != 4 ||
 		report.KeepMessages != 1 ||
-		report.MaxSummaryChars != 1500 {
+		report.MaxSummaryChars != 1500 ||
+		report.SummaryStrategy != "deterministic" {
 		t.Fatalf("policy fields = %#v", report)
 	}
 	if report.ProtectedPrefix.EndIndex != 4 ||

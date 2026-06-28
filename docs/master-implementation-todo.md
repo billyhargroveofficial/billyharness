@@ -499,17 +499,17 @@ Acceptance:
 
 ### 4.5 Compaction
 
-- [ ] Keep deterministic compaction default for speed.
+- [x] Keep deterministic compaction default for speed.
 - [ ] Add optional model summary compaction strategy.
-- [ ] Add structured compaction report:
-  - [ ] trigger
-  - [ ] reason
-  - [ ] tokens before
-  - [ ] tokens after
-  - [ ] cut range
-  - [ ] protected prefix count
-  - [ ] replacement id
-  - [ ] summary model if used
+- [x] Add structured compaction report:
+  - [x] trigger
+  - [x] reason
+  - [x] tokens before
+  - [x] tokens after
+  - [x] cut range
+  - [x] protected prefix count
+  - [x] replacement id
+  - [x] summary model if used
 - [ ] Preserve tool refs and important outputs.
 - [ ] Add replay tests around compaction boundaries.
 

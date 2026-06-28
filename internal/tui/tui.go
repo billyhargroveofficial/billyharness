@@ -3774,8 +3774,16 @@ func compactEventText(value any) string {
 		TriggerSource            string              `json:"trigger_source"`
 		TriggerPromptToks        int64               `json:"trigger_prompt_tokens"`
 		ThresholdTokens          int64               `json:"threshold_tokens"`
+		BeforeEstimatedTokens    int64               `json:"before_estimated_tokens"`
+		AfterEstimatedTokens     int64               `json:"after_estimated_tokens"`
+		CutStartIndex            int                 `json:"cut_start_index"`
+		CutEndIndex              int                 `json:"cut_end_index"`
+		ReplacementIndex         int                 `json:"replacement_index"`
 		KeepMessages             int                 `json:"keep_messages"`
 		MaxSummaryChars          int                 `json:"max_summary_chars"`
+		SummaryStrategy          string              `json:"summary_strategy"`
+		SummaryProvider          string              `json:"summary_provider"`
+		SummaryModel             string              `json:"summary_model"`
 		CompactedMessages        int                 `json:"compacted_messages"`
 		CompactedChars           int                 `json:"compacted_chars"`
 		CompactedEstimatedTokens int64               `json:"compacted_estimated_tokens"`
@@ -3799,8 +3807,21 @@ func compactEventText(value any) string {
 	} else if data.Detail != "" {
 		lines = append(lines, data.Detail)
 	}
+	if data.BeforeEstimatedTokens > 0 || data.AfterEstimatedTokens > 0 {
+		lines = append(lines, fmt.Sprintf("context: before ~%s / after ~%s", compactNumber(data.BeforeEstimatedTokens), compactNumber(data.AfterEstimatedTokens)))
+	}
+	if data.CutEndIndex > data.CutStartIndex {
+		lines = append(lines, fmt.Sprintf("cut: [%d:%d) -> replacement index %d", data.CutStartIndex, data.CutEndIndex, data.ReplacementIndex))
+	}
 	if data.KeepMessages > 0 || data.MaxSummaryChars > 0 {
 		lines = append(lines, fmt.Sprintf("policy: keep %d messages / summary cap %d chars", data.KeepMessages, data.MaxSummaryChars))
+	}
+	if data.SummaryStrategy != "" {
+		line := "summary: " + data.SummaryStrategy
+		if data.SummaryProvider != "" || data.SummaryModel != "" {
+			line += " " + strings.TrimSpace(data.SummaryProvider+"/"+data.SummaryModel)
+		}
+		lines = append(lines, line)
 	}
 	if data.CompactedMessages > 0 {
 		lines = append(lines, fmt.Sprintf("compacted messages: %d", data.CompactedMessages))

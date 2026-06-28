@@ -30,8 +30,16 @@ type compactionReport struct {
 	TriggerSource            string                          `json:"trigger_source"`
 	TriggerPromptTokens      int64                           `json:"trigger_prompt_tokens"`
 	ThresholdTokens          int64                           `json:"threshold_tokens"`
+	BeforeEstimatedTokens    int64                           `json:"before_estimated_tokens"`
+	AfterEstimatedTokens     int64                           `json:"after_estimated_tokens"`
+	CutStartIndex            int                             `json:"cut_start_index"`
+	CutEndIndex              int                             `json:"cut_end_index"`
+	ReplacementIndex         int                             `json:"replacement_index"`
 	KeepMessages             int                             `json:"keep_messages"`
 	MaxSummaryChars          int                             `json:"max_summary_chars"`
+	SummaryStrategy          string                          `json:"summary_strategy"`
+	SummaryProvider          string                          `json:"summary_provider,omitempty"`
+	SummaryModel             string                          `json:"summary_model,omitempty"`
 	ProtectedPrefix          compactionProtectedPrefixReport `json:"protected_prefix"`
 	ProtectedPrefixMessages  int                             `json:"protected_prefix_messages"`
 	ProtectedPrefixChars     int                             `json:"protected_prefix_chars"`
@@ -100,7 +108,7 @@ func compactMessages(messages []protocol.Message, cfg config.Config, observedPro
 	out = append(out, messages[:protected.EndIndex]...)
 	out = append(out, summary)
 	out = append(out, messages[cut:]...)
-	report := newCompactionReport(id, policy, triggerTokens, triggerSource, protected, compacted, summary, out, messages)
+	report := newCompactionReport(id, policy, triggerTokens, triggerSource, protected, cut, compacted, summary, out, messages)
 	return out, report, true
 }
 
@@ -312,6 +320,7 @@ func newCompactionReport(
 	triggerTokens int64,
 	triggerSource string,
 	protected compactionProtectedPrefixReport,
+	cutEnd int,
 	compacted []protocol.Message,
 	summary protocol.Message,
 	active []protocol.Message,
@@ -323,8 +332,14 @@ func newCompactionReport(
 		TriggerSource:            triggerSource,
 		TriggerPromptTokens:      triggerTokens,
 		ThresholdTokens:          policy.ThresholdTokens,
+		BeforeEstimatedTokens:    estimateMessagesTokens(before),
+		AfterEstimatedTokens:     estimateMessagesTokens(active),
+		CutStartIndex:            protected.EndIndex,
+		CutEndIndex:              cutEnd,
+		ReplacementIndex:         protected.EndIndex,
 		KeepMessages:             policy.KeepMessages,
 		MaxSummaryChars:          policy.MaxSummaryChars,
+		SummaryStrategy:          "deterministic",
 		ProtectedPrefix:          protected,
 		ProtectedPrefixMessages:  protected.Messages,
 		ProtectedPrefixChars:     protected.Chars,

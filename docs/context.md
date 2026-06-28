@@ -14,7 +14,7 @@ Provider usage counters such as cache hit/miss can be larger than active context
 
 During a run, the agent emits `context.threshold` events when active context crosses 50%, 70%, 85%, or 95% of `context_window_tokens`. TUI renders these as `CONTEXT` blocks. Telegram shows them as compact progress lines.
 
-When compaction fires, the `context.compacted` event includes `top_context_contributors` from the pre-compaction messages so the UI can show what dominated the window before it was summarized.
+When compaction fires, the `context.compacted` event includes before/after token estimates, cut range, replacement index, deterministic summary strategy, protected prefix details, and `top_context_contributors` from the pre-compaction messages so the UI can show what dominated the window before it was summarized.
 
 Gateway API:
 
