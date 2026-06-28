@@ -829,29 +829,42 @@ func (a *Agent) toolStepMetadata(call protocol.ToolCall, parallel bool, batchSiz
 	metadata := map[string]any{}
 	var risk protocol.Risk
 	var ok bool
+	var parallelMeta tools.ParallelMetadata
+	var hasParallelMeta bool
 	if a != nil && a.tools != nil {
 		risk, ok = a.tools.Risk(call.Name)
 		if ok {
 			metadata["risk"] = risk
 		}
+		parallelMeta, hasParallelMeta = a.tools.ParallelMetadata(call.Name)
 	}
-	parallelSafe := risk == protocol.RiskReadOnly || risk == protocol.RiskNetwork
-	if ok {
+	parallelSafe := hasParallelMeta && parallelMeta.CanRunParallel()
+	if hasParallelMeta {
 		metadata["parallel_safe"] = parallelSafe
+		metadata["parallel_policy"] = parallelMeta.Policy
+		metadata["idempotent"] = parallelMeta.Idempotent
+		metadata["requires_exclusive_workspace"] = parallelMeta.RequiresExclusiveWorkspace
+		metadata["cancellable"] = parallelMeta.Cancellable
+		if parallelMeta.RateLimitKey != "" {
+			metadata["rate_limit_key"] = parallelMeta.RateLimitKey
+		}
+		if parallelMeta.MaxConcurrency > 0 {
+			metadata["max_concurrency"] = parallelMeta.MaxConcurrency
+		}
 	}
 	switch {
 	case parallel:
-		metadata["parallel_policy"] = "parallel_batch"
+		metadata["parallel_decision"] = "parallel_batch"
 	case a == nil || a.cfg.MaxParallelTools <= 1:
-		metadata["parallel_policy"] = "parallel_disabled"
-	case !ok:
-		metadata["parallel_policy"] = "unknown_tool_serial"
+		metadata["parallel_decision"] = "parallel_disabled"
+	case !hasParallelMeta:
+		metadata["parallel_decision"] = "unknown_tool_serial"
 	case !parallelSafe:
-		metadata["parallel_policy"] = "serial_risk_" + string(risk)
+		metadata["parallel_decision"] = "serial_policy_" + parallelMeta.Policy
 	case batchSize <= 1:
-		metadata["parallel_policy"] = "single_parallel_safe_tool"
+		metadata["parallel_decision"] = "single_parallel_safe_tool"
 	default:
-		metadata["parallel_policy"] = "serial"
+		metadata["parallel_decision"] = "serial"
 	}
 	return metadata
 }

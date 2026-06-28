@@ -177,22 +177,22 @@ Acceptance:
 
 ### 1.3 Parallel Policy
 
-- [ ] Replace broad risk-based parallel assumptions with explicit fields:
-  - [ ] `parallel_policy`
-  - [ ] `idempotent`
-  - [ ] `requires_exclusive_workspace`
-  - [ ] `rate_limit_key`
-  - [ ] `cancellable`
-  - [ ] `max_concurrency`
-- [ ] Make read-only fs tools parallel safe.
+- [x] Replace broad risk-based parallel assumptions with explicit fields:
+  - [x] `parallel_policy`
+  - [x] `idempotent`
+  - [x] `requires_exclusive_workspace`
+  - [x] `rate_limit_key`
+  - [x] `cancellable`
+  - [x] `max_concurrency`
+- [x] Make read-only fs tools parallel safe.
 - [ ] Make web search/fetch/crawl parallel safe only through rate-limited buckets.
-- [ ] Treat shell/write/mkdir as exclusive unless explicitly allowed.
-- [ ] Treat MCP tools as unknown/exclusive unless config or server metadata says otherwise.
-- [ ] Add trace metadata for why a batch was or was not parallelized.
+- [x] Treat shell/write/mkdir as exclusive unless explicitly allowed.
+- [x] Treat MCP tools as unknown/exclusive unless config or server metadata says otherwise.
+- [x] Add trace metadata for why a batch was or was not parallelized.
 
 Acceptance:
 
-- [ ] Parallel tests cover safe grouping.
+- [x] Parallel tests cover safe grouping.
 - [ ] Exclusive tools break batches.
 - [ ] Rate-limited network tools do not exceed configured concurrency.
 

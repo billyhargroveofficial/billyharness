@@ -645,8 +645,12 @@ func TestRunMessagesExecutesParallelSafeToolsConcurrentlyAndPreservesOrder(t *te
 	for _, event := range events {
 		step, ok := stepEvent(event, protocol.EventStepStarted)
 		if ok && step.Kind == protocol.StepKindToolCall && step.BatchID == batchStarted.BatchID && step.Parallel {
-			if step.Metadata["parallel_policy"] != "parallel_batch" ||
+			if step.Metadata["parallel_policy"] != tools.ParallelPolicyReadOnly ||
+				step.Metadata["parallel_decision"] != "parallel_batch" ||
 				step.Metadata["parallel_safe"] != true ||
+				step.Metadata["idempotent"] != true ||
+				step.Metadata["requires_exclusive_workspace"] != false ||
+				step.Metadata["cancellable"] != true ||
 				step.Metadata["risk"] != string(protocol.RiskReadOnly) ||
 				step.Metadata["attempt_id"] == "" ||
 				step.Metadata["permission_decision"] != "allow" {

@@ -60,9 +60,26 @@ type Result struct {
 }
 
 type Tool struct {
-	Spec    protocol.ToolSpec
-	Handler func(context.Context, json.RawMessage) (Result, error)
+	Spec     protocol.ToolSpec
+	Parallel ParallelMetadata
+	Handler  func(context.Context, json.RawMessage) (Result, error)
 }
+
+type ParallelMetadata struct {
+	Policy                     string `json:"parallel_policy,omitempty"`
+	Idempotent                 bool   `json:"idempotent,omitempty"`
+	RequiresExclusiveWorkspace bool   `json:"requires_exclusive_workspace,omitempty"`
+	RateLimitKey               string `json:"rate_limit_key,omitempty"`
+	Cancellable                bool   `json:"cancellable,omitempty"`
+	MaxConcurrency             int    `json:"max_concurrency,omitempty"`
+}
+
+const (
+	ParallelPolicyReadOnly           = "read_only"
+	ParallelPolicyNetworkRateLimited = "network_rate_limited"
+	ParallelPolicyExclusiveWorkspace = "exclusive_workspace"
+	ParallelPolicyUnknownExternal    = "unknown_external"
+)
 
 type Registry struct {
 	cfg          config.Config
@@ -187,16 +204,24 @@ func (r *Registry) Call(ctx context.Context, call protocol.ToolCall) (Result, er
 }
 
 func (r *Registry) CanRunParallel(name string) bool {
-	tool, ok := r.lookup(name)
+	meta, ok := r.ParallelMetadata(name)
 	if !ok {
 		return false
 	}
-	switch tool.Spec.Risk {
-	case protocol.RiskReadOnly, protocol.RiskNetwork:
-		return true
-	default:
-		return false
+	return meta.CanRunParallel()
+}
+
+func (r *Registry) ParallelMetadata(name string) (ParallelMetadata, bool) {
+	tool, ok := r.lookup(name)
+	if !ok {
+		return ParallelMetadata{}, false
 	}
+	return normalizeParallelMetadata(tool.Spec.Name, tool.Spec.Risk, tool.Parallel), true
+}
+
+func (m ParallelMetadata) CanRunParallel() bool {
+	return m.Idempotent && !m.RequiresExclusiveWorkspace &&
+		(m.Policy == ParallelPolicyReadOnly || m.Policy == ParallelPolicyNetworkRateLimited)
 }
 
 func (r *Registry) Risk(name string) (protocol.Risk, bool) {
@@ -224,6 +249,7 @@ func errorResult(code, content string) Result {
 }
 
 func (r *Registry) add(tool Tool) {
+	tool.Parallel = normalizeParallelMetadata(tool.Spec.Name, tool.Spec.Risk, tool.Parallel)
 	r.tools[tool.Spec.Name] = tool
 }
 
@@ -234,8 +260,53 @@ func (r *Registry) Register(tool Tool) error {
 	if _, exists := r.tools[tool.Spec.Name]; exists {
 		return fmt.Errorf("tool %s already registered", tool.Spec.Name)
 	}
+	tool.Parallel = normalizeParallelMetadata(tool.Spec.Name, tool.Spec.Risk, tool.Parallel)
 	r.tools[tool.Spec.Name] = tool
 	return nil
+}
+
+func normalizeParallelMetadata(name string, risk protocol.Risk, meta ParallelMetadata) ParallelMetadata {
+	defaults := defaultParallelMetadata(name, risk)
+	if meta.Policy == "" {
+		meta.Policy = defaults.Policy
+	}
+	if !meta.Idempotent {
+		meta.Idempotent = defaults.Idempotent
+	}
+	if !meta.RequiresExclusiveWorkspace {
+		meta.RequiresExclusiveWorkspace = defaults.RequiresExclusiveWorkspace
+	}
+	if meta.RateLimitKey == "" {
+		meta.RateLimitKey = defaults.RateLimitKey
+	}
+	if !meta.Cancellable {
+		meta.Cancellable = defaults.Cancellable
+	}
+	if meta.MaxConcurrency <= 0 {
+		meta.MaxConcurrency = defaults.MaxConcurrency
+	}
+	return meta
+}
+
+func defaultParallelMetadata(name string, risk protocol.Risk) ParallelMetadata {
+	switch name {
+	case "time_now", "fs_read_file", "fs_list", "fs_search", "tool_search":
+		return ParallelMetadata{Policy: ParallelPolicyReadOnly, Idempotent: true, Cancellable: true}
+	case "web_search", "web_fetch", "web_extract", "web_crawl":
+		return ParallelMetadata{Policy: ParallelPolicyNetworkRateLimited, Idempotent: true, RateLimitKey: "web", Cancellable: true, MaxConcurrency: 3}
+	case "fs_write_file", "fs_make_dir", "shell_exec":
+		return ParallelMetadata{Policy: ParallelPolicyExclusiveWorkspace, RequiresExclusiveWorkspace: true, Cancellable: true, MaxConcurrency: 1}
+	case "mcp_list_tools", "mcp_call":
+		return ParallelMetadata{Policy: ParallelPolicyUnknownExternal, RequiresExclusiveWorkspace: true, Cancellable: true, RateLimitKey: "mcp", MaxConcurrency: 1}
+	}
+	switch risk {
+	case protocol.RiskReadOnly:
+		return ParallelMetadata{Policy: ParallelPolicyReadOnly, Idempotent: true, Cancellable: true}
+	case protocol.RiskNetwork:
+		return ParallelMetadata{Policy: ParallelPolicyNetworkRateLimited, Idempotent: true, RateLimitKey: "network", Cancellable: true, MaxConcurrency: 2}
+	default:
+		return ParallelMetadata{Policy: ParallelPolicyExclusiveWorkspace, RequiresExclusiveWorkspace: true, Cancellable: true, MaxConcurrency: 1}
+	}
 }
 
 func (r *Registry) Close() {

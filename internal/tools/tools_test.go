@@ -831,6 +831,38 @@ func TestLazyMCPGatewayHidesRawSpecsAndCanCallTool(t *testing.T) {
 	}
 }
 
+func TestRegistryExposesExplicitParallelMetadata(t *testing.T) {
+	registry := NewRegistry(config.Config{})
+	registry.mcpTools["mcp__fake__echo"] = Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "mcp__fake__echo",
+			Description: "Echo.",
+			Parameters:  raw(`{"type":"object","properties":{}}`),
+			Risk:        protocol.RiskExternal,
+		},
+		Handler: func(context.Context, json.RawMessage) (Result, error) {
+			return Result{Content: "ok"}, nil
+		},
+	}
+	registry.addMCPGateway()
+	readMeta, ok := registry.ParallelMetadata("fs_read_file")
+	if !ok || readMeta.Policy != ParallelPolicyReadOnly || !readMeta.Idempotent || readMeta.RequiresExclusiveWorkspace || !readMeta.CanRunParallel() {
+		t.Fatalf("read metadata = %#v ok=%v", readMeta, ok)
+	}
+	webMeta, ok := registry.ParallelMetadata("web_fetch")
+	if !ok || webMeta.Policy != ParallelPolicyNetworkRateLimited || webMeta.RateLimitKey != "web" || webMeta.MaxConcurrency != 3 || !webMeta.CanRunParallel() {
+		t.Fatalf("web metadata = %#v ok=%v", webMeta, ok)
+	}
+	writeMeta, ok := registry.ParallelMetadata("fs_write_file")
+	if !ok || writeMeta.Policy != ParallelPolicyExclusiveWorkspace || !writeMeta.RequiresExclusiveWorkspace || writeMeta.CanRunParallel() {
+		t.Fatalf("write metadata = %#v ok=%v", writeMeta, ok)
+	}
+	mcpMeta, ok := registry.ParallelMetadata("mcp_call")
+	if !ok || mcpMeta.Policy != ParallelPolicyUnknownExternal || !mcpMeta.RequiresExclusiveWorkspace || mcpMeta.CanRunParallel() {
+		t.Fatalf("mcp metadata = %#v ok=%v", mcpMeta, ok)
+	}
+}
+
 func TestToolSearchFindsNativeAndMCPTools(t *testing.T) {
 	registry := NewRegistry(config.Default())
 	registry.mcpTools["mcp__github__search_repositories"] = Tool{
