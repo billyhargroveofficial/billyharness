@@ -881,12 +881,12 @@ Acceptance:
 - [ ] Compare DeepSeek Flash versus DeepSeek Pro.
 - [ ] Compare Codex/OpenAI OAuth path when available.
 - [ ] Track:
-  - [ ] quality outcome
-  - [ ] elapsed time
-  - [ ] tool correctness
-  - [ ] token/context growth
-  - [ ] cost/subscription
-  - [ ] failure modes
+  - [x] quality outcome
+  - [x] elapsed time
+  - [x] tool correctness
+  - [x] token/context growth
+  - [x] cost/subscription
+  - [x] failure modes
 - [ ] Keep provider-specific bugs in separate report.
 
 Acceptance:

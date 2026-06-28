@@ -662,6 +662,10 @@ func TestBenchCostMarkerUsesProviderCatalog(t *testing.T) {
 	if marker != "none" || subscription {
 		t.Fatalf("mock marker = %q subscription=%v", marker, subscription)
 	}
+	marker, subscription = benchCostMarker(config.Config{Provider: "mock", Model: "deepseek-v4-flash"})
+	if marker != "none" || subscription {
+		t.Fatalf("mock deepseek marker = %q subscription=%v", marker, subscription)
+	}
 	marker, subscription = benchCostMarker(config.Config{Provider: "deepseek", Model: "deepseek-v4-flash"})
 	if marker != "metered" || subscription {
 		t.Fatalf("deepseek marker = %q subscription=%v", marker, subscription)

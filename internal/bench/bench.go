@@ -903,6 +903,9 @@ func percentile(sorted []int64, p float64) int64 {
 }
 
 func benchCostMarker(cfg config.Config) (string, bool) {
+	if cfg.Provider == modelinfo.ProviderMock {
+		return "none", false
+	}
 	model := modelinfo.Lookup(cfg.Model)
 	providerInfo := modelinfo.Provider(cfg.Provider)
 	subscription := model.Subscription || providerInfo.Subscription
@@ -911,9 +914,6 @@ func benchCostMarker(cfg config.Config) (string, bool) {
 	}
 	if model.Pricing.CacheHitPer1M > 0 || model.Pricing.CacheMissPer1M > 0 || model.Pricing.InputPer1M > 0 || model.Pricing.OutputPer1M > 0 {
 		return "metered", false
-	}
-	if cfg.Provider == modelinfo.ProviderMock {
-		return "none", false
 	}
 	return "unknown", false
 }

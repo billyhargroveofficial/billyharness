@@ -580,6 +580,8 @@ func benchCmd(args []string) error {
 		return benchRunCmd(args[1:])
 	case "local-loop", "long-loop":
 		return benchLocalLoopCmd(args[1:])
+	case "compare-providers", "compare":
+		return benchCompareProvidersCmd(args[1:])
 	case "terminal-bench", "tb":
 		return benchTerminalBenchCmd(args[1:])
 	default:
@@ -704,6 +706,71 @@ func benchLocalLoopCmd(args []string) error {
 	})
 }
 
+func benchCompareProvidersCmd(args []string) error {
+	cfg := config.Default()
+	fs := flag.NewFlagSet("bench compare-providers", flag.ExitOnError)
+	tasksPath := fs.String("tasks", "", "JSONL task file to run for every provider/model")
+	outDir := fs.String("out", "bench-runs/provider-compare", "output directory for provider comparison trace bundles")
+	modelsRaw := fs.String("models", "deepseek-v4-flash,deepseek-v4-pro", "comma-separated models to compare")
+	includeCodex := fs.Bool("codex", false, "also compare the default Codex/OpenAI OAuth model")
+	live := fs.Bool("live", false, "run real providers; default false uses mock scripted runs and spends no API tokens")
+	limit := fs.Int("limit", 0, "max tasks to run per target")
+	timeoutSec := fs.Int("timeout-sec", 0, "per-task timeout override")
+	maxRounds := fs.Int("max-rounds", cfg.MaxToolRounds, "max model/tool rounds per task")
+	allowDangerous := fs.Bool("dangerous", true, "enable write and shell tools for benchmark tasks")
+	reasoning := fs.String("reasoning", cfg.ReasoningEffort, "reasoning effort for live provider runs")
+	contextCompactTokens := fs.Int("context-compact-tokens", 0, "override context compaction trigger tokens")
+	contextCompactKeep := fs.Int("context-compact-keep", 0, "override context compaction keep count")
+	contextCompactMaxChars := fs.Int("context-compact-max-chars", 0, "override context compaction summary max chars")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*tasksPath) == "" {
+		return fmt.Errorf("-tasks required")
+	}
+	targets := comparisonTargetsFromModels(*modelsRaw, *includeCodex, *reasoning)
+	if len(targets) == 0 {
+		return fmt.Errorf("no models to compare")
+	}
+	opts := bench.ProviderComparisonOptions{
+		TasksPath:              *tasksPath,
+		OutDir:                 *outDir,
+		Targets:                targets,
+		Live:                   *live,
+		Limit:                  *limit,
+		MaxRounds:              *maxRounds,
+		AllowDangerous:         *allowDangerous,
+		ContextCompactTokens:   *contextCompactTokens,
+		ContextCompactKeep:     *contextCompactKeep,
+		ContextCompactMaxChars: *contextCompactMaxChars,
+	}
+	if *timeoutSec > 0 {
+		opts.Timeout = time.Duration(*timeoutSec) * time.Second
+	}
+	report, err := bench.CompareProviders(context.Background(), cfg, opts)
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(report)
+}
+
+func comparisonTargetsFromModels(modelsRaw string, includeCodex bool, reasoning string) []bench.ProviderComparisonTarget {
+	var targets []bench.ProviderComparisonTarget
+	for _, model := range strings.Split(modelsRaw, ",") {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		targets = append(targets, bench.ProviderComparisonTarget{Model: model, Reasoning: reasoning})
+	}
+	if includeCodex {
+		targets = append(targets, bench.ProviderComparisonTarget{Model: "gpt-5.5", Reasoning: reasoning})
+	}
+	return targets
+}
+
 func benchTerminalBenchCmd(args []string) error {
 	if len(args) == 0 {
 		benchTerminalBenchUsage()
@@ -782,6 +849,7 @@ func benchUsage() {
 	fmt.Println("usage:")
 	fmt.Println("  fast-agent-harness bench run -tasks tasks.jsonl -out runs")
 	fmt.Println("  fast-agent-harness bench local-loop [-out runs/local-loop] [-turns 60]")
+	fmt.Println("  fast-agent-harness bench compare-providers -tasks tasks.jsonl [-out runs/provider-compare] [-live]")
 	fmt.Println("  fast-agent-harness bench terminal-bench export -tasks tasks.jsonl -out tb-dataset")
 	fmt.Println("  fast-agent-harness bench terminal-bench import -dataset tb-dataset [-out tasks.jsonl]")
 }

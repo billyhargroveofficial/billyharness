@@ -86,4 +86,39 @@ If `replay_verified` is false or missing, treat the bundle as incomplete and ins
 
 ## Provider Comparison
 
-The provider comparison flow is intentionally not automated yet. Use the same task file with explicit provider/model config, then compare elapsed time, tool correctness, token/context growth, cost or subscription marker, and failure modes. Keep DeepSeek Flash, DeepSeek Pro, and Codex OAuth runs in separate output directories.
+Generate a local-loop task file without running it:
+
+```sh
+./bin/fast-agent-harness bench local-loop -out /root/billyharness/bench-runs/provider-compare-source -turns 60 -run=false
+```
+
+Compare providers in mock-safe mode first. This spends no API tokens and verifies the comparison/report plumbing:
+
+```sh
+./bin/fast-agent-harness bench compare-providers \
+  -tasks /root/billyharness/bench-runs/provider-compare-source/local-loop-tasks.jsonl \
+  -out /root/billyharness/bench-runs/provider-compare
+```
+
+Run live provider comparison only when you intentionally want to spend API or subscription quota:
+
+```sh
+./bin/fast-agent-harness bench compare-providers \
+  -tasks /root/billyharness/bench-runs/provider-compare-source/local-loop-tasks.jsonl \
+  -out /root/billyharness/bench-runs/provider-compare-live \
+  -models deepseek-v4-flash,deepseek-v4-pro \
+  -live
+```
+
+Add Codex/OpenAI OAuth to the target set:
+
+```sh
+./bin/fast-agent-harness bench compare-providers \
+  -tasks /root/billyharness/bench-runs/provider-compare-source/local-loop-tasks.jsonl \
+  -out /root/billyharness/bench-runs/provider-compare-codex \
+  -models deepseek-v4-flash,deepseek-v4-pro \
+  -codex \
+  -live
+```
+
+The report tracks quality outcome, elapsed time, tool correctness, token/context growth, cost or subscription marker, replay bundle paths, and failure modes. Keep live DeepSeek Flash, DeepSeek Pro, and Codex OAuth runs in separate output directories when comparing historical runs.
