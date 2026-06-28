@@ -163,6 +163,32 @@ func TestStreamPlainTextShowsContextAboveProgress(t *testing.T) {
 	}
 }
 
+func TestRendererContextThresholdAddsProgressLine(t *testing.T) {
+	r := NewRendererWithContextWindow(1_000_000)
+	events := r.Apply(protocol.Event{Type: protocol.EventContextThreshold, Data: protocol.ContextThresholdEvent{
+		Percent:             70,
+		EstimatedTokens:     705000,
+		ContextWindowTokens: 1000000,
+		Stage:               "after_tool_results",
+	}})
+	if len(events) != 1 || events[0].Kind != "status" || events[0].Key != "context-threshold-70" {
+		t.Fatalf("render events = %#v", events)
+	}
+	progress := NewToolProgress()
+	if !progress.Add(events[0]) {
+		t.Fatalf("expected progress line")
+	}
+	if progress.Add(events[0]) {
+		t.Fatalf("duplicate threshold should not change progress")
+	}
+	text := progress.PlainTextLimit(1000)
+	for _, want := range []string{"context 70%", "705.0k/1.00M", "after_tool_results"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("progress missing %q: %q", want, text)
+		}
+	}
+}
+
 func TestRendererFooterShowsToolSummaryTokens(t *testing.T) {
 	r := NewRenderer()
 	r.Apply(protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{

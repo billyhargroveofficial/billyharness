@@ -246,6 +246,7 @@ type ReplaySummary struct {
 	ToolCallsStarted       int                  `json:"tool_calls_started,omitempty"`
 	ToolCallProgress       int                  `json:"tool_call_progress,omitempty"`
 	ToolCallsFinished      int                  `json:"tool_calls_finished,omitempty"`
+	ContextThresholds      int                  `json:"context_thresholds,omitempty"`
 	ContextCompactions     int                  `json:"context_compactions,omitempty"`
 	InputTokens            int64                `json:"input_tokens,omitempty"`
 	OutputTokens           int64                `json:"output_tokens,omitempty"`
@@ -468,6 +469,8 @@ func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEve
 		s.ToolCallProgress++
 	case protocol.EventToolCallFinished:
 		s.ToolCallsFinished++
+	case protocol.EventContextThreshold:
+		s.ContextThresholds++
 	case protocol.EventContextCompacted:
 		s.ContextCompactions++
 	case protocol.EventProviderUsageUpdate:
@@ -576,6 +579,10 @@ func (s *ReplaySummary) appendTimeline(record EventRecord, event protocol.Event)
 		item.Kind = protocol.StepKindToolCall
 		item.Status = "output_ref_created"
 		applyTimelineMapData(&item, event.Data)
+	case protocol.EventContextThreshold:
+		item.Kind = "context_threshold"
+		item.Status = protocol.StepStatusCompleted
+		applyTimelineMapData(&item, event.Data)
 	case protocol.EventContextCompacted:
 		item.Kind = "context_compaction"
 		item.Status = protocol.StepStatusCompleted
@@ -616,6 +623,7 @@ func isReplayTimelineEvent(eventType protocol.EventType) bool {
 		protocol.EventToolCallFailed,
 		protocol.EventToolCallAborted,
 		protocol.EventToolOutputRefCreated,
+		protocol.EventContextThreshold,
 		protocol.EventContextCompacted,
 		protocol.EventHookStarted,
 		protocol.EventHookFinished,

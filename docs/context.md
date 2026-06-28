@@ -12,6 +12,8 @@ The report includes:
 
 Provider usage counters such as cache hit/miss can be larger than active context because they are provider billing/cache accounting for model calls. `/context` is the cleaner place to answer "why did this chat get large?".
 
+During a run, the agent emits `context.threshold` events when active context crosses 50%, 70%, 85%, or 95% of `context_window_tokens`. TUI renders these as `CONTEXT` blocks. Telegram shows them as compact progress lines.
+
 Gateway API:
 
 ```bash

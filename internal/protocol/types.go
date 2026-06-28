@@ -76,6 +76,7 @@ const (
 	EventToolCallFailed          EventType = "tool.call_failed"
 	EventToolCallAborted         EventType = "tool.call_aborted"
 	EventToolOutputRefCreated    EventType = "tool.output_ref_created"
+	EventContextThreshold        EventType = "context.threshold"
 	EventContextCompacted        EventType = "context.compacted"
 	EventHookStarted             EventType = "hook.started"
 	EventHookFinished            EventType = "hook.finished"
@@ -162,4 +163,16 @@ type ToolProgressEvent struct {
 	Status    string         `json:"status"`
 	Message   string         `json:"message,omitempty"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
+}
+
+type ContextThresholdEvent struct {
+	Percent             int    `json:"percent"`
+	EstimatedTokens     int64  `json:"estimated_tokens"`
+	ContextWindowTokens int64  `json:"context_window_tokens"`
+	ThresholdTokens     int64  `json:"threshold_tokens"`
+	RemainingTokens     int64  `json:"remaining_tokens"`
+	MessageCount        int    `json:"message_count"`
+	Round               int    `json:"round,omitempty"`
+	Stage               string `json:"stage,omitempty"`
+	Estimator           string `json:"estimator,omitempty"`
 }

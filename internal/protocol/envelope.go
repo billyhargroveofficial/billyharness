@@ -126,7 +126,7 @@ func ValidateEventEnvelope(event Event) error {
 	}
 
 	switch event.Type {
-	case EventRunStarted, EventRunCompleted, EventRunFailed, EventContextCompacted:
+	case EventRunStarted, EventRunCompleted, EventRunFailed, EventContextThreshold, EventContextCompacted:
 		return requireEnvelope(event, "run_id")
 	case EventTurnStarted, EventTurnCompleted:
 		return requireEnvelope(event, "run_id", "turn_id")

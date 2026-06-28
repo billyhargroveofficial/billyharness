@@ -99,6 +99,8 @@ func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
 			return nil
 		}
 		return []RenderEvent{{Kind: "tool", Title: "Tool", Body: summary, Key: key}}
+	case protocol.EventContextThreshold:
+		return []RenderEvent{{Kind: "status", Title: "Context", Body: telegramContextThresholdText(event.Data), Key: telegramContextThresholdKey(event.Data)}}
 	case protocol.EventProviderUsageUpdate:
 		delta := r.usageAccounting.Apply(usage(event.Data))
 		current := r.usageAccounting.Current()
@@ -276,7 +278,7 @@ func NewToolProgress() *ToolProgress {
 }
 
 func (p *ToolProgress) Add(event RenderEvent) bool {
-	if event.Kind != "tool" {
+	if event.Kind != "tool" && event.Kind != "status" {
 		return false
 	}
 	prefix := "•"
@@ -1055,6 +1057,36 @@ func compactInt(value int64) string {
 		return fmt.Sprintf("%.1fk", float64(value)/1000)
 	}
 	return fmt.Sprint(value)
+}
+
+func telegramContextThresholdText(value any) string {
+	data := contextThresholdData(value)
+	if data.Percent <= 0 {
+		return "⚠ context threshold crossed"
+	}
+	body := fmt.Sprintf("⚠ context %d%% · %s", data.Percent, compactInt(data.EstimatedTokens))
+	if data.ContextWindowTokens > 0 {
+		body += "/" + compactInt(data.ContextWindowTokens)
+	}
+	if data.Stage != "" {
+		body += " · " + data.Stage
+	}
+	return body
+}
+
+func telegramContextThresholdKey(value any) string {
+	data := contextThresholdData(value)
+	if data.Percent <= 0 {
+		return "context-threshold"
+	}
+	return fmt.Sprintf("context-threshold-%d", data.Percent)
+}
+
+func contextThresholdData(value any) protocol.ContextThresholdEvent {
+	bytes, _ := json.Marshal(value)
+	var data protocol.ContextThresholdEvent
+	_ = json.Unmarshal(bytes, &data)
+	return data
 }
 
 func percentText(used, window int64) string {

@@ -248,6 +248,10 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 				if tools.Add(rendered) {
 					answerDirty = true
 				}
+			case "status":
+				if tools.Add(rendered) {
+					answerDirty = true
+				}
 			case "error":
 				answerDirty = true
 			}

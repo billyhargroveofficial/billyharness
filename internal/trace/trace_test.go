@@ -152,6 +152,7 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 			"turn_id":           "turn-001",
 			"step_id":           "turn-001:model-call-001",
 		}},
+		{Type: protocol.EventContextThreshold, Data: protocol.ContextThresholdEvent{Percent: 50, EstimatedTokens: 500000, ContextWindowTokens: 1000000, ThresholdTokens: 500000, Stage: "before_turn"}},
 		{Type: protocol.EventContextCompacted},
 		{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:model-call-001", Round: 1, Kind: protocol.StepKindModelCall, Status: protocol.StepStatusCompleted, DurationMS: 11, Metadata: map[string]any{"first_delta_ms": 4}}},
 		{Type: protocol.EventStepStarted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:tool-batch-001", Round: 1, Kind: protocol.StepKindToolBatch, Status: protocol.StepStatusStarted, Parallel: true, BatchSize: 2}},
@@ -196,7 +197,7 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 		summary.ParallelBatches != 1 ||
 		summary.ModelCallsStarted != 1 || summary.ModelCallsFinished != 1 ||
 		summary.ToolCallsStarted != 1 || summary.ToolCallProgress != 1 || summary.ToolCallsFinished != 1 ||
-		summary.ContextCompactions != 1 {
+		summary.ContextThresholds != 1 || summary.ContextCompactions != 1 {
 		t.Fatalf("event counters = %#v", summary)
 	}
 	if summary.FirstDeltaSamples != 1 || summary.FirstDeltaTotalMS != 4 || summary.ModelLatencyMS != 11 || summary.ParallelBatchLatencyMS != 7 {
@@ -214,6 +215,7 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 		string(protocol.EventTurnStarted),
 		string(protocol.EventStepStarted),
 		string(protocol.EventModelCallStarted),
+		string(protocol.EventContextThreshold),
 		string(protocol.EventContextCompacted),
 		string(protocol.EventStepCompleted),
 		string(protocol.EventStepStarted),
@@ -244,25 +246,28 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 		summary.Timeline[2].Status != protocol.StepStatusStarted {
 		t.Fatalf("model step timeline item = %#v", summary.Timeline[2])
 	}
-	if summary.Timeline[4].Seq != 6 || summary.Timeline[4].Kind != "context_compaction" {
-		t.Fatalf("compaction timeline item = %#v", summary.Timeline[4])
+	if summary.Timeline[4].Seq != 6 || summary.Timeline[4].Kind != "context_threshold" {
+		t.Fatalf("threshold timeline item = %#v", summary.Timeline[4])
 	}
-	if summary.Timeline[7].CallID != "call-1" ||
-		summary.Timeline[7].AttemptID != "turn-001:tool-call-001:attempt-001" ||
-		summary.Timeline[7].Name != "time_now" {
-		t.Fatalf("tool start timeline item = %#v", summary.Timeline[7])
+	if summary.Timeline[5].Seq != 7 || summary.Timeline[5].Kind != "context_compaction" {
+		t.Fatalf("compaction timeline item = %#v", summary.Timeline[5])
 	}
 	if summary.Timeline[8].CallID != "call-1" ||
 		summary.Timeline[8].AttemptID != "turn-001:tool-call-001:attempt-001" ||
-		summary.Timeline[8].Name != "time_now" ||
-		summary.Timeline[8].Phase != "executing" ||
-		summary.Timeline[8].Status != protocol.StepStatusStarted {
-		t.Fatalf("tool progress timeline item = %#v", summary.Timeline[8])
+		summary.Timeline[8].Name != "time_now" {
+		t.Fatalf("tool start timeline item = %#v", summary.Timeline[8])
 	}
 	if summary.Timeline[9].CallID != "call-1" ||
 		summary.Timeline[9].AttemptID != "turn-001:tool-call-001:attempt-001" ||
-		summary.Timeline[9].Name != "time_now" {
-		t.Fatalf("tool finish timeline item = %#v", summary.Timeline[9])
+		summary.Timeline[9].Name != "time_now" ||
+		summary.Timeline[9].Phase != "executing" ||
+		summary.Timeline[9].Status != protocol.StepStatusStarted {
+		t.Fatalf("tool progress timeline item = %#v", summary.Timeline[9])
+	}
+	if summary.Timeline[10].CallID != "call-1" ||
+		summary.Timeline[10].AttemptID != "turn-001:tool-call-001:attempt-001" ||
+		summary.Timeline[10].Name != "time_now" {
+		t.Fatalf("tool finish timeline item = %#v", summary.Timeline[10])
 	}
 
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")

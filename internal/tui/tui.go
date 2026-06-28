@@ -2738,6 +2738,8 @@ func blockKindForEvent(eventType protocol.EventType) string {
 		return "tool"
 	case protocol.EventToolAudit:
 		return "audit"
+	case protocol.EventContextThreshold:
+		return "status"
 	case protocol.EventRunFailed:
 		return "error"
 	default:
@@ -2847,6 +2849,9 @@ func (m *Model) applyEvent(event protocol.Event) {
 	case protocol.EventContextCompacted:
 		m.status = "context compacted"
 		m.addEventBlock(protocol.EventContextCompacted, "COMPACT", compactEventText(event.Data))
+	case protocol.EventContextThreshold:
+		m.status = "context threshold crossed"
+		m.addEventBlock(protocol.EventContextThreshold, "CONTEXT", contextThresholdEventText(event.Data))
 	case protocol.EventProviderUsageUpdate:
 		update := usageFromAny(event.Data)
 		delta := m.usageAccounting.Apply(update)
@@ -3809,6 +3814,39 @@ func compactEventText(value any) string {
 	}
 	if len(lines) == 0 {
 		return "context compacted"
+	}
+	return strings.Join(lines, "\n")
+}
+
+func contextThresholdEventText(value any) string {
+	bytes, _ := json.Marshal(value)
+	var data protocol.ContextThresholdEvent
+	_ = json.Unmarshal(bytes, &data)
+	if data.Percent <= 0 {
+		return "context threshold crossed"
+	}
+	window := data.ContextWindowTokens
+	var lines []string
+	lines = append(lines, fmt.Sprintf("threshold: %d%%", data.Percent))
+	if window > 0 {
+		lines = append(lines, fmt.Sprintf("active: %s / %s", compactNumber(data.EstimatedTokens), compactNumber(window)))
+	} else {
+		lines = append(lines, fmt.Sprintf("active: %s", compactNumber(data.EstimatedTokens)))
+	}
+	if data.ThresholdTokens > 0 {
+		lines = append(lines, fmt.Sprintf("threshold tokens: %s", compactNumber(data.ThresholdTokens)))
+	}
+	if data.RemainingTokens > 0 {
+		lines = append(lines, fmt.Sprintf("remaining window: %s", compactNumber(data.RemainingTokens)))
+	}
+	if data.MessageCount > 0 {
+		lines = append(lines, fmt.Sprintf("messages: %d", data.MessageCount))
+	}
+	if data.Stage != "" {
+		lines = append(lines, "stage: "+data.Stage)
+	}
+	if data.Round > 0 {
+		lines = append(lines, fmt.Sprintf("round: %d", data.Round))
 	}
 	return strings.Join(lines, "\n")
 }

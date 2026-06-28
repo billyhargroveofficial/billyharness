@@ -85,10 +85,13 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 	}
 	messages = a.withMCPInstructions(messages)
 	var lastPromptTokens int64
+	emittedContextThresholds := map[int]bool{}
+	emitContextThresholdEvents(messages, a.cfg, 0, "initial", emittedContextThresholds, emit)
 	for round := 0; round < a.cfg.MaxToolRounds; round++ {
 		roundNum := round + 1
 		turnID := agentTurnID(roundNum)
 		turnStarted := time.Now()
+		emitContextThresholdEvents(messages, a.cfg, roundNum, "before_turn", emittedContextThresholds, emit)
 		var compacted bool
 		var compaction *compactionReport
 		messages, compaction, compacted = compactMessages(messages, a.cfg, lastPromptTokens)
@@ -328,6 +331,7 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 				Content:          content,
 				ReasoningContent: optionalReasoning(a.cfg, reasoning),
 			})
+			emitContextThresholdEvents(messages, a.cfg, roundNum, "after_final_answer", emittedContextThresholds, emit)
 			emit(protocol.Event{Type: protocol.EventTurnCompleted, Data: protocol.TurnEvent{
 				TurnID:       turnID,
 				Round:        roundNum,
@@ -364,6 +368,7 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 				Name:       result.Call.Name,
 			})
 		}
+		emitContextThresholdEvents(messages, a.cfg, roundNum, "after_tool_results", emittedContextThresholds, emit)
 		emit(protocol.Event{Type: protocol.EventTurnCompleted, Data: protocol.TurnEvent{
 			TurnID:        turnID,
 			Round:         roundNum,

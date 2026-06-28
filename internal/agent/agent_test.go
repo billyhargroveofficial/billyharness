@@ -256,6 +256,37 @@ func TestEstimateMessagesTokensIgnoresStoredReasoningContent(t *testing.T) {
 	}
 }
 
+func TestEmitContextThresholdEventsOncePerRun(t *testing.T) {
+	cfg := config.Default()
+	cfg.ContextWindowTokens = 1000
+	var events []protocol.Event
+	emitted := map[int]bool{}
+	messages := []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: strings.Repeat("x", 2200)},
+	}
+	emitContextThresholdEvents(messages, cfg, 2, "after_tool_results", emitted, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	emitContextThresholdEvents(messages, cfg, 3, "before_turn", emitted, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	if len(events) != 1 {
+		t.Fatalf("threshold events = %d, want exactly one 50%% crossing: %#v", len(events), events)
+	}
+	data := eventDataMap(events[0])
+	if events[0].Type != protocol.EventContextThreshold ||
+		int(data["percent"].(float64)) != 50 ||
+		int64(data["context_window_tokens"].(float64)) != 1000 ||
+		data["stage"] != "after_tool_results" ||
+		int(data["round"].(float64)) != 2 {
+		t.Fatalf("threshold event = %#v data=%#v", events[0], data)
+	}
+	if emitted[50] != true || emitted[70] || emitted[85] || emitted[95] {
+		t.Fatalf("emitted thresholds = %#v", emitted)
+	}
+}
+
 func TestCompactMessagesPreservesAgentsContextPrefix(t *testing.T) {
 	cfg := config.Default()
 	cfg.ContextCompactTokens = 1

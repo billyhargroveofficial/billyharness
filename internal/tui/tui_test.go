@@ -1543,6 +1543,33 @@ func TestContextCommandShowsGatewayContextReport(t *testing.T) {
 	}
 }
 
+func TestContextThresholdEventRendersContextBlock(t *testing.T) {
+	m := newTestModel(t)
+	m.applyEvent(protocol.Event{Type: protocol.EventContextThreshold, Data: protocol.ContextThresholdEvent{
+		Percent:             70,
+		EstimatedTokens:     705000,
+		ContextWindowTokens: 1000000,
+		ThresholdTokens:     700000,
+		RemainingTokens:     295000,
+		MessageCount:        44,
+		Round:               3,
+		Stage:               "after_tool_results",
+		Estimator:           "chars_div_4",
+	}})
+	if len(m.blocks) == 0 {
+		t.Fatal("expected context threshold block")
+	}
+	block := m.blocks[len(m.blocks)-1]
+	if block.title != "CONTEXT" || block.eventType != protocol.EventContextThreshold {
+		t.Fatalf("block = %#v", block)
+	}
+	for _, want := range []string{"threshold: 70%", "active: 705k / 1.0m", "remaining window: 295k", "stage: after_tool_results"} {
+		if !strings.Contains(block.content, want) {
+			t.Fatalf("context threshold block missing %q:\n%s", want, block.content)
+		}
+	}
+}
+
 func TestRunStatusShowsSpinnerAndInlineStatusShowsElapsedWhileBusy(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 160
