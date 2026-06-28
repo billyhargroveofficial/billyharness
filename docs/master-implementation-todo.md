@@ -898,7 +898,7 @@ Acceptance:
 - [x] Profile TUI render on long transcript.
 - [ ] Profile Telegram edit throttling.
 - [ ] Profile web fetch/extract.
-- [ ] Profile JSONL append/replay.
+- [x] Profile JSONL append/replay.
 - [ ] Profile provider streaming.
 - [x] Add backpressure tests for event stream.
 

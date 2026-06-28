@@ -94,6 +94,14 @@ TUI long-transcript rendering has focused benchmarks for cached transcript reflo
 
 Use these before and after renderer changes. Printable keypresses should stay far cheaper than cached full reflow on the same long transcript.
 
+Gateway JSONL session append/replay has focused benchmarks for append cost and replay cursor behavior:
+
+```sh
+/root/.local/go/bin/go test ./internal/gateway -run '^$' -bench 'BenchmarkGatewaySessionJSONL(Append|Replay)$' -benchmem
+```
+
+Tail replay is expected to scan the canonical JSONL file until an index optimization lands; use this benchmark to prove any future replay index actually changes the profile.
+
 ## Provider Comparison
 
 Generate a local-loop task file without running it:
