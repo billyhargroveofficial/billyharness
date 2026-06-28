@@ -445,8 +445,15 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 		}
 		_ = b.sendHTML(ctx, msg, "<b>MCP</b>\n<pre>"+esc(status)+"</pre>")
 	case "/cancel":
-		if b.cancelChat(key) {
+		state := b.chatState(key)
+		localCancelled := b.cancelChat(key)
+		if state.SessionID != "" {
+			b.cancelGatewaySession(state.SessionID)
+		}
+		if localCancelled {
 			_ = b.sendPlain(ctx, msg, "Cancelled current run.")
+		} else if state.SessionID != "" {
+			_ = b.sendPlain(ctx, msg, "Cancel requested.")
 		} else {
 			_ = b.sendPlain(ctx, msg, "No active run.")
 		}
@@ -609,6 +616,23 @@ func (b *Bot) cancelChat(key string) bool {
 	}
 	cancel()
 	return true
+}
+
+func (b *Bot) cancelGatewaySession(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || b.harness == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		cancelled, err := b.harness.CancelSession(ctx, sessionID)
+		if err != nil {
+			log.Printf("telegram gateway cancel session=%s failed: %v", short(sessionID), err)
+			return
+		}
+		log.Printf("telegram gateway cancel session=%s cancelled=%t", short(sessionID), cancelled)
+	}()
 }
 
 func bypassActiveRunLock(text string) bool {

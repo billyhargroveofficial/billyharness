@@ -16,16 +16,19 @@ import (
 )
 
 type blockingHarness struct {
-	startOnce  sync.Once
-	cancelOnce sync.Once
-	runStarted chan struct{}
-	cancelled  chan struct{}
+	startOnce           sync.Once
+	cancelOnce          sync.Once
+	gatewayCancelOnce   sync.Once
+	runStarted          chan struct{}
+	cancelled           chan struct{}
+	gatewayCancelCalled chan struct{}
 }
 
 func newBlockingHarness() *blockingHarness {
 	return &blockingHarness{
-		runStarted: make(chan struct{}),
-		cancelled:  make(chan struct{}),
+		runStarted:          make(chan struct{}),
+		cancelled:           make(chan struct{}),
+		gatewayCancelCalled: make(chan struct{}),
 	}
 }
 
@@ -42,6 +45,11 @@ func (h *blockingHarness) RunSession(ctx context.Context, _ string, _ gateway.Ru
 
 func (h *blockingHarness) MCPStatus(context.Context) (string, error) {
 	return "{}", nil
+}
+
+func (h *blockingHarness) CancelSession(context.Context, string) (bool, error) {
+	h.gatewayCancelOnce.Do(func() { close(h.gatewayCancelCalled) })
+	return true, nil
 }
 
 func TestCancelCommandBypassesActiveRunLock(t *testing.T) {
@@ -94,6 +102,11 @@ func TestCancelCommandBypassesActiveRunLock(t *testing.T) {
 	case <-harness.cancelled:
 	case <-time.After(time.Second):
 		t.Fatal("active run was not cancelled")
+	}
+	select {
+	case <-harness.gatewayCancelCalled:
+	case <-time.After(time.Second):
+		t.Fatal("gateway cancel was not requested")
 	}
 	select {
 	case <-runDone:

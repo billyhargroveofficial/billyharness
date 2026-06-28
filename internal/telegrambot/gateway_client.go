@@ -16,6 +16,7 @@ import (
 type Harness interface {
 	CreateSession(context.Context, string) (string, error)
 	RunSession(context.Context, string, gateway.RunRequest, func(protocol.Event)) error
+	CancelSession(context.Context, string) (bool, error)
 	MCPStatus(context.Context) (string, error)
 }
 
@@ -123,6 +124,32 @@ func (c *GatewayClient) MCPStatus(ctx context.Context) (string, error) {
 	}
 	pretty, _ := json.MarshalIndent(raw, "", "  ")
 	return string(pretty), nil
+}
+
+func (c *GatewayClient) CancelSession(ctx context.Context, sessionID string) (bool, error) {
+	resp, err := gateway.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/sessions/"+sessionID+"/cancel", nil)
+		if err != nil {
+			return nil, err
+		}
+		gateway.SetAuthHeaderFromEnv(req)
+		return req, nil
+	})
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return false, fmt.Errorf("gateway cancel HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(limited)))
+	}
+	var out struct {
+		Cancelled bool `json:"cancelled"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return false, err
+	}
+	return out.Cancelled, nil
 }
 
 func (c *GatewayClient) client() *http.Client {
