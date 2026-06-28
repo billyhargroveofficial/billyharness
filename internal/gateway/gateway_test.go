@@ -159,6 +159,61 @@ func TestGatewaySessionStatusEndpoint(t *testing.T) {
 	}
 }
 
+func TestGatewaySessionListEndpointReturnsTypedSummaries(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+
+	var ids []string
+	for i := 0; i < 2; i++ {
+		create := httptest.NewRecorder()
+		server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", nil))
+		if create.Code != http.StatusCreated {
+			t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+		}
+		var created SessionResponse
+		if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+			t.Fatal(err)
+		}
+		if created.ID == "" || created.MessageCount == 0 {
+			t.Fatalf("created = %#v", created)
+		}
+		ids = append(ids, created.ID)
+	}
+	run := httptest.NewRecorder()
+	server.Handler().ServeHTTP(run, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+ids[0]+"/run", bytes.NewBufferString(`{"prompt":"list me"}`)))
+	if run.Code != http.StatusOK {
+		t.Fatalf("run status = %d body=%s", run.Code, run.Body.String())
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/sessions", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"messages"`) {
+		t.Fatalf("session list should not include full messages: %s", rec.Body.String())
+	}
+	var listed SessionListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Sessions) != 2 {
+		t.Fatalf("listed sessions = %#v", listed.Sessions)
+	}
+	byID := map[string]SessionSummary{}
+	for _, summary := range listed.Sessions {
+		byID[summary.ID] = summary
+	}
+	if byID[ids[0]].LastEvent != string(protocol.EventRunCompleted) || byID[ids[0]].MessageCount < 3 {
+		t.Fatalf("run session summary = %#v", byID[ids[0]])
+	}
+	if byID[ids[1]].MessageCount == 0 {
+		t.Fatalf("idle session summary = %#v", byID[ids[1]])
+	}
+}
+
 func TestGatewaySessionEventsSubscribeReceivesRunEvents(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"

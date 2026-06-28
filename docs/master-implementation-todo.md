@@ -755,18 +755,18 @@ Acceptance:
 ### 7.2 API Surface
 
 - [ ] Stabilize endpoints:
-  - [ ] health
-  - [ ] sessions create/list/get
-  - [ ] run
-  - [ ] cancel
-  - [ ] subscribe/replay
-  - [ ] status
-  - [ ] config inspect
-  - [ ] auth status
-  - [ ] MCP status
+  - [x] health
+  - [x] sessions create/list/get
+  - [x] run
+  - [x] cancel
+  - [x] subscribe/replay
+  - [x] status
+  - [x] config inspect
+  - [x] auth status
+  - [x] MCP status
   - [ ] context status
   - [ ] benchmarks
-- [ ] Add typed response structs and tests.
+- [x] Add typed response structs and tests.
 - [x] Add event replay cursor: `after_seq`.
 
 Acceptance:

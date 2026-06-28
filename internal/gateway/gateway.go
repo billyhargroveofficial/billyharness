@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -76,6 +77,50 @@ type DeepSeekAuthRequest struct {
 type CodexImportRequest struct {
 	SourcePath string          `json:"source_path,omitempty"`
 	AuthJSON   json.RawMessage `json:"auth_json,omitempty"`
+}
+
+type HealthResponse struct {
+	OK       bool   `json:"ok"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+type ConfigStatusResponse struct {
+	Config   map[string]any         `json:"config"`
+	Values   []config.ResolvedValue `json:"values"`
+	Warnings []string               `json:"warnings,omitempty"`
+}
+
+type SessionListResponse struct {
+	Sessions []SessionSummary `json:"sessions"`
+}
+
+type SessionSummary struct {
+	ID              string    `json:"id"`
+	Created         time.Time `json:"created"`
+	Running         bool      `json:"running"`
+	RunSeq          int64     `json:"run_seq"`
+	MessageCount    int       `json:"message_count"`
+	LastEvent       string    `json:"last_event,omitempty"`
+	LastEventAt     time.Time `json:"last_event_at,omitempty"`
+	Model           string    `json:"model,omitempty"`
+	Provider        string    `json:"provider,omitempty"`
+	Profile         string    `json:"profile,omitempty"`
+	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
+	LastError       string    `json:"last_error,omitempty"`
+}
+
+type SessionResponse struct {
+	ID           string             `json:"id"`
+	Created      time.Time          `json:"created"`
+	MessageCount int                `json:"message_count"`
+	Messages     []protocol.Message `json:"messages,omitempty"`
+	Running      bool               `json:"running"`
+	Status       SessionStatus      `json:"status"`
+}
+
+type CancelSessionResponse struct {
+	Cancelled bool `json:"cancelled"`
 }
 
 func NewServer(cfg config.Config, prov provider.Provider, registry *tools.Registry) *Server {
@@ -178,6 +223,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/tools", s.handleTools)
 	s.mux.HandleFunc("GET /v1/mcp", s.handleMCP)
 	s.mux.HandleFunc("POST /v1/run", s.handleRun)
+	s.mux.HandleFunc("GET /v1/sessions", s.handleListSessions)
 	s.mux.HandleFunc("POST /v1/sessions", s.handleCreateSession)
 	s.mux.HandleFunc("GET /v1/sessions/{id}", s.handleGetSession)
 	s.mux.HandleFunc("GET /v1/sessions/{id}/status", s.handleSessionStatus)
@@ -187,10 +233,10 @@ func (s *Server) routes() {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":       true,
-		"provider": s.cfg.Provider,
-		"model":    s.cfg.Model,
+	writeJSON(w, http.StatusOK, HealthResponse{
+		OK:       true,
+		Provider: s.cfg.Provider,
+		Model:    s.cfg.Model,
 	})
 }
 
@@ -213,10 +259,10 @@ func (s *Server) handleConfigStatus(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"config":   resolved.SanitizedConfig(),
-		"values":   resolved.SanitizedValues(),
-		"warnings": resolved.Warnings,
+	writeJSON(w, http.StatusOK, ConfigStatusResponse{
+		Config:   resolved.SanitizedConfig(),
+		Values:   resolved.SanitizedValues(),
+		Warnings: resolved.Warnings,
 	})
 }
 
@@ -297,7 +343,19 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.sessions[session.ID] = session
 	s.mu.Unlock()
-	writeJSON(w, http.StatusCreated, session)
+	writeJSON(w, http.StatusCreated, sessionResponse(session, false))
+}
+
+func (s *Server) handleListSessions(w http.ResponseWriter, _ *http.Request) {
+	sessions := s.allSessions()
+	summaries := make([]SessionSummary, 0, len(sessions))
+	for _, session := range sessions {
+		summaries = append(summaries, sessionSummary(session))
+	}
+	sort.Slice(summaries, func(i, j int) bool {
+		return summaries[i].Created.After(summaries[j].Created)
+	})
+	writeJSON(w, http.StatusOK, SessionListResponse{Sessions: summaries})
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
@@ -306,16 +364,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	messages := session.Thread.Messages()
-	status := session.Status()
-	writeJSON(w, http.StatusOK, map[string]any{
-		"id":            session.ID,
-		"created":       session.Created,
-		"message_count": len(messages),
-		"messages":      messages,
-		"running":       status.Running,
-		"status":        status,
-	})
+	writeJSON(w, http.StatusOK, sessionResponse(session, true))
 }
 
 func (s *Server) handleSessionStatus(w http.ResponseWriter, r *http.Request) {
@@ -486,9 +535,7 @@ func (s *Server) handleSessionCancel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"cancelled": session.Thread.Cancel(),
-	})
+	writeJSON(w, http.StatusOK, CancelSessionResponse{Cancelled: session.Thread.Cancel()})
 }
 
 func (s *Server) session(id string) (*Session, bool) {
@@ -496,6 +543,50 @@ func (s *Server) session(id string) (*Session, bool) {
 	defer s.mu.Unlock()
 	session, ok := s.sessions[id]
 	return session, ok
+}
+
+func (s *Server) allSessions() []*Session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*Session, 0, len(s.sessions))
+	for _, session := range s.sessions {
+		out = append(out, session)
+	}
+	return out
+}
+
+func sessionResponse(session *Session, includeMessages bool) SessionResponse {
+	status := session.Status()
+	var messages []protocol.Message
+	if includeMessages {
+		messages = session.messages()
+	}
+	return SessionResponse{
+		ID:           session.ID,
+		Created:      session.Created,
+		MessageCount: status.MessageCount,
+		Messages:     messages,
+		Running:      status.Running,
+		Status:       status,
+	}
+}
+
+func sessionSummary(session *Session) SessionSummary {
+	status := session.Status()
+	return SessionSummary{
+		ID:              session.ID,
+		Created:         session.Created,
+		Running:         status.Running,
+		RunSeq:          status.RunSeq,
+		MessageCount:    status.MessageCount,
+		LastEvent:       status.LastEvent,
+		LastEventAt:     status.LastEventAt,
+		Model:           status.Model,
+		Provider:        status.Provider,
+		Profile:         status.Profile,
+		ReasoningEffort: status.ReasoningEffort,
+		LastError:       status.LastError,
+	}
 }
 
 func (s *Server) saveSession(session *Session) error {
