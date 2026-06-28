@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
-	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
 )
 
 type sessionStore struct {
@@ -107,9 +106,5 @@ func (s *sessionStore) load(path string) (*Session, error) {
 	if record.Created.IsZero() {
 		record.Created = time.Now().UTC()
 	}
-	return &Session{
-		ID:      record.ID,
-		Created: record.Created,
-		Thread:  sessionpkg.New(record.Messages),
-	}, nil
+	return newGatewaySession(record.ID, record.Created, record.Messages), nil
 }

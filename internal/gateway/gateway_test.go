@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -121,6 +123,129 @@ func TestGatewaySessionRunPersistsHistory(t *testing.T) {
 		got.Messages[len(got.Messages)-2].Content != "two" ||
 		got.Messages[len(got.Messages)-1].Content != "mock: two" {
 		t.Fatalf("unexpected history tail: %+v", got.Messages)
+	}
+}
+
+func TestGatewaySessionStatusEndpoint(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+
+	create := httptest.NewRecorder()
+	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", nil))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	status := httptest.NewRecorder()
+	server.Handler().ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID+"/status", nil))
+	if status.Code != http.StatusOK {
+		t.Fatalf("status code = %d body=%s", status.Code, status.Body.String())
+	}
+	var got SessionStatus
+	if err := json.Unmarshal(status.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != created.ID || got.Running || got.MessageCount == 0 {
+		t.Fatalf("status = %#v", got)
+	}
+}
+
+func TestGatewaySessionEventsSubscribeReceivesRunEvents(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	createResp, err := http.Post(httpServer.URL+"/v1/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer createResp.Body.Close()
+	if createResp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(createResp.Body)
+		t.Fatalf("create status = %d body=%s", createResp.StatusCode, body)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, httpServer.URL+"/v1/sessions/"+created.ID+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventsResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eventsResp.Body.Close()
+	if eventsResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(eventsResp.Body)
+		t.Fatalf("events status = %d body=%s", eventsResp.StatusCode, body)
+	}
+	events := decodeProtocolEvents(eventsResp.Body)
+	first := waitProtocolEvent(t, events)
+	if first.Type != protocol.EventSessionStatus {
+		t.Fatalf("first event = %#v", first)
+	}
+	if status := eventStatus(t, first); status.ID != created.ID || status.Running {
+		t.Fatalf("initial status = %#v", status)
+	}
+
+	runBody := bytes.NewBufferString(`{"prompt":"subscribe me","model":"mock","reasoning_effort":"high"}`)
+	runResp, err := http.Post(httpServer.URL+"/v1/sessions/"+created.ID+"/run", "application/json", runBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runResp.Body.Close()
+	if runResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(runResp.Body)
+		t.Fatalf("run status = %d body=%s", runResp.StatusCode, body)
+	}
+	io.Copy(io.Discard, runResp.Body)
+
+	var sawDelta, sawCompleted bool
+	var seen []protocol.EventType
+	for i := 0; i < 20 && !(sawDelta && sawCompleted); i++ {
+		event := waitProtocolEvent(t, events)
+		seen = append(seen, event.Type)
+		switch event.Type {
+		case protocol.EventAssistantDelta:
+			if fmt.Sprint(event.Data) == "mock: subscribe me" {
+				sawDelta = true
+			}
+		case protocol.EventRunCompleted:
+			sawCompleted = true
+		}
+	}
+	if !sawDelta || !sawCompleted {
+		t.Fatalf("events missing pieces: delta=%t completed=%t seen=%v", sawDelta, sawCompleted, seen)
+	}
+	statusResp, err := http.Get(httpServer.URL + "/v1/sessions/" + created.ID + "/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer statusResp.Body.Close()
+	var finalStatus SessionStatus
+	if err := json.NewDecoder(statusResp.Body).Decode(&finalStatus); err != nil {
+		t.Fatal(err)
+	}
+	if finalStatus.Running || finalStatus.LastEvent != string(protocol.EventRunCompleted) || finalStatus.MessageCount < 3 {
+		t.Fatalf("final status = %#v", finalStatus)
 	}
 }
 
@@ -557,4 +682,47 @@ func assertPerm(t *testing.T, path string, want os.FileMode) {
 	if got := info.Mode().Perm(); got != want {
 		t.Fatalf("%s mode = %o, want %o", path, got, want)
 	}
+}
+
+func decodeProtocolEvents(r io.Reader) <-chan protocol.Event {
+	out := make(chan protocol.Event, 64)
+	go func() {
+		defer close(out)
+		dec := json.NewDecoder(r)
+		for {
+			var event protocol.Event
+			if err := dec.Decode(&event); err != nil {
+				return
+			}
+			out <- event
+		}
+	}()
+	return out
+}
+
+func waitProtocolEvent(t *testing.T, events <-chan protocol.Event) protocol.Event {
+	t.Helper()
+	select {
+	case event, ok := <-events:
+		if !ok {
+			t.Fatal("event stream closed")
+		}
+		return event
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for event")
+		return protocol.Event{}
+	}
+}
+
+func eventStatus(t *testing.T, event protocol.Event) SessionStatus {
+	t.Helper()
+	bytes, err := json.Marshal(event.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status SessionStatus
+	if err := json.Unmarshal(bytes, &status); err != nil {
+		t.Fatal(err)
+	}
+	return status
 }

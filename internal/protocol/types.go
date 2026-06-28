@@ -70,6 +70,7 @@ const (
 	EventRunCompleted        EventType = "run.completed"
 	EventRunFailed           EventType = "run.failed"
 	EventProviderUsageUpdate EventType = "provider.usage"
+	EventSessionStatus       EventType = "session.status"
 )
 
 type Event struct {

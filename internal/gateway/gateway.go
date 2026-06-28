@@ -46,6 +46,9 @@ type Session struct {
 	ID      string              `json:"id"`
 	Created time.Time           `json:"created"`
 	Thread  *sessionpkg.Session `json:"-"`
+	events  *eventHub
+	mu      sync.Mutex
+	status  SessionStatus
 }
 
 type RunRequest struct {
@@ -171,6 +174,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/run", s.handleRun)
 	s.mux.HandleFunc("POST /v1/sessions", s.handleCreateSession)
 	s.mux.HandleFunc("GET /v1/sessions/{id}", s.handleGetSession)
+	s.mux.HandleFunc("GET /v1/sessions/{id}/status", s.handleSessionStatus)
+	s.mux.HandleFunc("GET /v1/sessions/{id}/events", s.handleSessionEvents)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/run", s.handleSessionRun)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/cancel", s.handleSessionCancel)
 }
@@ -259,11 +264,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 		messages = agent.InitialMessages(cfg)
 	}
-	session := &Session{
-		ID:      newID(),
-		Created: time.Now().UTC(),
-		Thread:  sessionpkg.New(messages),
-	}
+	session := newGatewaySession(newID(), time.Now().UTC(), messages)
 	if err := s.saveSession(session); err != nil {
 		writeError(w, http.StatusInternalServerError, "session save failed: "+err.Error())
 		return
@@ -281,13 +282,61 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	messages := session.Thread.Messages()
+	status := session.Status()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":            session.ID,
 		"created":       session.Created,
 		"message_count": len(messages),
 		"messages":      messages,
-		"running":       session.Thread.Running(),
+		"running":       status.Running,
+		"status":        status,
 	})
+}
+
+func (s *Server) handleSessionStatus(w http.ResponseWriter, r *http.Request) {
+	session, ok := s.session(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, session.Status())
+}
+
+func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
+	session, ok := s.session(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	enc := json.NewEncoder(w)
+	flusher, _ := w.(http.Flusher)
+	emit := func(event protocol.Event) bool {
+		if err := enc.Encode(event); err != nil {
+			return false
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return true
+	}
+	events, unsubscribe := session.Subscribe()
+	defer unsubscribe()
+	if !emit(protocol.Event{Type: protocol.EventSessionStatus, Data: session.Status()}) {
+		return
+	}
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case event := <-events:
+			if !emit(event) {
+				return
+			}
+		}
+	}
 }
 
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
@@ -329,7 +378,14 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		err = session.Thread.Run(r.Context(), sessionpkg.RunnerFunc(a.RunMessages), req.Prompt, emit)
+		statusReq := s.statusRunRequest(req)
+		err = session.Thread.Run(r.Context(), sessionpkg.RunnerFunc(a.RunMessages), req.Prompt, func(event protocol.Event) {
+			if event.Type == protocol.EventRunStarted {
+				session.beginRunStatus(statusReq)
+			}
+			session.observeRunEvent(event)
+			emit(event)
+		})
 		if !errors.Is(err, sessionpkg.ErrBusy) {
 			if saveErr := s.saveSession(session); saveErr != nil {
 				log.Printf("gateway session save failed id=%s: %v", session.ID, saveErr)
@@ -390,6 +446,37 @@ func (s *Server) agentFor(req RunRequest) (*agent.Agent, error) {
 		return nil, err
 	}
 	return agent.New(cfg, prov, s.registry), nil
+}
+
+func (s *Server) statusRunRequest(req RunRequest) RunRequest {
+	cfg := s.cfg
+	if req.Provider != "" {
+		cfg.Provider = req.Provider
+	}
+	if req.Model != "" {
+		cfg.Model = req.Model
+	}
+	if strings.TrimSpace(req.Profile) != "" {
+		cfg.Profile = config.NormalizeProfileName(req.Profile)
+	}
+	cfg.ApplyModelProviderDefaults()
+	if req.ReasoningEffort != "" {
+		cfg.ReasoningEffort = req.ReasoningEffort
+	}
+	if req.Thinking != "" {
+		cfg.Thinking = req.Thinking
+	}
+	if req.MaxToolRounds > 0 {
+		cfg.MaxToolRounds = req.MaxToolRounds
+	}
+	return RunRequest{
+		Provider:        cfg.Provider,
+		Model:           cfg.Model,
+		Profile:         cfg.Profile,
+		Thinking:        cfg.Thinking,
+		ReasoningEffort: cfg.ReasoningEffort,
+		MaxToolRounds:   cfg.MaxToolRounds,
+	}
 }
 
 func streamEvents(w http.ResponseWriter, run func(func(protocol.Event)) error) {
