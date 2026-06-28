@@ -1378,6 +1378,22 @@ func TestInlineStatusIsWidthAware(t *testing.T) {
 	}
 }
 
+func TestStatusCommandShowsDetailedStatusBlock(t *testing.T) {
+	m := newTestModel(t)
+	handled, cmd := m.handleSlashCommand("/status")
+	if !handled || cmd != nil {
+		t.Fatalf("/status handled=%v cmd=%v, want handled without async command", handled, cmd)
+	}
+	if len(m.blocks) != 1 || m.blocks[0].title != "STATUS" {
+		t.Fatalf("/status should add one STATUS block, got %#v", m.blocks)
+	}
+	for _, want := range []string{"provider:", "model:", "profile:", "context:", "calls:"} {
+		if !strings.Contains(m.blocks[0].content, want) {
+			t.Fatalf("/status block missing %q:\n%s", want, m.blocks[0].content)
+		}
+	}
+}
+
 func TestCompactEventTextShowsStructuredCompactionFields(t *testing.T) {
 	text := compactEventText(map[string]any{
 		"compaction_id":               "abc123",

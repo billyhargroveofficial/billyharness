@@ -609,7 +609,7 @@ Acceptance:
   - [x] cost/subscription
   - [x] chat/profile
 - [x] Remove confusing raw provider counters from default footer.
-- [ ] Add detailed status view command.
+- [x] Add detailed status view command.
 
 Acceptance:
 
