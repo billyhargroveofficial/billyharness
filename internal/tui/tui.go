@@ -2111,6 +2111,8 @@ func (m *Model) setToolView(value string) bool {
 		case "collapsed":
 			value = "expanded"
 		case "expanded":
+			value = "errors"
+		case "errors":
 			value = "hidden"
 		default:
 			value = "auto"
@@ -2121,8 +2123,10 @@ func (m *Model) setToolView(value string) bool {
 		value = "expanded"
 	case "close":
 		value = "collapsed"
+	case "failed", "error":
+		value = "errors"
 	}
-	if !validViewMode(value, []string{"auto", "expanded", "collapsed", "hidden"}) {
+	if !validViewMode(value, []string{"auto", "expanded", "collapsed", "hidden", "errors"}) {
 		m.status = "unknown toolview " + value
 		return false
 	}
@@ -3266,6 +3270,9 @@ func (m *Model) reflow(gotoBottom bool) {
 		if b.kind == "tool" && m.toolView == "hidden" {
 			continue
 		}
+		if b.kind == "tool" && m.toolView == "errors" && !isToolErrorBlock(b) {
+			continue
+		}
 		parts = append(parts, m.renderBlockCached(i))
 	}
 	m.viewportContent = strings.Join(parts, "\n")
@@ -3276,6 +3283,21 @@ func (m *Model) reflow(gotoBottom bool) {
 	if gotoBottom {
 		m.viewport.GotoBottom()
 	}
+}
+
+func isToolErrorBlock(b block) bool {
+	if b.kind != "tool" {
+		return false
+	}
+	switch b.eventType {
+	case protocol.EventToolCallFailed, protocol.EventToolCallAborted:
+		return true
+	}
+	title := strings.ToLower(strings.TrimSpace(b.title))
+	return strings.HasPrefix(title, "failed") ||
+		strings.Contains(title, " failed ") ||
+		strings.Contains(title, " aborted ") ||
+		strings.Contains(strings.ToLower(b.content), "error:")
 }
 
 func (m *Model) renderBlockCached(i int) string {

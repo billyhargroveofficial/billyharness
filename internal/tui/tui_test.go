@@ -421,6 +421,46 @@ func TestToolAndThinkViewsAffectRendering(t *testing.T) {
 	}
 }
 
+func TestToolViewErrorsOnlyShowsFailedTools(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.height = 24
+	m.applyEvent(protocol.Event{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{
+		ID:        "ok-call",
+		Name:      "fs_read_file",
+		Arguments: json.RawMessage(`{"path":"ok.txt"}`),
+	}})
+	m.applyEvent(protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
+		CallID:  "ok-call",
+		Name:    "fs_read_file",
+		Content: "ok",
+	}})
+	m.applyEvent(protocol.Event{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{
+		ID:        "bad-call",
+		Name:      "fs_read_file",
+		Arguments: json.RawMessage(`{"path":"bad.txt"}`),
+	}})
+	m.applyEvent(protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
+		CallID:  "bad-call",
+		Name:    "fs_read_file",
+		Content: "permission denied",
+		IsError: true,
+	}})
+
+	handled, _ := m.handleSlashCommand("/toolview errors")
+	if !handled {
+		t.Fatalf("/toolview errors returned false")
+	}
+	m.resize(false)
+	view := stripANSITest(m.viewport.View())
+	if strings.Contains(view, "ok.txt") || strings.Contains(view, "Done Read") {
+		t.Fatalf("errors-only view should hide successful tools: %q", view)
+	}
+	if !strings.Contains(view, "Failed Read bad.txt") || !strings.Contains(view, "permission denied") {
+		t.Fatalf("errors-only view should show failed tool: %q", view)
+	}
+}
+
 func TestToolAndThinkingBlocksRenderWithoutSelectionMarkersOrIndent(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 100

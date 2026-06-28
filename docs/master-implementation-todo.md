@@ -583,9 +583,9 @@ Acceptance:
 - [ ] Group context-gathering tools when possible.
 - [ ] Expand/collapse:
   - [x] by selected cell
-  - [ ] all tools
+  - [x] all tools
   - [ ] current turn tools
-  - [ ] errors only
+  - [x] errors only
 - [x] Keep `/toolview` modes.
 
 Acceptance:
