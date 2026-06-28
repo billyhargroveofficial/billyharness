@@ -566,6 +566,43 @@ func TestTranscriptBlocksCarryTypedCellMetadata(t *testing.T) {
 		t.Fatalf("tool cell = %#v", toolCell)
 	}
 
+	m.applyEvent(protocol.Event{Type: protocol.EventStepStarted, Data: protocol.StepEvent{
+		TurnID:        "turn-001",
+		StepID:        "turn-001:tool-batch-001",
+		Kind:          protocol.StepKindToolBatch,
+		Status:        protocol.StepStatusStarted,
+		BatchID:       "turn-001:tool-batch-001",
+		BatchSize:     2,
+		Parallel:      true,
+		ParallelLimit: 2,
+	}})
+	batchIndex := len(m.blocks) - 1
+	batchCell := m.blocks[batchIndex]
+	if batchCell.cellType != cellTypeToolBatch || batchCell.stepID != "turn-001:tool-batch-001" || batchCell.turnID != "turn-001" {
+		t.Fatalf("tool batch cell = %#v", batchCell)
+	}
+	if rendered := stripANSITest(m.renderBlock(batchIndex, batchCell)); !strings.Contains(rendered, "Tool batch running") || !strings.Contains(rendered, "2 tools") {
+		t.Fatalf("tool batch render missing compact status: %q", rendered)
+	}
+	m.applyEvent(protocol.Event{Type: protocol.EventStepCompleted, Data: map[string]any{
+		"turn_id":        "turn-001",
+		"step_id":        "turn-001:tool-batch-001",
+		"kind":           protocol.StepKindToolBatch,
+		"status":         protocol.StepStatusCompleted,
+		"batch_id":       "turn-001:tool-batch-001",
+		"batch_size":     2,
+		"parallel":       true,
+		"parallel_limit": 2,
+		"duration_ms":    37,
+	}})
+	if len(m.blocks) != batchIndex+1 {
+		t.Fatalf("completed batch should update existing cell, blocks=%d batchIndex=%d", len(m.blocks), batchIndex)
+	}
+	batchCell = m.blocks[batchIndex]
+	if batchCell.cellType != cellTypeToolBatch || !strings.Contains(batchCell.title, "Tool batch done") || !strings.Contains(batchCell.title, "0s") {
+		t.Fatalf("completed tool batch cell = %#v", batchCell)
+	}
+
 	m.applyEvent(protocol.Event{Type: protocol.EventContextCompacted, Data: map[string]any{"reason": "threshold"}})
 	if got := m.blocks[len(m.blocks)-1].cellType; got != cellTypeCompaction {
 		t.Fatalf("compaction cellType = %q", got)

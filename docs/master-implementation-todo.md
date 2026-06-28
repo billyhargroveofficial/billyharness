@@ -530,7 +530,7 @@ Purpose: make the terminal feel like a serious agent UI rather than a pile of st
   - [x] assistant final
   - [x] thinking/reasoning
   - [x] tool call
-  - [ ] tool batch
+  - [x] tool batch
   - [x] audit/security
   - [x] compaction
   - [x] MCP status

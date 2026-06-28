@@ -2500,6 +2500,10 @@ func normalizeBlockKind(kind string) string {
 }
 
 func cellTypeForBlock(b block) string {
+	switch b.cellType {
+	case cellTypeToolBatch, cellTypeRunSummary:
+		return b.cellType
+	}
 	switch b.eventType {
 	case protocol.EventAssistantDelta:
 		if b.live {
@@ -2700,6 +2704,8 @@ func (m *Model) applyEvent(event protocol.Event) {
 		m.observeToolSummary(event.Data)
 		m.appendToolResult(event, toolResultText(event.Data))
 		m.collapseToolBlockIfLarge(eventCallID(event))
+	case protocol.EventStepStarted, protocol.EventStepCompleted:
+		m.applyStepEvent(event)
 	case protocol.EventContextCompacted:
 		m.status = "context compacted"
 		m.addEventBlock(protocol.EventContextCompacted, "COMPACT", compactEventText(event.Data))
@@ -2727,6 +2733,133 @@ func (m *Model) applyEvent(event protocol.Event) {
 		m.addEventBlock(event.Type, "ERROR", fmt.Sprint(event.Data))
 		m.status = "failed"
 	}
+}
+
+func (m *Model) applyStepEvent(event protocol.Event) {
+	step, ok := stepEventFromAny(event.Data)
+	if !ok || step.Kind != protocol.StepKindToolBatch {
+		return
+	}
+	if step.StepID == "" {
+		step.StepID = step.BatchID
+	}
+	if step.StepID == "" {
+		return
+	}
+	title := toolBatchTitle(step)
+	body := toolBatchBody(step)
+	i, found := m.stepBlockIndex(step.StepID, cellTypeToolBatch)
+	if !found {
+		b := m.newBlock("tool", title, body)
+		b.cellType = cellTypeToolBatch
+		b.eventType = event.Type
+		b.turnID = firstNonEmptyString(step.TurnID, event.TurnID)
+		b.stepID = step.StepID
+		b.rawCopy = body
+		b.updated = time.Now().UTC()
+		refreshBlockDerivedFields(&b)
+		m.blocks = append(m.blocks, b)
+		m.selected = len(m.blocks) - 1
+	} else {
+		m.blocks[i].title = title
+		m.blocks[i].content = body
+		m.blocks[i].rawCopy = body
+		m.blocks[i].eventType = event.Type
+		m.blocks[i].updated = time.Now().UTC()
+		m.refreshBlockDerivedFields(i)
+		m.selected = i
+	}
+	switch step.Status {
+	case protocol.StepStatusCompleted:
+		m.status = "tool batch completed"
+	case protocol.StepStatusFailed:
+		m.status = "tool batch failed"
+	default:
+		m.status = "tool batch running"
+	}
+}
+
+func stepEventFromAny(value any) (protocol.StepEvent, bool) {
+	switch step := value.(type) {
+	case protocol.StepEvent:
+		return step, true
+	case *protocol.StepEvent:
+		if step == nil {
+			return protocol.StepEvent{}, false
+		}
+		return *step, true
+	default:
+		bytes, err := json.Marshal(value)
+		if err != nil {
+			return protocol.StepEvent{}, false
+		}
+		var out protocol.StepEvent
+		if err := json.Unmarshal(bytes, &out); err != nil {
+			return protocol.StepEvent{}, false
+		}
+		return out, out.Kind != ""
+	}
+}
+
+func (m Model) stepBlockIndex(stepID, cellType string) (int, bool) {
+	stepID = strings.TrimSpace(stepID)
+	if stepID == "" {
+		return 0, false
+	}
+	for i := range m.blocks {
+		if m.blocks[i].stepID == stepID && (cellType == "" || m.blocks[i].cellType == cellType) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+func toolBatchTitle(step protocol.StepEvent) string {
+	status := "Tool batch"
+	switch step.Status {
+	case protocol.StepStatusStarted:
+		status = "Tool batch running"
+	case protocol.StepStatusCompleted:
+		status = "Tool batch done"
+	case protocol.StepStatusFailed:
+		status = "Tool batch failed"
+	}
+	var parts []string
+	parts = append(parts, status)
+	if step.BatchSize > 0 {
+		parts = append(parts, fmt.Sprintf("%d tools", step.BatchSize))
+	}
+	if step.Parallel {
+		if step.ParallelLimit > 0 {
+			parts = append(parts, fmt.Sprintf("parallel x%d", step.ParallelLimit))
+		} else {
+			parts = append(parts, "parallel")
+		}
+	}
+	if step.DurationMS > 0 {
+		parts = append(parts, compactDuration(time.Duration(step.DurationMS)*time.Millisecond))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func toolBatchBody(step protocol.StepEvent) string {
+	var lines []string
+	if step.BatchID != "" {
+		lines = append(lines, "batch: "+step.BatchID)
+	}
+	if step.TurnID != "" {
+		lines = append(lines, "turn: "+step.TurnID)
+	}
+	if step.Round > 0 {
+		lines = append(lines, fmt.Sprintf("round: %d", step.Round))
+	}
+	if step.Status != "" {
+		lines = append(lines, "status: "+step.Status)
+	}
+	if step.Error != "" {
+		lines = append(lines, "error: "+step.Error)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func toolResultText(value any) string {
@@ -3451,6 +3584,15 @@ func oneLinePreview(text string, maxChars int) string {
 		return string(runes[:maxChars])
 	}
 	return string(runes[:maxChars-3]) + "..."
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func truncateRunes(text string, maxChars int) string {
