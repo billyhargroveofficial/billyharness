@@ -999,7 +999,12 @@ func TestSlashPopupKeepsSelectedCommandVisiblePastFirstPage(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 100
 	m.textarea.SetValue("/")
-	m.slashIndex = 9
+	for i, command := range slashCommands() {
+		if command.name == "/thinkview" {
+			m.slashIndex = i
+			break
+		}
+	}
 
 	view := stripANSITest(m.slashPopupView())
 	if !strings.Contains(view, "/thinkview") {
@@ -1336,6 +1341,41 @@ func TestAuthCodexGatewayImport(t *testing.T) {
 	}
 	if !called || !strings.Contains(msg.text, "acct_123") {
 		t.Fatalf("called=%v text=%q", called, msg.text)
+	}
+}
+
+func TestConfigCommandShowsSanitizedGatewaySummary(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/config" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"values": []config.ResolvedValue{
+				{Key: "provider", Value: "deepseek", Source: config.SourceGateway, SourceKey: "provider"},
+				{Key: "model", Value: "deepseek-v4-flash", Source: config.SourceGateway, SourceKey: "model"},
+				{Key: "api_key", Value: "[redacted]", Redacted: true, Source: config.SourceEnvironment, SourceKey: "DEEPSEEK_API_KEY"},
+			},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	m := newTestModel(t)
+	m.gatewayURL = server.URL
+	handled, cmd := m.handleSlashCommand("/config")
+	if !handled || cmd == nil {
+		t.Fatalf("handled=%v cmd=%v", handled, cmd)
+	}
+	msg := cmd().(configStatusMsg)
+	if msg.err != nil {
+		t.Fatal(msg.err)
+	}
+	for _, want := range []string{"billyharness config", "provider:", "deepseek", "model:", "deepseek-v4-flash"} {
+		if !strings.Contains(msg.text, want) {
+			t.Fatalf("config summary missing %q:\n%s", want, msg.text)
+		}
+	}
+	if strings.Contains(msg.text, "sk-") || strings.Contains(msg.text, "DEEPSEEK_API_KEY=") {
+		t.Fatalf("config summary leaked secret-ish content:\n%s", msg.text)
 	}
 }
 

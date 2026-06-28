@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
@@ -18,6 +19,7 @@ type Harness interface {
 	RunSession(context.Context, string, gateway.RunRequest, func(protocol.Event)) error
 	CancelSession(context.Context, string) (bool, error)
 	MCPStatus(context.Context) (string, error)
+	ConfigStatus(context.Context) (string, error)
 }
 
 type GatewayClient struct {
@@ -124,6 +126,33 @@ func (c *GatewayClient) MCPStatus(ctx context.Context) (string, error) {
 	}
 	pretty, _ := json.MarshalIndent(raw, "", "  ")
 	return string(pretty), nil
+}
+
+func (c *GatewayClient) ConfigStatus(ctx context.Context) (string, error) {
+	resp, err := gateway.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/config", nil)
+		if err != nil {
+			return nil, err
+		}
+		gateway.SetAuthHeaderFromEnv(req)
+		return req, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("gateway config HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(limited)))
+	}
+	var out struct {
+		Values   []config.ResolvedValue `json:"values"`
+		Warnings []string               `json:"warnings,omitempty"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	return config.FormatSummary(out.Values, out.Warnings), nil
 }
 
 func (c *GatewayClient) CancelSession(ctx context.Context, sessionID string) (bool, error) {

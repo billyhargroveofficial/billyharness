@@ -27,8 +27,9 @@ type blockingHarness struct {
 }
 
 type scriptedHarness struct {
-	events []protocol.Event
-	delay  time.Duration
+	events       []protocol.Event
+	delay        time.Duration
+	configStatus string
 }
 
 func newBlockingHarness() *blockingHarness {
@@ -52,6 +53,10 @@ func (h *blockingHarness) RunSession(ctx context.Context, _ string, _ gateway.Ru
 
 func (h *blockingHarness) MCPStatus(context.Context) (string, error) {
 	return "{}", nil
+}
+
+func (h *blockingHarness) ConfigStatus(context.Context) (string, error) {
+	return "billyharness config", nil
 }
 
 func (h *blockingHarness) CancelSession(context.Context, string) (bool, error) {
@@ -80,6 +85,13 @@ func (h scriptedHarness) RunSession(ctx context.Context, _ string, _ gateway.Run
 
 func (h scriptedHarness) MCPStatus(context.Context) (string, error) {
 	return "{}", nil
+}
+
+func (h scriptedHarness) ConfigStatus(context.Context) (string, error) {
+	if h.configStatus != "" {
+		return h.configStatus, nil
+	}
+	return "billyharness config", nil
 }
 
 func (h scriptedHarness) CancelSession(context.Context, string) (bool, error) {
@@ -275,6 +287,50 @@ func TestTelegramRunUsesSingleProgressMessageWithInlineTools(t *testing.T) {
 	}
 	if !foundDoneTools {
 		t.Fatalf("final stream edit did not finalize tool progress: %#v", editTexts)
+	}
+}
+
+func TestTelegramConfigCommandSendsSanitizedSummary(t *testing.T) {
+	var sentText string
+	var parseMode string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/botbottoken/sendMessage" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		sentText, _ = payload["text"].(string)
+		parseMode, _ = payload["parse_mode"].(string)
+		writeTelegramResult(w, SentMessage{MessageID: 11, Chat: Chat{ID: 123}})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{BaseURL: server.URL, Token: "bottoken", MinInterval: time.Nanosecond})
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      t.TempDir() + "/state.json",
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, scriptedHarness{configStatus: "billyharness config\nprovider: deepseek\napi_key: [redacted]"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/config"})
+	if parseMode != "HTML" || !strings.Contains(sentText, "<b>Config</b>") || !strings.Contains(sentText, "provider: deepseek") {
+		t.Fatalf("config message parse=%q text=%q", parseMode, sentText)
+	}
+	if strings.Contains(sentText, "sk-secret") {
+		t.Fatalf("config leaked secret: %q", sentText)
 	}
 }
 

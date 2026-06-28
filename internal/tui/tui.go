@@ -188,6 +188,11 @@ type mcpStatusMsg struct {
 	err  error
 }
 
+type configStatusMsg struct {
+	text string
+	err  error
+}
+
 type authResultMsg struct {
 	text string
 	err  error
@@ -540,6 +545,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		reflow = true
 		gotoBottom = m.followOutput
+	case configStatusMsg:
+		if msg.err != nil {
+			m.addBlock("error", "CONFIG", msg.err.Error())
+			m.status = "config failed"
+		} else {
+			m.addInfoBlock("CONFIG", msg.text)
+			m.status = "config shown"
+		}
+		reflow = true
+		gotoBottom = m.followOutput
 	case authResultMsg:
 		m.cancelAuthInput()
 		if msg.err != nil {
@@ -718,6 +733,7 @@ func slashCommands() []slashCommand {
 	return []slashCommand{
 		{"/help", "", "show commands and key bindings"},
 		{"/status", "", "show current session details"},
+		{"/config", "", "show resolved config summary"},
 		{"/auth", "deepseek|codex", "configure DeepSeek key or Codex OAuth"},
 		{"/theme", "light|dark", "switch active theme"},
 		{"/model", "flash|pro|gpt|id", "switch model"},
@@ -1553,6 +1569,38 @@ type mcpStatusResponse struct {
 	Servers     []mcpclient.ServerStatus `json:"servers"`
 }
 
+type configStatusResponse struct {
+	Config   map[string]any         `json:"config"`
+	Values   []config.ResolvedValue `json:"values"`
+	Warnings []string               `json:"warnings,omitempty"`
+}
+
+func (m Model) configStatusCmd() tea.Cmd {
+	return func() tea.Msg {
+		text, err := m.loadConfigSummary()
+		return configStatusMsg{text: text, err: err}
+	}
+}
+
+func (m Model) loadConfigSummary() (string, error) {
+	if m.gatewayURL != "" {
+		var out configStatusResponse
+		if err := m.gatewayJSON(http.MethodGet, "/v1/config", nil, &out); err != nil {
+			return "", err
+		}
+		return config.FormatSummary(out.Values, out.Warnings), nil
+	}
+	base, err := config.Resolve()
+	if err != nil {
+		return "", err
+	}
+	resolved, err := config.Resolve(config.RuntimeDiffOverrides(base.Config, m.currentConfig(), config.SourceGateway)...)
+	if err != nil {
+		return "", err
+	}
+	return config.FormatSummary(resolved.SanitizedValues(), resolved.Warnings), nil
+}
+
 func (m Model) mcpStatusCmd() tea.Cmd {
 	return func() tea.Msg {
 		text, err := m.loadMCPStatus()
@@ -1880,6 +1928,9 @@ func (m *Model) handleSlashCommand(prompt string) (bool, tea.Cmd) {
 		m.addInfoBlock("MODELS", m.modelsText())
 		m.status = "models shown"
 		return true, nil
+	case "/config":
+		m.status = "loading config"
+		return true, m.configStatusCmd()
 	case "/profile":
 		return true, m.setProfile(arg)
 	case "/mcp":
@@ -3591,6 +3642,7 @@ func helpText() string {
 		"/models                                show known models and providers",
 		"/profile [billy|name]                  switch SOUL.md system profile",
 		"/mcp                                   show MCP servers and status",
+		"/config                                show resolved config summary",
 		"/reasoning [low|medium|high|xhigh|off] set provider reasoning effort",
 		"/thinkview [expanded|collapsed|hidden] show/collapse/hide thinking blocks",
 		"/toolview [auto|expanded|collapsed|hidden] control tool blocks",

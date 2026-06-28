@@ -432,6 +432,13 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 			return
 		}
 		_ = b.sendHTML(ctx, msg, "<b>MCP</b>\n<pre>"+esc(status)+"</pre>")
+	case "/config":
+		status, err := b.harness.ConfigStatus(ctx)
+		if err != nil {
+			_ = b.sendPlain(ctx, msg, "Config status failed: "+err.Error())
+			return
+		}
+		_ = b.sendHTML(ctx, msg, "<b>Config</b>\n<pre>"+esc(status)+"</pre>")
 	case "/cancel":
 		state := b.chatState(key)
 		localCancelled := b.cancelChat(key)
@@ -639,7 +646,7 @@ func bypassActiveRunLock(text string) bool {
 	}
 	cmd := strings.ToLower(strings.SplitN(fields[0], "@", 2)[0])
 	switch cmd {
-	case "/cancel", "/status", "/start", "/help":
+	case "/cancel", "/status", "/config", "/start", "/help":
 		return true
 	default:
 		return false
@@ -675,6 +682,7 @@ Commands:
 <code>/profile billy</code>
 <code>/reasoning low|medium|high|xhigh|off</code>
 <code>/mcp</code> MCP status
+<code>/config</code> resolved config summary
 <code>/cancel</code> cancel current run`
 }
 

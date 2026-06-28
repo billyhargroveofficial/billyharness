@@ -234,7 +234,7 @@ Purpose: stop scattering config logic across env, CLI flags, TUI, gateway, and s
   - [x] validation warning/error
 - [x] Add `config inspect` command.
 - [x] Add gateway endpoint for sanitized config status.
-- [ ] Add TUI/Telegram command to show config summary.
+- [x] Add TUI/Telegram command to show config summary.
 
 Acceptance:
 
