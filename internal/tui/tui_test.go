@@ -982,7 +982,7 @@ func TestFormatMCPStatusShowsOwnConfigAndNativeWebTools(t *testing.T) {
 	for _, want := range []string{
 		"/root/billyharness/mcp.config.toml",
 		"allowed: telegram, telegram-parilka, github, context7",
-		"native: web_search, web_fetch, web_crawl",
+		"native: web_search, web_fetch, web_extract, web_crawl",
 		"github",
 		"connected",
 		"tools:7",

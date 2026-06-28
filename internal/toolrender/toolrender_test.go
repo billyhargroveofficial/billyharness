@@ -36,6 +36,19 @@ func TestCallLineFormatsShellArgvForTUI(t *testing.T) {
 	}
 }
 
+func TestCallLineFormatsWebExtract(t *testing.T) {
+	call := protocol.ToolCall{
+		Name:      "web_extract",
+		Arguments: []byte(`{"url":"https://example.com/long/path?secret=query","query":"pricing limits"}`),
+	}
+	if got := CallLine(call, StyleTelegram); !strings.Contains(got, "🧩 web_extract") || !strings.Contains(got, "pricing limits") || strings.Contains(got, "secret=query") {
+		t.Fatalf("telegram line = %q", got)
+	}
+	if got := CallLine(call, StyleTUI); !strings.Contains(got, "Extracted example.com") || !strings.Contains(got, "pricing limits") || strings.Contains(got, "secret=query") {
+		t.Fatalf("tui line = %q", got)
+	}
+}
+
 func TestResultKeyAndLineCompactsMetadata(t *testing.T) {
 	key, line := ResultKeyAndLine(protocol.ToolResult{
 		CallID:    "call_fetch",

@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -34,6 +36,11 @@ const (
 	webCrawlDefaultTokens    = 600
 	webCrawlDefaultTotalToks = 2500
 	webCrawlMaxTotalToks     = 12000
+	webDigestChars           = 1400
+	webExtractChars          = 1600
+	webKeyPointChars         = 220
+	webInlineDefaultTokens   = 0
+	webInlineMaxTokens       = 1200
 	webMaxLinks              = 20
 	maxWriteBytes            = 2 * 1024 * 1024
 	maxExecOutput            = 512 * 1024
@@ -73,6 +80,7 @@ func NewRegistry(cfg config.Config) *Registry {
 	r.addWebFetch()
 	r.addWebSearch()
 	r.addWebCrawl()
+	r.addWebExtract()
 	r.addToolSearch()
 	return r
 }
@@ -516,34 +524,66 @@ func (r *Registry) addWebFetch() {
 	r.add(Tool{
 		Spec: protocol.ToolSpec{
 			Name:        "web_fetch",
-			Description: "Fetch a public HTTP(S) URL and return an extractive summary, capped text, and links. Use max_tokens/max_chars to control context cost. Set full_text only when exact page text is required; output is still capped.",
-			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"max_bytes":{"type":"integer","default":65536},"max_tokens":{"type":"integer","default":900,"description":"Approximate output token budget for extracted text."},"max_chars":{"type":"integer","description":"Maximum extracted text characters returned; combined with max_tokens by taking the smaller budget."},"full_text":{"type":"boolean","default":false},"max_links":{"type":"integer","default":20}},"required":["url"],"additionalProperties":false}`),
+			Description: "Fetch a public HTTP(S) URL and return a compact digest, key points, short extract, links, and an output_ref to the full extracted text. By default it does not return raw page text to protect the agent context.",
+			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"query":{"type":"string","description":"Optional focus for extraction/snippets."},"max_bytes":{"type":"integer","default":65536},"max_tokens":{"type":"integer","default":0,"description":"Optional capped inline text token budget; default 0 returns no raw text."},"max_chars":{"type":"integer","description":"Optional capped inline text characters; ignored unless include_text/full_text is true."},"include_text":{"type":"boolean","default":false,"description":"Return capped raw extracted text inline. Prefer output_ref unless exact short quotes are needed."},"full_text":{"type":"boolean","default":false,"description":"Legacy alias for include_text; still capped hard."},"max_links":{"type":"integer","default":20}},"required":["url"],"additionalProperties":false}`),
 			Risk:        protocol.RiskNetwork,
 		},
 		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in struct {
-				URL       string `json:"url"`
-				MaxBytes  int    `json:"max_bytes"`
-				MaxTokens int    `json:"max_tokens"`
-				MaxChars  int    `json:"max_chars"`
-				FullText  bool   `json:"full_text"`
-				MaxLinks  int    `json:"max_links"`
+				URL         string `json:"url"`
+				Query       string `json:"query"`
+				MaxBytes    int    `json:"max_bytes"`
+				MaxTokens   int    `json:"max_tokens"`
+				MaxChars    int    `json:"max_chars"`
+				IncludeText bool   `json:"include_text"`
+				FullText    bool   `json:"full_text"`
+				MaxLinks    int    `json:"max_links"`
 			}
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
 			}
-			page, err := fetchPage(ctx, in.URL, boundedBytes(in.MaxBytes))
-			if err != nil {
+			return fetchCompactPageResult(ctx, "web_fetch", in.URL, webFetchOptions{
+				Query:       in.Query,
+				MaxBytes:    in.MaxBytes,
+				MaxChars:    in.MaxChars,
+				MaxTokens:   in.MaxTokens,
+				IncludeText: in.IncludeText,
+				FullText:    in.FullText,
+				MaxLinks:    in.MaxLinks,
+			})
+		},
+	})
+}
+
+func (r *Registry) addWebExtract() {
+	r.add(Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "web_extract",
+			Description: "Fetch a public HTTP(S) URL and extract a focused digest for a query/topic. Returns compact out-of-band summary plus output_ref to full extracted text; never dumps raw page text unless include_text is true.",
+			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"query":{"type":"string","description":"Topic, question, or terms to focus extraction."},"max_bytes":{"type":"integer","default":65536},"max_tokens":{"type":"integer","default":0},"max_chars":{"type":"integer"},"include_text":{"type":"boolean","default":false},"max_links":{"type":"integer","default":20}},"required":["url"],"additionalProperties":false}`),
+			Risk:        protocol.RiskNetwork,
+		},
+		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
+			var in struct {
+				URL         string `json:"url"`
+				Query       string `json:"query"`
+				MaxBytes    int    `json:"max_bytes"`
+				MaxTokens   int    `json:"max_tokens"`
+				MaxChars    int    `json:"max_chars"`
+				IncludeText bool   `json:"include_text"`
+				MaxLinks    int    `json:"max_links"`
+			}
+			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
 			}
-			compact := compactFetchedPage(page, webFetchOptions{
-				MaxChars:  in.MaxChars,
-				MaxTokens: in.MaxTokens,
-				FullText:  in.FullText,
-				MaxLinks:  in.MaxLinks,
+			return fetchCompactPageResult(ctx, "web_extract", in.URL, webFetchOptions{
+				Query:       in.Query,
+				MaxBytes:    in.MaxBytes,
+				MaxChars:    in.MaxChars,
+				MaxTokens:   in.MaxTokens,
+				IncludeText: in.IncludeText,
+				MaxLinks:    in.MaxLinks,
 			})
-			out, _ := json.MarshalIndent(compact, "", "  ")
-			return Result{Content: string(out), Metadata: webPageMetadata(compact), Truncated: compact.OutputTextTruncated}, nil
 		},
 	})
 }
@@ -584,13 +624,14 @@ func (r *Registry) addWebCrawl() {
 	r.add(Tool{
 		Spec: protocol.ToolSpec{
 			Name:        "web_crawl",
-			Description: "Crawl public HTTP(S) pages breadth-first and return compact summaries plus capped text. max_total_tokens bounds total returned crawl text.",
-			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"max_pages":{"type":"integer","default":3},"max_depth":{"type":"integer","default":1},"same_host":{"type":"boolean","default":true},"max_bytes_per_page":{"type":"integer","default":65536},"max_tokens_per_page":{"type":"integer","default":600},"max_total_tokens":{"type":"integer","default":2500},"max_chars_per_page":{"type":"integer","description":"Maximum extracted text characters per page; combined with token budgets by taking the smaller budget."},"full_text":{"type":"boolean","default":false}},"required":["url"],"additionalProperties":false}`),
+			Description: "Crawl public HTTP(S) pages breadth-first and return compact per-page digests plus one output_ref containing full extracted crawl text. Raw page text is not returned inline by default.",
+			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"query":{"type":"string","description":"Optional focus for extraction/snippets."},"max_pages":{"type":"integer","default":3},"max_depth":{"type":"integer","default":1},"same_host":{"type":"boolean","default":true},"max_bytes_per_page":{"type":"integer","default":65536},"max_tokens_per_page":{"type":"integer","default":0},"max_total_tokens":{"type":"integer","default":0},"max_chars_per_page":{"type":"integer","description":"Optional capped inline text characters per page; ignored unless include_text/full_text is true."},"include_text":{"type":"boolean","default":false},"full_text":{"type":"boolean","default":false}},"required":["url"],"additionalProperties":false}`),
 			Risk:        protocol.RiskNetwork,
 		},
 		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in struct {
 				URL              string `json:"url"`
+				Query            string `json:"query"`
 				MaxPages         int    `json:"max_pages"`
 				MaxDepth         int    `json:"max_depth"`
 				SameHost         *bool  `json:"same_host"`
@@ -598,6 +639,7 @@ func (r *Registry) addWebCrawl() {
 				MaxTokensPerPage int    `json:"max_tokens_per_page"`
 				MaxTotalTokens   int    `json:"max_total_tokens"`
 				MaxCharsPerPage  int    `json:"max_chars_per_page"`
+				IncludeText      bool   `json:"include_text"`
 				FullText         bool   `json:"full_text"`
 			}
 			if err := json.Unmarshal(args, &in); err != nil {
@@ -611,14 +653,20 @@ func (r *Registry) addWebCrawl() {
 			if err != nil {
 				return Result{}, err
 			}
-			out, _ := json.MarshalIndent(compactCrawlPages(pages, webFetchOptions{
+			compact, ref, storeErr := compactCrawlResult(pages, webFetchOptions{
+				Query:          in.Query,
 				MaxChars:       in.MaxCharsPerPage,
 				MaxTokens:      in.MaxTokensPerPage,
 				MaxTotalTokens: in.MaxTotalTokens,
+				IncludeText:    in.IncludeText,
 				FullText:       in.FullText,
 				MaxLinks:       0,
-			}), "", "  ")
-			return Result{Content: string(out)}, nil
+			})
+			if storeErr != nil {
+				compact.CompactNote = strings.TrimSpace(compact.CompactNote + " full crawl text save failed: " + storeErr.Error())
+			}
+			out, _ := json.MarshalIndent(compact, "", "  ")
+			return Result{Content: string(out), Metadata: crawlMetadata(compact), Truncated: compact.OutputTextTruncated, OutputRef: ref}, nil
 		},
 	})
 }
@@ -1006,9 +1054,12 @@ type crawlPage struct {
 }
 
 type webFetchOptions struct {
+	Query          string
+	MaxBytes       int
 	MaxChars       int
 	MaxTokens      int
 	MaxTotalTokens int
+	IncludeText    bool
 	FullText       bool
 	MaxLinks       int
 }
@@ -1019,10 +1070,14 @@ type compactPage struct {
 	ContentType         string   `json:"content_type,omitempty"`
 	Title               string   `json:"title,omitempty"`
 	Summary             string   `json:"summary,omitempty"`
+	KeyPoints           []string `json:"key_points,omitempty"`
+	Extract             string   `json:"extract,omitempty"`
 	Text                string   `json:"text,omitempty"`
 	Links               []string `json:"links,omitempty"`
+	OutputRef           string   `json:"output_ref,omitempty"`
 	Truncated           bool     `json:"truncated,omitempty"`
 	OriginalTextChars   int      `json:"original_text_chars,omitempty"`
+	OriginalTextTokens  int      `json:"original_text_tokens,omitempty"`
 	ReturnedTextChars   int      `json:"returned_text_chars,omitempty"`
 	EstimatedTextTokens int      `json:"estimated_text_tokens,omitempty"`
 	BudgetTextChars     int      `json:"budget_text_chars,omitempty"`
@@ -1032,24 +1087,46 @@ type compactPage struct {
 }
 
 type compactCrawlPage struct {
-	URL                 string `json:"url"`
-	Depth               int    `json:"depth"`
-	Title               string `json:"title,omitempty"`
-	Summary             string `json:"summary,omitempty"`
-	Text                string `json:"text,omitempty"`
-	Error               string `json:"error,omitempty"`
-	OriginalTextChars   int    `json:"original_text_chars,omitempty"`
-	ReturnedTextChars   int    `json:"returned_text_chars,omitempty"`
-	EstimatedTextTokens int    `json:"estimated_text_tokens,omitempty"`
-	BudgetTextChars     int    `json:"budget_text_chars,omitempty"`
-	BudgetTextTokens    int    `json:"budget_text_tokens,omitempty"`
-	OutputTextTruncated bool   `json:"output_text_truncated,omitempty"`
-	CompactNote         string `json:"compact_note,omitempty"`
+	URL                 string   `json:"url"`
+	Depth               int      `json:"depth"`
+	Title               string   `json:"title,omitempty"`
+	Summary             string   `json:"summary,omitempty"`
+	KeyPoints           []string `json:"key_points,omitempty"`
+	Extract             string   `json:"extract,omitempty"`
+	Text                string   `json:"text,omitempty"`
+	Error               string   `json:"error,omitempty"`
+	OutputRef           string   `json:"output_ref,omitempty"`
+	OriginalTextChars   int      `json:"original_text_chars,omitempty"`
+	OriginalTextTokens  int      `json:"original_text_tokens,omitempty"`
+	ReturnedTextChars   int      `json:"returned_text_chars,omitempty"`
+	EstimatedTextTokens int      `json:"estimated_text_tokens,omitempty"`
+	BudgetTextChars     int      `json:"budget_text_chars,omitempty"`
+	BudgetTextTokens    int      `json:"budget_text_tokens,omitempty"`
+	OutputTextTruncated bool     `json:"output_text_truncated,omitempty"`
+	CompactNote         string   `json:"compact_note,omitempty"`
+}
+
+type compactCrawlOutput struct {
+	Pages               []compactCrawlPage `json:"pages"`
+	OutputRef           string             `json:"output_ref,omitempty"`
+	OriginalTextChars   int                `json:"original_text_chars,omitempty"`
+	OriginalTextTokens  int                `json:"original_text_tokens,omitempty"`
+	ReturnedTextChars   int                `json:"returned_text_chars,omitempty"`
+	EstimatedTextTokens int                `json:"estimated_text_tokens,omitempty"`
+	OutputTextTruncated bool               `json:"output_text_truncated,omitempty"`
+	CompactNote         string             `json:"compact_note,omitempty"`
 }
 
 func compactFetchedPage(page fetchedPage, opts webFetchOptions) compactPage {
 	maxChars, budgetTokens := webTextBudget(opts, webTextChars, webDefaultTextTokens, webMaxTextTokens)
-	text, outputTruncated := compactWebText(page.Text, maxChars, opts.FullText)
+	text := ""
+	outputTruncated := false
+	includeText := opts.IncludeText || opts.FullText
+	if includeText {
+		text, outputTruncated = compactWebText(page.Text, maxChars, opts.FullText)
+	} else {
+		outputTruncated = strings.TrimSpace(page.Text) != ""
+	}
 	maxLinks := opts.MaxLinks
 	if maxLinks <= 0 || maxLinks > 50 {
 		maxLinks = webMaxLinks
@@ -1063,17 +1140,20 @@ func compactFetchedPage(page fetchedPage, opts webFetchOptions) compactPage {
 		Status:              page.Status,
 		ContentType:         page.ContentType,
 		Title:               page.Title,
-		Summary:             summarizeText(page.Title, page.Text, 900),
+		Summary:             summarizeText(page.Title, page.Text, webDigestChars),
+		KeyPoints:           keyPoints(page.Text, opts.Query, 5, webKeyPointChars),
+		Extract:             extractSnippets(page.Text, opts.Query, webExtractChars),
 		Text:                text,
 		Links:               links,
 		Truncated:           page.Truncated,
 		OriginalTextChars:   len([]rune(page.Text)),
+		OriginalTextTokens:  estimateTokens(page.Text),
 		ReturnedTextChars:   len([]rune(text)),
-		EstimatedTextTokens: estimateTokens(text),
+		EstimatedTextTokens: estimateTokens(compactInlineText(text, page.Title, page.Text, opts.Query)),
 		BudgetTextChars:     maxChars,
 		BudgetTextTokens:    budgetTokens,
 		OutputTextTruncated: outputTruncated || len(page.Links) > len(links),
-		CompactNote:         webCompactNote(outputTruncated || len(page.Links) > len(links), opts.FullText),
+		CompactNote:         webCompactNote(outputTruncated || len(page.Links) > len(links), includeText, opts.FullText),
 	}
 }
 
@@ -1089,33 +1169,377 @@ func compactCrawlPages(pages []crawlPage, opts webFetchOptions) []compactCrawlPa
 	}
 	out := make([]compactCrawlPage, 0, len(pages))
 	for _, page := range pages {
-		text, outputTruncated := compactWebText(page.Text, maxChars, opts.FullText)
+		text := ""
+		outputTruncated := false
+		includeText := opts.IncludeText || opts.FullText
+		if includeText {
+			text, outputTruncated = compactWebText(page.Text, maxChars, opts.FullText)
+		} else {
+			outputTruncated = strings.TrimSpace(page.Text) != ""
+		}
 		out = append(out, compactCrawlPage{
 			URL:                 page.URL,
 			Depth:               page.Depth,
 			Title:               page.Title,
-			Summary:             summarizeText(page.Title, page.Text, 700),
+			Summary:             summarizeText(page.Title, page.Text, webDigestChars),
+			KeyPoints:           keyPoints(page.Text, opts.Query, 4, webKeyPointChars),
+			Extract:             extractSnippets(page.Text, opts.Query, webExtractChars),
 			Text:                text,
 			Error:               page.Error,
 			OriginalTextChars:   len([]rune(page.Text)),
+			OriginalTextTokens:  estimateTokens(page.Text),
 			ReturnedTextChars:   len([]rune(text)),
-			EstimatedTextTokens: estimateTokens(text),
+			EstimatedTextTokens: estimateTokens(compactInlineText(text, page.Title, page.Text, opts.Query)),
 			BudgetTextChars:     maxChars,
 			BudgetTextTokens:    min(budgetTokens, totalTokens),
 			OutputTextTruncated: outputTruncated,
-			CompactNote:         webCompactNote(outputTruncated, opts.FullText),
+			CompactNote:         webCompactNote(outputTruncated, includeText, opts.FullText),
 		})
 	}
 	return out
 }
 
+func fetchCompactPageResult(ctx context.Context, toolName, rawURL string, opts webFetchOptions) (Result, error) {
+	page, err := fetchPage(ctx, rawURL, boundedBytes(opts.MaxBytes))
+	if err != nil {
+		return Result{}, err
+	}
+	compact := compactFetchedPage(page, opts)
+	ref, err := storeWebOutput(toolName, page.URL, renderFetchedPageArtifact(page))
+	if err != nil {
+		compact.CompactNote = strings.TrimSpace(compact.CompactNote + " full extracted text save failed: " + err.Error())
+	} else {
+		compact.OutputRef = ref
+	}
+	out, _ := json.MarshalIndent(compact, "", "  ")
+	return Result{
+		Content:   string(out),
+		Metadata:  webPageMetadata(compact),
+		Truncated: compact.OutputTextTruncated,
+		OutputRef: compact.OutputRef,
+	}, nil
+}
+
+func compactCrawlResult(pages []crawlPage, opts webFetchOptions) (compactCrawlOutput, string, error) {
+	compactPages := compactCrawlPages(pages, opts)
+	artifact := renderCrawlArtifact(pages)
+	ref, err := storeWebOutput("web_crawl", firstCrawlURL(pages), artifact)
+	var out compactCrawlOutput
+	out.Pages = compactPages
+	out.OutputRef = ref
+	if err == nil && ref != "" {
+		for i := range out.Pages {
+			if out.Pages[i].Error == "" {
+				out.Pages[i].OutputRef = ref
+			}
+		}
+	}
+	for _, page := range out.Pages {
+		out.OriginalTextChars += page.OriginalTextChars
+		out.OriginalTextTokens += page.OriginalTextTokens
+		out.ReturnedTextChars += page.ReturnedTextChars
+		out.EstimatedTextTokens += page.EstimatedTextTokens
+		out.OutputTextTruncated = out.OutputTextTruncated || page.OutputTextTruncated
+	}
+	if out.OutputTextTruncated {
+		out.CompactNote = "full extracted crawl text is saved out-of-band in output_ref; inline response contains only digest/extract to protect context cost"
+	}
+	return out, ref, err
+}
+
+func crawlMetadata(out compactCrawlOutput) map[string]any {
+	return map[string]any{
+		"pages":                 len(out.Pages),
+		"original_text_chars":   out.OriginalTextChars,
+		"original_text_tokens":  out.OriginalTextTokens,
+		"returned_text_chars":   out.ReturnedTextChars,
+		"estimated_text_tokens": out.EstimatedTextTokens,
+		"output_text_truncated": out.OutputTextTruncated,
+		"output_ref":            out.OutputRef,
+	}
+}
+
+func firstCrawlURL(pages []crawlPage) string {
+	for _, page := range pages {
+		if page.URL != "" {
+			return page.URL
+		}
+	}
+	return "crawl"
+}
+
+func compactInlineText(text, title, fullText, query string) string {
+	return strings.Join(nonEmptyStrings(
+		title,
+		summarizeText(title, fullText, webDigestChars),
+		strings.Join(keyPoints(fullText, query, 5, webKeyPointChars), "\n"),
+		extractSnippets(fullText, query, webExtractChars),
+		text,
+	), "\n")
+}
+
+func keyPoints(text, query string, maxPoints, maxChars int) []string {
+	if maxPoints <= 0 {
+		return nil
+	}
+	sentences := candidateSentences(text)
+	if len(sentences) == 0 {
+		return nil
+	}
+	ranked := rankSentences(sentences, query)
+	points := make([]string, 0, maxPoints)
+	seen := map[string]bool{}
+	for _, sentence := range ranked {
+		sentence = truncateRunes(oneLine(sentence), maxChars)
+		if sentence == "" || seen[strings.ToLower(sentence)] {
+			continue
+		}
+		seen[strings.ToLower(sentence)] = true
+		points = append(points, sentence)
+		if len(points) >= maxPoints {
+			break
+		}
+	}
+	return points
+}
+
+func extractSnippets(text, query string, maxChars int) string {
+	text = strings.TrimSpace(text)
+	if text == "" || maxChars <= 0 {
+		return ""
+	}
+	var selected []string
+	terms := queryTerms(query)
+	for _, sentence := range candidateSentences(text) {
+		if len(selected) >= 6 {
+			break
+		}
+		clean := oneLine(sentence)
+		if clean == "" {
+			continue
+		}
+		if len(terms) == 0 || textScore(clean, terms) > 0 {
+			selected = append(selected, clean)
+		}
+	}
+	if len(selected) == 0 {
+		for _, sentence := range candidateSentences(text) {
+			selected = append(selected, sentence)
+			if len(selected) >= 6 {
+				break
+			}
+		}
+	}
+	return truncateRunes(strings.Join(selected, "\n"), maxChars)
+}
+
+func candidateSentences(text string) []string {
+	var out []string
+	for _, paragraph := range splitParagraphs(text) {
+		for _, sentence := range splitSentences(paragraph) {
+			sentence = oneLine(sentence)
+			if len([]rune(sentence)) < 40 {
+				continue
+			}
+			out = append(out, sentence)
+			if len(out) >= 32 {
+				return out
+			}
+		}
+	}
+	if len(out) == 0 && strings.TrimSpace(text) != "" {
+		out = append(out, truncateRunes(oneLine(text), 320))
+	}
+	return out
+}
+
+func rankSentences(sentences []string, query string) []string {
+	type scored struct {
+		text  string
+		score int
+		index int
+	}
+	terms := queryTerms(query)
+	items := make([]scored, 0, len(sentences))
+	for i, sentence := range sentences {
+		items = append(items, scored{text: sentence, score: textScore(sentence, terms), index: i})
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].score != items[j].score {
+			return items[i].score > items[j].score
+		}
+		return items[i].index < items[j].index
+	})
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		out = append(out, item.text)
+	}
+	return out
+}
+
+func queryTerms(query string) []string {
+	fields := strings.Fields(strings.ToLower(query))
+	terms := make([]string, 0, len(fields))
+	seen := map[string]bool{}
+	for _, term := range fields {
+		term = strings.Trim(term, `"'.,:;!?()[]{}<>`)
+		if len([]rune(term)) < 3 || seen[term] {
+			continue
+		}
+		seen[term] = true
+		terms = append(terms, term)
+	}
+	return terms
+}
+
+func textScore(text string, terms []string) int {
+	if len(terms) == 0 {
+		return 0
+	}
+	lower := strings.ToLower(text)
+	score := 0
+	for _, term := range terms {
+		score += strings.Count(lower, term)
+	}
+	return score
+}
+
+func splitParagraphs(text string) []string {
+	raw := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	var out []string
+	for _, paragraph := range raw {
+		paragraph = strings.TrimSpace(paragraph)
+		if paragraph != "" {
+			out = append(out, paragraph)
+		}
+	}
+	return out
+}
+
+func nonEmptyStrings(values ...string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func renderFetchedPageArtifact(page fetchedPage) string {
+	var b strings.Builder
+	b.WriteString("url: " + page.URL + "\n")
+	if page.Title != "" {
+		b.WriteString("title: " + page.Title + "\n")
+	}
+	if page.ContentType != "" {
+		b.WriteString("content_type: " + page.ContentType + "\n")
+	}
+	if page.Status != 0 {
+		b.WriteString(fmt.Sprintf("status: %d\n", page.Status))
+	}
+	if page.Truncated {
+		b.WriteString("response_body_truncated: true\n")
+	}
+	b.WriteString("\n--- extracted text ---\n")
+	b.WriteString(strings.TrimSpace(page.Text))
+	b.WriteString("\n")
+	if len(page.Links) > 0 {
+		b.WriteString("\n--- links ---\n")
+		for _, link := range page.Links {
+			b.WriteString(link + "\n")
+		}
+	}
+	return b.String()
+}
+
+func renderCrawlArtifact(pages []crawlPage) string {
+	var b strings.Builder
+	for i, page := range pages {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(fmt.Sprintf("=== page %d depth=%d ===\n", i+1, page.Depth))
+		b.WriteString("url: " + page.URL + "\n")
+		if page.Title != "" {
+			b.WriteString("title: " + page.Title + "\n")
+		}
+		if page.Error != "" {
+			b.WriteString("error: " + page.Error + "\n")
+			continue
+		}
+		b.WriteString("\n")
+		b.WriteString(strings.TrimSpace(page.Text))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func storeWebOutput(toolName, source, content string) (string, error) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return "", nil
+	}
+	baseDir := filepath.Join(config.BillyHomeDir(), "tool-output")
+	if err := ensurePrivateToolDir(baseDir); err != nil {
+		return "", err
+	}
+	dir := filepath.Join(baseDir, time.Now().UTC().Format("20060102"))
+	if err := ensurePrivateToolDir(dir); err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(content))
+	name := fmt.Sprintf("%s-%s-%s-%s.txt",
+		time.Now().UTC().Format("150405.000000000"),
+		safeArtifactName(toolName),
+		safeArtifactName(source),
+		hex.EncodeToString(sum[:4]),
+	)
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func ensurePrivateToolDir(path string) error {
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o700)
+}
+
+var unsafeArtifactNameRE = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
+
+func safeArtifactName(value string) string {
+	value = strings.TrimSpace(value)
+	if u, err := url.Parse(value); err == nil && u.Hostname() != "" {
+		value = u.Hostname() + u.EscapedPath()
+	}
+	value = unsafeArtifactNameRE.ReplaceAllString(value, "_")
+	value = strings.Trim(value, "._-")
+	if value == "" {
+		return "web"
+	}
+	if len(value) > 72 {
+		value = value[:72]
+	}
+	return value
+}
+
 func webTextBudget(opts webFetchOptions, fallbackChars, fallbackTokens, maxTokens int) (int, int) {
+	if !opts.IncludeText && !opts.FullText {
+		return 0, webInlineDefaultTokens
+	}
 	fallback := fallbackChars
 	if opts.FullText && opts.MaxChars <= 0 && opts.MaxTokens <= 0 {
 		fallback = webFullTextChars
 	}
 	charBudget := normalizedWebChars(opts.MaxChars, fallback)
-	tokenBudget := normalizedWebTokens(opts.MaxTokens, fallbackTokens, maxTokens)
+	tokenBudget := normalizedWebTokens(opts.MaxTokens, fallbackTokens, min(maxTokens, webInlineMaxTokens))
 	tokenChars := tokenBudget * 4
 	if tokenChars > 0 && tokenChars < charBudget {
 		charBudget = tokenChars
@@ -1168,25 +1592,30 @@ func compactWebText(text string, maxChars int, fullText bool) (string, bool) {
 	return truncateRunesWithMarker(text, maxChars)
 }
 
-func webCompactNote(truncated, fullText bool) string {
+func webCompactNote(truncated, includeText, fullText bool) string {
 	if !truncated {
 		return ""
+	}
+	if !includeText {
+		return "full extracted text is saved out-of-band in output_ref; inline response contains only digest/extract to protect context cost"
 	}
 	if fullText {
 		return "full_text was requested, but output is still capped by max_tokens/max_chars to protect context cost"
 	}
-	return "text is capped; increase max_tokens/max_chars only if exact source text is required"
+	return "inline text is capped; use output_ref if exact source text is required"
 }
 
 func webPageMetadata(page compactPage) map[string]any {
 	return map[string]any{
 		"original_text_chars":     page.OriginalTextChars,
+		"original_text_tokens":    page.OriginalTextTokens,
 		"returned_text_chars":     page.ReturnedTextChars,
 		"estimated_text_tokens":   page.EstimatedTextTokens,
 		"budget_text_chars":       page.BudgetTextChars,
 		"budget_text_tokens":      page.BudgetTextTokens,
 		"output_text_truncated":   page.OutputTextTruncated,
 		"response_body_truncated": page.Truncated,
+		"output_ref":              page.OutputRef,
 	}
 }
 

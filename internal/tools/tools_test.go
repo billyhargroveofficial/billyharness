@@ -423,13 +423,13 @@ func TestWebCompactionDefaultsStaySmall(t *testing.T) {
 		Text:  strings.Repeat("Alpha beta gamma delta. ", 2000),
 	}
 	fetched := compactFetchedPage(page, webFetchOptions{})
-	if fetched.BudgetTextTokens != webDefaultTextTokens {
-		t.Fatalf("fetch default token budget = %d", fetched.BudgetTextTokens)
+	if fetched.Text != "" || fetched.ReturnedTextChars != 0 || fetched.BudgetTextTokens != 0 {
+		t.Fatalf("fetch default should not return raw text inline: %#v", fetched)
 	}
-	if webDefaultTextTokens != 900 {
-		t.Fatalf("webDefaultTextTokens = %d", webDefaultTextTokens)
+	if fetched.Summary == "" || fetched.Extract == "" || len(fetched.KeyPoints) == 0 {
+		t.Fatalf("fetch default should return digest/extract/key points: %#v", fetched)
 	}
-	if fetched.BudgetTextChars != 3600 || fetched.EstimatedTextTokens > 960 {
+	if fetched.EstimatedTextTokens > 700 {
 		t.Fatalf("fetch default returned too much: %#v", fetched)
 	}
 
@@ -441,13 +441,13 @@ func TestWebCompactionDefaultsStaySmall(t *testing.T) {
 	if len(crawled) != 1 {
 		t.Fatalf("crawl pages = %d", len(crawled))
 	}
-	if crawled[0].BudgetTextTokens != webCrawlDefaultTokens {
-		t.Fatalf("crawl default token budget = %d", crawled[0].BudgetTextTokens)
+	if crawled[0].Text != "" || crawled[0].ReturnedTextChars != 0 || crawled[0].BudgetTextTokens != 0 {
+		t.Fatalf("crawl default should not return raw text inline: %#v", crawled[0])
 	}
-	if webCrawlDefaultTokens != 600 {
-		t.Fatalf("webCrawlDefaultTokens = %d", webCrawlDefaultTokens)
+	if crawled[0].Summary == "" || crawled[0].Extract == "" || len(crawled[0].KeyPoints) == 0 {
+		t.Fatalf("crawl default should return digest/extract/key points: %#v", crawled[0])
 	}
-	if crawled[0].EstimatedTextTokens > 660 {
+	if crawled[0].EstimatedTextTokens > 700 {
 		t.Fatalf("crawl default returned too much: %#v", crawled[0])
 	}
 }
@@ -468,7 +468,7 @@ func TestCompactFetchedPageHonorsTokenBudgetEvenForFullText(t *testing.T) {
 	if !out.OutputTextTruncated || !strings.Contains(out.CompactNote, "full_text") {
 		t.Fatalf("full_text should still be capped: %#v", out)
 	}
-	if out.ReturnedTextChars > 1000 || out.EstimatedTextTokens > 260 {
+	if out.ReturnedTextChars > 1000 || out.EstimatedTextTokens > 800 {
 		t.Fatalf("returned too much text: chars=%d tokens=%d", out.ReturnedTextChars, out.EstimatedTextTokens)
 	}
 }
@@ -479,7 +479,7 @@ func TestCompactCrawlPagesHonorsTotalTokenBudget(t *testing.T) {
 		{URL: "https://example.com/b", Depth: 1, Title: "B", Text: strings.Repeat("B page sentence. ", 800)},
 		{URL: "https://example.com/c", Depth: 1, Title: "C", Text: strings.Repeat("C page sentence. ", 800)},
 	}
-	out := compactCrawlPages(pages, webFetchOptions{MaxTokens: 2000, MaxTotalTokens: 900})
+	out := compactCrawlPages(pages, webFetchOptions{IncludeText: true, MaxTokens: 2000, MaxTotalTokens: 900})
 	if len(out) != len(pages) {
 		t.Fatalf("pages = %d, want %d", len(out), len(pages))
 	}
@@ -489,12 +489,78 @@ func TestCompactCrawlPagesHonorsTotalTokenBudget(t *testing.T) {
 		if page.BudgetTextChars != 1200 {
 			t.Fatalf("per-page budget = %d, want 1200: %#v", page.BudgetTextChars, page)
 		}
-		if !page.OutputTextTruncated || page.EstimatedTextTokens > 360 {
+		if !page.OutputTextTruncated || page.EstimatedTextTokens > 900 {
 			t.Fatalf("page was not compacted enough: %#v", page)
 		}
 	}
 	if totalBudgetChars != 3600 {
 		t.Fatalf("total budget chars = %d, want 3600", totalBudgetChars)
+	}
+}
+
+func TestWebCompactionStoresFullTextOutOfBand(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	text := strings.Repeat("Full page sentence with important evidence. ", 300) + "TAIL_UNIQUE_EVIDENCE_THAT_SHOULD_ONLY_BE_IN_REF"
+	page := fetchedPage{
+		URL:         "https://example.com/article",
+		Status:      200,
+		ContentType: "text/html",
+		Title:       "Important Article",
+		Text:        text,
+		Links:       []string{"https://example.com/source"},
+	}
+	compact := compactFetchedPage(page, webFetchOptions{})
+	ref, err := storeWebOutput("web_fetch", page.URL, renderFetchedPageArtifact(page))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact.OutputRef = ref
+	out, err := json.Marshal(compact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "TAIL_UNIQUE_EVIDENCE_THAT_SHOULD_ONLY_BE_IN_REF") {
+		t.Fatalf("compact output leaked tail raw text: %s", string(out))
+	}
+	if compact.Text != "" || compact.OutputRef == "" {
+		t.Fatalf("compact page should omit raw text and include output ref: %#v", compact)
+	}
+	bytes, err := os.ReadFile(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(bytes), text[:200]) {
+		t.Fatalf("artifact missing full extracted text")
+	}
+	assertMode(t, filepath.Join(config.BillyHomeDir(), "tool-output"), 0o700)
+	assertMode(t, filepath.Dir(ref), 0o700)
+	assertMode(t, ref, 0o600)
+}
+
+func TestCompactCrawlResultReturnsSingleOutputRef(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	pages := []crawlPage{
+		{URL: "https://example.com/a", Depth: 0, Title: "A", Text: strings.Repeat("A page sentence. ", 400)},
+		{URL: "https://example.com/b", Depth: 1, Title: "B", Text: strings.Repeat("B page sentence. ", 400)},
+	}
+	out, ref, err := compactCrawlResult(pages, webFetchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref == "" || out.OutputRef != ref || len(out.Pages) != 2 {
+		t.Fatalf("crawl compact output/ref = %#v ref=%q", out, ref)
+	}
+	for _, page := range out.Pages {
+		if page.Text != "" || page.OutputRef != ref || page.Extract == "" {
+			t.Fatalf("page should be compact with shared ref: %#v", page)
+		}
+	}
+	bytes, err := os.ReadFile(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(bytes), "=== page 2") || !strings.Contains(string(bytes), "B page sentence") {
+		t.Fatalf("crawl artifact missing page text:\n%s", string(bytes))
 	}
 }
 
@@ -826,4 +892,15 @@ func rawArgs(value any) json.RawMessage {
 		panic(err)
 	}
 	return bytes
+}
+
+func assertMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("%s mode = %o, want %o", path, got, want)
+	}
 }

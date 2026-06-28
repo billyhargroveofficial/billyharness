@@ -163,6 +163,8 @@ func tuiCallLine(call protocol.ToolCall, args map[string]any) string {
 		return "Created dir " + firstArg(args, "path")
 	case "web_fetch":
 		return "Fetched " + CompactURL(args["url"], 88)
+	case "web_extract":
+		return "Extracted " + JoinParts(CompactURL(args["url"], 64), OptionalPart("query", args["query"], 48))
 	case "web_search":
 		return "Searched web " + CompactArg(args["query"], 96)
 	case "web_crawl":
@@ -188,6 +190,8 @@ func telegramCallLine(call protocol.ToolCall, args map[string]any) string {
 		return "🔎 web_search " + CompactArg(args["query"], 96)
 	case "web_fetch":
 		return "🌐 web_fetch " + CompactURL(args["url"], 88)
+	case "web_extract":
+		return "🧩 web_extract " + JoinParts(CompactURL(args["url"], 60), OptionalPart("query", args["query"], 48))
 	case "web_crawl":
 		return "🕸 web_crawl " + CompactURL(args["url"], 88)
 	case "fs_read_file":
