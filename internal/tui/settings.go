@@ -67,7 +67,7 @@ func (s appSettings) normalized() appSettings {
 	if s.Theme != "dark" && s.Theme != "light" {
 		s.Theme = "dark"
 	}
-	if !validViewMode(s.ToolView, []string{"auto", "expanded", "collapsed", "hidden", "errors"}) {
+	if !validViewMode(s.ToolView, []string{"auto", "expanded", "collapsed", "current", "hidden", "errors"}) {
 		s.ToolView = "collapsed"
 	}
 	if !validViewMode(s.ThinkView, []string{"expanded", "collapsed", "hidden"}) {

@@ -91,6 +91,7 @@ const (
 	cellTypeThinking        = "thinking"
 	cellTypeToolCall        = "tool_call"
 	cellTypeToolBatch       = "tool_batch"
+	cellTypeToolGroup       = "tool_group"
 	cellTypeAuditSecurity   = "audit_security"
 	cellTypeCompaction      = "compaction"
 	cellTypeMCPStatus       = "mcp_status"
@@ -2117,6 +2118,8 @@ func (m *Model) setToolView(value string) bool {
 		case "auto":
 			value = "collapsed"
 		case "collapsed":
+			value = "current"
+		case "current":
 			value = "expanded"
 		case "expanded":
 			value = "errors"
@@ -2131,10 +2134,12 @@ func (m *Model) setToolView(value string) bool {
 		value = "expanded"
 	case "close":
 		value = "collapsed"
+	case "turn", "current-turn":
+		value = "current"
 	case "failed", "error":
 		value = "errors"
 	}
-	if !validViewMode(value, []string{"auto", "expanded", "collapsed", "hidden", "errors"}) {
+	if !validViewMode(value, []string{"auto", "expanded", "collapsed", "current", "hidden", "errors"}) {
 		m.status = "unknown toolview " + value
 		return false
 	}
@@ -2647,7 +2652,7 @@ func normalizeBlockKind(kind string) string {
 
 func cellTypeForBlock(b block) string {
 	switch b.cellType {
-	case cellTypeToolBatch, cellTypeRunSummary:
+	case cellTypeToolBatch, cellTypeToolGroup, cellTypeRunSummary:
 		return b.cellType
 	}
 	switch b.eventType {
@@ -2854,10 +2859,12 @@ func (m *Model) applyEvent(event protocol.Event) {
 		m.toolCalls++
 		m.status = "running tool " + toolName(event.Data)
 		m.addProtocolEventBlock(event, toolTitle(event.Data), toolBody(event.Data))
+		m.upsertContextToolGroup(event.TurnID)
 	case protocol.EventToolCallFinished:
 		m.observeToolSummary(event.Data)
 		m.appendToolResult(event, toolResultText(event.Data))
 		m.collapseToolBlockIfLarge(eventCallID(event))
+		m.upsertContextToolGroup(m.turnIDForToolEvent(event))
 	case protocol.EventStepStarted, protocol.EventStepCompleted:
 		m.applyStepEvent(event)
 	case protocol.EventContextCompacted:
@@ -3013,6 +3020,223 @@ func (m *Model) applyStepEvent(event protocol.Event) {
 	default:
 		m.status = "tool batch running"
 	}
+}
+
+type contextToolSummary struct {
+	title    string
+	category string
+	status   string
+	failed   bool
+}
+
+func (m *Model) upsertContextToolGroup(turnID string) {
+	if m.toolView != "collapsed" && m.toolView != "current" && m.toolView != "auto" {
+		return
+	}
+	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		turnID = m.latestToolTurnID()
+	}
+	summaries := m.contextToolSummaries(turnID)
+	if len(summaries) < 2 {
+		return
+	}
+	title, body := contextToolGroupText(summaries)
+	i, found := m.contextToolGroupIndex(turnID)
+	if !found {
+		selected := m.selected
+		b := m.newBlock("tool", title, body)
+		b.cellType = cellTypeToolGroup
+		b.eventType = protocol.EventStepStarted
+		b.turnID = turnID
+		b.rawCopy = body
+		refreshBlockDerivedFields(&b)
+		m.blocks = append(m.blocks, b)
+		if selected >= 0 && selected < len(m.blocks) {
+			m.selected = selected
+		}
+		return
+	}
+	m.blocks[i].title = title
+	m.blocks[i].content = body
+	m.blocks[i].rawCopy = body
+	m.blocks[i].updated = time.Now().UTC()
+	m.refreshBlockDerivedFields(i)
+}
+
+func (m Model) contextToolSummaries(turnID string) []contextToolSummary {
+	var summaries []contextToolSummary
+	seen := map[string]bool{}
+	for _, b := range m.blocks {
+		if b.kind != "tool" || b.cellType != cellTypeToolCall {
+			continue
+		}
+		if strings.TrimSpace(turnID) != "" && b.turnID != turnID {
+			continue
+		}
+		if strings.TrimSpace(turnID) == "" && strings.TrimSpace(b.turnID) != "" {
+			continue
+		}
+		category, ok := contextToolCategory(b)
+		if !ok {
+			continue
+		}
+		key := b.callID
+		if key == "" {
+			key = b.title
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		status := contextToolStatus(b)
+		summaries = append(summaries, contextToolSummary{
+			title:    oneLinePreview(b.title, 96),
+			category: category,
+			status:   status,
+			failed:   isToolErrorBlock(b),
+		})
+	}
+	return summaries
+}
+
+func contextToolGroupText(summaries []contextToolSummary) (string, string) {
+	counts := map[string]int{}
+	done := 0
+	failed := 0
+	for _, summary := range summaries {
+		counts[summary.category]++
+		switch summary.status {
+		case "done":
+			done++
+		case "failed":
+			failed++
+		}
+	}
+	state := "running"
+	if failed > 0 {
+		state = "failed"
+	} else if done == len(summaries) {
+		state = "done"
+	}
+	var parts []string
+	parts = append(parts, "Context tools "+state, fmt.Sprintf("%d tools", len(summaries)))
+	for _, category := range []string{"files", "web", "mcp", "skills", "time"} {
+		if counts[category] > 0 {
+			parts = append(parts, fmt.Sprintf("%s %d", category, counts[category]))
+		}
+	}
+	var lines []string
+	for i, summary := range summaries {
+		if i >= 8 {
+			lines = append(lines, fmt.Sprintf("... %d more", len(summaries)-i))
+			break
+		}
+		marker := "•"
+		switch summary.status {
+		case "done":
+			marker = "✓"
+		case "failed":
+			marker = "!"
+		}
+		lines = append(lines, marker+" "+summary.title)
+	}
+	return strings.Join(parts, " · "), strings.Join(lines, "\n")
+}
+
+func (m Model) contextToolGroupIndex(turnID string) (int, bool) {
+	for i := range m.blocks {
+		if m.blocks[i].kind == "tool" && m.blocks[i].cellType == cellTypeToolGroup && m.blocks[i].turnID == turnID {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+func (m Model) hasContextToolGroup(turnID string) bool {
+	_, ok := m.contextToolGroupIndex(turnID)
+	return ok
+}
+
+func (m Model) shouldHideGroupedContextTool(b block) bool {
+	if m.toolView != "collapsed" && m.toolView != "current" {
+		return false
+	}
+	if b.kind != "tool" || b.cellType != cellTypeToolCall || isToolErrorBlock(b) {
+		return false
+	}
+	if _, ok := contextToolCategory(b); !ok {
+		return false
+	}
+	return m.hasContextToolGroup(b.turnID)
+}
+
+func (m Model) currentToolTurnID() string {
+	return m.latestToolTurnID()
+}
+
+func (m Model) latestToolTurnID() string {
+	for i := len(m.blocks) - 1; i >= 0; i-- {
+		if m.blocks[i].kind != "tool" {
+			continue
+		}
+		if turnID := strings.TrimSpace(m.blocks[i].turnID); turnID != "" {
+			return turnID
+		}
+	}
+	return ""
+}
+
+func (m Model) turnIDForToolEvent(event protocol.Event) string {
+	if turnID := strings.TrimSpace(event.TurnID); turnID != "" {
+		return turnID
+	}
+	if i, ok := m.toolBlockIndex(eventCallID(event)); ok {
+		return strings.TrimSpace(m.blocks[i].turnID)
+	}
+	return ""
+}
+
+func contextToolCategory(b block) (string, bool) {
+	title := strings.ToLower(strings.TrimSpace(b.title))
+	title = strings.TrimPrefix(title, "done ")
+	title = strings.TrimPrefix(title, "failed ")
+	title = strings.TrimPrefix(title, "aborted ")
+	switch {
+	case strings.HasPrefix(title, "read ") ||
+		strings.HasPrefix(title, "listed ") ||
+		strings.HasPrefix(title, "searched ") && strings.Contains(title, " in "):
+		return "files", true
+	case strings.HasPrefix(title, "searched web ") ||
+		strings.HasPrefix(title, "fetched ") ||
+		strings.HasPrefix(title, "extracted ") ||
+		strings.HasPrefix(title, "crawled "):
+		return "web", true
+	case strings.HasPrefix(title, "listed mcp tools ") ||
+		strings.HasPrefix(title, "called mcp read") ||
+		strings.HasPrefix(title, "called mcp search") ||
+		strings.HasPrefix(title, "called mcp get") ||
+		strings.HasPrefix(title, "called mcp list"):
+		return "mcp", true
+	case strings.HasPrefix(title, "called skill_list") ||
+		strings.HasPrefix(title, "called skill_read"):
+		return "skills", true
+	case strings.HasPrefix(title, "checked time"):
+		return "time", true
+	default:
+		return "", false
+	}
+}
+
+func contextToolStatus(b block) string {
+	if isToolErrorBlock(b) {
+		return "failed"
+	}
+	title := strings.ToLower(strings.TrimSpace(b.title))
+	if strings.HasPrefix(title, "done ") {
+		return "done"
+	}
+	return "running"
 }
 
 func stepEventFromAny(value any) (protocol.StepEvent, bool) {
@@ -3394,6 +3618,10 @@ func (m *Model) finishLiveBlocks() {
 
 func (m *Model) reflow(gotoBottom bool) {
 	var parts []string
+	currentToolTurnID := ""
+	if m.toolView == "current" {
+		currentToolTurnID = m.currentToolTurnID()
+	}
 	for i, b := range m.blocks {
 		if b.kind == "reasoning" && m.thinkView == "hidden" {
 			continue
@@ -3401,7 +3629,16 @@ func (m *Model) reflow(gotoBottom bool) {
 		if b.kind == "tool" && m.toolView == "hidden" {
 			continue
 		}
+		if b.kind == "tool" && m.toolView == "current" && currentToolTurnID != "" && b.turnID != "" && b.turnID != currentToolTurnID {
+			continue
+		}
 		if b.kind == "tool" && m.toolView == "errors" && !isToolErrorBlock(b) {
+			continue
+		}
+		if b.kind == "tool" && b.cellType == cellTypeToolGroup && m.toolView == "errors" {
+			continue
+		}
+		if b.kind == "tool" && m.shouldHideGroupedContextTool(b) {
 			continue
 		}
 		parts = append(parts, m.renderBlockCached(i))
@@ -3505,7 +3742,7 @@ func (m Model) toolCollapsed(i int) bool {
 		return false
 	}
 	switch m.toolView {
-	case "collapsed":
+	case "collapsed", "current":
 		if !m.blocks[i].collapseSet {
 			return true
 		}

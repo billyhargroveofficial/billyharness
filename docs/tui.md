@@ -27,7 +27,7 @@ Slash commands open an autocomplete popup. Use `Tab`, `Up`, and `Down` to move t
 /model flash|pro|gpt|spark|<model-id>
 /reasoning low|medium|high|xhigh|max|off
 /profile PROFILE
-/toolview auto|expanded|collapsed|hidden
+/toolview auto|expanded|collapsed|current|errors|hidden
 /thinkview expanded|collapsed|hidden
 /copy selected|last|tool|transcript|code|command
 /context
@@ -80,6 +80,7 @@ Tool calls are collapsed by default. Use:
 
 ```text
 /toolview collapsed
+/toolview current
 /toolview expanded
 /toolview errors
 /toolview hidden
@@ -94,6 +95,8 @@ Thinking blocks can be switched with:
 ```
 
 The default compact tool line shows status, tool name, file/url/query/server/command summary, duration, truncation, output refs, and cache or token metadata when available.
+
+`/toolview current` keeps only the latest turn's tool cells visible. In collapsed/current/auto views, repeated context-gathering calls such as file reads, searches, web fetches, and read-only MCP lookups are grouped into a compact "Context tools" summary so a long evidence-gathering run stays readable. Switch to `/toolview expanded` when you need the full individual tool outputs.
 
 ## Copy And Selection
 

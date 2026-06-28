@@ -271,13 +271,14 @@ func actionRegistry() []actionSpec {
 			title:     "Set Tool View",
 			category:  "ui",
 			slash:     "/toolview",
-			slashArgs: "auto|expanded|collapsed|hidden|errors",
+			slashArgs: "auto|expanded|collapsed|current|hidden|errors",
 			summary:   "control tool blocks",
 			args: func(m Model) []slashArg {
 				return rotateSlashArgs([]slashArg{
 					{"auto", "expand tool blocks while running"},
 					{"expanded", "show full tool blocks"},
 					{"collapsed", "collapse tool blocks"},
+					{"current", "show current turn tools only"},
 					{"hidden", "hide tool blocks"},
 					{"errors", "show failed tool blocks only"},
 					{"toggle", "cycle tool view"},

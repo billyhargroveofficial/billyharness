@@ -580,17 +580,17 @@ Acceptance:
   - [x] target file/url/query/server
   - [x] duration
   - [x] truncation/ref indicator
-- [ ] Group context-gathering tools when possible.
+- [x] Group context-gathering tools when possible.
 - [ ] Expand/collapse:
   - [x] by selected cell
   - [x] all tools
-  - [ ] current turn tools
+  - [x] current turn tools
   - [x] errors only
 - [x] Keep `/toolview` modes.
 
 Acceptance:
 
-- [ ] A long multi-tool run remains readable.
+- [x] A long multi-tool run remains readable.
 - [x] Full output is available on demand without dominating default view.
 
 ### 5.4 Status Line

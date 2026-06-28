@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -666,6 +667,92 @@ func TestToolCollapsedLineUsesFinishedSummary(t *testing.T) {
 	}
 	if strings.Contains(rendered, "payload payload") || strings.Contains(rendered, "secret=query") {
 		t.Fatalf("collapsed finished tool line leaked payload or raw query: %q", rendered)
+	}
+}
+
+func TestContextGatheringToolsGroupInCollapsedView(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 140
+	for i := 0; i < 12; i++ {
+		callID := fmt.Sprintf("call-%02d", i)
+		m.applyEvent(protocol.Event{
+			Type:   protocol.EventToolCallRequested,
+			TurnID: "turn-context",
+			Data: protocol.ToolCall{
+				ID:        callID,
+				Name:      "fs_read_file",
+				Arguments: json.RawMessage(fmt.Sprintf(`{"path":"file-%02d.txt"}`, i)),
+			},
+		})
+		m.applyEvent(protocol.Event{
+			Type:   protocol.EventToolCallFinished,
+			TurnID: "turn-context",
+			Data: protocol.ToolResult{
+				CallID:  callID,
+				Name:    "fs_read_file",
+				Content: "payload that should stay behind the group",
+			},
+		})
+	}
+
+	m.reflow(true)
+	rendered := stripANSITest(m.viewportContent)
+	if !strings.Contains(rendered, "Context tools done") || !strings.Contains(rendered, "12 tools") || !strings.Contains(rendered, "files 12") {
+		t.Fatalf("group summary missing: %q", rendered)
+	}
+	if strings.Contains(rendered, "payload that should stay behind the group") {
+		t.Fatalf("collapsed grouped view leaked individual payload: %q", rendered)
+	}
+	if count := strings.Count(rendered, "Done Read file-"); count > 1 {
+		t.Fatalf("collapsed grouped view should hide individual context tools, count=%d view=%q", count, rendered)
+	}
+	if lines := strings.Count(strings.TrimSpace(rendered), "\n") + 1; lines > 12 {
+		t.Fatalf("long context tool run should remain compact, lines=%d view=%q", lines, rendered)
+	}
+
+	m.setToolView("expanded")
+	m.reflow(true)
+	expanded := stripANSITest(m.viewportContent)
+	if !strings.Contains(expanded, "Done Read file-00.txt") || !strings.Contains(expanded, "payload that should stay behind the group") {
+		t.Fatalf("expanded view should still expose individual tool output: %q", expanded)
+	}
+}
+
+func TestToolViewCurrentShowsOnlyLatestTurnTools(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.applyEvent(protocol.Event{
+		Type:   protocol.EventToolCallRequested,
+		TurnID: "turn-old",
+		Data: protocol.ToolCall{
+			ID:        "old-call",
+			Name:      "web_search",
+			Arguments: json.RawMessage(`{"query":"old query"}`),
+		},
+	})
+	m.applyEvent(protocol.Event{
+		Type:   protocol.EventToolCallRequested,
+		TurnID: "turn-new",
+		Data: protocol.ToolCall{
+			ID:        "new-call",
+			Name:      "web_search",
+			Arguments: json.RawMessage(`{"query":"new query"}`),
+		},
+	})
+
+	if ok := m.setToolView("current"); !ok {
+		t.Fatal("/toolview current was rejected")
+	}
+	m.reflow(true)
+	rendered := stripANSITest(m.viewportContent)
+	if strings.Contains(rendered, "old query") {
+		t.Fatalf("current tool view should hide old turn tools: %q", rendered)
+	}
+	if !strings.Contains(rendered, "new query") {
+		t.Fatalf("current tool view should show latest turn tools: %q", rendered)
+	}
+	if !m.toolCollapsed(1) {
+		t.Fatalf("current tool view should collapse tool cells by default")
 	}
 }
 
