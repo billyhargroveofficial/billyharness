@@ -296,7 +296,7 @@ Acceptance:
 Acceptance:
 
 - [x] Provider selection is data-driven where practical.
-- [ ] TUI/Telegram status line does not use confusing raw provider counters.
+- [x] TUI/Telegram status line does not use confusing raw provider counters.
 - [x] Context and cost displays are based on documented model metadata and provider usage.
 
 ### 2.4 AuthManager

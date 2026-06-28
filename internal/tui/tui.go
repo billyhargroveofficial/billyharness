@@ -1207,11 +1207,12 @@ func (m Model) inlineStatusView() string {
 		{"Context " + m.contextText() + " used", styles.statusUsage},
 		{m.costText(), styles.statusCost},
 	}
-	bottom := []statusSegment{
-		{"cached " + compactNumber(m.cacheHitTok), styles.statusUsage},
-		{"miss " + compactNumber(m.cacheMissTok), styles.statusUsage},
-		{"reasoning " + compactNumber(m.reasoningTok), styles.statusReasoning},
-		{compactNumber(m.usedTokens()) + " used", styles.statusUsage},
+	bottom := []statusSegment{}
+	if m.lastCacheHitTok+m.lastCacheMissTok > 0 {
+		bottom = append(bottom,
+			statusSegment{"cache hit " + compactNumber(m.lastCacheHitTok), styles.statusUsage},
+			statusSegment{"miss " + compactNumber(m.lastCacheMissTok), styles.statusUsage},
+		)
 	}
 	if m.toolSummaryInTok > 0 || m.toolSummaryOutTok > 0 {
 		bottom = append(bottom, statusSegment{
@@ -1221,6 +1222,7 @@ func (m Model) inlineStatusView() string {
 		bottom = append(bottom, statusSegment{"sumapi " + compactNumber(m.toolSummaryAPITok), styles.statusDim})
 	}
 	bottom = append(bottom,
+		statusSegment{"agent turns " + strconv.Itoa(m.modelCalls), styles.statusDim},
 		statusSegment{"tools " + strconv.Itoa(m.toolCalls), styles.statusDim},
 		statusSegment{"v" + m.version, styles.statusDim},
 		statusSegment{"theme " + m.theme, styles.statusDim},

@@ -1061,6 +1061,8 @@ func TestInlineStatusShowsModelAccessCacheCostAndSession(t *testing.T) {
 	m.cacheMissTok = 300
 	m.lastInputTok = 1000
 	m.lastOutputTok = 500
+	m.lastCacheHitTok = 700
+	m.lastCacheMissTok = 300
 	m.toolSummaryInTok = 20000
 	m.toolSummaryOutTok = 900
 	m.toolSummaryAPITok = 0
@@ -1072,10 +1074,11 @@ func TestInlineStatusShowsModelAccessCacheCostAndSession(t *testing.T) {
 		"Full Access",
 		"Context",
 		"cost $",
-		"cached",
+		"cache hit",
 		"websum",
 		"20k→900",
 		"sumapi 0",
+		"agent turns",
 		"v0.1.0",
 		"theme dark",
 		"Main [",
@@ -1086,6 +1089,11 @@ func TestInlineStatusShowsModelAccessCacheCostAndSession(t *testing.T) {
 	}
 	if strings.Count(status, "\n") != 1 {
 		t.Fatalf("status should be two lines, got %q", status)
+	}
+	for _, bad := range []string{"reasoning 0", "1.5k used", "cached "} {
+		if strings.Contains(status, bad) {
+			t.Fatalf("status should not contain raw provider counter %q: %q", bad, status)
+		}
 	}
 }
 
@@ -1170,6 +1178,7 @@ func TestResumeChatDoesNotTreatLifetimeTokensAsContextUsage(t *testing.T) {
 
 func TestProviderUsageUpdateDeduplicatesCumulativeSnapshots(t *testing.T) {
 	m := newTestModel(t)
+	m.width = 180
 	m.applyEvent(protocol.Event{Type: protocol.EventRunStarted})
 	m.applyEvent(protocol.Event{Type: protocol.EventModelCallStarted})
 
@@ -1201,6 +1210,15 @@ func TestProviderUsageUpdateDeduplicatesCumulativeSnapshots(t *testing.T) {
 	}
 	if got := m.contextTokens(); got != 150 {
 		t.Fatalf("contextTokens = %d, want current snapshot input+output 150", got)
+	}
+	status := m.inlineStatusView()
+	if !strings.Contains(status, "cache hit 50") || !strings.Contains(status, "miss 75") {
+		t.Fatalf("status should show last cache snapshot, got %q", status)
+	}
+	for _, bad := range []string{"cache hit 90", "miss 135", "reasoning 7", "157 used"} {
+		if strings.Contains(status, bad) {
+			t.Fatalf("status should not show cumulative raw counter %q: %q", bad, status)
+		}
 	}
 }
 
