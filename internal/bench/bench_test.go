@@ -171,6 +171,128 @@ func TestRunMockScriptedLoopCountsRoundsAndCompactions(t *testing.T) {
 	}
 }
 
+func TestLocalLoopBenchmarkGeneratesReplayableFiftyTurnSuite(t *testing.T) {
+	root := t.TempDir()
+	tasksPath := filepath.Join(root, "local-loop", "tasks.jsonl")
+	generated, err := WriteLocalLoopTasks(LocalLoopOptions{TasksPath: tasksPath, Turns: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generated.Tasks != 5 || generated.ExpectedTurns != 50 || generated.ScriptedRounds+generated.Tasks != generated.ExpectedTurns {
+		t.Fatalf("generated summary = %#v", generated)
+	}
+	if _, err := os.Stat(filepath.Join(generated.WorkspaceTemplate, "README.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(generated.WorkspaceTemplate, "app", "main.txt")); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := LoadTasks(tasksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != generated.Tasks {
+		t.Fatalf("loaded %d tasks, want %d", len(tasks), generated.Tasks)
+	}
+	wantIDs := map[string]bool{
+		"local-loop-app-build":     false,
+		"local-loop-file-search":   false,
+		"local-loop-web-caps":      false,
+		"local-loop-mcp-discovery": false,
+		"local-loop-cancel-resume": false,
+	}
+	wantTools := map[string]bool{
+		"fs_write_file": false,
+		"fs_search":     false,
+		"tool_search":   false,
+		"time_now":      false,
+	}
+	for _, task := range tasks {
+		if task.Suite != LocalLongLoopSuite || task.WorkspaceTemplate != generated.WorkspaceTemplate {
+			t.Fatalf("task has wrong suite/template: %#v", task)
+		}
+		if _, ok := wantIDs[task.ID]; !ok {
+			t.Fatalf("unexpected task id %q", task.ID)
+		}
+		wantIDs[task.ID] = true
+		if _, ok := wantTools[task.ScriptedToolName]; !ok {
+			t.Fatalf("unexpected scripted tool %q", task.ScriptedToolName)
+		}
+		wantTools[task.ScriptedToolName] = true
+		if task.ScriptedToolRounds <= 0 || task.ScriptedToolArgs == "" {
+			t.Fatalf("task missing scripted loop fields: %#v", task)
+		}
+	}
+	for id, seen := range wantIDs {
+		if !seen {
+			t.Fatalf("missing generated task %s", id)
+		}
+	}
+	for name, seen := range wantTools {
+		if !seen {
+			t.Fatalf("missing scripted tool %s", name)
+		}
+	}
+	liveGenerated, err := WriteLocalLoopTasks(LocalLoopOptions{TasksPath: filepath.Join(root, "local-loop-live", "tasks.jsonl"), Turns: 50, LiveWeb: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveTasks, err := LoadTasks(liveGenerated.TasksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawLiveWeb bool
+	for _, task := range liveTasks {
+		if task.ID == "local-loop-web-caps" && task.ScriptedToolName == "web_search" && hasTag(task.Tags, "live-network") {
+			sawLiveWeb = true
+		}
+	}
+	if !sawLiveWeb {
+		t.Fatalf("live web local-loop task not generated: %#v", liveTasks)
+	}
+
+	cfg := config.Default()
+	cfg.AutoApproveDangerous = true
+	cfg.StoreReasoningContent = true
+	cfg.MaxToolRounds = 60
+	summary, err := Run(context.Background(), cfg, RunConfig{
+		TasksPath: tasksPath,
+		OutDir:    filepath.Join(root, "runs"),
+		Mock:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Total != generated.Tasks || summary.Passed != generated.Tasks || !summary.ReplayVerified {
+		t.Fatalf("summary = %#v", summary)
+	}
+	if summary.Turns != generated.ExpectedTurns || summary.ToolCalls != generated.ScriptedRounds {
+		t.Fatalf("turn/tool counts = turns %d tools %d, want %d/%d", summary.Turns, summary.ToolCalls, generated.ExpectedTurns, generated.ScriptedRounds)
+	}
+	if summary.ToolCalls <= 0 || summary.ModelCalls != summary.Turns {
+		t.Fatalf("unexpected model/tool summary = %#v", summary)
+	}
+	resultsBytes, err := os.ReadFile(summary.ResultsJSONL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultsText := string(resultsBytes)
+	for _, name := range []string{"fs_write_file", "fs_search", "tool_search", "time_now"} {
+		if !strings.Contains(resultsText, name) {
+			t.Fatalf("results missing tool name %s: %s", name, resultsText)
+		}
+	}
+}
+
+func hasTag(tags []string, want string) bool {
+	for _, tag := range tags {
+		if tag == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRunTraceEventsHaveSeqPayloadRefsAndRedaction(t *testing.T) {
 	root := t.TempDir()
 	tasksPath := filepath.Join(root, "tasks.jsonl")

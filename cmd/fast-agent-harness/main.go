@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -577,6 +578,8 @@ func benchCmd(args []string) error {
 	switch args[0] {
 	case "run":
 		return benchRunCmd(args[1:])
+	case "local-loop", "long-loop":
+		return benchLocalLoopCmd(args[1:])
 	case "terminal-bench", "tb":
 		return benchTerminalBenchCmd(args[1:])
 	default:
@@ -633,6 +636,72 @@ func benchRunCmd(args []string) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(summary)
+}
+
+func benchLocalLoopCmd(args []string) error {
+	fs := flag.NewFlagSet("bench local-loop", flag.ExitOnError)
+	outDir := fs.String("out", "bench-runs/local-loop", "output directory for the local long-loop trace bundle")
+	tasksPath := fs.String("tasks", "", "JSONL task file to write; defaults to <out>/local-loop-tasks.jsonl")
+	turns := fs.Int("turns", 60, "target agent turns across the generated local benchmark, clamped to 50..100")
+	runNow := fs.Bool("run", true, "run the generated benchmark immediately")
+	liveWeb := fs.Bool("live-web", false, "use real native web_search in the web task; default uses offline tool discovery")
+	timeoutSec := fs.Int("timeout-sec", 180, "per-task timeout in seconds")
+	maxRounds := fs.Int("max-rounds", 0, "max model/tool rounds per generated task; 0 derives from -turns")
+	contextCompactTokens := fs.Int("context-compact-tokens", 0, "override context compaction trigger tokens")
+	contextCompactKeep := fs.Int("context-compact-keep", 0, "override context compaction keep count")
+	contextCompactMaxChars := fs.Int("context-compact-max-chars", 0, "override context compaction summary max chars")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*tasksPath) == "" {
+		*tasksPath = filepath.Join(*outDir, "local-loop-tasks.jsonl")
+	}
+	generated, err := bench.WriteLocalLoopTasks(bench.LocalLoopOptions{
+		TasksPath: *tasksPath,
+		Turns:     *turns,
+		LiveWeb:   *liveWeb,
+	})
+	if err != nil {
+		return err
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if !*runNow {
+		return enc.Encode(generated)
+	}
+
+	cfg := config.Default()
+	cfg.StoreReasoningContent = true
+	cfg.AutoApproveDangerous = true
+	if *maxRounds > 0 {
+		cfg.MaxToolRounds = *maxRounds
+	} else {
+		cfg.MaxToolRounds = max(100, generated.ExpectedTurns+10)
+	}
+	cfg.ApplyModelProviderDefaults()
+	rc := bench.RunConfig{
+		TasksPath:              generated.TasksPath,
+		OutDir:                 *outDir,
+		Mock:                   true,
+		ContextCompactTokens:   *contextCompactTokens,
+		ContextCompactKeep:     *contextCompactKeep,
+		ContextCompactMaxChars: *contextCompactMaxChars,
+	}
+	if *timeoutSec > 0 {
+		rc.Timeout = time.Duration(*timeoutSec) * time.Second
+	}
+	summary, err := bench.Run(context.Background(), cfg, rc)
+	if err != nil {
+		return err
+	}
+	return enc.Encode(struct {
+		Generated bench.LocalLoopSummary `json:"generated"`
+		Run       bench.Summary          `json:"run"`
+	}{
+		Generated: generated,
+		Run:       summary,
+	})
 }
 
 func benchTerminalBenchCmd(args []string) error {
@@ -712,6 +781,7 @@ func benchTerminalBenchImportCmd(args []string) error {
 func benchUsage() {
 	fmt.Println("usage:")
 	fmt.Println("  fast-agent-harness bench run -tasks tasks.jsonl -out runs")
+	fmt.Println("  fast-agent-harness bench local-loop [-out runs/local-loop] [-turns 60]")
 	fmt.Println("  fast-agent-harness bench terminal-bench export -tasks tasks.jsonl -out tb-dataset")
 	fmt.Println("  fast-agent-harness bench terminal-bench import -dataset tb-dataset [-out tasks.jsonl]")
 }

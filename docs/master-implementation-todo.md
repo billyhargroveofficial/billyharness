@@ -41,7 +41,7 @@ The goal is complete only when all of these are true:
 - [ ] Context status shows active context, percentage, compaction status, and major context contributors.
 - [ ] Tool lifecycle is keyed by stable ids and replayable from JSONL.
 - [ ] MCP servers are configured by billyharness config, not inherited by accident.
-- [ ] Bench runs create replayable bundles and at least one 50-100 turn local loop can be executed.
+- [x] Bench runs create replayable bundles and at least one 50-100 turn local loop can be executed.
 - [ ] Documentation explains startup, dangerous permissions, Telegram setup, provider auth, MCP config, profiles, and benchmark commands.
 
 ## Current Baseline To Preserve
@@ -854,27 +854,27 @@ Purpose: prove the harness is fast and effective, not just nice to look at.
 
 ### 9.1 Local Long-Loop Bench
 
-- [ ] Create a 50-100 turn local agent benchmark.
-- [ ] Include app-building tasks and file-edit tasks.
-- [ ] Include web-search tasks with output caps.
-- [ ] Include MCP/tool discovery tasks.
+- [x] Create a 50-100 turn local agent benchmark.
+- [x] Include app-building tasks and file-edit tasks.
+- [x] Include web-search tasks with output caps.
+- [x] Include MCP/tool discovery tasks.
 - [ ] Include cancellation/resume tests.
 - [ ] Record:
-  - [ ] success/failure
-  - [ ] total time
+  - [x] success/failure
+  - [x] total time
   - [ ] first delta latency
   - [ ] model latency p50/p95
   - [ ] tool latency p50/p95
   - [ ] parallel batch latency
   - [ ] context growth
-  - [ ] compaction count
+  - [x] compaction count
   - [ ] web summary savings
   - [ ] cost or subscription marker
 
 Acceptance:
 
-- [ ] Benchmark runs locally from a documented command.
-- [ ] Output bundle passes replay verifier.
+- [x] Benchmark runs locally from a documented command.
+- [x] Output bundle passes replay verifier.
 
 ### 9.2 Provider Comparison
 
@@ -942,11 +942,11 @@ Purpose: make the project usable after sleep, reboot, or a week away.
   - [ ] commands
   - [ ] sessions
   - [ ] throttling
-- [ ] `docs/benchmarks.md`:
-  - [ ] local bench
-  - [ ] Terminal-Bench adapter
-  - [ ] replay verifier
-  - [ ] provider comparison
+- [x] `docs/benchmarks.md`:
+  - [x] local bench
+  - [x] Terminal-Bench adapter
+  - [x] replay verifier
+  - [x] provider comparison
 
 Acceptance:
 
