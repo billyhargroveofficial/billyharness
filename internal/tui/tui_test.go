@@ -222,7 +222,7 @@ func TestHiddenReasoningIsPreserved(t *testing.T) {
 	if !handled {
 		t.Fatalf("/thinking off returned false")
 	}
-	m.appendToOpenBlock("reasoning", "THINKING", "hidden reasoning")
+	m.appendToOpenBlock("reasoning", "THINKING", "hidden reasoning", protocol.EventAssistantReasoning)
 	if len(m.blocks) != 1 {
 		t.Fatalf("reasoning block was not preserved")
 	}
@@ -421,6 +421,89 @@ func TestMarkdownTableDoesNotLeakInlineDelimitersWhenTruncated(t *testing.T) {
 	for _, leak := range []string{"**", "__", "`"} {
 		if strings.Contains(rendered, leak) {
 			t.Fatalf("table markdown delimiter %q leaked after truncation: %q", leak, rendered)
+		}
+	}
+}
+
+func TestLiveAssistantMarkdownKeepsUnstableTailRawUntilCompleted(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: strings.Join([]string{
+		"## Weather",
+		"",
+		"| Name | Score |",
+		"| --- | ---: |",
+		"| **Billy** | `10` |",
+	}, "\n")})
+	if len(m.blocks) != 1 || !m.blocks[0].live {
+		t.Fatalf("assistant block should be live: %#v", m.blocks)
+	}
+
+	live := stripANSITest(m.renderBlock(0, m.blocks[0]))
+	if !strings.Contains(live, "| **Billy** | `10` |") {
+		t.Fatalf("live markdown tail should stay raw, got: %q", live)
+	}
+
+	m.applyEvent(protocol.Event{Type: protocol.EventRunCompleted})
+	if m.blocks[0].live {
+		t.Fatalf("assistant block should be finalized")
+	}
+	final := stripANSITest(m.renderBlock(0, m.blocks[0]))
+	if !strings.Contains(final, "┌") || !strings.Contains(final, "Billy") || !strings.Contains(final, "10") {
+		t.Fatalf("final markdown table did not render: %q", final)
+	}
+	for _, leak := range []string{"**", "`10`"} {
+		if strings.Contains(final, leak) {
+			t.Fatalf("final markdown syntax %q leaked: %q", leak, final)
+		}
+	}
+}
+
+func TestToolAuditRendersCompactBlock(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.applyEvent(protocol.Event{Type: protocol.EventToolAudit, Data: map[string]any{
+		"name":          "shell_exec",
+		"risk":          string(protocol.RiskExecute),
+		"auto_approved": true,
+	}})
+
+	if len(m.blocks) != 1 || m.blocks[0].kind != "audit" {
+		t.Fatalf("expected audit block, got %#v", m.blocks)
+	}
+	rendered := stripANSITest(m.renderBlock(0, m.blocks[0]))
+	for _, want := range []string{"Tool audit", "execute shell_exec auto-approved"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("audit render missing %q: %q", want, rendered)
+		}
+	}
+}
+
+func TestToolAuditDoesNotSplitToolResult(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.toolView = "expanded"
+	m.applyEvent(protocol.Event{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{
+		Name:      "shell_exec",
+		Arguments: json.RawMessage(`{"argv":["pwd"],"cwd":"/root/billyharness"}`),
+	}})
+	m.applyEvent(protocol.Event{Type: protocol.EventToolAudit, Data: map[string]any{
+		"name":          "shell_exec",
+		"risk":          string(protocol.RiskExecute),
+		"auto_approved": true,
+	}})
+	m.applyEvent(protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
+		Name:    "shell_exec",
+		Content: "/root/billyharness\n",
+	}})
+
+	if len(m.blocks) != 1 || m.blocks[0].kind != "tool" {
+		t.Fatalf("tool audit/result should stay in one block: %#v", m.blocks)
+	}
+	rendered := stripANSITest(m.renderBlock(0, m.blocks[0]))
+	for _, want := range []string{"audit: execute shell_exec auto-approved", "/root/billyharness"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("tool block missing %q: %q", want, rendered)
 		}
 	}
 }

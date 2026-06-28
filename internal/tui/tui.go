@@ -56,9 +56,14 @@ func (m thinkingMode) effortLabel() string {
 }
 
 type block struct {
-	kind    string
-	title   string
-	content string
+	id        string
+	kind      string
+	title     string
+	content   string
+	live      bool
+	eventType protocol.EventType
+	started   time.Time
+	updated   time.Time
 }
 
 type selectionPoint struct {
@@ -101,6 +106,7 @@ type Model struct {
 	height          int
 
 	blocks            []block
+	nextBlockSeq      int64
 	collapsed         map[int]bool
 	selected          int
 	busy              bool
@@ -464,6 +470,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case runDoneMsg:
 		m.busy = false
+		m.finishLiveBlocks()
 		if !m.runStartedAt.IsZero() {
 			m.lastRunDuration = time.Since(m.runStartedAt)
 		}
@@ -482,6 +489,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		gotoBottom = m.followOutput
 	case errMsg:
 		m.busy = false
+		m.finishLiveBlocks()
 		if !m.runStartedAt.IsZero() {
 			m.lastRunDuration = time.Since(m.runStartedAt)
 		}
@@ -2198,6 +2206,7 @@ func (m *Model) applyChatSession(session chatSession) {
 		m.messages = agent.InitialMessages(m.currentConfig())
 	}
 	m.blocks = decodeBlocks(session.Blocks)
+	m.ensureBlockMetadata()
 	m.collapsed = map[int]bool{}
 	m.selected = max(0, len(m.blocks)-1)
 	m.inputTok = session.InputTokens
@@ -2328,6 +2337,62 @@ func decodeBlocks(blocks []savedBlock) []block {
 	return out
 }
 
+func (m *Model) newBlock(kind, title, content string) block {
+	now := time.Now().UTC()
+	m.nextBlockSeq++
+	return block{
+		id:      fmt.Sprintf("%s-%d", normalizeBlockKind(kind), m.nextBlockSeq),
+		kind:    normalizeBlockKind(kind),
+		title:   title,
+		content: content,
+		started: now,
+		updated: now,
+	}
+}
+
+func (m *Model) ensureBlockMetadata() {
+	now := time.Now().UTC()
+	for i := range m.blocks {
+		m.blocks[i].kind = normalizeBlockKind(m.blocks[i].kind)
+		if m.blocks[i].id == "" {
+			m.nextBlockSeq++
+			m.blocks[i].id = fmt.Sprintf("%s-%d", m.blocks[i].kind, m.nextBlockSeq)
+		}
+		if m.blocks[i].started.IsZero() {
+			m.blocks[i].started = now
+		}
+		if m.blocks[i].updated.IsZero() {
+			m.blocks[i].updated = m.blocks[i].started
+		}
+	}
+}
+
+func normalizeBlockKind(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "user", "assistant", "reasoning", "tool", "error", "status", "audit":
+		return strings.ToLower(strings.TrimSpace(kind))
+	default:
+		return "status"
+	}
+}
+
+func blockKindForEvent(eventType protocol.EventType) string {
+	switch eventType {
+	case protocol.EventAssistantDelta:
+		return "assistant"
+	case protocol.EventAssistantReasoning:
+		return "reasoning"
+	case protocol.EventToolCallRequested, protocol.EventToolCallStarted, protocol.EventToolCallFinished:
+		return "tool"
+	case protocol.EventToolAudit:
+		return "audit"
+	case protocol.EventRunFailed:
+		return "error"
+	default:
+		return "status"
+	}
+}
+
 func (m *Model) addInfoBlock(title, content string) {
 	m.followOutput = true
 	m.addBlock("status", title, content)
@@ -2402,6 +2467,7 @@ func (m Model) modelsText() string {
 func (m *Model) applyEvent(event protocol.Event) {
 	switch event.Type {
 	case protocol.EventRunStarted:
+		m.finishLiveBlocks()
 		m.status = "run started"
 		m.usageAccounting.Reset()
 	case protocol.EventModelCallStarted:
@@ -2409,13 +2475,16 @@ func (m *Model) applyEvent(event protocol.Event) {
 		m.status = fmt.Sprintf("model call %d", m.modelCalls)
 		m.usageAccounting.Reset()
 	case protocol.EventAssistantReasoning:
-		m.appendToOpenBlock("reasoning", "THINKING", fmt.Sprint(event.Data))
+		m.appendToOpenBlock("reasoning", "THINKING", fmt.Sprint(event.Data), event.Type)
 	case protocol.EventAssistantDelta:
-		m.appendToOpenBlock("assistant", "ASSISTANT", fmt.Sprint(event.Data))
+		m.appendToOpenBlock("assistant", "ASSISTANT", fmt.Sprint(event.Data), event.Type)
+	case protocol.EventToolAudit:
+		m.status = "tool audit " + auditToolName(event.Data)
+		m.appendToolAudit(auditEventText(event.Data))
 	case protocol.EventToolCallRequested:
 		m.toolCalls++
 		m.status = "running tool " + toolName(event.Data)
-		m.addBlock("tool", toolTitle(event.Data), toolBody(event.Data))
+		m.addEventBlock(event.Type, toolTitle(event.Data), toolBody(event.Data))
 	case protocol.EventToolCallFinished:
 		m.appendToolResult(toolResultText(event.Data))
 		m.collapseLastToolBlockIfLarge()
@@ -2436,9 +2505,11 @@ func (m *Model) applyEvent(event protocol.Event) {
 		m.lastCacheHitTok = current.CacheHitTokens
 		m.lastCacheMissTok = current.CacheMissTokens
 	case protocol.EventRunCompleted:
+		m.finishLiveBlocks()
 		m.status = "completed"
 	case protocol.EventRunFailed:
-		m.addBlock("error", "ERROR", fmt.Sprint(event.Data))
+		m.finishLiveBlocks()
+		m.addEventBlock(event.Type, "ERROR", fmt.Sprint(event.Data))
 		m.status = "failed"
 	}
 }
@@ -2455,12 +2526,17 @@ func toolResultText(value any) string {
 	return fmt.Sprint(value)
 }
 
-func (m *Model) appendToOpenBlock(kind, title, text string) {
+func (m *Model) appendToOpenBlock(kind, title, text string, eventType protocol.EventType) {
+	kind = normalizeBlockKind(kind)
 	if len(m.blocks) == 0 || m.blocks[len(m.blocks)-1].kind != kind {
-		m.addBlock(kind, title, "")
+		m.addEventBlock(eventType, title, "")
 	}
-	m.blocks[len(m.blocks)-1].content += text
-	m.selected = len(m.blocks) - 1
+	i := len(m.blocks) - 1
+	m.blocks[i].content += text
+	m.blocks[i].live = kind == "assistant" || kind == "reasoning"
+	m.blocks[i].eventType = eventType
+	m.blocks[i].updated = time.Now().UTC()
+	m.selected = i
 }
 
 func (m *Model) appendToolResult(text string) {
@@ -2479,6 +2555,26 @@ func (m *Model) appendToolResult(text string) {
 	} else {
 		m.blocks[i].content = content + "\n" + text
 	}
+	m.blocks[i].updated = time.Now().UTC()
+	m.selected = i
+}
+
+func (m *Model) appendToolAudit(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	if len(m.blocks) == 0 || m.blocks[len(m.blocks)-1].kind != "tool" {
+		m.addEventBlock(protocol.EventToolAudit, "AUDIT", text)
+		return
+	}
+	i := len(m.blocks) - 1
+	if strings.TrimSpace(m.blocks[i].content) == "" {
+		m.blocks[i].content = "audit: " + text
+	} else {
+		m.blocks[i].content = strings.TrimRight(m.blocks[i].content, "\n") + "\naudit: " + text
+	}
+	m.blocks[i].updated = time.Now().UTC()
 	m.selected = i
 }
 
@@ -2496,8 +2592,26 @@ func (m *Model) collapseLastToolBlockIfLarge() {
 }
 
 func (m *Model) addBlock(kind, title, content string) {
-	m.blocks = append(m.blocks, block{kind: kind, title: title, content: content})
+	m.blocks = append(m.blocks, m.newBlock(kind, title, content))
 	m.selected = len(m.blocks) - 1
+}
+
+func (m *Model) addEventBlock(eventType protocol.EventType, title, content string) {
+	b := m.newBlock(blockKindForEvent(eventType), title, content)
+	b.eventType = eventType
+	b.live = b.kind == "assistant" || b.kind == "reasoning"
+	m.blocks = append(m.blocks, b)
+	m.selected = len(m.blocks) - 1
+}
+
+func (m *Model) finishLiveBlocks() {
+	now := time.Now().UTC()
+	for i := range m.blocks {
+		if m.blocks[i].live {
+			m.blocks[i].live = false
+			m.blocks[i].updated = now
+		}
+	}
 }
 
 func (m *Model) reflow(gotoBottom bool) {
@@ -2537,6 +2651,8 @@ func (m Model) renderBlock(i int, b block) string {
 		style = styles.error
 	case "status":
 		style = styles.statusBlock
+	case "audit":
+		style = styles.statusBlock
 	}
 	body := strings.TrimRight(b.content, "\n")
 	switch {
@@ -2551,7 +2667,7 @@ func (m Model) renderBlock(i int, b block) string {
 	}
 	width := max(20, m.width-style.GetHorizontalFrameSize())
 	if b.kind == "assistant" {
-		body = renderTerminalMarkdown(body, width, styles)
+		body = renderAssistantBody(body, width, styles, b.live)
 	}
 	if b.kind == "user" || b.kind == "assistant" {
 		return style.Width(width).Render(body)
@@ -2603,9 +2719,51 @@ func blockTitle(b block) string {
 		return "error"
 	case "status":
 		return strings.ToLower(oneLinePreview(b.title, 72))
+	case "audit":
+		return strings.ToLower(oneLinePreview(b.title, 72))
 	default:
 		return label
 	}
+}
+
+func renderAssistantBody(body string, width int, styles themeStyles, live bool) string {
+	if !live {
+		return renderTerminalMarkdown(body, width, styles)
+	}
+	stable, tail := splitLiveMarkdown(body)
+	switch {
+	case stable == "":
+		return body
+	case tail == "":
+		return renderTerminalMarkdown(stable, width, styles)
+	default:
+		rendered := strings.TrimRight(renderTerminalMarkdown(stable, width, styles), "\n")
+		if rendered == "" {
+			return tail
+		}
+		return rendered + "\n" + tail
+	}
+}
+
+func splitLiveMarkdown(body string) (stable, tail string) {
+	if body == "" || markdownFenceOpen(body) {
+		return "", body
+	}
+	idx := strings.LastIndex(body, "\n")
+	if idx < 0 {
+		return "", body
+	}
+	return body[:idx+1], body[idx+1:]
+}
+
+func markdownFenceOpen(body string) bool {
+	open := false
+	for _, line := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			open = !open
+		}
+	}
+	return open
 }
 
 func renderActivityBlock(b block, body string, width int, styles themeStyles) string {
@@ -2618,6 +2776,8 @@ func renderActivityBlock(b block, body string, width int, styles themeStyles) st
 	case "error":
 		titleStyle = styles.activityError
 	case "status":
+		titleStyle = styles.activityStatus
+	case "audit":
 		titleStyle = styles.activityStatus
 	}
 	header := titleStyle.Render("• " + activityTitle(b))
@@ -2646,6 +2806,11 @@ func activityTitle(b block) string {
 	case "status":
 		if title == "" {
 			return "Status"
+		}
+		return titleCase(title)
+	case "audit":
+		if title == "" || strings.EqualFold(title, "AUDIT") {
+			return "Tool audit"
 		}
 		return titleCase(title)
 	default:
@@ -2765,6 +2930,77 @@ func toolBody(value any) string {
 		return toolMetaLines(args, "append", "create_dirs")
 	default:
 		return pretty(args)
+	}
+}
+
+func auditToolName(value any) string {
+	fields := mapFromAny(value)
+	if name := stringField(fields, "name"); name != "" {
+		return name
+	}
+	return "tool"
+}
+
+func auditEventText(value any) string {
+	fields := mapFromAny(value)
+	name := stringField(fields, "name")
+	if name == "" {
+		name = "tool"
+	}
+	risk := stringField(fields, "risk")
+	if risk == "" {
+		risk = "unknown risk"
+	}
+	decision := "approval required"
+	if boolField(fields, "auto_approved") {
+		decision = "auto-approved"
+	}
+	return fmt.Sprintf("%s %s %s", risk, name, decision)
+}
+
+func mapFromAny(value any) map[string]any {
+	if fields, ok := value.(map[string]any); ok {
+		return fields
+	}
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(bytes, &fields); err != nil {
+		return nil
+	}
+	return fields
+}
+
+func stringField(fields map[string]any, key string) string {
+	if fields == nil {
+		return ""
+	}
+	switch value := fields[key].(type) {
+	case string:
+		return value
+	case fmt.Stringer:
+		return value.String()
+	default:
+		if value == nil {
+			return ""
+		}
+		return fmt.Sprint(value)
+	}
+}
+
+func boolField(fields map[string]any, key string) bool {
+	if fields == nil {
+		return false
+	}
+	switch value := fields[key].(type) {
+	case bool:
+		return value
+	case string:
+		return value == "true" || value == "1" || value == "yes"
+	default:
+		return false
 	}
 }
 
