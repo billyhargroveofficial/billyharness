@@ -23,6 +23,14 @@ To generate tasks without running them:
 
 The generated suite covers local app/file edits, file search, web/tool discovery output-cap behavior, MCP/tool discovery, and a harmless long-loop cancellation/resume telemetry placeholder.
 
+The cancellation/resume smoke is covered by the focused Go test:
+
+```sh
+go test -count=1 ./internal/bench -run TestLocalLoopBenchmarkCancellationResumeSmoke -v
+```
+
+It cancels a generated local-loop task, verifies the canceled trace is replayable, then reruns the same task successfully from the same generated benchmark definition.
+
 To exercise the native live `web_search` tool instead of the offline tool-discovery web task, add `-live-web`:
 
 ```sh

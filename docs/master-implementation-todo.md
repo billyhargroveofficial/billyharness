@@ -858,7 +858,7 @@ Purpose: prove the harness is fast and effective, not just nice to look at.
 - [x] Include app-building tasks and file-edit tasks.
 - [x] Include web-search tasks with output caps.
 - [x] Include MCP/tool discovery tasks.
-- [ ] Include cancellation/resume tests.
+- [x] Include cancellation/resume tests.
 - [ ] Record:
   - [x] success/failure
   - [x] total time

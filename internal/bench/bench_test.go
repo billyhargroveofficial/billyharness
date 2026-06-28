@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
@@ -296,6 +297,81 @@ func TestLocalLoopBenchmarkGeneratesReplayableFiftyTurnSuite(t *testing.T) {
 		if !strings.Contains(resultsText, name) {
 			t.Fatalf("results missing tool name %s: %s", name, resultsText)
 		}
+	}
+}
+
+func TestLocalLoopBenchmarkCancellationResumeSmoke(t *testing.T) {
+	root := t.TempDir()
+	tasksPath := filepath.Join(root, "local-loop", "tasks.jsonl")
+	generated, err := WriteLocalLoopTasks(LocalLoopOptions{TasksPath: tasksPath, Turns: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := LoadTasks(generated.TasksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cancelTask Task
+	for _, task := range tasks {
+		if task.ID == "local-loop-cancel-resume" {
+			cancelTask = task
+			break
+		}
+	}
+	if cancelTask.ID == "" {
+		t.Fatalf("local-loop cancel/resume task missing: %#v", tasks)
+	}
+	cancelTask.ScriptedToolRounds = 100
+	cancelTasksPath := filepath.Join(root, "cancel", "tasks.jsonl")
+	if err := os.MkdirAll(filepath.Dir(cancelTasksPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteTasksJSONL(cancelTasksPath, []Task{cancelTask}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	cfg.MaxToolRounds = 120
+	cfg.StoreReasoningContent = true
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(5*time.Millisecond, cancel)
+	canceled, err := Run(cancelCtx, cfg, RunConfig{
+		TasksPath: cancelTasksPath,
+		OutDir:    filepath.Join(root, "runs-canceled"),
+		Mock:      true,
+		Timeout:   time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canceled.Total != 1 || canceled.Timeouts != 1 || canceled.Passed != 0 {
+		t.Fatalf("canceled summary = %#v", canceled)
+	}
+	if !canceled.ReplayVerified {
+		t.Fatalf("canceled run should still be replay-verified: %#v", canceled)
+	}
+	canceledRows, err := os.ReadFile(canceled.ResultsJSONL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(canceledRows), "context canceled") {
+		t.Fatalf("canceled results missing context canceled error: %s", canceledRows)
+	}
+
+	resumed, err := Run(context.Background(), cfg, RunConfig{
+		TasksPath: cancelTasksPath,
+		OutDir:    filepath.Join(root, "runs-resumed"),
+		Mock:      true,
+		Timeout:   2 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Total != 1 || resumed.Passed != 1 || resumed.Timeouts != 0 || !resumed.ReplayVerified {
+		t.Fatalf("resumed summary = %#v", resumed)
+	}
+	if resumed.Turns != cancelTask.ScriptedToolRounds+1 || resumed.ToolCalls != cancelTask.ScriptedToolRounds {
+		t.Fatalf("resumed counts = turns %d tools %d", resumed.Turns, resumed.ToolCalls)
 	}
 }
 
