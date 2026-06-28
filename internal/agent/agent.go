@@ -20,6 +20,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	runtimehooks "github.com/billyhargroveofficial/billyharness/internal/hooks"
 	"github.com/billyhargroveofficial/billyharness/internal/instructions"
+	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
@@ -83,6 +84,8 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 		emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
 		return messages, err
 	}
+	cleanupMCPStatusHook := a.installMCPStatusHook(ctx, hookRunner, run, emit)
+	defer cleanupMCPStatusHook()
 	messages = a.withMCPInstructions(messages)
 	var lastPromptTokens int64
 	emittedContextThresholds := map[int]bool{}
@@ -1039,6 +1042,65 @@ func joinHookError(primary, hookErr error) error {
 		return hookErr
 	}
 	return errors.Join(primary, hookErr)
+}
+
+func (a *Agent) installMCPStatusHook(ctx context.Context, hookRunner *runtimehooks.Runner, run runstate.Run, emit func(protocol.Event)) func() {
+	if a == nil || a.tools == nil || hookRunner == nil {
+		return func() {}
+	}
+	deliver := func(status mcpclient.ServerStatus, phase string) {
+		payload := mcpStatusHookPayload(run, status)
+		payload["phase"] = phase
+		_ = hookRunner.Run(ctx, "mcp_status_change", payload, emit)
+	}
+	cleanup := a.tools.AddMCPStatusListener(func(status mcpclient.ServerStatus) {
+		deliver(status, "change")
+	})
+	for _, status := range a.tools.MCPStatuses() {
+		deliver(status, "snapshot")
+	}
+	return cleanup
+}
+
+func mcpStatusHookPayload(run runstate.Run, status mcpclient.ServerStatus) map[string]any {
+	payload := map[string]any{
+		"submission_id": run.SubmissionID,
+		"run_id":        run.ID,
+		"server_name":   status.Name,
+		"transport":     status.Transport,
+		"enabled":       status.Enabled,
+		"required":      status.Required,
+		"connected":     status.Connected,
+		"state":         status.State,
+		"tool_count":    status.ToolCount,
+		"retry_count":   status.RetryCount,
+		"restart_count": status.RestartCount,
+	}
+	if status.Command != "" {
+		payload["command"] = filepath.Base(status.Command)
+	}
+	if status.URL != "" {
+		payload["url"] = status.URL
+	}
+	if status.UnsupportedReason != "" {
+		payload["unsupported_reason"] = status.UnsupportedReason
+	}
+	if status.LastError != "" {
+		payload["last_error"] = status.LastError
+	}
+	if status.Error != "" {
+		payload["error"] = status.Error
+	}
+	if status.RetryBackoffMS > 0 {
+		payload["retry_backoff_ms"] = status.RetryBackoffMS
+	}
+	if status.NextRetryAt != nil {
+		payload["next_retry_at"] = status.NextRetryAt.Format(time.RFC3339Nano)
+	}
+	if status.LastEventAt != nil {
+		payload["last_event_at"] = status.LastEventAt.Format(time.RFC3339Nano)
+	}
+	return payload
 }
 
 func dangerousToolDisabledMessage() string {

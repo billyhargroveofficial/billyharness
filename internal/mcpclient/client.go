@@ -77,10 +77,13 @@ type ServerStatus struct {
 }
 
 type Manager struct {
-	tools        []ExternalTool
-	instructions []string
-	mu           sync.RWMutex
-	servers      []*managedServer
+	tools           []ExternalTool
+	instructions    []string
+	mu              sync.RWMutex
+	servers         []*managedServer
+	listenerSeq     int64
+	listenersMu     sync.RWMutex
+	statusListeners map[int64]func(ServerStatus)
 }
 
 func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
@@ -88,7 +91,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 	var errs []string
 	seenTools := map[string]string{}
 	for _, server := range cfg.MCPServers {
-		runtime := newManagedServer(cfg, server)
+		runtime := newManagedServer(cfg, server, manager.emitStatus)
 		if !server.Enabled {
 			manager.addServer(runtime)
 			continue
@@ -159,6 +162,39 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		return nil, fmt.Errorf("MCP initialization failed: %s", strings.Join(errs, "; "))
 	}
 	return manager, nil
+}
+
+func (m *Manager) AddStatusListener(listener func(ServerStatus)) func() {
+	if m == nil || listener == nil {
+		return func() {}
+	}
+	id := atomic.AddInt64(&m.listenerSeq, 1)
+	m.listenersMu.Lock()
+	if m.statusListeners == nil {
+		m.statusListeners = map[int64]func(ServerStatus){}
+	}
+	m.statusListeners[id] = listener
+	m.listenersMu.Unlock()
+	return func() {
+		m.listenersMu.Lock()
+		delete(m.statusListeners, id)
+		m.listenersMu.Unlock()
+	}
+}
+
+func (m *Manager) emitStatus(status ServerStatus) {
+	if m == nil {
+		return
+	}
+	m.listenersMu.RLock()
+	listeners := make([]func(ServerStatus), 0, len(m.statusListeners))
+	for _, listener := range m.statusListeners {
+		listeners = append(listeners, listener)
+	}
+	m.listenersMu.RUnlock()
+	for _, listener := range listeners {
+		listener(cloneStatus(status))
+	}
 }
 
 func (m *Manager) Tools() []ExternalTool {
@@ -235,11 +271,12 @@ type managedServer struct {
 	mu            sync.Mutex
 	client        *stdioClient
 	status        ServerStatus
+	onStatus      func(ServerStatus)
 	closed        bool
 	starting      bool
 }
 
-func newManagedServer(cfg config.Config, server config.MCPServer) *managedServer {
+func newManagedServer(cfg config.Config, server config.MCPServer, onStatus func(ServerStatus)) *managedServer {
 	state := mcpStateDisconnected
 	if !server.Enabled {
 		state = mcpStateDisabled
@@ -252,6 +289,7 @@ func newManagedServer(cfg config.Config, server config.MCPServer) *managedServer
 		cfg:           cfg,
 		server:        server,
 		reconnectable: server.Enabled && server.URL == "" && strings.TrimSpace(server.Command) != "",
+		onStatus:      onStatus,
 		status: ServerStatus{
 			Name:              server.Name,
 			Transport:         mcpTransport(server),
@@ -278,13 +316,17 @@ func (s *managedServer) start(ctx context.Context, reconnect bool) ([]protocol.T
 	if !s.reconnectable {
 		err := fmt.Errorf("MCP %s cannot reconnect with transport %s", s.server.Name, mcpTransport(s.server))
 		s.recordFailureLocked(mcpStateFailed, err, false)
+		status := cloneStatus(s.status)
 		s.mu.Unlock()
+		s.publishStatus(status)
 		return nil, "", err
 	}
 	if s.closed {
 		err := fmt.Errorf("MCP %s manager is closed", s.server.Name)
 		s.recordFailureLocked(mcpStateDisconnected, err, false)
+		status := cloneStatus(s.status)
 		s.mu.Unlock()
+		s.publishStatus(status)
 		return nil, "", err
 	}
 	return s.startLocked(ctx, reconnect)
@@ -292,7 +334,7 @@ func (s *managedServer) start(ctx context.Context, reconnect bool) ([]protocol.T
 
 func (s *managedServer) ensureConnected(ctx context.Context) (*stdioClient, error) {
 	s.mu.Lock()
-	s.absorbClientLocked()
+	_, _ = s.absorbClientLocked()
 	if s.closed {
 		s.mu.Unlock()
 		return nil, fmt.Errorf("MCP %s manager is closed", s.server.Name)
@@ -350,7 +392,9 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 	if reconnect {
 		s.status.RetryCount++
 	}
+	restartingStatus := cloneStatus(s.status)
 	s.mu.Unlock()
+	s.publishStatus(restartingStatus)
 
 	if oldClient != nil {
 		oldClient.close()
@@ -361,7 +405,9 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 	if s.closed {
 		closedErr := fmt.Errorf("MCP %s manager is closed", s.server.Name)
 		s.recordFailureLocked(mcpStateDisconnected, closedErr, false)
+		status := cloneStatus(s.status)
 		s.mu.Unlock()
+		s.publishStatus(status)
 		if client != nil {
 			client.close()
 		}
@@ -369,7 +415,9 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 	}
 	if err != nil {
 		s.recordFailureLocked(mcpStateFailed, err, reconnect)
+		status := cloneStatus(s.status)
 		s.mu.Unlock()
+		s.publishStatus(status)
 		return nil, "", err
 	}
 	s.client = client
@@ -393,7 +441,9 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 	s.status.StderrTail = ""
 	s.status.NextRetryAt = nil
 	s.status.RetryBackoffMS = 0
+	status := cloneStatus(s.status)
 	s.mu.Unlock()
+	s.publishStatus(status)
 	return specs, instructions, nil
 }
 
@@ -405,8 +455,11 @@ func (s *managedServer) callTool(ctx context.Context, name string, args json.Raw
 	text, err := client.callTool(ctx, name, args)
 	if err != nil && !client.connected.Load() {
 		s.mu.Lock()
-		s.absorbClientLocked()
+		status, changed := s.absorbClientLocked()
 		s.mu.Unlock()
+		if changed {
+			s.publishStatus(status)
+		}
 	}
 	return text, err
 }
@@ -416,9 +469,12 @@ func (s *managedServer) snapshot() ServerStatus {
 		return ServerStatus{}
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.absorbClientLocked()
-	return s.status
+	status, changed := s.absorbClientLocked()
+	s.mu.Unlock()
+	if changed {
+		s.publishStatus(status)
+	}
+	return status
 }
 
 func (s *managedServer) close() {
@@ -437,7 +493,9 @@ func (s *managedServer) close() {
 	s.status.Error = ""
 	s.status.NextRetryAt = nil
 	s.status.RetryBackoffMS = 0
+	status := cloneStatus(s.status)
 	s.mu.Unlock()
+	s.publishStatus(status)
 	if client != nil {
 		client.close()
 	}
@@ -449,8 +507,10 @@ func (s *managedServer) recordStaticError(err error) {
 
 func (s *managedServer) recordStaticErrorState(state string, err error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.recordFailureLocked(state, err, false)
+	status := cloneStatus(s.status)
+	s.mu.Unlock()
+	s.publishStatus(status)
 }
 
 func (s *managedServer) recordFailureLocked(state string, err error, retryable bool) {
@@ -474,10 +534,11 @@ func (s *managedServer) recordFailureLocked(state string, err error, retryable b
 	}
 }
 
-func (s *managedServer) absorbClientLocked() {
+func (s *managedServer) absorbClientLocked() (ServerStatus, bool) {
 	if s.client == nil {
-		return
+		return cloneStatus(s.status), false
 	}
+	before := cloneStatus(s.status)
 	client := s.client
 	if client.connected.Load() {
 		s.status.Connected = true
@@ -486,7 +547,8 @@ func (s *managedServer) absorbClientLocked() {
 			startedAt := client.startedAt
 			s.status.StartedAt = &startedAt
 		}
-		return
+		after := cloneStatus(s.status)
+		return after, mcpStatusChanged(before, after)
 	}
 	state, lastErr, lastErrAt := client.lifecycleState()
 	if state == "" {
@@ -504,6 +566,52 @@ func (s *managedServer) absorbClientLocked() {
 	}
 	s.status.PID = client.pid()
 	s.status.StderrTail = client.stderrTail()
+	after := cloneStatus(s.status)
+	return after, mcpStatusChanged(before, after)
+}
+
+func (s *managedServer) publishStatus(status ServerStatus) {
+	if s == nil || s.onStatus == nil {
+		return
+	}
+	s.onStatus(cloneStatus(status))
+}
+
+func cloneStatus(status ServerStatus) ServerStatus {
+	out := status
+	if status.StartedAt != nil {
+		value := *status.StartedAt
+		out.StartedAt = &value
+	}
+	if status.LastConnectedAt != nil {
+		value := *status.LastConnectedAt
+		out.LastConnectedAt = &value
+	}
+	if status.LastEventAt != nil {
+		value := *status.LastEventAt
+		out.LastEventAt = &value
+	}
+	if status.LastErrorAt != nil {
+		value := *status.LastErrorAt
+		out.LastErrorAt = &value
+	}
+	if status.NextRetryAt != nil {
+		value := *status.NextRetryAt
+		out.NextRetryAt = &value
+	}
+	return out
+}
+
+func mcpStatusChanged(before, after ServerStatus) bool {
+	return before.Connected != after.Connected ||
+		before.State != after.State ||
+		before.ToolCount != after.ToolCount ||
+		before.PID != after.PID ||
+		before.LastError != after.LastError ||
+		before.Error != after.Error ||
+		before.RetryCount != after.RetryCount ||
+		before.RestartCount != after.RestartCount ||
+		before.RetryBackoffMS != after.RetryBackoffMS
 }
 
 func mcpReconnectBackoff(retryCount int) time.Duration {

@@ -31,18 +31,17 @@ Supported hook events today:
 - `session_start`
 - `before_tool`
 - `after_tool`
+- `mcp_status_change`
 - `provider_retry`
 - `session_done`
-
-Reserved but not wired yet:
-
-- `mcp_status_change`
 
 The hook process receives a JSON payload on stdin:
 
 ```json
 {"event":"before_tool","hook":"audit","payload":{"tool_name":"fs_read_file","call_id":"call_1"}}
 ```
+
+`mcp_status_change` runs once with a `snapshot` phase for each known MCP server at run start, then again with a `change` phase when the MCP manager observes a state transition such as `connected`, `failed`, `crashed`, `restarting`, `reconnected`, `disconnected`, or `unsupported`. Its payload includes `server_name`, `transport`, `connected`, `state`, `tool_count`, retry/restart counters, and redacted error fields when present.
 
 Billyharness also sets environment variables such as `BILLYHARNESS_HOOK_EVENT`, `BILLYHARNESS_HOOK_NAME`, `BILLYHARNESS_CALL_ID`, `BILLYHARNESS_ATTEMPT_ID`, and `BILLYHARNESS_TOOL_NAME` when those values exist.
 

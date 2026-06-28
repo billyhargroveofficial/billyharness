@@ -177,6 +177,13 @@ func (r *Registry) MCPStatuses() []mcpclient.ServerStatus {
 	return r.manager.Statuses()
 }
 
+func (r *Registry) AddMCPStatusListener(listener func(mcpclient.ServerStatus)) func() {
+	if r == nil || r.manager == nil {
+		return func() {}
+	}
+	return r.manager.AddStatusListener(listener)
+}
+
 func (r *Registry) hasMCPServer(server string) bool {
 	if r == nil {
 		return false

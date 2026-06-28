@@ -274,6 +274,42 @@ func TestStdioLifecycleCleanupOnCollisionFailureAndClose(t *testing.T) {
 	})
 }
 
+func TestManagerStatusListenersObserveLifecycleChanges(t *testing.T) {
+	root := t.TempDir()
+	manager, err := NewManager(context.Background(), config.Config{
+		WorkspaceRoots:     []string{root},
+		MaxToolOutputBytes: 64 * 1024,
+		MCPServers: []config.MCPServer{{
+			Name:           "fake",
+			Command:        os.Args[0],
+			Args:           []string{"-test.run=TestFakeStdioMCPServer"},
+			Env:            helperEnv("normal", nil),
+			CWD:            root,
+			Enabled:        true,
+			StartupTimeout: 2 * time.Second,
+			EnabledTools:   []string{"echo"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch := make(chan ServerStatus, 4)
+	cancel := manager.AddStatusListener(func(status ServerStatus) {
+		ch <- status
+	})
+	manager.Close()
+	cancel()
+
+	select {
+	case status := <-ch:
+		if status.Name != "fake" || status.Connected || status.State != mcpStateDisconnected {
+			t.Fatalf("listener status = %#v", status)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for status listener")
+	}
+}
+
 func TestStdioCallTimeoutAndTransportCloseDisconnectStatus(t *testing.T) {
 	root := t.TempDir()
 

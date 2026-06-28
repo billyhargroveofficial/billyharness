@@ -1016,6 +1016,58 @@ func TestRunMessagesEmitsProviderRetryHook(t *testing.T) {
 	t.Fatalf("provider_retry payload missing request metadata: %#v", events)
 }
 
+func TestRunMessagesEmitsMCPStatusChangeHookSnapshot(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.MaxToolRounds = 1
+	cfg.MCPEnabled = true
+	cfg.MCPServers = []config.MCPServer{{
+		Name:    "remote",
+		URL:     "https://example.com/mcp",
+		Enabled: true,
+	}}
+	cfg.HooksEnabled = true
+	cfg.Hooks = []config.Hook{testHook("mcp", "mcp_status_change")}
+	registry, err := tools.NewRegistryWithMCP(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	a := New(cfg, &captureProvider{}, registry)
+	var events []protocol.Event
+	_, err = a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "say hi"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Type != protocol.EventHookFinished {
+			continue
+		}
+		data := eventDataMap(event)
+		if data["hook_event"] != "mcp_status_change" {
+			continue
+		}
+		if data["server_name"] != "remote" ||
+			data["transport"] != "streamable-http" ||
+			data["state"] != "unsupported" ||
+			data["connected"] != false {
+			t.Fatalf("mcp status hook payload = %#v", data)
+		}
+		payload, _ := data["payload"].(map[string]any)
+		if payload["phase"] != "snapshot" || payload["unsupported_reason"] == "" {
+			t.Fatalf("mcp status hook nested payload = %#v", payload)
+		}
+		return
+	}
+	t.Fatalf("missing mcp_status_change hook: %#v", events)
+}
+
 func testHook(name, event string) config.Hook {
 	return config.Hook{
 		Name:           name,

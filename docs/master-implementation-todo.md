@@ -302,7 +302,7 @@ Acceptance:
 ### 2.4 AuthManager
 
 - [x] Centralize API key and OAuth resolution.
-- [ ] Support sources:
+- [x] Support sources:
   - [x] `.env`
   - [x] environment
   - [x] imported Codex/OAuth credentials
@@ -380,11 +380,11 @@ Acceptance:
 
 ### 3.4 Hooks v0
 
-- [ ] Add local command hooks:
+- [x] Add local command hooks:
   - [x] `session_start`
   - [x] `before_tool`
   - [x] `after_tool`
-  - [ ] `mcp_status_change`
+  - [x] `mcp_status_change`
   - [x] `provider_retry`
   - [x] `session_done`
 - [x] Add timeout, env, cwd, redaction, and structured event payload.
