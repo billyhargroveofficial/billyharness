@@ -14,6 +14,7 @@ type ProfileMetadata struct {
 	Model                string   `json:"model,omitempty" toml:"model"`
 	Thinking             string   `json:"thinking,omitempty" toml:"thinking"`
 	ReasoningEffort      string   `json:"reasoning_effort,omitempty" toml:"reasoning_effort"`
+	DisableSpark         *bool    `json:"disable_spark,omitempty" toml:"disable_spark"`
 	ContextWindowTokens  int64    `json:"context_window_tokens,omitempty" toml:"context_window_tokens"`
 	WebSummaryMode       string   `json:"web_summary_mode,omitempty" toml:"web_summary_mode"`
 	ToolPolicy           string   `json:"tool_policy,omitempty" toml:"tool_policy"`
@@ -90,6 +91,9 @@ func (c *Config) ApplyProfileMetadata() error {
 	if strings.TrimSpace(meta.ReasoningEffort) != "" {
 		c.ReasoningEffort = strings.TrimSpace(meta.ReasoningEffort)
 	}
+	if meta.DisableSpark != nil {
+		c.DisableSpark = *meta.DisableSpark
+	}
 	if meta.ContextWindowTokens > 0 {
 		c.ContextWindowTokens = meta.ContextWindowTokens
 	}
@@ -109,6 +113,7 @@ provider = "deepseek"
 model = "deepseek-v4-flash"
 thinking = "enabled"
 reasoning_effort = "high"
+disable_spark = true
 context_window_tokens = 1000000
 web_summary_mode = "extractive"
 tool_policy = "solo-full-access"

@@ -63,6 +63,9 @@ func TestDefaultRuntimeLimits(t *testing.T) {
 	if cfg.Profile != "billy" {
 		t.Fatalf("Profile = %q, want billy", cfg.Profile)
 	}
+	if !cfg.DisableSpark {
+		t.Fatalf("DisableSpark should be enabled by default billy profile")
+	}
 	if cfg.WebSummaryMode != "extractive" || cfg.WebSummaryModel != "deepseek-v4-flash" || cfg.WebSummaryProvider != "deepseek" {
 		t.Fatalf("web summary defaults = mode:%q provider:%q model:%q", cfg.WebSummaryMode, cfg.WebSummaryProvider, cfg.WebSummaryModel)
 	}
@@ -261,6 +264,28 @@ func TestWebSummaryModelDefaultsFollowProviderWithoutSpark(t *testing.T) {
 	cfg = Default()
 	if cfg.WebSummaryMode != "model" || cfg.WebSummaryProvider != "deepseek" || cfg.WebSummaryModel != "deepseek-v4-flash" {
 		t.Fatalf("deepseek web summary defaults = mode:%q provider:%q model:%q", cfg.WebSummaryMode, cfg.WebSummaryProvider, cfg.WebSummaryModel)
+	}
+}
+
+func TestProfileDisableSparkRewritesSparkUnlessOverridden(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	t.Setenv("FAST_AGENT_MODEL", "spark")
+	cfg := Default()
+	if !cfg.DisableSpark || cfg.Model != "gpt-5.4-mini" || cfg.Provider != "openai-codex" {
+		t.Fatalf("spark should be disabled by billy profile: disable=%v model=%q provider=%q", cfg.DisableSpark, cfg.Model, cfg.Provider)
+	}
+
+	t.Setenv("FAST_AGENT_DISABLE_SPARK", "false")
+	cfg = Default()
+	if cfg.DisableSpark || cfg.Model != "gpt-5.3-codex-spark" || cfg.Provider != "openai-codex" {
+		t.Fatalf("explicit disable_spark=false should allow spark: disable=%v model=%q provider=%q", cfg.DisableSpark, cfg.Model, cfg.Provider)
+	}
+
+	t.Setenv("FAST_AGENT_DISABLE_SPARK", "true")
+	t.Setenv("FAST_AGENT_WEB_SUMMARY_MODEL", "spark")
+	cfg = Default()
+	if cfg.WebSummaryModel == "gpt-5.3-codex-spark" {
+		t.Fatalf("web summary model should not remain spark when disabled: %#v", cfg)
 	}
 }
 

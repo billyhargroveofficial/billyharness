@@ -216,6 +216,7 @@ func builtInConfig() Config {
 		CodexOriginator:           "billyharness",
 		Thinking:                  "enabled",
 		ReasoningEffort:           "high",
+		DisableSpark:              false,
 		MaxTokens:                 8192,
 		MaxToolRounds:             100,
 		MaxParallelTools:          4,
@@ -260,6 +261,7 @@ func configSpecs() []configSpec {
 		stringSpec("codex_originator", []string{"FAST_AGENT_CODEX_ORIGINATOR"}, func(c Config) any { return c.CodexOriginator }, func(c *Config, v string) { c.CodexOriginator = v }),
 		stringSpec("thinking", []string{"DEEPSEEK_THINKING"}, func(c Config) any { return c.Thinking }, func(c *Config, v string) { c.Thinking = v }),
 		stringSpec("reasoning_effort", []string{"DEEPSEEK_REASONING_EFFORT"}, func(c Config) any { return c.ReasoningEffort }, func(c *Config, v string) { c.ReasoningEffort = v }),
+		boolSpec("disable_spark", []string{"BILLYHARNESS_DISABLE_SPARK", "FAST_AGENT_DISABLE_SPARK"}, func(c Config) any { return c.DisableSpark }, func(c *Config, v bool) { c.DisableSpark = v }),
 		intSpec("max_tokens", []string{"FAST_AGENT_MAX_TOKENS"}, func(c Config) any { return c.MaxTokens }, func(c *Config, v int) { c.MaxTokens = v }),
 		intSpec("max_tool_rounds", []string{"FAST_AGENT_MAX_TOOL_ROUNDS"}, func(c Config) any { return c.MaxToolRounds }, func(c *Config, v int) { c.MaxToolRounds = v }),
 		intSpec("max_parallel_tools", []string{"FAST_AGENT_MAX_PARALLEL_TOOLS"}, func(c Config) any { return c.MaxParallelTools }, func(c *Config, v int) { c.MaxParallelTools = v }),
@@ -441,6 +443,9 @@ func (s *resolveState) applyProfileMetadata() error {
 	}
 	if strings.TrimSpace(meta.ReasoningEffort) != "" {
 		s.applyProfileValue("reasoning_effort", meta.ReasoningEffort, source, path, "reasoning_effort")
+	}
+	if meta.DisableSpark != nil {
+		s.applyProfileValue("disable_spark", *meta.DisableSpark, source, path, "disable_spark")
 	}
 	if meta.ContextWindowTokens > 0 {
 		s.applyProfileValue("context_window_tokens", meta.ContextWindowTokens, source, path, "context_window_tokens")

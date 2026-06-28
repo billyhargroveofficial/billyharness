@@ -446,7 +446,7 @@ Acceptance:
 - [ ] Recommended defaults:
   - [x] DeepSeek profile uses cheap DeepSeek model if available.
   - [x] OpenAI/Codex profile uses configured mini model, not expensive main model.
-  - [ ] Do not use Spark if the profile disables it.
+  - [x] Do not use Spark if the profile disables it.
 - [x] Summarizer calls must not enter the main conversation context as raw pages.
 - [x] Add separate metrics:
   - [x] `websum_input_tokens`

@@ -29,6 +29,15 @@ func TestProviderForModelFollowsKnownFamilies(t *testing.T) {
 	}
 }
 
+func TestIsSparkModelUsesAliases(t *testing.T) {
+	if !IsSparkModel("spark") || !IsSparkModel("gpt-5.3-codex-spark") {
+		t.Fatalf("spark aliases were not detected")
+	}
+	if IsSparkModel("gpt-5.4-mini") {
+		t.Fatalf("mini should not be detected as spark")
+	}
+}
+
 func TestLookupIncludesBillingHints(t *testing.T) {
 	flash := Lookup("deepseek-v4-flash")
 	if flash.Provider != ProviderDeepSeek || flash.Pricing.CacheMissPer1M <= 0 || flash.Subscription {

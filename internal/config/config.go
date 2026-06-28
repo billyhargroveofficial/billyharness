@@ -29,6 +29,7 @@ type Config struct {
 	CodexOriginator           string
 	Thinking                  string
 	ReasoningEffort           string
+	DisableSpark              bool
 	MaxTokens                 int
 	MaxToolRounds             int
 	MaxParallelTools          int
@@ -115,12 +116,18 @@ func (c Config) APIKey() string {
 
 func (c *Config) ApplyModelProviderDefaults() {
 	c.Model = modelinfo.NormalizeAlias(c.Model)
+	if c.DisableSpark && modelinfo.IsSparkModel(c.Model) {
+		c.Model = "gpt-5.4-mini"
+	}
 	c.Provider = modelinfo.ProviderForModel(c.Model, c.Provider)
 }
 
 func (c *Config) ApplyWebSummaryDefaults() {
 	c.WebSummaryMode = NormalizeWebSummaryMode(c.WebSummaryMode)
 	c.WebSummaryModel = modelinfo.NormalizeAlias(c.WebSummaryModel)
+	if c.DisableSpark && modelinfo.IsSparkModel(c.WebSummaryModel) {
+		c.WebSummaryModel = "gpt-5.4-mini"
+	}
 	c.WebSummaryProvider = modelinfo.NormalizeProvider(c.WebSummaryProvider)
 	if c.WebSummaryModel == "" {
 		c.WebSummaryModel = modelinfo.DefaultSummaryModel(c.Model, c.Provider)

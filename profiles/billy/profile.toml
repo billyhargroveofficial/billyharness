@@ -3,6 +3,7 @@ provider = "deepseek"
 model = "deepseek-v4-flash"
 thinking = "enabled"
 reasoning_effort = "high"
+disable_spark = true
 context_window_tokens = 1000000
 web_summary_mode = "extractive"
 tool_policy = "solo-full-access"

@@ -976,6 +976,7 @@ func sessionConfigSnapshot(cfg config.Config) map[string]any {
 		"profile":                       cfg.Profile,
 		"thinking":                      cfg.Thinking,
 		"reasoning_effort":              cfg.ReasoningEffort,
+		"disable_spark":                 cfg.DisableSpark,
 		"max_tokens":                    cfg.MaxTokens,
 		"max_tool_rounds":               cfg.MaxToolRounds,
 		"max_parallel_tools":            cfg.MaxParallelTools,

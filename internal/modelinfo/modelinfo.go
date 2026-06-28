@@ -220,6 +220,10 @@ func IsCodexModel(model string) bool {
 		strings.HasPrefix(model, "o4")
 }
 
+func IsSparkModel(model string) bool {
+	return NormalizeAlias(model) == "gpt-5.3-codex-spark"
+}
+
 func IsDeepSeekModel(model string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "deepseek-")
 }

@@ -143,6 +143,7 @@ See [docs/web.md](docs/web.md).
 
 `/model gpt`, `/model gpt-5.5`, `/model gpt-5.4`, `/model gpt-5.4-mini`, and `/model spark`
 route through the Codex-compatible ChatGPT backend provider.
+The default `billy` profile sets `disable_spark = true`; set `disable_spark = false` in config/profile if you intentionally want Spark.
 
 Use one of:
 
