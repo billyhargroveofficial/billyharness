@@ -402,6 +402,67 @@ func TestToolResultsUpdateMatchingBlockByCallIDOutOfOrder(t *testing.T) {
 	}
 }
 
+func TestTranscriptBlocksCarryTypedCellMetadata(t *testing.T) {
+	m := newTestModel(t)
+	m.addBlock("user", "USER", "hello")
+	if m.blocks[0].cellType != cellTypeUser || m.blocks[0].id == "" || m.blocks[0].renderCacheKey == "" || m.blocks[0].rawCopy != "hello" {
+		t.Fatalf("user cell = %#v", m.blocks[0])
+	}
+
+	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: "draft"})
+	assistantIndex := len(m.blocks) - 1
+	streamKey := m.blocks[assistantIndex].renderCacheKey
+	if m.blocks[assistantIndex].cellType != cellTypeAssistantStream || !m.blocks[assistantIndex].live {
+		t.Fatalf("assistant stream cell = %#v", m.blocks[assistantIndex])
+	}
+	m.applyEvent(protocol.Event{Type: protocol.EventRunCompleted})
+	if m.blocks[assistantIndex].cellType != cellTypeAssistantFinal || m.blocks[assistantIndex].live || m.blocks[assistantIndex].renderCacheKey == streamKey {
+		t.Fatalf("assistant final cell = %#v", m.blocks[assistantIndex])
+	}
+
+	m.applyEvent(protocol.Event{Type: protocol.EventAssistantReasoning, Data: "hidden"})
+	if got := m.blocks[len(m.blocks)-1].cellType; got != cellTypeThinking {
+		t.Fatalf("thinking cellType = %q", got)
+	}
+
+	m.applyEvent(protocol.Event{
+		Type:   protocol.EventToolCallRequested,
+		TurnID: "turn-001",
+		StepID: "turn-001:tool-call-001",
+		Data: protocol.ToolCall{
+			ID:        "call-1",
+			Name:      "fs_read_file",
+			Arguments: json.RawMessage(`{"path":"README.md"}`),
+		},
+	})
+	toolCell := m.blocks[len(m.blocks)-1]
+	if toolCell.cellType != cellTypeToolCall || toolCell.turnID != "turn-001" || toolCell.stepID != "turn-001:tool-call-001" || toolCell.callID != "call-1" {
+		t.Fatalf("tool cell = %#v", toolCell)
+	}
+
+	m.applyEvent(protocol.Event{Type: protocol.EventContextCompacted, Data: map[string]any{"reason": "threshold"}})
+	if got := m.blocks[len(m.blocks)-1].cellType; got != cellTypeCompaction {
+		t.Fatalf("compaction cellType = %q", got)
+	}
+	m.addInfoBlock("MCP", "connected")
+	if got := m.blocks[len(m.blocks)-1].cellType; got != cellTypeMCPStatus {
+		t.Fatalf("mcp cellType = %q", got)
+	}
+	m.addBlock("error", "ERROR", "boom")
+	if got := m.blocks[len(m.blocks)-1].cellType; got != cellTypeError {
+		t.Fatalf("error cellType = %q", got)
+	}
+
+	decoded := decodeBlocks(encodeBlocks(m.blocks))
+	m.blocks = decoded
+	m.ensureBlockMetadata()
+	for i, block := range m.blocks {
+		if block.id == "" || block.cellType == "" || block.renderCacheKey == "" || block.rawCopy == "" {
+			t.Fatalf("decoded block[%d] missing metadata: %#v", i, block)
+		}
+	}
+}
+
 func TestToolAuditUpdatesMatchingBlockByCallID(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 120

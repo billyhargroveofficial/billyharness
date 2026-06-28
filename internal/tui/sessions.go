@@ -36,17 +36,19 @@ type chatSession struct {
 }
 
 type savedBlock struct {
-	ID           string `json:"id,omitempty"`
-	Kind         string `json:"kind"`
-	Title        string `json:"title"`
-	Content      string `json:"content"`
-	EventType    string `json:"event_type,omitempty"`
-	TurnID       string `json:"turn_id,omitempty"`
-	StepID       string `json:"step_id,omitempty"`
-	CallID       string `json:"call_id,omitempty"`
-	AttemptID    string `json:"attempt_id,omitempty"`
-	ParentStepID string `json:"parent_step_id,omitempty"`
-	RawCopy      string `json:"raw_copy,omitempty"`
+	ID             string `json:"id,omitempty"`
+	Kind           string `json:"kind"`
+	CellType       string `json:"cell_type,omitempty"`
+	Title          string `json:"title"`
+	Content        string `json:"content"`
+	EventType      string `json:"event_type,omitempty"`
+	TurnID         string `json:"turn_id,omitempty"`
+	StepID         string `json:"step_id,omitempty"`
+	CallID         string `json:"call_id,omitempty"`
+	AttemptID      string `json:"attempt_id,omitempty"`
+	ParentStepID   string `json:"parent_step_id,omitempty"`
+	RawCopy        string `json:"raw_copy,omitempty"`
+	RenderCacheKey string `json:"render_cache_key,omitempty"`
 }
 
 func newChatID() string {

@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -59,6 +61,7 @@ func (m thinkingMode) effortLabel() string {
 type block struct {
 	id             string
 	kind           string
+	cellType       string
 	title          string
 	content        string
 	live           bool
@@ -73,6 +76,21 @@ type block struct {
 	started        time.Time
 	updated        time.Time
 }
+
+const (
+	cellTypeUser            = "user"
+	cellTypeAssistantStream = "assistant_stream"
+	cellTypeAssistantFinal  = "assistant_final"
+	cellTypeThinking        = "thinking"
+	cellTypeToolCall        = "tool_call"
+	cellTypeToolBatch       = "tool_batch"
+	cellTypeAuditSecurity   = "audit_security"
+	cellTypeCompaction      = "compaction"
+	cellTypeMCPStatus       = "mcp_status"
+	cellTypeRunSummary      = "run_summary"
+	cellTypeError           = "error"
+	cellTypeStatus          = "status"
+)
 
 type selectionPoint struct {
 	row int
@@ -2405,17 +2423,19 @@ func encodeBlocks(blocks []block) []savedBlock {
 	out := make([]savedBlock, 0, len(blocks))
 	for _, b := range blocks {
 		out = append(out, savedBlock{
-			ID:           b.id,
-			Kind:         b.kind,
-			Title:        b.title,
-			Content:      b.content,
-			EventType:    string(b.eventType),
-			TurnID:       b.turnID,
-			StepID:       b.stepID,
-			CallID:       b.callID,
-			AttemptID:    b.attemptID,
-			ParentStepID: b.parentStepID,
-			RawCopy:      b.rawCopy,
+			ID:             b.id,
+			Kind:           b.kind,
+			CellType:       b.cellType,
+			Title:          b.title,
+			Content:        b.content,
+			EventType:      string(b.eventType),
+			TurnID:         b.turnID,
+			StepID:         b.stepID,
+			CallID:         b.callID,
+			AttemptID:      b.attemptID,
+			ParentStepID:   b.parentStepID,
+			RawCopy:        b.rawCopy,
+			RenderCacheKey: b.renderCacheKey,
 		})
 	}
 	return out
@@ -2425,17 +2445,19 @@ func decodeBlocks(blocks []savedBlock) []block {
 	out := make([]block, 0, len(blocks))
 	for _, b := range blocks {
 		out = append(out, block{
-			id:           b.ID,
-			kind:         b.Kind,
-			title:        b.Title,
-			content:      b.Content,
-			eventType:    protocol.EventType(b.EventType),
-			turnID:       b.TurnID,
-			stepID:       b.StepID,
-			callID:       b.CallID,
-			attemptID:    b.AttemptID,
-			parentStepID: b.ParentStepID,
-			rawCopy:      b.RawCopy,
+			id:             b.ID,
+			kind:           b.Kind,
+			cellType:       b.CellType,
+			title:          b.Title,
+			content:        b.Content,
+			eventType:      protocol.EventType(b.EventType),
+			turnID:         b.TurnID,
+			stepID:         b.StepID,
+			callID:         b.CallID,
+			attemptID:      b.AttemptID,
+			parentStepID:   b.ParentStepID,
+			rawCopy:        b.RawCopy,
+			renderCacheKey: b.RenderCacheKey,
 		})
 	}
 	return out
@@ -2444,15 +2466,21 @@ func decodeBlocks(blocks []savedBlock) []block {
 func (m *Model) newBlock(kind, title, content string) block {
 	now := time.Now().UTC()
 	m.nextBlockSeq++
-	return block{
+	rawCopy := content
+	if strings.TrimSpace(rawCopy) == "" {
+		rawCopy = title
+	}
+	b := block{
 		id:      fmt.Sprintf("%s-%d", normalizeBlockKind(kind), m.nextBlockSeq),
 		kind:    normalizeBlockKind(kind),
 		title:   title,
 		content: content,
-		rawCopy: content,
+		rawCopy: rawCopy,
 		started: now,
 		updated: now,
 	}
+	refreshBlockDerivedFields(&b)
+	return b
 }
 
 func (m *Model) ensureBlockMetadata() {
@@ -2471,7 +2499,11 @@ func (m *Model) ensureBlockMetadata() {
 		}
 		if m.blocks[i].rawCopy == "" {
 			m.blocks[i].rawCopy = m.blocks[i].content
+			if strings.TrimSpace(m.blocks[i].rawCopy) == "" {
+				m.blocks[i].rawCopy = m.blocks[i].title
+			}
 		}
+		m.refreshBlockDerivedFields(i)
 	}
 	m.rebuildToolBlockIndex()
 }
@@ -2483,6 +2515,89 @@ func normalizeBlockKind(kind string) string {
 	default:
 		return "status"
 	}
+}
+
+func cellTypeForBlock(b block) string {
+	switch b.eventType {
+	case protocol.EventAssistantDelta:
+		if b.live {
+			return cellTypeAssistantStream
+		}
+		return cellTypeAssistantFinal
+	case protocol.EventAssistantReasoning:
+		return cellTypeThinking
+	case protocol.EventToolCallRequested, protocol.EventToolCallStarted, protocol.EventToolCallFinished,
+		protocol.EventToolCallFailed, protocol.EventToolCallAborted, protocol.EventToolCallProgress,
+		protocol.EventToolPermissionRequested, protocol.EventToolPermissionDecided, protocol.EventToolOutputRefCreated:
+		return cellTypeToolCall
+	case protocol.EventToolAudit:
+		return cellTypeAuditSecurity
+	case protocol.EventContextCompacted:
+		return cellTypeCompaction
+	case protocol.EventRunCompleted, protocol.EventRunStarted:
+		return cellTypeRunSummary
+	case protocol.EventRunFailed:
+		return cellTypeError
+	}
+	switch b.kind {
+	case "user":
+		return cellTypeUser
+	case "assistant":
+		if b.live {
+			return cellTypeAssistantStream
+		}
+		return cellTypeAssistantFinal
+	case "reasoning":
+		return cellTypeThinking
+	case "tool":
+		return cellTypeToolCall
+	case "audit":
+		return cellTypeAuditSecurity
+	case "error":
+		return cellTypeError
+	case "status":
+		if strings.EqualFold(strings.TrimSpace(b.title), "MCP") {
+			return cellTypeMCPStatus
+		}
+		return cellTypeStatus
+	default:
+		return cellTypeStatus
+	}
+}
+
+func refreshBlockDerivedFields(b *block) {
+	if b == nil {
+		return
+	}
+	b.kind = normalizeBlockKind(b.kind)
+	b.cellType = cellTypeForBlock(*b)
+	b.renderCacheKey = transcriptRenderCacheKey(*b)
+}
+
+func (m *Model) refreshBlockDerivedFields(i int) {
+	if i < 0 || i >= len(m.blocks) {
+		return
+	}
+	refreshBlockDerivedFields(&m.blocks[i])
+}
+
+func transcriptRenderCacheKey(b block) string {
+	sum := sha1.Sum([]byte(strings.Join([]string{
+		b.id,
+		b.kind,
+		b.cellType,
+		string(b.eventType),
+		b.title,
+		b.content,
+		b.rawCopy,
+		strconv.FormatBool(b.live),
+		b.turnID,
+		b.stepID,
+		b.callID,
+		b.attemptID,
+		b.parentStepID,
+	}, "\x00")))
+	return hex.EncodeToString(sum[:8])
 }
 
 func blockKindForEvent(eventType protocol.EventType) string {
@@ -2600,7 +2715,7 @@ func (m *Model) applyEvent(event protocol.Event) {
 		m.collapseToolBlockIfLarge(eventCallID(event))
 	case protocol.EventContextCompacted:
 		m.status = "context compacted"
-		m.addInfoBlock("COMPACT", compactEventText(event.Data))
+		m.addEventBlock(protocol.EventContextCompacted, "COMPACT", compactEventText(event.Data))
 	case protocol.EventProviderUsageUpdate:
 		update := usageFromAny(event.Data)
 		delta := m.usageAccounting.Apply(update)
@@ -2711,6 +2826,7 @@ func (m *Model) appendToOpenBlock(kind, title, text string, eventType protocol.E
 	m.blocks[i].live = kind == "assistant" || kind == "reasoning"
 	m.blocks[i].eventType = eventType
 	m.blocks[i].updated = time.Now().UTC()
+	m.refreshBlockDerivedFields(i)
 	m.selected = i
 }
 
@@ -2747,6 +2863,7 @@ func (m *Model) appendToolTextAt(i int, text string) {
 	}
 	m.blocks[i].rawCopy = m.blocks[i].content
 	m.blocks[i].updated = time.Now().UTC()
+	m.refreshBlockDerivedFields(i)
 	m.selected = i
 }
 
@@ -2775,6 +2892,7 @@ func (m *Model) appendToolAudit(event protocol.Event, text string) {
 	}
 	m.blocks[i].rawCopy = m.blocks[i].content
 	m.blocks[i].updated = time.Now().UTC()
+	m.refreshBlockDerivedFields(i)
 	m.selected = i
 }
 
@@ -2812,6 +2930,10 @@ func (m *Model) addEventBlock(eventType protocol.EventType, title, content strin
 	b := m.newBlock(blockKindForEvent(eventType), title, content)
 	b.eventType = eventType
 	b.live = b.kind == "assistant" || b.kind == "reasoning"
+	if b.live && strings.TrimSpace(content) == "" {
+		b.rawCopy = ""
+	}
+	refreshBlockDerivedFields(&b)
 	m.blocks = append(m.blocks, b)
 	m.selected = len(m.blocks) - 1
 }
@@ -2821,6 +2943,7 @@ func (m *Model) addProtocolEventBlock(event protocol.Event, title, content strin
 	b.eventType = event.Type
 	b.live = b.kind == "assistant" || b.kind == "reasoning"
 	applyEventIdentity(&b, event)
+	refreshBlockDerivedFields(&b)
 	m.blocks = append(m.blocks, b)
 	m.selected = len(m.blocks) - 1
 	m.registerToolBlock(m.selected)
@@ -2864,6 +2987,7 @@ func (m *Model) applyEventIdentityToBlock(i int, event protocol.Event) {
 		return
 	}
 	applyEventIdentity(&m.blocks[i], event)
+	m.refreshBlockDerivedFields(i)
 	m.registerToolBlock(i)
 }
 
@@ -2895,6 +3019,7 @@ func (m *Model) finishLiveBlocks() {
 		if m.blocks[i].live {
 			m.blocks[i].live = false
 			m.blocks[i].updated = now
+			m.refreshBlockDerivedFields(i)
 		}
 	}
 }

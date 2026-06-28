@@ -142,7 +142,7 @@ Purpose: centralize permission, attempt, retry, cancellation, audit, output refs
   - [x] retry decision
   - [x] finalize
   - [x] cancel/abort
-- [ ] Add structured events:
+- [x] Add structured events:
   - [x] `tool.call_requested`
   - [x] `tool.permission_requested`
   - [x] `tool.permission_decided`
@@ -525,26 +525,26 @@ Purpose: make the terminal feel like a serious agent UI rather than a pile of st
 ### 5.1 Typed Transcript Cells
 
 - [ ] Introduce cell types:
-  - [ ] user
-  - [ ] assistant stream
-  - [ ] assistant final
-  - [ ] thinking/reasoning
-  - [ ] tool call
+  - [x] user
+  - [x] assistant stream
+  - [x] assistant final
+  - [x] thinking/reasoning
+  - [x] tool call
   - [ ] tool batch
-  - [ ] audit/security
-  - [ ] compaction
-  - [ ] MCP status
+  - [x] audit/security
+  - [x] compaction
+  - [x] MCP status
   - [ ] run summary
-  - [ ] error
+  - [x] error
 - [ ] Each cell has:
-  - [ ] stable id
-  - [ ] turn id
-  - [ ] step id
-  - [ ] call id if tool-related
-  - [ ] raw copy text
+  - [x] stable id
+  - [x] turn id
+  - [x] step id
+  - [x] call id if tool-related
+  - [x] raw copy text
   - [ ] rich terminal text
   - [ ] collapsed/expanded state
-  - [ ] render cache key
+  - [x] render cache key
 - [x] Keep old rendering path while migrating if needed.
 
 Acceptance:
