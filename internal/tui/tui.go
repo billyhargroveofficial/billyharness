@@ -772,9 +772,13 @@ func (m Model) footerView() string {
 }
 
 type slashCommand struct {
-	name    string
-	args    string
-	summary string
+	id       string
+	title    string
+	category string
+	name     string
+	args     string
+	summary  string
+	aliases  []string
 }
 
 type slashArg struct {
@@ -785,29 +789,6 @@ type slashArg struct {
 type statusSegment struct {
 	text  string
 	style lipgloss.Style
-}
-
-func slashCommands() []slashCommand {
-	return []slashCommand{
-		{"/help", "", "show commands and key bindings"},
-		{"/status", "", "show current session details"},
-		{"/context", "", "show active context and contributors"},
-		{"/config", "", "show resolved config summary"},
-		{"/auth", "deepseek|codex", "configure DeepSeek key or Codex OAuth"},
-		{"/theme", "light|dark", "switch active theme"},
-		{"/model", "flash|pro|gpt|id", "switch model"},
-		{"/models", "", "list known models"},
-		{"/profile", "billy|name", "switch SOUL.md system profile"},
-		{"/mcp", "", "show connected MCP servers"},
-		{"/reasoning", "high|max|off", "set provider reasoning effort"},
-		{"/thinkview", "expanded|collapsed|hidden", "control thinking blocks"},
-		{"/thinking", "on|off", "alias for thinking visibility"},
-		{"/toolview", "auto|expanded|collapsed|hidden", "control tool blocks"},
-		{"/new", "", "start a new chat"},
-		{"/resume", "[id-prefix]", "list or resume local chats"},
-		{"/fork", "[id-prefix]", "fork current or named chat"},
-		{"/exit", "", "save and quit"},
-	}
 }
 
 func (m Model) slashActive() bool {
@@ -844,7 +825,7 @@ func (m Model) slashArgMode() (slashCommand, string, bool) {
 		return slashCommand{}, "", false
 	}
 	for _, command := range slashCommands() {
-		if token == command.name && len(m.slashArgs(command)) > 0 {
+		if slashCommandMatches(command, token) && len(m.slashArgs(command)) > 0 {
 			return command, strings.ToLower(argPrefix), true
 		}
 	}
@@ -862,11 +843,13 @@ func (m Model) filteredSlashCommands() []slashCommand {
 	var summary []slashCommand
 	for _, command := range slashCommands() {
 		name := strings.TrimPrefix(command.name, "/")
-		haystack := strings.ToLower(name + " " + command.args)
+		haystack := strings.ToLower(name + " " + command.args + " " + strings.Join(command.aliases, " "))
 		switch {
 		case token == "":
 			prefix = append(prefix, command)
 		case name == token:
+			exact = append(exact, command)
+		case slashCommandMatches(command, "/"+token):
 			exact = append(exact, command)
 		case strings.HasPrefix(name, token):
 			prefix = append(prefix, command)
@@ -883,94 +866,11 @@ func (m Model) filteredSlashCommands() []slashCommand {
 }
 
 func (m Model) slashArgs(command slashCommand) []slashArg {
-	next := func(values []slashArg, current string) []slashArg {
-		for i, item := range values {
-			if item.value == current {
-				return append(append([]slashArg{}, values[i+1:]...), values[:i+1]...)
-			}
-		}
-		return values
-	}
-	switch command.name {
-	case "/auth":
-		return []slashArg{
-			{"deepseek", "save DeepSeek API key"},
-			{"codex", "import Codex OAuth from codex login"},
-		}
-	case "/theme":
-		values := []slashArg{
-			{"dark", "black codex-style theme"},
-			{"light", "light theme"},
-			{"toggle", "switch to the other theme"},
-		}
-		return next(values, m.theme)
-	case "/model":
-		values := []slashArg{
-			{"flash", "deepseek-v4-flash"},
-			{"pro", "deepseek-v4-pro"},
-			{"gpt", "gpt-5.5 via Codex subscription"},
-			{"gpt-5.5", "Codex/ChatGPT subscription"},
-			{"gpt-5.4", "Codex/ChatGPT subscription"},
-			{"gpt-5.4-mini", "faster Codex/ChatGPT model"},
-			{"gpt-5.3-codex-spark", "ultra-fast Codex coding model"},
-			{"deepseek-v4-flash", "full model id"},
-			{"deepseek-v4-pro", "full model id"},
-			{"toggle", "switch to the other configured model"},
-		}
-		switch m.currentModel() {
-		case "deepseek-v4-flash":
-			return next(values, "flash")
-		case "deepseek-v4-pro":
-			return next(values, "pro")
-		case "gpt-5.5":
-			return next(values, "gpt")
-		}
-		return values
-	case "/profile":
-		return []slashArg{
-			{m.currentProfile(), "current SOUL.md profile"},
-			{"billy", "teacher-style default profile"},
-		}
-	case "/reasoning":
-		values := []slashArg{
-			{"high", "reasoning high"},
-			{"xhigh", "reasoning xhigh"},
-			{"max", "reasoning max"},
-			{"medium", "reasoning medium"},
-			{"low", "reasoning low"},
-			{"off", "disable reasoning"},
-			{"toggle", "cycle reasoning mode"},
-		}
-		return next(values, m.currentThinking().effortLabel())
-	case "/thinkview":
-		values := []slashArg{
-			{"expanded", "show thinking content"},
-			{"collapsed", "show collapsed thinking blocks"},
-			{"hidden", "hide thinking blocks"},
-			{"toggle", "cycle thinking view"},
-		}
-		return next(values, m.thinkView)
-	case "/thinking":
-		if m.showThinking {
-			return []slashArg{{"off", "hide thinking blocks"}, {"on", "show thinking blocks"}, {"toggle", "switch thinking visibility"}}
-		}
-		return []slashArg{{"on", "show thinking blocks"}, {"off", "hide thinking blocks"}, {"toggle", "switch thinking visibility"}}
-	case "/toolview":
-		values := []slashArg{
-			{"auto", "expand tool blocks while running"},
-			{"expanded", "show full tool blocks"},
-			{"collapsed", "collapse tool blocks"},
-			{"hidden", "hide tool blocks"},
-			{"toggle", "cycle tool view"},
-		}
-		return next(values, m.toolView)
-	case "/resume":
-		return m.sessionArgs(true)
-	case "/fork":
-		return m.sessionArgs(false)
-	default:
+	action, ok := actionForSlash(command.name)
+	if !ok || !m.actionEnabled(action) || action.args == nil {
 		return nil
 	}
+	return action.args(m)
 }
 
 func (m Model) filteredSlashArgs(command slashCommand, prefix string) []slashArg {
@@ -1046,7 +946,7 @@ func (m Model) exactSlashCommand(prompt string) bool {
 		return false
 	}
 	for _, command := range slashCommands() {
-		if fields[0] == command.name {
+		if slashCommandMatches(command, fields[0]) {
 			return true
 		}
 	}
@@ -1983,58 +1883,12 @@ func (m *Model) handleSlashCommand(prompt string) (bool, tea.Cmd) {
 	if len(fields) > 1 {
 		arg = strings.ToLower(strings.Join(fields[1:], " "))
 	}
-	switch command {
-	case "/auth":
-		return m.handleAuthCommand(arg)
-	case "/theme":
-		return m.setTheme(arg), nil
-	case "/model":
-		return m.setModel(arg), nil
-	case "/models":
-		m.addInfoBlock("MODELS", m.modelsText())
-		m.status = "models shown"
-		return true, nil
-	case "/config":
-		m.status = "loading config"
-		return true, m.configStatusCmd()
-	case "/context":
-		m.status = "loading context"
-		return true, m.contextStatusCmd()
-	case "/profile":
-		return true, m.setProfile(arg)
-	case "/mcp":
-		m.status = "loading mcp status"
-		return true, m.mcpStatusCmd()
-	case "/reasoning":
-		return m.setReasoning(arg), nil
-	case "/thinking", "/show-reasoning", "/show_reasoning":
-		return m.setThinkingDisplay(arg), nil
-	case "/toolview":
-		return m.setToolView(arg), nil
-	case "/thinkview":
-		return m.setThinkView(arg), nil
-	case "/new":
-		return true, m.newChat()
-	case "/resume":
-		return true, m.resumeChat(arg)
-	case "/fork":
-		return true, m.forkChat(arg)
-	case "/exit", "/quit":
-		_ = m.saveCurrentSession()
-		_ = m.saveSettings()
-		return true, tea.Quit
-	case "/status":
-		m.addInfoBlock("STATUS", m.statusText())
-		m.status = "status shown"
-		return true, nil
-	case "/help":
-		m.addInfoBlock("HELP", helpText())
-		m.status = "help shown"
-		return true, nil
-	default:
+	action, ok := actionForSlash(command)
+	if !ok || !m.actionEnabled(action) || action.run == nil {
 		m.status = "unknown command " + fields[0]
 		return false, nil
 	}
+	return action.run(m, arg)
 }
 
 func (m *Model) setTheme(value string) bool {
@@ -3717,36 +3571,6 @@ func compactDuration(d time.Duration) string {
 		return fmt.Sprintf("%ds", int(d.Seconds()))
 	}
 	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
-}
-
-func helpText() string {
-	return strings.Join([]string{
-		"/theme [light|dark]                    switch UI theme",
-		"/auth [deepseek|codex]                 configure credentials",
-		"/model [flash|pro|gpt|id]              switch model",
-		"/models                                show known models and providers",
-		"/profile [billy|name]                  switch SOUL.md system profile",
-		"/mcp                                   show MCP servers and status",
-		"/context                               show active context and contributors",
-		"/config                                show resolved config summary",
-		"/reasoning [low|medium|high|xhigh|off] set provider reasoning effort",
-		"/thinkview [expanded|collapsed|hidden] show/collapse/hide thinking blocks",
-		"/toolview [auto|expanded|collapsed|hidden] control tool blocks",
-		"/new                                   start a new chat",
-		"/resume [id-prefix]                    list or resume saved chats",
-		"/fork [id-prefix]                      fork current or saved chat",
-		"/status                                show session details",
-		"/exit                                  save and quit",
-		"Tab / Up / Down                         complete slash commands",
-		"Enter                                  send",
-		"Alt+Enter                              insert newline",
-		"Ctrl+S                                 send fallback; may freeze SSH if IXON is enabled",
-		"mouse wheel / PgUp/PgDn                 scroll transcript",
-		"Alt+Home / Alt+End                      top / follow bottom",
-		"Ctrl+E                                 collapse or expand selected block",
-		"Ctrl+P / Ctrl+L                        select previous / next block",
-		"Ctrl+G                                 reconnect gateway",
-	}, "\n")
 }
 
 func compactEventText(value any) string {

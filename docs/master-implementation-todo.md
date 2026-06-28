@@ -618,24 +618,24 @@ Acceptance:
 
 ### 5.5 Action Registry And Commands
 
-- [ ] Add action registry:
-  - [ ] id
-  - [ ] title
-  - [ ] category
-  - [ ] enabled predicate
-  - [ ] keybinding
-  - [ ] slash alias
-  - [ ] Telegram alias if applicable
-  - [ ] runner
-- [ ] Make slash popup read from action registry.
+- [x] Add action registry:
+  - [x] id
+  - [x] title
+  - [x] category
+  - [x] enabled predicate
+  - [x] keybinding
+  - [x] slash alias
+  - [x] Telegram alias if applicable
+  - [x] runner
+- [x] Make slash popup read from action registry.
 - [ ] Add command palette.
-- [ ] Add argument selectors for commands requiring args.
-- [ ] Enter on selected command should execute or open arg selector without requiring a redundant second Enter.
+- [x] Add argument selectors for commands requiring args.
+- [x] Enter on selected command should execute or open arg selector without requiring a redundant second Enter.
 
 Acceptance:
 
-- [ ] `/model`, `/reasoning`, `/theme`, `/profile`, `/toolview`, `/thinkview` feel consistent.
-- [ ] Commands can be extended without editing multiple unrelated switch statements.
+- [x] `/model`, `/reasoning`, `/theme`, `/profile`, `/toolview`, `/thinkview` feel consistent.
+- [x] Commands can be extended without editing multiple unrelated switch statements.
 
 ### 5.6 Semantic Copy
 

@@ -92,6 +92,65 @@ func TestSlashCommands(t *testing.T) {
 	}
 }
 
+func TestActionRegistryBacksSlashCommandsAndHelp(t *testing.T) {
+	commands := slashCommands()
+	byName := make(map[string]slashCommand, len(commands))
+	for _, command := range commands {
+		if command.id == "" {
+			t.Fatalf("slash command %q missing action id", command.name)
+		}
+		if command.title == "" {
+			t.Fatalf("slash command %q missing title", command.name)
+		}
+		if command.category == "" {
+			t.Fatalf("slash command %q missing category", command.name)
+		}
+		byName[command.name] = command
+	}
+
+	help := helpText()
+	for _, action := range actionRegistry() {
+		if action.slash == "" {
+			continue
+		}
+		if action.id == "" || action.title == "" || action.category == "" {
+			t.Fatalf("action for %q missing registry metadata: %#v", action.slash, action)
+		}
+		if action.run == nil {
+			t.Fatalf("action for %q missing runner", action.slash)
+		}
+		for _, alias := range action.telegramAliases {
+			if !strings.HasPrefix(alias, "/") {
+				t.Fatalf("telegram alias for %q must be slash-prefixed, got %q", action.slash, alias)
+			}
+		}
+		command, ok := byName[action.slash]
+		if !ok {
+			t.Fatalf("action %q missing from slashCommands", action.slash)
+		}
+		if command.summary != action.summary || command.args != action.slashArgs {
+			t.Fatalf("slash command %q not derived from registry: %#v vs %#v", action.slash, command, action)
+		}
+		if !strings.Contains(help, action.slash) {
+			t.Fatalf("helpText missing %q:\n%s", action.slash, help)
+		}
+	}
+}
+
+func TestActionRegistryDispatchesSlashAliases(t *testing.T) {
+	m := newTestModel(t)
+	handled, _ := m.handleSlashCommand("/show-reasoning off")
+	if !handled {
+		t.Fatal("/show-reasoning alias was not handled")
+	}
+	if m.showThinking {
+		t.Fatal("/show-reasoning off should hide thinking")
+	}
+	if !m.exactSlashCommand("/quit") {
+		t.Fatal("/quit alias should be recognized as an exact slash command")
+	}
+}
+
 func TestTUISelectsCodexProviderForGPTModels(t *testing.T) {
 	m := newTestModel(t)
 	handled, _ := m.handleSlashCommand("/model gpt")
