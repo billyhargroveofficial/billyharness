@@ -122,6 +122,12 @@ MCP tools are exposed lazily through `mcp_list_tools` and `mcp_call`, so large e
 not inflate every model request.
 Use `tool_search` with `query`, `server`, `namespace`, `risk`, and capped `include_schema` when the model needs a specific native or MCP tool.
 
+## Hooks
+
+Local command hooks can be configured in `$BILLYHARNESS_HOME/hooks.config.toml`.
+They are no-op by default and emit replayable `hook.started`, `hook.finished`, and `hook.failed` events.
+See [docs/hooks.md](docs/hooks.md) for the config format and supported events.
+
 ## Codex / GPT subscription mode
 
 `/model gpt`, `/model gpt-5.5`, `/model gpt-5.4`, `/model gpt-5.4-mini`, and `/model spark`

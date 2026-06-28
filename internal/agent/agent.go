@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	runtimehooks "github.com/billyhargroveofficial/billyharness/internal/hooks"
 	"github.com/billyhargroveofficial/billyharness/internal/instructions"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
@@ -72,6 +74,15 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 		"run_id":        run.ID,
 		"status":        run.Status,
 	}})
+	hookRunner := runtimehooks.New(a.cfg)
+	if err := hookRunner.Run(ctx, "session_start", map[string]any{
+		"submission_id": run.SubmissionID,
+		"run_id":        run.ID,
+		"status":        run.Status,
+	}, emit); err != nil {
+		emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
+		return messages, err
+	}
 	messages = a.withMCPInstructions(messages)
 	var lastPromptTokens int64
 	for round := 0; round < a.cfg.MaxToolRounds; round++ {
@@ -195,6 +206,12 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 				DurationMS: durationMS(turnStarted),
 				Error:      err.Error(),
 			}})
+			err = joinHookError(err, hookRunner.Run(ctx, "session_done", map[string]any{
+				"run_id":  run.ID,
+				"status":  protocol.StepStatusFailed,
+				"error":   err.Error(),
+				"turn_id": turnID,
+			}, emit))
 			emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
 			return messages, err
 		}
@@ -225,6 +242,12 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 				DurationMS: durationMS(turnStarted),
 				Error:      err.Error(),
 			}})
+			err = joinHookError(err, hookRunner.Run(ctx, "session_done", map[string]any{
+				"run_id":  run.ID,
+				"status":  protocol.StepStatusFailed,
+				"error":   err.Error(),
+				"turn_id": turnID,
+			}, emit))
 			emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
 			return messages, err
 		}
@@ -264,6 +287,15 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 				MessageCount: len(messages),
 				DurationMS:   durationMS(turnStarted),
 			}})
+			if err := hookRunner.Run(ctx, "session_done", map[string]any{
+				"run_id":        run.ID,
+				"status":        protocol.StepStatusCompleted,
+				"turn_id":       turnID,
+				"message_count": len(messages),
+			}, emit); err != nil {
+				emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
+				return messages, err
+			}
 			emit(protocol.Event{Type: protocol.EventRunCompleted})
 			return messages, nil
 		}
@@ -273,7 +305,7 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 			ReasoningContent: optionalReasoning(a.cfg, reasoning),
 			ToolCalls:        calls,
 		})
-		results := a.executeToolCalls(ctx, turnID, roundNum, calls, emit)
+		results := a.executeToolCalls(ctx, hookRunner, turnID, roundNum, calls, emit)
 		for _, result := range results {
 			messages = append(messages, protocol.Message{
 				Role:       protocol.RoleTool,
@@ -294,6 +326,11 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 		}})
 	}
 	err := fmt.Errorf("exceeded max tool rounds: %d", a.cfg.MaxToolRounds)
+	err = joinHookError(err, hookRunner.Run(ctx, "session_done", map[string]any{
+		"run_id": run.ID,
+		"status": protocol.StepStatusFailed,
+		"error":  err.Error(),
+	}, emit))
 	emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
 	return messages, err
 }
@@ -306,9 +343,9 @@ type toolExecutionResult struct {
 	AttemptID  string
 }
 
-func (a *Agent) executeToolCalls(ctx context.Context, turnID string, round int, calls []protocol.ToolCall, emit func(protocol.Event)) []toolExecutionResult {
+func (a *Agent) executeToolCalls(ctx context.Context, hookRunner *runtimehooks.Runner, turnID string, round int, calls []protocol.ToolCall, emit func(protocol.Event)) []toolExecutionResult {
 	results := make([]toolExecutionResult, len(calls))
-	orchestrator := a.newToolOrchestrator(emit)
+	orchestrator := a.newToolOrchestrator(emit, hookRunner)
 	for _, call := range calls {
 		orchestrator.Request(call)
 	}
@@ -331,6 +368,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, turnID string, round int, 
 type toolOrchestrator struct {
 	agent     *Agent
 	emit      func(protocol.Event)
+	hooks     *runtimehooks.Runner
 	decisions map[string]toolPermissionDecision
 }
 
@@ -359,10 +397,11 @@ const (
 	toolProgressStatusAborted = "aborted"
 )
 
-func (a *Agent) newToolOrchestrator(emit func(protocol.Event)) *toolOrchestrator {
+func (a *Agent) newToolOrchestrator(emit func(protocol.Event), hookRunner *runtimehooks.Runner) *toolOrchestrator {
 	return &toolOrchestrator{
 		agent:     a,
 		emit:      emit,
+		hooks:     hookRunner,
 		decisions: map[string]toolPermissionDecision{},
 	}
 }
@@ -398,7 +437,7 @@ func (o *toolOrchestrator) EmitAttemptStarted(call protocol.ToolCall, attemptID 
 	})
 }
 
-func (o *toolOrchestrator) Execute(ctx context.Context, index int, call protocol.ToolCall, attemptID string) toolExecutionResult {
+func (o *toolOrchestrator) Execute(ctx context.Context, turnID string, index int, call protocol.ToolCall, attemptID string) toolExecutionResult {
 	started := time.Now()
 	decision := o.decision(call)
 	executingStatus := protocol.StepStatusStarted
@@ -407,7 +446,27 @@ func (o *toolOrchestrator) Execute(ctx context.Context, index int, call protocol
 	}
 	o.EmitProgress(call, attemptID, toolPhaseExecuting, executingStatus, decision.progressMetadata())
 	var out protocol.ToolResult
-	if decision.Decision == "deny" {
+	stepID := agentStepID(turnID, protocol.StepKindToolCall, index+1)
+	beforeHookErr := o.runHook(ctx, "before_tool", o.toolHookPayload(turnID, stepID, call, attemptID, map[string]any{
+		"args_summary":        summarizeToolArgs(call.Arguments),
+		"permission_decision": decision.Decision,
+		"permission_source":   decision.Source,
+		"permission_reason":   decision.Reason,
+		"requires_approval":   decision.RequiresApproval,
+		"risk":                decision.Risk,
+		"known_risk":          decision.KnownRisk,
+		"started_at":          started.UTC().Format(time.RFC3339Nano),
+	}))
+	if beforeHookErr != nil {
+		out = protocol.ToolResult{
+			CallID:    call.ID,
+			Name:      call.Name,
+			Content:   beforeHookErr.Error(),
+			IsError:   true,
+			ErrorCode: "hook_failed",
+			Metadata:  map[string]any{"hook_event": "before_tool"},
+		}
+	} else if decision.Decision == "deny" {
 		out = protocol.ToolResult{
 			CallID:    call.ID,
 			Name:      call.Name,
@@ -472,6 +531,30 @@ func (o *toolOrchestrator) Execute(ctx context.Context, index int, call protocol
 	out.Metadata["truncated"] = out.Truncated
 	if out.OutputRef != "" {
 		annotateOutputRefMetadata(out.OutputRef, out.Metadata)
+	}
+	if beforeHookErr == nil {
+		afterHookErr := o.runHook(ctx, "after_tool", o.toolHookPayload(turnID, stepID, call, attemptID, map[string]any{
+			"status":                  toolResultProgressStatus(out),
+			"error_code":              out.ErrorCode,
+			"is_error":                out.IsError,
+			"duration_ms":             duration,
+			"output_bytes":            out.Metadata["output_bytes"],
+			"output_estimated_tokens": out.Metadata["output_estimated_tokens"],
+			"truncated":               out.Truncated,
+			"output_ref":              out.OutputRef,
+			"permission_decision":     decision.Decision,
+			"permission_source":       decision.Source,
+			"permission_reason":       decision.Reason,
+		}))
+		if afterHookErr != nil {
+			out.IsError = true
+			out.ErrorCode = "hook_failed"
+			out.Content = afterHookErr.Error()
+			out.Metadata["hook_event"] = "after_tool"
+			out.Metadata["hook_error"] = afterHookErr.Error()
+			out.Metadata["output_bytes"] = len(out.Content)
+			out.Metadata["output_estimated_tokens"] = estimateMessagesTokens([]protocol.Message{{Role: protocol.RoleTool, Content: out.Content}})
+		}
 	}
 	progressStatus := toolResultProgressStatus(out)
 	if out.ErrorCode == "tool_aborted" {
@@ -612,6 +695,29 @@ func (o *toolOrchestrator) EmitProgress(call protocol.ToolCall, attemptID, phase
 		AttemptID: attemptID,
 		Data:      progress,
 	})
+}
+
+func (o *toolOrchestrator) runHook(ctx context.Context, event string, payload map[string]any) error {
+	if o == nil || o.hooks == nil {
+		return nil
+	}
+	return o.hooks.Run(ctx, event, payload, o.emit)
+}
+
+func (o *toolOrchestrator) toolHookPayload(turnID, stepID string, call protocol.ToolCall, attemptID string, extra map[string]any) map[string]any {
+	payload := map[string]any{
+		"turn_id":    turnID,
+		"step_id":    stepID,
+		"call_id":    call.ID,
+		"attempt_id": attemptID,
+		"tool_name":  call.Name,
+	}
+	for key, value := range extra {
+		if value != nil && value != "" {
+			payload[key] = value
+		}
+	}
+	return payload
 }
 
 func (o *toolOrchestrator) StepMetadata(call protocol.ToolCall, attemptID string, base map[string]any) map[string]any {
@@ -870,6 +976,16 @@ func minInt(a, b int) int {
 	return b
 }
 
+func joinHookError(primary, hookErr error) error {
+	if hookErr == nil {
+		return primary
+	}
+	if primary == nil {
+		return hookErr
+	}
+	return errors.Join(primary, hookErr)
+}
+
 func dangerousToolDisabledMessage() string {
 	return "tool disabled; set FAST_AGENT_AUTO_APPROVE_DANGEROUS=true or unset FAST_AGENT_AUTO_APPROVE_DANGEROUS to enable write/execute tools"
 }
@@ -941,7 +1057,7 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, orchestrator *tool
 					done <- orchestrator.AbortBeforeExecute(idx, call, agentAttemptID(turnID, idx), ctx.Err())
 					continue
 				}
-				result := orchestrator.Execute(ctx, idx, call, agentAttemptID(turnID, idx))
+				result := orchestrator.Execute(ctx, turnID, idx, call, agentAttemptID(turnID, idx))
 				if release != nil {
 					release()
 				}
@@ -985,7 +1101,7 @@ func (a *Agent) executeOneTool(ctx context.Context, orchestrator *toolOrchestrat
 	attemptID := agentAttemptID(turnID, index)
 	emitToolStepStarted(emit, turnID, round, index, call, parallel, batchID, batchSize, limit, orchestrator.StepMetadata(call, attemptID, a.toolStepMetadata(call, parallel, batchSize)))
 	orchestrator.EmitAttemptStarted(call, attemptID)
-	result := orchestrator.Execute(ctx, index, call, attemptID)
+	result := orchestrator.Execute(ctx, turnID, index, call, attemptID)
 	emitToolStepCompleted(emit, turnID, round, result, parallel, batchID, batchSize, limit)
 	orchestrator.EmitAttemptFinished(result)
 	return result

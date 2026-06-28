@@ -772,6 +772,61 @@ func TestRunMessagesParallelBatchCompletesOutOfOrderWithCallIDs(t *testing.T) {
 	}
 }
 
+func TestRunMessagesEmitsConfiguredHookEvents(t *testing.T) {
+	cfg := config.Default()
+	cfg.MaxToolRounds = 3
+	cfg.HooksEnabled = true
+	cfg.Hooks = []config.Hook{
+		testHook("session_start", "session_start"),
+		testHook("before_tool", "before_tool"),
+		testHook("after_tool", "after_tool"),
+		testHook("session_done", "session_done"),
+	}
+	registry := tools.NewRegistry(cfg)
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call-hook", ToolName: "time_now", ArgsDelta: `{}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "finished"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	a := New(cfg, prov, registry)
+	var events []protocol.Event
+	_, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "run tool"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, hookEvent := range []string{"session_start", "before_tool", "after_tool", "session_done"} {
+		if !sawHookFinished(events, hookEvent) {
+			t.Fatalf("missing hook %s in events %#v", hookEvent, events)
+		}
+	}
+	if !sawHookToolPayload(events, "before_tool", "call-hook", "time_now") ||
+		!sawHookToolPayload(events, "after_tool", "call-hook", "time_now") {
+		t.Fatalf("tool hook payload missing call/tool ids: %#v", events)
+	}
+}
+
+func testHook(name, event string) config.Hook {
+	return config.Hook{
+		Name:           name,
+		Event:          event,
+		Command:        "sh",
+		Args:           []string{"-c", "cat >/dev/null"},
+		Timeout:        time.Second,
+		MaxOutputBytes: 1024,
+		Enabled:        true,
+	}
+}
+
 func TestRunMessagesExclusiveToolBreaksParallelBatches(t *testing.T) {
 	cfg := config.Default()
 	cfg.MaxToolRounds = 3
@@ -1400,6 +1455,32 @@ func sawToolAudit(events []protocol.Event, name string, risk protocol.Risk, auto
 		}
 		_ = json.Unmarshal(bytes, &data)
 		if data.Name == name && data.Risk == risk && data.AutoApproved == autoApproved {
+			return true
+		}
+	}
+	return false
+}
+
+func sawHookFinished(events []protocol.Event, hookEvent string) bool {
+	for _, event := range events {
+		if event.Type != protocol.EventHookFinished {
+			continue
+		}
+		data := eventDataMap(event)
+		if data["hook_event"] == hookEvent {
+			return true
+		}
+	}
+	return false
+}
+
+func sawHookToolPayload(events []protocol.Event, hookEvent, callID, toolName string) bool {
+	for _, event := range events {
+		if event.Type != protocol.EventHookFinished {
+			continue
+		}
+		data := eventDataMap(event)
+		if data["hook_event"] == hookEvent && data["call_id"] == callID && data["tool_name"] == toolName {
 			return true
 		}
 	}

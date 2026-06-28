@@ -381,19 +381,19 @@ Acceptance:
 ### 3.4 Hooks v0
 
 - [ ] Add local command hooks:
-  - [ ] `session_start`
-  - [ ] `before_tool`
-  - [ ] `after_tool`
+  - [x] `session_start`
+  - [x] `before_tool`
+  - [x] `after_tool`
   - [ ] `mcp_status_change`
   - [ ] `provider_retry`
-  - [ ] `session_done`
-- [ ] Add timeout, env, cwd, redaction, and structured event payload.
-- [ ] Hooks must be disabled or no-op by default unless configured.
+  - [x] `session_done`
+- [x] Add timeout, env, cwd, redaction, and structured event payload.
+- [x] Hooks must be disabled or no-op by default unless configured.
 
 Acceptance:
 
-- [ ] Hook failure is reported but does not crash the harness unless configured as fatal.
-- [ ] Hook output is capped.
+- [x] Hook failure is reported but does not crash the harness unless configured as fatal.
+- [x] Hook output is capped.
 
 ### 3.5 Skills v0
 

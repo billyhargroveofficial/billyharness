@@ -433,6 +433,42 @@ env_http_headers = { Authorization = "REMOTE_MCP_AUTH_HEADER" }
 	}
 }
 
+func TestLoadHooksParsesCommandHooks(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "hooks.toml")
+	if err := os.WriteFile(path, []byte(`
+[hooks.before_tool.capture]
+command = "sh"
+args = ["-c", "cat"]
+env = { STATIC_VALUE = "literal" }
+env_vars = ["PATH"]
+cwd = "."
+timeout_sec = 1.5
+max_output_bytes = 123
+fatal = true
+
+[hooks.after_tool.disabled]
+enabled = false
+command = "sh"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hooks, err := LoadHooks([]string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hooks) != 1 {
+		t.Fatalf("hooks = %#v", hooks)
+	}
+	hook := hooks[0]
+	if hook.Event != "before_tool" || hook.Name != "capture" || hook.Command != "sh" ||
+		strings.Join(hook.Args, " ") != "-c cat" || hook.Env["STATIC_VALUE"] != "literal" ||
+		strings.Join(hook.EnvVars, ",") != "PATH" || hook.Timeout != 1500*time.Millisecond ||
+		hook.MaxOutputBytes != 123 || !hook.Fatal || !hook.Enabled {
+		t.Fatalf("hook = %#v", hook)
+	}
+}
+
 func TestFilterMCPServersKeepsOnlyAllowedNames(t *testing.T) {
 	servers := []MCPServer{
 		{Name: "context7"},

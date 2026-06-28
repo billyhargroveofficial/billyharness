@@ -237,6 +237,7 @@ func builtInConfig() Config {
 		GatewayAddr:               "127.0.0.1:8765",
 		MCPEnabled:                true,
 		MCPAllowedServers:         []string{"telegram", "telegram-parilka", "github", "context7"},
+		HooksEnabled:              true,
 	}
 }
 
@@ -281,6 +282,8 @@ func configSpecs() []configSpec {
 		boolSpec("mcp_enabled", []string{"FAST_AGENT_MCP_ENABLED"}, func(c Config) any { return c.MCPEnabled }, func(c *Config, v bool) { c.MCPEnabled = v }),
 		stringListSpec("mcp_config_files", []string{"FAST_AGENT_MCP_CONFIG_FILES"}, func(c Config) any { return c.MCPConfigFiles }, func(c *Config, v []string) { c.MCPConfigFiles = v }),
 		stringListSpec("mcp_allowed_servers", []string{"FAST_AGENT_MCP_ALLOWED_SERVERS"}, func(c Config) any { return c.MCPAllowedServers }, func(c *Config, v []string) { c.MCPAllowedServers = v }),
+		boolSpec("hooks_enabled", []string{"BILLYHARNESS_HOOKS_ENABLED", "FAST_AGENT_HOOKS_ENABLED"}, func(c Config) any { return c.HooksEnabled }, func(c *Config, v bool) { c.HooksEnabled = v }),
+		stringListSpec("hooks_config_files", []string{"BILLYHARNESS_HOOKS_CONFIG_FILES", "FAST_AGENT_HOOKS_CONFIG_FILES"}, func(c Config) any { return c.HookConfigFiles }, func(c *Config, v []string) { c.HookConfigFiles = v }),
 	}
 }
 

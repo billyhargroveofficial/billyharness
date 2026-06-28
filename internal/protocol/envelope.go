@@ -138,6 +138,8 @@ func ValidateEventEnvelope(event Event) error {
 		return requireEnvelope(event, "run_id", "call_id")
 	case EventToolCallStarted, EventToolCallFinished, EventToolCallFailed, EventToolCallAborted, EventToolOutputRefCreated:
 		return requireEnvelope(event, "run_id", "call_id", "attempt_id")
+	case EventHookStarted, EventHookFinished, EventHookFailed:
+		return requireEnvelope(event, "run_id")
 	case EventSessionStatus:
 		return nil
 	default:

@@ -579,6 +579,18 @@ func (s *ReplaySummary) appendTimeline(record EventRecord, event protocol.Event)
 	case protocol.EventContextCompacted:
 		item.Kind = "context_compaction"
 		item.Status = protocol.StepStatusCompleted
+	case protocol.EventHookStarted:
+		item.Kind = "hook"
+		item.Status = protocol.StepStatusStarted
+		applyTimelineMapData(&item, event.Data)
+	case protocol.EventHookFinished:
+		item.Kind = "hook"
+		item.Status = protocol.StepStatusCompleted
+		applyTimelineMapData(&item, event.Data)
+	case protocol.EventHookFailed:
+		item.Kind = "hook"
+		item.Status = protocol.StepStatusFailed
+		applyTimelineMapData(&item, event.Data)
 	}
 	s.Timeline = append(s.Timeline, item)
 	return nil
@@ -604,7 +616,10 @@ func isReplayTimelineEvent(eventType protocol.EventType) bool {
 		protocol.EventToolCallFailed,
 		protocol.EventToolCallAborted,
 		protocol.EventToolOutputRefCreated,
-		protocol.EventContextCompacted:
+		protocol.EventContextCompacted,
+		protocol.EventHookStarted,
+		protocol.EventHookFinished,
+		protocol.EventHookFailed:
 		return true
 	default:
 		return false
