@@ -18,17 +18,20 @@ import (
 const CurrentManifestVersion = 1
 
 type Manifest struct {
-	SchemaVersion int       `json:"schema_version"`
-	RunID         string    `json:"run_id"`
-	CreatedAt     time.Time `json:"created_at"`
-	StartedAtMS   int64     `json:"started_at_unix_ms"`
-	Harness       string    `json:"harness"`
-	ProfileHash   string    `json:"profile_hash,omitempty"`
-	TasksPath     string    `json:"tasks_path,omitempty"`
-	TaskCount     int       `json:"task_count,omitempty"`
-	ResultsJSONL  string    `json:"results_jsonl"`
-	EventsJSONL   string    `json:"events_jsonl"`
-	PayloadsDir   string    `json:"payloads_dir,omitempty"`
+	SchemaVersion         int            `json:"schema_version"`
+	RunID                 string         `json:"run_id"`
+	CreatedAt             time.Time      `json:"created_at"`
+	StartedAtMS           int64          `json:"started_at_unix_ms"`
+	Harness               string         `json:"harness"`
+	ProfileHash           string         `json:"profile_hash,omitempty"`
+	TasksPath             string         `json:"tasks_path,omitempty"`
+	TaskCount             int            `json:"task_count,omitempty"`
+	ResultsJSONL          string         `json:"results_jsonl"`
+	EventsJSONL           string         `json:"events_jsonl"`
+	PayloadsDir           string         `json:"payloads_dir,omitempty"`
+	ConfigSnapshot        map[string]any `json:"config_snapshot,omitempty"`
+	ProviderModelMetadata map[string]any `json:"provider_model_metadata,omitempty"`
+	MCPStatus             map[string]any `json:"mcp_status,omitempty"`
 }
 
 type EventRecord struct {

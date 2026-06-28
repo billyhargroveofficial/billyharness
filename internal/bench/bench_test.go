@@ -65,6 +65,13 @@ func TestRunMockTaskWritesResults(t *testing.T) {
 		manifest.ProfileHash != summary.ProfileHash {
 		t.Fatalf("manifest = %#v summary = %#v", manifest, summary)
 	}
+	if manifest.ConfigSnapshot["model"] != "mock" ||
+		manifest.ConfigSnapshot["provider"] != "mock" ||
+		manifest.ProviderModelMetadata["model"] != "mock" ||
+		manifest.ProviderModelMetadata["provider"] != "mock" ||
+		manifest.MCPStatus["enabled"] == nil {
+		t.Fatalf("manifest missing audit snapshots: %#v", manifest)
+	}
 
 	resultsBytes, err := os.ReadFile(summary.ResultsJSONL)
 	if err != nil {

@@ -275,11 +275,14 @@ func TestReplayEventsRejectsInvalidNewEventEnvelope(t *testing.T) {
 func TestWriteManifestUsesPrivateAtomicJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "trace", "manifest.json")
 	err := WriteManifest(path, Manifest{
-		RunID:        "run-1",
-		Harness:      "fast-agent-harness-go",
-		ProfileHash:  "profile-sha",
-		ResultsJSONL: "results.jsonl",
-		EventsJSONL:  "events.jsonl",
+		RunID:                 "run-1",
+		Harness:               "fast-agent-harness-go",
+		ProfileHash:           "profile-sha",
+		ResultsJSONL:          "results.jsonl",
+		EventsJSONL:           "events.jsonl",
+		ConfigSnapshot:        map[string]any{"model": "mock"},
+		ProviderModelMetadata: map[string]any{"provider": "mock"},
+		MCPStatus:             map[string]any{"enabled": false},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -301,5 +304,10 @@ func TestWriteManifestUsesPrivateAtomicJSON(t *testing.T) {
 	}
 	if manifest.SchemaVersion != CurrentManifestVersion || manifest.RunID != "run-1" || manifest.ProfileHash != "profile-sha" || manifest.StartedAtMS == 0 {
 		t.Fatalf("manifest = %#v", manifest)
+	}
+	if manifest.ConfigSnapshot["model"] != "mock" ||
+		manifest.ProviderModelMetadata["provider"] != "mock" ||
+		manifest.MCPStatus["enabled"] != false {
+		t.Fatalf("manifest snapshots = %#v", manifest)
 	}
 }

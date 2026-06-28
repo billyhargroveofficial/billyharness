@@ -17,6 +17,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/agent"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/runstate"
@@ -229,16 +230,19 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 		return summary, err
 	}
 	if err := trace.WriteManifest(manifestPath, trace.Manifest{
-		RunID:        runID,
-		CreatedAt:    startAll.UTC(),
-		StartedAtMS:  startAll.UTC().UnixMilli(),
-		Harness:      "fast-agent-harness-go",
-		ProfileHash:  profileHash,
-		TasksPath:    rc.TasksPath,
-		TaskCount:    len(tasks),
-		ResultsJSONL: resultsPath,
-		EventsJSONL:  eventsPath,
-		PayloadsDir:  payloadsDir,
+		RunID:                 runID,
+		CreatedAt:             startAll.UTC(),
+		StartedAtMS:           startAll.UTC().UnixMilli(),
+		Harness:               "fast-agent-harness-go",
+		ProfileHash:           profileHash,
+		TasksPath:             rc.TasksPath,
+		TaskCount:             len(tasks),
+		ResultsJSONL:          resultsPath,
+		EventsJSONL:           eventsPath,
+		PayloadsDir:           payloadsDir,
+		ConfigSnapshot:        benchConfigSnapshot(cfg),
+		ProviderModelMetadata: benchProviderModelMetadata(cfg),
+		MCPStatus:             benchMCPStatusSnapshot(cfg),
 	}); err != nil {
 		return summary, err
 	}
@@ -377,6 +381,92 @@ func applyRunConfig(cfg config.Config, rc RunConfig) config.Config {
 
 func runProfileHash(cfg config.Config) string {
 	return runstate.NewSnapshot(cfg, agent.InitialMessages(cfg), nil).ProfileInstructionHash
+}
+
+func benchConfigSnapshot(cfg config.Config) map[string]any {
+	return map[string]any{
+		"provider":                      cfg.Provider,
+		"model":                         cfg.Model,
+		"profile":                       cfg.Profile,
+		"thinking":                      cfg.Thinking,
+		"reasoning_effort":              cfg.ReasoningEffort,
+		"max_tokens":                    cfg.MaxTokens,
+		"max_tool_rounds":               cfg.MaxToolRounds,
+		"max_parallel_tools":            cfg.MaxParallelTools,
+		"provider_max_retries":          cfg.ProviderMaxRetries,
+		"context_window_tokens":         cfg.ContextWindowTokens,
+		"context_compact_tokens":        cfg.ContextCompactTokens,
+		"context_compact_keep":          cfg.ContextCompactKeep,
+		"context_compact_max_chars":     cfg.ContextCompactMaxChars,
+		"web_summary_mode":              cfg.WebSummaryMode,
+		"web_summary_provider":          cfg.WebSummaryProvider,
+		"web_summary_model":             cfg.WebSummaryModel,
+		"web_summary_max_input_tokens":  cfg.WebSummaryMaxInputTokens,
+		"web_summary_max_output_tokens": cfg.WebSummaryMaxOutputTokens,
+		"workspace_roots":               append([]string(nil), cfg.WorkspaceRoots...),
+		"max_tool_output_bytes":         cfg.MaxToolOutputBytes,
+		"auto_approve_dangerous":        cfg.AutoApproveDangerous,
+		"store_reasoning_content":       cfg.StoreReasoningContent,
+		"mcp_enabled":                   cfg.MCPEnabled,
+		"mcp_config_files":              append([]string(nil), cfg.MCPConfigFiles...),
+		"mcp_allowed_servers":           append([]string(nil), cfg.MCPAllowedServers...),
+	}
+}
+
+func benchProviderModelMetadata(cfg config.Config) map[string]any {
+	model := modelinfo.Lookup(cfg.Model)
+	providerInfo := modelinfo.Provider(cfg.Provider)
+	modelProvider := model.Provider
+	if strings.TrimSpace(modelProvider) == "" {
+		modelProvider = cfg.Provider
+	}
+	modelKnown := model.Known || cfg.Provider == modelinfo.ProviderMock
+	return map[string]any{
+		"provider":                cfg.Provider,
+		"model":                   cfg.Model,
+		"provider_info":           providerInfo,
+		"model_known":             modelKnown,
+		"model_provider":          modelProvider,
+		"subscription":            model.Subscription || providerInfo.Subscription,
+		"context_window_tokens":   model.ContextWindowTokens,
+		"reasoning_modes":         append([]string(nil), model.ReasoningModes...),
+		"tool_calls":              model.ToolCalls,
+		"parallel_tool_calls":     model.ParallelToolCalls,
+		"streaming":               model.Streaming,
+		"token_accounting_fields": append([]string(nil), model.TokenAccountingFields...),
+		"cache_accounting_fields": append([]string(nil), model.CacheAccountingFields...),
+		"default_summary_model":   model.DefaultSummaryModel,
+	}
+}
+
+func benchMCPStatusSnapshot(cfg config.Config) map[string]any {
+	return map[string]any{
+		"enabled":      cfg.MCPEnabled,
+		"config_files": append([]string(nil), cfg.MCPConfigFiles...),
+		"allowed":      append([]string(nil), cfg.MCPAllowedServers...),
+		"servers":      benchMCPServerSummaries(cfg.MCPServers),
+	}
+}
+
+func benchMCPServerSummaries(servers []config.MCPServer) []map[string]any {
+	out := make([]map[string]any, 0, len(servers))
+	for _, server := range servers {
+		transport := "stdio"
+		if strings.TrimSpace(server.URL) != "" {
+			transport = "http"
+		}
+		out = append(out, map[string]any{
+			"name":           server.Name,
+			"enabled":        server.Enabled,
+			"required":       server.Required,
+			"transport":      transport,
+			"command":        filepath.Base(server.Command),
+			"url_set":        strings.TrimSpace(server.URL) != "",
+			"enabled_tools":  append([]string(nil), server.EnabledTools...),
+			"disabled_tools": append([]string(nil), server.DisabledTools...),
+		})
+	}
+	return out
 }
 
 func LoadTasks(path string) ([]Task, error) {

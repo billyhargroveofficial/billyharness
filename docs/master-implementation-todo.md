@@ -812,26 +812,26 @@ Acceptance:
 
 ### 8.2 Trace Bundles
 
-- [ ] Include:
-  - [ ] manifest
-  - [ ] event stream
-  - [ ] payload refs
-  - [ ] result rows
-  - [ ] config snapshot
-  - [ ] provider/model metadata
-  - [ ] profile hash
-  - [ ] MCP status
-  - [ ] sanitized tool outputs or refs
-- [ ] Add verifier:
-  - [ ] event ids complete
-  - [ ] payload refs exist
-  - [ ] payload hashes match
-  - [ ] result aggregates match events
-  - [ ] no raw secrets
+- [x] Include:
+  - [x] manifest
+  - [x] event stream
+  - [x] payload refs
+  - [x] result rows
+  - [x] config snapshot
+  - [x] provider/model metadata
+  - [x] profile hash
+  - [x] MCP status
+  - [x] sanitized tool outputs or refs
+- [x] Add verifier:
+  - [x] event ids complete
+  - [x] payload refs exist
+  - [x] payload hashes match
+  - [x] result aggregates match events
+  - [x] no raw secrets
 
 Acceptance:
 
-- [ ] Bench result can be audited from files only.
+- [x] Bench result can be audited from files only.
 
 ### 8.3 Optional Indexes
 
