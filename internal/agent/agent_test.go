@@ -58,6 +58,18 @@ func TestRunMessagesEmitsTypedTurnAndModelStepEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runStarted, ok := firstEventData(events, protocol.EventRunStarted)
+	if !ok || runStarted["submission_id"] == "" || runStarted["run_id"] == "" {
+		t.Fatalf("run started = %#v ok=%v", runStarted, ok)
+	}
+	for _, event := range events {
+		if event.Type == "" {
+			continue
+		}
+		if event.SubmissionID == "" || event.SubmissionID != runStarted["submission_id"] {
+			t.Fatalf("event missing stable submission id: %#v run=%#v", event, runStarted)
+		}
+	}
 	started, ok := firstTurnEvent(events, protocol.EventTurnStarted)
 	if !ok || started.TurnID != "turn-001" || started.Round != 1 || started.Status != protocol.TurnStatusStarted || started.Model != "mock" {
 		t.Fatalf("turn started = %#v ok=%v", started, ok)

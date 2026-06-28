@@ -100,14 +100,14 @@ Purpose: turn the current loop into a real, replayable runtime without losing sp
 
 - [x] Introduce explicit `Submission`, `Run`, `Turn`, and `Step` types.
 - [x] Keep existing public API compatible while adding the internal model.
-- [ ] Add stable ids:
-  - [ ] `submission_id`
-  - [ ] `run_id`
-  - [ ] `turn_id`
-  - [ ] `step_id`
-  - [ ] `call_id`
-  - [ ] `attempt_id`
-  - [ ] `parent_step_id`
+- [x] Add stable ids:
+  - [x] `submission_id`
+  - [x] `run_id`
+  - [x] `turn_id`
+  - [x] `step_id`
+  - [x] `call_id`
+  - [x] `attempt_id`
+  - [x] `parent_step_id`
 - [x] Add a per-turn immutable snapshot:
   - [x] provider id
   - [x] model id

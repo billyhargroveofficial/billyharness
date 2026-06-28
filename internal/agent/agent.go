@@ -58,8 +58,18 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 		emit = func(protocol.Event) {}
 	}
 	runID := newAgentRunID()
-	emit = protocol.NewEventEnricher(runID, protocol.EventSourceAgent, emit).Emit
-	emit(protocol.Event{Type: protocol.EventRunStarted})
+	submission := runstate.Submission{ID: newAgentSubmissionID(), CreatedAt: time.Now().UTC()}
+	run := runstate.Run{ID: runID, SubmissionID: submission.ID, Status: "started", StartedAt: submission.CreatedAt}
+	emit = protocol.NewEventEnricherWithEnvelope(protocol.EventEnvelope{
+		SubmissionID: submission.ID,
+		RunID:        run.ID,
+		Source:       protocol.EventSourceAgent,
+	}, emit).Emit
+	emit(protocol.Event{Type: protocol.EventRunStarted, Data: map[string]any{
+		"submission_id": run.SubmissionID,
+		"run_id":        run.ID,
+		"status":        run.Status,
+	}})
 	messages = a.withMCPInstructions(messages)
 	var lastPromptTokens int64
 	for round := 0; round < a.cfg.MaxToolRounds; round++ {
@@ -759,6 +769,10 @@ func agentAttemptID(turnID string, index int) string {
 
 func agentRequestID(turnID string, round int) string {
 	return fmt.Sprintf("%s:provider-request-%03d", turnID, round)
+}
+
+func newAgentSubmissionID() string {
+	return fmt.Sprintf("submission-%s-%d", time.Now().UTC().Format("20060102T150405.000000000Z"), os.Getpid())
 }
 
 func newAgentRunID() string {

@@ -40,14 +40,20 @@ type EventEnricher struct {
 }
 
 func NewEventEnricher(runID string, source EventSource, emit func(Event)) *EventEnricher {
+	return NewEventEnricherWithEnvelope(EventEnvelope{
+		RunID:  runID,
+		Source: source,
+	}, emit)
+}
+
+func NewEventEnricherWithEnvelope(env EventEnvelope, emit func(Event)) *EventEnricher {
+	if env.Now == nil {
+		env.Now = func() time.Time {
+			return time.Now().UTC()
+		}
+	}
 	return &EventEnricher{
-		env: EventEnvelope{
-			RunID:  runID,
-			Source: source,
-			Now: func() time.Time {
-				return time.Now().UTC()
-			},
-		},
+		env:  env,
 		emit: emit,
 	}
 }
