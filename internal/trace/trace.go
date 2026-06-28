@@ -234,6 +234,7 @@ type ReplaySummary struct {
 	ModelCallsStarted      int                  `json:"model_calls_started,omitempty"`
 	ModelCallsFinished     int                  `json:"model_calls_finished,omitempty"`
 	ToolCallsStarted       int                  `json:"tool_calls_started,omitempty"`
+	ToolCallProgress       int                  `json:"tool_call_progress,omitempty"`
 	ToolCallsFinished      int                  `json:"tool_calls_finished,omitempty"`
 	ContextCompactions     int                  `json:"context_compactions,omitempty"`
 	InputTokens            int64                `json:"input_tokens,omitempty"`
@@ -258,6 +259,7 @@ type ReplayTimelineItem struct {
 	Round        int    `json:"round,omitempty"`
 	Index        int    `json:"index,omitempty"`
 	Kind         string `json:"kind,omitempty"`
+	Phase        string `json:"phase,omitempty"`
 	Status       string `json:"status,omitempty"`
 	Name         string `json:"name,omitempty"`
 	StopReason   string `json:"stop_reason,omitempty"`
@@ -447,6 +449,8 @@ func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEve
 		s.ModelCallsFinished++
 	case protocol.EventToolCallStarted:
 		s.ToolCallsStarted++
+	case protocol.EventToolCallProgress:
+		s.ToolCallProgress++
 	case protocol.EventToolCallFinished:
 		s.ToolCallsFinished++
 	case protocol.EventContextCompacted:
@@ -537,6 +541,9 @@ func (s *ReplaySummary) appendTimeline(record EventRecord, event protocol.Event)
 		item.Kind = protocol.StepKindToolCall
 		item.Status = protocol.StepStatusStarted
 		applyTimelineToolNameData(&item, event.Data)
+	case protocol.EventToolCallProgress:
+		item.Kind = protocol.StepKindToolCall
+		applyTimelineToolProgressData(&item, event.Data)
 	case protocol.EventToolCallFinished:
 		item.Kind = protocol.StepKindToolCall
 		item.Status = protocol.StepStatusCompleted
@@ -576,6 +583,7 @@ func isReplayTimelineEvent(eventType protocol.EventType) bool {
 		protocol.EventToolPermissionRequested,
 		protocol.EventToolPermissionDecided,
 		protocol.EventToolCallStarted,
+		protocol.EventToolCallProgress,
 		protocol.EventToolCallFinished,
 		protocol.EventToolCallFailed,
 		protocol.EventToolCallAborted,
@@ -614,6 +622,24 @@ func applyTimelineToolResultData(item *ReplayTimelineItem, data any) {
 			item.Status = protocol.StepStatusFailed
 		}
 		applyTimelineMap(item, result.Metadata)
+		return
+	}
+	applyTimelineMapData(item, data)
+}
+
+func applyTimelineToolProgressData(item *ReplayTimelineItem, data any) {
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+	var progress protocol.ToolProgressEvent
+	if err := json.Unmarshal(bytes, &progress); err == nil {
+		item.CallID = firstString(item.CallID, progress.CallID)
+		item.AttemptID = firstString(item.AttemptID, progress.AttemptID)
+		item.Name = firstString(item.Name, progress.Name)
+		item.Phase = firstString(item.Phase, progress.Phase)
+		item.Status = firstString(progress.Status, item.Status)
+		applyTimelineMap(item, progress.Metadata)
 		return
 	}
 	applyTimelineMapData(item, data)

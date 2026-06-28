@@ -508,6 +508,32 @@ func TestRunMessagesToolOrchestratorEmitsSafePermissionAndAttempt(t *testing.T) 
 		result.Metadata["truncated"] == nil {
 		t.Fatalf("tool result metadata = %#v ok=%v", result, ok)
 	}
+	progress := toolProgressEvents(events, "call_time")
+	wantPhases := []string{
+		toolPhasePrepare,
+		toolPhasePermissionDecision,
+		toolPhaseAttemptStarted,
+		toolPhaseExecuting,
+		toolPhaseAttemptFinished,
+		toolPhaseRetryDecision,
+		toolPhaseFinalize,
+	}
+	if len(progress) != len(wantPhases) {
+		t.Fatalf("tool progress events = %#v", progress)
+	}
+	for i, want := range wantPhases {
+		if progress[i].Phase != want {
+			t.Fatalf("progress[%d].phase = %q, want %q: %#v", i, progress[i].Phase, want, progress)
+		}
+	}
+	if progress[0].Status != protocol.StepStatusStarted ||
+		progress[1].Status != "allow" ||
+		progress[3].Status != protocol.StepStatusStarted ||
+		progress[4].Status != protocol.StepStatusCompleted ||
+		progress[5].Status != toolProgressStatusSkipped ||
+		progress[6].Status != protocol.StepStatusCompleted {
+		t.Fatalf("tool progress statuses = %#v", progress)
+	}
 }
 
 func TestRunMessagesToolOrchestratorDeniesDangerousToolBeforeExecution(t *testing.T) {
@@ -549,6 +575,10 @@ func TestRunMessagesToolOrchestratorDeniesDangerousToolBeforeExecution(t *testin
 	}
 	if !sawEvent(events, protocol.EventToolCallFailed) {
 		t.Fatalf("tool.call_failed missing: %#v", events)
+	}
+	progress := toolProgressEvents(events, "call_write")
+	if len(progress) == 0 || progress[len(progress)-1].Phase != toolPhaseFinalize || progress[len(progress)-1].Status != protocol.StepStatusFailed {
+		t.Fatalf("denied tool progress = %#v", progress)
 	}
 }
 
@@ -889,6 +919,16 @@ func TestRunMessagesRecordsAbortWhenActiveToolIsCanceled(t *testing.T) {
 	}
 	if !sawAborted || aborted.CallID != "call_cancel" || aborted.ErrorCode != "tool_aborted" || aborted.Metadata["attempt_id"] == "" {
 		t.Fatalf("aborted result = %#v saw=%v events=%#v", aborted, sawAborted, events)
+	}
+	var sawCancelProgress bool
+	for _, progress := range toolProgressEvents(events, "call_cancel") {
+		if progress.Phase == toolPhaseCancelAbort && progress.Status == toolProgressStatusAborted {
+			sawCancelProgress = true
+			break
+		}
+	}
+	if !sawCancelProgress {
+		t.Fatalf("cancel progress missing: %#v", toolProgressEvents(events, "call_cancel"))
 	}
 }
 
@@ -1293,6 +1333,24 @@ func sawPermissionDecision(events []protocol.Event, name, decision, source, reas
 		}
 	}
 	return false
+}
+
+func toolProgressEvents(events []protocol.Event, callID string) []protocol.ToolProgressEvent {
+	var progress []protocol.ToolProgressEvent
+	for _, event := range events {
+		if event.Type != protocol.EventToolCallProgress {
+			continue
+		}
+		var item protocol.ToolProgressEvent
+		bytes, _ := json.Marshal(event.Data)
+		if err := json.Unmarshal(bytes, &item); err != nil {
+			continue
+		}
+		if item.CallID == callID {
+			progress = append(progress, item)
+		}
+	}
+	return progress
 }
 
 func eventIndex(events []protocol.Event, typ protocol.EventType) int {

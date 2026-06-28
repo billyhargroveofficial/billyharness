@@ -134,20 +134,20 @@ Acceptance:
 Purpose: centralize permission, attempt, retry, cancellation, audit, output refs, and telemetry.
 
 - [x] Add `internal/toolorchestrator` or equivalent package only if it pays for itself.
-- [ ] Define orchestration lifecycle:
-  - [ ] prepare
-  - [ ] permission decision
-  - [ ] attempt started
-  - [ ] attempt finished
-  - [ ] retry decision
-  - [ ] finalize
-  - [ ] cancel/abort
+- [x] Define orchestration lifecycle:
+  - [x] prepare
+  - [x] permission decision
+  - [x] attempt started
+  - [x] attempt finished
+  - [x] retry decision
+  - [x] finalize
+  - [x] cancel/abort
 - [ ] Add structured events:
   - [x] `tool.call_requested`
   - [x] `tool.permission_requested`
   - [x] `tool.permission_decided`
   - [x] `tool.call_started`
-  - [ ] `tool.call_progress`
+  - [x] `tool.call_progress`
   - [x] `tool.call_finished`
   - [x] `tool.call_failed`
   - [x] `tool.call_aborted`

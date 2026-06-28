@@ -345,6 +345,20 @@ type toolPermissionDecision struct {
 	Reason           string
 }
 
+const (
+	toolPhasePrepare            = "prepare"
+	toolPhasePermissionDecision = "permission_decision"
+	toolPhaseAttemptStarted     = "attempt_started"
+	toolPhaseExecuting          = "executing"
+	toolPhaseAttemptFinished    = "attempt_finished"
+	toolPhaseRetryDecision      = "retry_decision"
+	toolPhaseFinalize           = "finalize"
+	toolPhaseCancelAbort        = "cancel_abort"
+
+	toolProgressStatusSkipped = "skipped"
+	toolProgressStatusAborted = "aborted"
+)
+
 func (a *Agent) newToolOrchestrator(emit func(protocol.Event)) *toolOrchestrator {
 	return &toolOrchestrator{
 		agent:     a,
@@ -358,10 +372,14 @@ func (o *toolOrchestrator) Request(call protocol.ToolCall) {
 		return
 	}
 	o.emit(protocol.Event{Type: protocol.EventToolCallRequested, CallID: call.ID, Data: call})
+	o.EmitProgress(call, "", toolPhasePrepare, protocol.StepStatusStarted, map[string]any{
+		"args_summary": summarizeToolArgs(call.Arguments),
+	})
 	decision := o.permissionDecision(call)
 	o.decisions[call.ID] = decision
 	o.emit(protocol.Event{Type: protocol.EventToolPermissionRequested, Data: decision.requestEventData()})
 	o.emit(protocol.Event{Type: protocol.EventToolPermissionDecided, Data: decision.decisionEventData()})
+	o.EmitProgress(call, "", toolPhasePermissionDecision, decision.Decision, decision.progressMetadata())
 	if o.agent != nil {
 		o.agent.emitToolAudit(call, o.emit)
 	}
@@ -371,6 +389,7 @@ func (o *toolOrchestrator) EmitAttemptStarted(call protocol.ToolCall, attemptID 
 	if o == nil || o.emit == nil {
 		return
 	}
+	o.EmitProgress(call, attemptID, toolPhaseAttemptStarted, protocol.StepStatusStarted, nil)
 	o.emit(protocol.Event{
 		Type:      protocol.EventToolCallStarted,
 		CallID:    call.ID,
@@ -382,6 +401,11 @@ func (o *toolOrchestrator) EmitAttemptStarted(call protocol.ToolCall, attemptID 
 func (o *toolOrchestrator) Execute(ctx context.Context, index int, call protocol.ToolCall, attemptID string) toolExecutionResult {
 	started := time.Now()
 	decision := o.decision(call)
+	executingStatus := protocol.StepStatusStarted
+	if decision.Decision == "deny" {
+		executingStatus = toolProgressStatusSkipped
+	}
+	o.EmitProgress(call, attemptID, toolPhaseExecuting, executingStatus, decision.progressMetadata())
 	var out protocol.ToolResult
 	if decision.Decision == "deny" {
 		out = protocol.ToolResult{
@@ -449,6 +473,25 @@ func (o *toolOrchestrator) Execute(ctx context.Context, index int, call protocol
 	if out.OutputRef != "" {
 		annotateOutputRefMetadata(out.OutputRef, out.Metadata)
 	}
+	progressStatus := toolResultProgressStatus(out)
+	if out.ErrorCode == "tool_aborted" {
+		o.EmitProgress(call, attemptID, toolPhaseCancelAbort, toolProgressStatusAborted, map[string]any{
+			"error_code":  out.ErrorCode,
+			"duration_ms": duration,
+		})
+	}
+	o.EmitProgress(call, attemptID, toolPhaseAttemptFinished, progressStatus, map[string]any{
+		"duration_ms":             duration,
+		"error_code":              out.ErrorCode,
+		"output_bytes":            out.Metadata["output_bytes"],
+		"output_estimated_tokens": out.Metadata["output_estimated_tokens"],
+		"truncated":               out.Truncated,
+		"permission_decision":     decision.Decision,
+		"permission_source":       decision.Source,
+		"permission_reason":       decision.Reason,
+		"output_ref":              out.OutputRef,
+		"rate_limit_wait_ms":      out.Metadata["rate_limit_wait_ms"],
+	})
 	return toolExecutionResult{Index: index, Call: call, Result: out, DurationMS: duration, AttemptID: attemptID}
 }
 
@@ -477,6 +520,22 @@ func (o *toolOrchestrator) AbortBeforeExecute(index int, call protocol.ToolCall,
 	out.Metadata["output_bytes"] = len(out.Content)
 	out.Metadata["output_estimated_tokens"] = estimateMessagesTokens([]protocol.Message{{Role: protocol.RoleTool, Content: out.Content}})
 	out.Metadata["truncated"] = false
+	o.EmitProgress(call, attemptID, toolPhaseCancelAbort, toolProgressStatusAborted, map[string]any{
+		"error_code":              out.ErrorCode,
+		"output_bytes":            out.Metadata["output_bytes"],
+		"output_estimated_tokens": out.Metadata["output_estimated_tokens"],
+		"permission_decision":     decision.Decision,
+		"permission_source":       decision.Source,
+		"permission_reason":       decision.Reason,
+	})
+	o.EmitProgress(call, attemptID, toolPhaseAttemptFinished, toolProgressStatusAborted, map[string]any{
+		"error_code":              out.ErrorCode,
+		"output_bytes":            out.Metadata["output_bytes"],
+		"output_estimated_tokens": out.Metadata["output_estimated_tokens"],
+		"permission_decision":     decision.Decision,
+		"permission_source":       decision.Source,
+		"permission_reason":       decision.Reason,
+	})
 	return toolExecutionResult{Index: index, Call: call, Result: out, AttemptID: attemptID}
 }
 
@@ -484,6 +543,7 @@ func (o *toolOrchestrator) EmitAttemptFinished(result toolExecutionResult) {
 	if o == nil || o.emit == nil {
 		return
 	}
+	progressStatus := toolResultProgressStatus(result.Result)
 	if result.Result.OutputRef != "" {
 		o.emit(protocol.Event{Type: protocol.EventToolOutputRefCreated, Data: map[string]any{
 			"call_id":    result.Call.ID,
@@ -505,11 +565,40 @@ func (o *toolOrchestrator) EmitAttemptFinished(result toolExecutionResult) {
 			Data:      result.Result,
 		})
 	}
+	o.EmitProgress(result.Call, result.AttemptID, toolPhaseRetryDecision, toolProgressStatusSkipped, map[string]any{
+		"reason": "retries_not_configured",
+	})
 	o.emit(protocol.Event{
 		Type:      protocol.EventToolCallFinished,
 		CallID:    result.Call.ID,
 		AttemptID: result.AttemptID,
 		Data:      result.Result,
+	})
+	o.EmitProgress(result.Call, result.AttemptID, toolPhaseFinalize, progressStatus, map[string]any{
+		"duration_ms": result.DurationMS,
+		"error_code":  result.Result.ErrorCode,
+		"truncated":   result.Result.Truncated,
+		"output_ref":  result.Result.OutputRef,
+	})
+}
+
+func (o *toolOrchestrator) EmitProgress(call protocol.ToolCall, attemptID, phase, status string, metadata map[string]any) {
+	if o == nil || o.emit == nil {
+		return
+	}
+	progress := protocol.ToolProgressEvent{
+		CallID:    call.ID,
+		Name:      call.Name,
+		AttemptID: attemptID,
+		Phase:     phase,
+		Status:    status,
+		Metadata:  cleanProgressMetadata(metadata),
+	}
+	o.emit(protocol.Event{
+		Type:      protocol.EventToolCallProgress,
+		CallID:    call.ID,
+		AttemptID: attemptID,
+		Data:      progress,
 	})
 }
 
@@ -602,6 +691,46 @@ func (d toolPermissionDecision) decisionEventData() map[string]any {
 	data["source"] = d.Source
 	data["reason"] = d.Reason
 	return data
+}
+
+func (d toolPermissionDecision) progressMetadata() map[string]any {
+	data := map[string]any{
+		"permission_decision": d.Decision,
+		"permission_source":   d.Source,
+		"permission_reason":   d.Reason,
+		"requires_approval":   d.RequiresApproval,
+	}
+	if d.KnownRisk {
+		data["risk"] = d.Risk
+	}
+	return data
+}
+
+func cleanProgressMetadata(metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	clean := map[string]any{}
+	for key, value := range metadata {
+		if value == nil || value == "" {
+			continue
+		}
+		clean[key] = value
+	}
+	if len(clean) == 0 {
+		return nil
+	}
+	return clean
+}
+
+func toolResultProgressStatus(result protocol.ToolResult) string {
+	if result.ErrorCode == "tool_aborted" {
+		return toolProgressStatusAborted
+	}
+	if result.IsError {
+		return protocol.StepStatusFailed
+	}
+	return protocol.StepStatusCompleted
 }
 
 func ensureToolMetadata(out *protocol.ToolResult) {

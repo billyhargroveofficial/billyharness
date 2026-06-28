@@ -130,7 +130,7 @@ func ValidateEventEnvelope(event Event) error {
 		return requireEnvelope(event, "run_id", "turn_id", "step_id")
 	case EventModelCallStarted, EventModelCallFinished, EventAssistantDelta, EventAssistantReasoning, EventProviderUsageUpdate:
 		return requireEnvelope(event, "run_id", "turn_id", "step_id")
-	case EventToolCallRequested, EventToolPermissionRequested, EventToolPermissionDecided, EventToolAudit:
+	case EventToolCallRequested, EventToolPermissionRequested, EventToolPermissionDecided, EventToolAudit, EventToolCallProgress:
 		return requireEnvelope(event, "run_id", "call_id")
 	case EventToolCallStarted, EventToolCallFinished, EventToolCallFailed, EventToolCallAborted, EventToolOutputRefCreated:
 		return requireEnvelope(event, "run_id", "call_id", "attempt_id")
@@ -200,6 +200,12 @@ func enrichEventIDsFromData(event *Event) {
 		if data != nil {
 			copyToolResultEnvelope(event, *data)
 		}
+	case ToolProgressEvent:
+		copyToolProgressEnvelope(event, data)
+	case *ToolProgressEvent:
+		if data != nil {
+			copyToolProgressEnvelope(event, *data)
+		}
 	case map[string]any:
 		copyMapEnvelope(event, data)
 	case json.RawMessage:
@@ -243,6 +249,16 @@ func copyToolResultEnvelope(event *Event, result ToolResult) {
 		event.CallID = result.CallID
 	}
 	copyMapEnvelope(event, result.Metadata)
+}
+
+func copyToolProgressEnvelope(event *Event, progress ToolProgressEvent) {
+	if event.CallID == "" {
+		event.CallID = progress.CallID
+	}
+	if event.AttemptID == "" {
+		event.AttemptID = progress.AttemptID
+	}
+	copyMapEnvelope(event, progress.Metadata)
 }
 
 func copyRawEnvelope(event *Event, raw json.RawMessage) {

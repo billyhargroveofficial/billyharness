@@ -69,3 +69,26 @@ func TestValidateEventEnvelopeAllowsLegacyAndRejectsMissingIDs(t *testing.T) {
 		t.Fatal("expected missing call_id/attempt_id error")
 	}
 }
+
+func TestEventEnricherExtractsToolProgressIDs(t *testing.T) {
+	event := EnrichEvent(Event{
+		Type: EventToolCallProgress,
+		Data: ToolProgressEvent{
+			CallID:    "call-1",
+			AttemptID: "turn-001:tool-call-001:attempt-001",
+			Phase:     "executing",
+			Status:    StepStatusStarted,
+		},
+	}, EventEnvelope{
+		Seq:    1,
+		Source: EventSourceAgent,
+		RunID:  "run-1",
+		TS:     time.Unix(10, 0).UTC().Format(time.RFC3339Nano),
+	})
+	if event.CallID != "call-1" || event.AttemptID != "turn-001:tool-call-001:attempt-001" {
+		t.Fatalf("tool progress envelope = %#v", event)
+	}
+	if err := ValidateEventEnvelope(event); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -70,6 +70,7 @@ const (
 	EventToolPermissionRequested EventType = "tool.permission_requested"
 	EventToolPermissionDecided   EventType = "tool.permission_decided"
 	EventToolAudit               EventType = "tool.audit"
+	EventToolCallProgress        EventType = "tool.call_progress"
 	EventToolCallStarted         EventType = "tool.call_started"
 	EventToolCallFinished        EventType = "tool.call_finished"
 	EventToolCallFailed          EventType = "tool.call_failed"
@@ -147,4 +148,14 @@ type StepEvent struct {
 	DurationMS    int64          `json:"duration_ms,omitempty"`
 	Error         string         `json:"error,omitempty"`
 	Metadata      map[string]any `json:"metadata,omitempty"`
+}
+
+type ToolProgressEvent struct {
+	CallID    string         `json:"call_id"`
+	Name      string         `json:"name,omitempty"`
+	AttemptID string         `json:"attempt_id,omitempty"`
+	Phase     string         `json:"phase"`
+	Status    string         `json:"status"`
+	Message   string         `json:"message,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
 }
