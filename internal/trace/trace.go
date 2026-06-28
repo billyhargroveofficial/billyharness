@@ -208,38 +208,63 @@ func WriteManifest(path string, manifest Manifest) error {
 }
 
 type ReplaySummary struct {
-	RunID                  string         `json:"run_id"`
-	Records                int            `json:"records"`
-	FirstSeq               int64          `json:"first_seq,omitempty"`
-	LastSeq                int64          `json:"last_seq,omitempty"`
-	PayloadRefs            int            `json:"payload_refs,omitempty"`
-	PayloadBytes           int64          `json:"payload_bytes,omitempty"`
-	EventTypes             map[string]int `json:"event_types"`
-	Tasks                  map[string]int `json:"tasks"`
-	RunStarted             int            `json:"run_started,omitempty"`
-	RunCompleted           int            `json:"run_completed,omitempty"`
-	RunFailed              int            `json:"run_failed,omitempty"`
-	TurnsStarted           int            `json:"turns_started,omitempty"`
-	TurnsCompleted         int            `json:"turns_completed,omitempty"`
-	TurnsFailed            int            `json:"turns_failed,omitempty"`
-	StepsStarted           int            `json:"steps_started,omitempty"`
-	StepsCompleted         int            `json:"steps_completed,omitempty"`
-	StepsFailed            int            `json:"steps_failed,omitempty"`
-	ParallelBatches        int            `json:"parallel_batches,omitempty"`
-	FirstDeltaSamples      int            `json:"first_delta_samples,omitempty"`
-	FirstDeltaTotalMS      int64          `json:"first_delta_total_ms,omitempty"`
-	ModelLatencyMS         int64          `json:"model_latency_ms,omitempty"`
-	ToolLatencyMS          int64          `json:"tool_latency_ms,omitempty"`
-	ParallelBatchLatencyMS int64          `json:"parallel_batch_latency_ms,omitempty"`
-	ModelCallsStarted      int            `json:"model_calls_started,omitempty"`
-	ModelCallsFinished     int            `json:"model_calls_finished,omitempty"`
-	ToolCallsStarted       int            `json:"tool_calls_started,omitempty"`
-	ToolCallsFinished      int            `json:"tool_calls_finished,omitempty"`
-	ContextCompactions     int            `json:"context_compactions,omitempty"`
-	InputTokens            int64          `json:"input_tokens,omitempty"`
-	OutputTokens           int64          `json:"output_tokens,omitempty"`
-	CacheHitTokens         int64          `json:"cache_hit_tokens,omitempty"`
-	CacheMissTokens        int64          `json:"cache_miss_tokens,omitempty"`
+	RunID                  string               `json:"run_id"`
+	Records                int                  `json:"records"`
+	FirstSeq               int64                `json:"first_seq,omitempty"`
+	LastSeq                int64                `json:"last_seq,omitempty"`
+	PayloadRefs            int                  `json:"payload_refs,omitempty"`
+	PayloadBytes           int64                `json:"payload_bytes,omitempty"`
+	EventTypes             map[string]int       `json:"event_types"`
+	Tasks                  map[string]int       `json:"tasks"`
+	RunStarted             int                  `json:"run_started,omitempty"`
+	RunCompleted           int                  `json:"run_completed,omitempty"`
+	RunFailed              int                  `json:"run_failed,omitempty"`
+	TurnsStarted           int                  `json:"turns_started,omitempty"`
+	TurnsCompleted         int                  `json:"turns_completed,omitempty"`
+	TurnsFailed            int                  `json:"turns_failed,omitempty"`
+	StepsStarted           int                  `json:"steps_started,omitempty"`
+	StepsCompleted         int                  `json:"steps_completed,omitempty"`
+	StepsFailed            int                  `json:"steps_failed,omitempty"`
+	ParallelBatches        int                  `json:"parallel_batches,omitempty"`
+	FirstDeltaSamples      int                  `json:"first_delta_samples,omitempty"`
+	FirstDeltaTotalMS      int64                `json:"first_delta_total_ms,omitempty"`
+	ModelLatencyMS         int64                `json:"model_latency_ms,omitempty"`
+	ToolLatencyMS          int64                `json:"tool_latency_ms,omitempty"`
+	ParallelBatchLatencyMS int64                `json:"parallel_batch_latency_ms,omitempty"`
+	ModelCallsStarted      int                  `json:"model_calls_started,omitempty"`
+	ModelCallsFinished     int                  `json:"model_calls_finished,omitempty"`
+	ToolCallsStarted       int                  `json:"tool_calls_started,omitempty"`
+	ToolCallsFinished      int                  `json:"tool_calls_finished,omitempty"`
+	ContextCompactions     int                  `json:"context_compactions,omitempty"`
+	InputTokens            int64                `json:"input_tokens,omitempty"`
+	OutputTokens           int64                `json:"output_tokens,omitempty"`
+	CacheHitTokens         int64                `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens        int64                `json:"cache_miss_tokens,omitempty"`
+	Timeline               []ReplayTimelineItem `json:"timeline,omitempty"`
+}
+
+type ReplayTimelineItem struct {
+	Seq          int64  `json:"seq"`
+	TaskID       string `json:"task_id,omitempty"`
+	EventType    string `json:"event_type"`
+	Source       string `json:"source,omitempty"`
+	SubmissionID string `json:"submission_id,omitempty"`
+	RunID        string `json:"run_id,omitempty"`
+	TurnID       string `json:"turn_id,omitempty"`
+	StepID       string `json:"step_id,omitempty"`
+	ParentStepID string `json:"parent_step_id,omitempty"`
+	CallID       string `json:"call_id,omitempty"`
+	AttemptID    string `json:"attempt_id,omitempty"`
+	Round        int    `json:"round,omitempty"`
+	Index        int    `json:"index,omitempty"`
+	Kind         string `json:"kind,omitempty"`
+	Status       string `json:"status,omitempty"`
+	Name         string `json:"name,omitempty"`
+	StopReason   string `json:"stop_reason,omitempty"`
+	BatchID      string `json:"batch_id,omitempty"`
+	BatchSize    int    `json:"batch_size,omitempty"`
+	Parallel     bool   `json:"parallel,omitempty"`
+	DurationMS   int64  `json:"duration_ms,omitempty"`
 }
 
 func ReplayEvents(path string) (ReplaySummary, error) {
@@ -289,14 +314,16 @@ func ReplayEvents(path string) (ReplaySummary, error) {
 			return summary, fmt.Errorf("%s:%d %w", path, lineNo, err)
 		}
 		summary.PayloadBytes += bytes
-		if event, ok, err := protocolEventFromRecord(record.Event); err != nil {
+		event, ok, err := protocolEventFromRecord(record.Event)
+		if err != nil {
 			return summary, fmt.Errorf("%s:%d %w", path, lineNo, err)
-		} else if ok {
+		}
+		if ok {
 			if err := protocol.ValidateEventEnvelope(event); err != nil {
 				return summary, fmt.Errorf("%s:%d invalid event envelope: %w", path, lineNo, err)
 			}
 		}
-		if err := summary.observe(record); err != nil {
+		if err := summary.observe(record, event, ok); err != nil {
 			return summary, fmt.Errorf("%s:%d %w", path, lineNo, err)
 		}
 		expectedSeq++
@@ -360,7 +387,12 @@ func resolvePayloadPath(eventsPath, payloadPath string) string {
 	return filepath.Join(filepath.Dir(eventsPath), payloadPath)
 }
 
-func (s *ReplaySummary) observe(record EventRecord) error {
+func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEvent bool) error {
+	if hasEvent {
+		if err := s.appendTimeline(record, event); err != nil {
+			return err
+		}
+	}
 	switch protocol.EventType(record.EventType) {
 	case protocol.EventRunStarted:
 		s.RunStarted++
@@ -430,6 +462,244 @@ func (s *ReplaySummary) observe(record EventRecord) error {
 		s.CacheMissTokens += usage.CacheMissTokens
 	}
 	return nil
+}
+
+func (s *ReplaySummary) appendTimeline(record EventRecord, event protocol.Event) error {
+	if !isReplayTimelineEvent(event.Type) {
+		return nil
+	}
+	item := ReplayTimelineItem{
+		Seq:          firstInt64(event.Seq, record.Seq),
+		TaskID:       record.TaskID,
+		EventType:    string(event.Type),
+		Source:       string(event.Source),
+		SubmissionID: event.SubmissionID,
+		RunID:        firstString(event.RunID, record.RunID),
+		TurnID:       event.TurnID,
+		StepID:       event.StepID,
+		ParentStepID: event.ParentStepID,
+		CallID:       event.CallID,
+		AttemptID:    event.AttemptID,
+		DurationMS:   event.DurationMS,
+	}
+
+	switch event.Type {
+	case protocol.EventTurnStarted, protocol.EventTurnCompleted:
+		turn, err := turnFromEvent(event)
+		if err != nil {
+			return err
+		}
+		item.TurnID = firstString(item.TurnID, turn.TurnID)
+		item.Round = turn.Round
+		item.Status = turn.Status
+		item.Name = turn.Model
+		item.StopReason = turn.StopReason
+		item.DurationMS = firstInt64(item.DurationMS, turn.DurationMS)
+	case protocol.EventStepStarted, protocol.EventStepCompleted:
+		step, err := stepFromEvent(event)
+		if err != nil {
+			return err
+		}
+		item.TurnID = firstString(item.TurnID, step.TurnID)
+		item.StepID = firstString(item.StepID, step.StepID)
+		item.CallID = firstString(item.CallID, step.ToolCallID)
+		item.ParentStepID = firstString(item.ParentStepID, step.BatchID)
+		item.Round = step.Round
+		item.Index = step.Index
+		item.Kind = step.Kind
+		item.Status = step.Status
+		item.Name = step.Name
+		item.BatchID = step.BatchID
+		item.BatchSize = step.BatchSize
+		item.Parallel = step.Parallel
+		item.DurationMS = firstInt64(item.DurationMS, step.DurationMS)
+	case protocol.EventModelCallStarted:
+		item.Kind = protocol.StepKindModelCall
+		item.Status = protocol.StepStatusStarted
+		applyTimelineMapData(&item, event.Data)
+	case protocol.EventModelCallFinished:
+		item.Kind = protocol.StepKindModelCall
+		item.Status = protocol.StepStatusCompleted
+		applyTimelineMapData(&item, event.Data)
+	case protocol.EventToolCallRequested:
+		item.Kind = protocol.StepKindToolCall
+		item.Status = "requested"
+		applyTimelineToolCallData(&item, event.Data)
+	case protocol.EventToolPermissionRequested:
+		item.Kind = protocol.StepKindToolCall
+		item.Status = "permission_requested"
+		applyTimelineMapData(&item, event.Data)
+	case protocol.EventToolPermissionDecided:
+		item.Kind = protocol.StepKindToolCall
+		item.Status = "permission_decided"
+		applyTimelineMapData(&item, event.Data)
+	case protocol.EventToolCallStarted:
+		item.Kind = protocol.StepKindToolCall
+		item.Status = protocol.StepStatusStarted
+		applyTimelineToolNameData(&item, event.Data)
+	case protocol.EventToolCallFinished:
+		item.Kind = protocol.StepKindToolCall
+		item.Status = protocol.StepStatusCompleted
+		applyTimelineToolResultData(&item, event.Data)
+	case protocol.EventToolCallFailed:
+		item.Kind = protocol.StepKindToolCall
+		item.Status = protocol.StepStatusFailed
+		applyTimelineToolResultData(&item, event.Data)
+	case protocol.EventToolCallAborted:
+		item.Kind = protocol.StepKindToolCall
+		item.Status = "aborted"
+		applyTimelineToolResultData(&item, event.Data)
+	case protocol.EventToolOutputRefCreated:
+		item.Kind = protocol.StepKindToolCall
+		item.Status = "output_ref_created"
+		applyTimelineMapData(&item, event.Data)
+	case protocol.EventContextCompacted:
+		item.Kind = "context_compaction"
+		item.Status = protocol.StepStatusCompleted
+	}
+	s.Timeline = append(s.Timeline, item)
+	return nil
+}
+
+func isReplayTimelineEvent(eventType protocol.EventType) bool {
+	switch eventType {
+	case protocol.EventRunStarted,
+		protocol.EventRunCompleted,
+		protocol.EventRunFailed,
+		protocol.EventTurnStarted,
+		protocol.EventTurnCompleted,
+		protocol.EventStepStarted,
+		protocol.EventStepCompleted,
+		protocol.EventModelCallStarted,
+		protocol.EventModelCallFinished,
+		protocol.EventToolCallRequested,
+		protocol.EventToolPermissionRequested,
+		protocol.EventToolPermissionDecided,
+		protocol.EventToolCallStarted,
+		protocol.EventToolCallFinished,
+		protocol.EventToolCallFailed,
+		protocol.EventToolCallAborted,
+		protocol.EventToolOutputRefCreated,
+		protocol.EventContextCompacted:
+		return true
+	default:
+		return false
+	}
+}
+
+func applyTimelineToolCallData(item *ReplayTimelineItem, data any) {
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+	var call protocol.ToolCall
+	if err := json.Unmarshal(bytes, &call); err == nil {
+		item.CallID = firstString(item.CallID, call.ID)
+		item.Name = firstString(item.Name, call.Name)
+		return
+	}
+	applyTimelineMapData(item, data)
+}
+
+func applyTimelineToolResultData(item *ReplayTimelineItem, data any) {
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+	var result protocol.ToolResult
+	if err := json.Unmarshal(bytes, &result); err == nil {
+		item.CallID = firstString(item.CallID, result.CallID)
+		item.Name = firstString(item.Name, result.Name)
+		if result.IsError && item.Status == protocol.StepStatusCompleted {
+			item.Status = protocol.StepStatusFailed
+		}
+		applyTimelineMap(item, result.Metadata)
+		return
+	}
+	applyTimelineMapData(item, data)
+}
+
+func applyTimelineToolNameData(item *ReplayTimelineItem, data any) {
+	switch value := data.(type) {
+	case string:
+		item.Name = firstString(item.Name, value)
+	default:
+		applyTimelineToolCallData(item, data)
+	}
+}
+
+func applyTimelineMapData(item *ReplayTimelineItem, data any) {
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+	var m map[string]any
+	if err := json.Unmarshal(bytes, &m); err != nil {
+		return
+	}
+	applyTimelineMap(item, m)
+}
+
+func applyTimelineMap(item *ReplayTimelineItem, m map[string]any) {
+	if len(m) == 0 {
+		return
+	}
+	item.SubmissionID = firstString(item.SubmissionID, mapString(m, "submission_id"))
+	item.RunID = firstString(item.RunID, mapString(m, "run_id"))
+	item.TurnID = firstString(item.TurnID, mapString(m, "turn_id"))
+	item.StepID = firstString(item.StepID, mapString(m, "step_id"))
+	item.ParentStepID = firstString(item.ParentStepID, firstString(mapString(m, "parent_step_id"), mapString(m, "batch_id")))
+	item.CallID = firstString(item.CallID, firstString(mapString(m, "call_id"), mapString(m, "tool_call_id")))
+	item.AttemptID = firstString(item.AttemptID, mapString(m, "attempt_id"))
+	item.Kind = firstString(item.Kind, mapString(m, "kind"))
+	item.Status = firstString(mapString(m, "status"), item.Status)
+	item.Name = firstString(item.Name, firstString(mapString(m, "name"), mapString(m, "tool_name"), mapString(m, "model")))
+	item.DurationMS = firstInt64(item.DurationMS, mapInt64(m, "duration_ms"))
+}
+
+func firstString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func firstInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func mapString(m map[string]any, key string) string {
+	switch value := m[key].(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case fmt.Stringer:
+		return strings.TrimSpace(value.String())
+	default:
+		return ""
+	}
+}
+
+func mapInt64(m map[string]any, key string) int64 {
+	switch value := m[key].(type) {
+	case int:
+		return int64(value)
+	case int64:
+		return value
+	case float64:
+		return int64(value)
+	case json.Number:
+		parsed, _ := value.Int64()
+		return parsed
+	default:
+		return 0
+	}
 }
 
 func turnFromEvent(value any) (protocol.TurnEvent, error) {

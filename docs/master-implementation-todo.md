@@ -126,7 +126,7 @@ Purpose: turn the current loop into a real, replayable runtime without losing sp
 Acceptance:
 
 - [ ] Existing sessions still run from TUI, Telegram, and gateway.
-- [ ] Replay can reconstruct run/turn/step order.
+- [x] Replay can reconstruct run/turn/step order.
 - [x] Concurrent run behavior is deterministic and tested.
 
 ### 1.2 ToolOrchestrator

@@ -164,6 +164,50 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 		summary.CacheHitTokens != 80 || summary.CacheMissTokens != 20 {
 		t.Fatalf("usage counters = %#v", summary)
 	}
+	wantTimeline := []string{
+		string(protocol.EventRunStarted),
+		string(protocol.EventTurnStarted),
+		string(protocol.EventStepStarted),
+		string(protocol.EventModelCallStarted),
+		string(protocol.EventContextCompacted),
+		string(protocol.EventStepCompleted),
+		string(protocol.EventStepStarted),
+		string(protocol.EventToolCallStarted),
+		string(protocol.EventToolCallFinished),
+		string(protocol.EventStepCompleted),
+		string(protocol.EventModelCallFinished),
+		string(protocol.EventTurnCompleted),
+		string(protocol.EventRunCompleted),
+	}
+	if len(summary.Timeline) != len(wantTimeline) {
+		t.Fatalf("timeline length = %d, want %d: %#v", len(summary.Timeline), len(wantTimeline), summary.Timeline)
+	}
+	for i, want := range wantTimeline {
+		if summary.Timeline[i].EventType != want {
+			t.Fatalf("timeline[%d].event_type = %q, want %q: %#v", i, summary.Timeline[i].EventType, want, summary.Timeline)
+		}
+	}
+	if summary.Timeline[1].TurnID != "turn-001" || summary.Timeline[1].Round != 1 || summary.Timeline[1].Status != protocol.TurnStatusStarted {
+		t.Fatalf("turn timeline item = %#v", summary.Timeline[1])
+	}
+	if summary.Timeline[2].StepID != "turn-001:model-call-001" ||
+		summary.Timeline[2].Kind != protocol.StepKindModelCall ||
+		summary.Timeline[2].Status != protocol.StepStatusStarted {
+		t.Fatalf("model step timeline item = %#v", summary.Timeline[2])
+	}
+	if summary.Timeline[4].Seq != 6 || summary.Timeline[4].Kind != "context_compaction" {
+		t.Fatalf("compaction timeline item = %#v", summary.Timeline[4])
+	}
+	if summary.Timeline[7].CallID != "call-1" ||
+		summary.Timeline[7].AttemptID != "turn-001:tool-call-001:attempt-001" ||
+		summary.Timeline[7].Name != "time_now" {
+		t.Fatalf("tool start timeline item = %#v", summary.Timeline[7])
+	}
+	if summary.Timeline[8].CallID != "call-1" ||
+		summary.Timeline[8].AttemptID != "turn-001:tool-call-001:attempt-001" ||
+		summary.Timeline[8].Name != "time_now" {
+		t.Fatalf("tool finish timeline item = %#v", summary.Timeline[8])
+	}
 }
 
 func TestReplayEventsRejectsSequenceGap(t *testing.T) {
