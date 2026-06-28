@@ -628,7 +628,7 @@ Acceptance:
   - [x] Telegram alias if applicable
   - [x] runner
 - [x] Make slash popup read from action registry.
-- [ ] Add command palette.
+- [x] Add command palette.
 - [x] Add argument selectors for commands requiring args.
 - [x] Enter on selected command should execute or open arg selector without requiring a redundant second Enter.
 

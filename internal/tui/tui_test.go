@@ -1357,6 +1357,30 @@ func TestSlashPopupCompletesCommand(t *testing.T) {
 	}
 }
 
+func TestCommandPaletteOpensSlashRegistry(t *testing.T) {
+	m := newTestModel(t)
+	next, _ := m.Update(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
+	updated := next.(Model)
+	if got := updated.textarea.Value(); got != "/" {
+		t.Fatalf("Ctrl+K textarea = %q, want /", got)
+	}
+	if updated.status != "command palette" {
+		t.Fatalf("status = %q, want command palette", updated.status)
+	}
+	popup := stripANSITest(updated.slashPopupView())
+	for _, want := range []string{"/help", "/status", "/theme"} {
+		if !strings.Contains(popup, want) {
+			t.Fatalf("command palette missing %q:\n%s", want, popup)
+		}
+	}
+
+	next, _ = updated.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated = next.(Model)
+	if len(updated.blocks) == 0 || updated.blocks[len(updated.blocks)-1].title != "HELP" {
+		t.Fatalf("Enter on default command should run /help, blocks=%#v", updated.blocks)
+	}
+}
+
 func TestSlashPopupCompletesArgument(t *testing.T) {
 	m := newTestModel(t)
 	m.textarea.SetValue("/theme")

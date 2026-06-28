@@ -423,6 +423,7 @@ func helpText() string {
 	}
 	lines = append(lines,
 		"Tab / Up / Down                           complete slash commands",
+		"Ctrl+K                                    open command palette",
 		"Enter                                     send",
 		"Alt+Enter                                 insert newline",
 		"Ctrl+S                                    send fallback; may freeze SSH if IXON is enabled",

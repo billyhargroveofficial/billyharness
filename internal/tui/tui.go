@@ -421,6 +421,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+t":
 			m.cycleReasoning()
 			skipTextareaUpdate = true
+		case "ctrl+k":
+			m.textarea.SetValue("/")
+			m.slashIndex = 0
+			m.slashDismissed = ""
+			m.status = "command palette"
+			reflow = true
+			gotoBottom = m.followOutput
+			skipTextareaUpdate = true
 		case "pgup":
 			m.viewport.PageUp()
 			m.followOutput = false
@@ -774,7 +782,7 @@ func (m Model) headerView() string {
 }
 
 func (m Model) footerView() string {
-	return "Enter send  Alt+Enter newline  Tab complete slash command  mouse/Pg scroll  Alt+End follow"
+	return "Enter send  Alt+Enter newline  Ctrl+K commands  Tab complete  mouse/Pg scroll  Alt+End follow"
 }
 
 type slashCommand struct {
