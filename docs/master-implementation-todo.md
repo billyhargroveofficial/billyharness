@@ -417,7 +417,7 @@ Purpose: stop web/tool output from exploding context and token use.
 ### 4.1 Web Output Contract
 
 - [x] Define output classes:
-  - [ ] tiny direct answer
+  - [x] tiny direct answer
   - [x] extractive summary
   - [x] model summary
   - [x] raw excerpt

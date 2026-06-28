@@ -9,6 +9,8 @@ Native web tools are built into billyharness:
 
 `web_fetch`, `web_extract`, and `web_crawl` return compact summaries by default. Large extracted text is stored out of band in `output_ref` files under `$BILLYHARNESS_HOME/tool-output`.
 
+Very short text responses, such as weather one-liners, use `output_class="tiny_direct_answer"`. They are returned inline and do not call the model summarizer even when model summaries are enabled.
+
 ## Cache
 
 The web cache stores compact web outputs under:

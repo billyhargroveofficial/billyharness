@@ -41,6 +41,7 @@ const (
 	webDigestChars           = 1400
 	webExtractChars          = 1600
 	webKeyPointChars         = 220
+	webTinyDirectTokens      = 80
 	webInlineDefaultTokens   = 0
 	webInlineMaxTokens       = 1200
 	webMaxLinks              = 20
@@ -1811,23 +1812,39 @@ func compactFetchedPage(page fetchedPage, opts webFetchOptions) compactPage {
 	summary := summarizeText(page.Title, page.Text, webDigestChars)
 	points := keyPoints(page.Text, opts.Query, 5, webKeyPointChars)
 	extract := extractSnippets(page.Text, opts.Query, webExtractChars)
-	estimatedTokens := estimateTokens(compactInlineText(text, page.Title, page.Text, opts.Query))
 	originalTokens := estimateTokens(page.Text)
+	outputClass := webOutputClass(includeText)
+	summaryMode := "extractive"
+	summarizerModel := "extractive"
+	if tinyDirectWebAnswer(page.Text, page.Links, page.Truncated, includeText, originalTokens) {
+		text = strings.TrimSpace(page.Text)
+		outputTruncated = false
+		outputClass = "tiny_direct_answer"
+		summaryMode = "direct"
+		summarizerModel = "direct"
+		summary = text
+		points = nil
+		extract = ""
+	}
+	estimatedTokens := estimateTokens(compactInlineText(text, page.Title, page.Text, opts.Query))
+	if outputClass == "tiny_direct_answer" {
+		estimatedTokens = originalTokens
+	}
 	estimatedSaved := maxInt(0, originalTokens-estimatedTokens)
 	return compactPage{
 		URL:                  page.URL,
 		Status:               page.Status,
 		ContentType:          page.ContentType,
-		OutputClass:          webOutputClass(includeText),
-		SummaryMode:          "extractive",
+		OutputClass:          outputClass,
+		SummaryMode:          summaryMode,
 		Title:                page.Title,
 		Summary:              summary,
 		SummaryChars:         webSummaryChars(summary, points, extract),
 		SummarizerProvider:   "native",
-		SummarizerModel:      "extractive",
+		SummarizerModel:      summarizerModel,
 		WebsumInputTokens:    int64(originalTokens),
 		WebsumOutputTokens:   int64(estimatedTokens),
-		WebsumModel:          "extractive",
+		WebsumModel:          summarizerModel,
 		KeyPoints:            points,
 		Extract:              extract,
 		Text:                 text,
@@ -1870,21 +1887,37 @@ func compactCrawlPages(pages []crawlPage, opts webFetchOptions) []compactCrawlPa
 		summary := summarizeText(page.Title, page.Text, webDigestChars)
 		points := keyPoints(page.Text, opts.Query, 4, webKeyPointChars)
 		extract := extractSnippets(page.Text, opts.Query, webExtractChars)
-		estimatedTokens := estimateTokens(compactInlineText(text, page.Title, page.Text, opts.Query))
 		originalTokens := estimateTokens(page.Text)
+		outputClass := webOutputClass(includeText)
+		summaryMode := "extractive"
+		summarizerModel := "extractive"
+		if tinyDirectWebAnswer(page.Text, nil, page.Truncated, includeText, originalTokens) {
+			text = strings.TrimSpace(page.Text)
+			outputTruncated = false
+			outputClass = "tiny_direct_answer"
+			summaryMode = "direct"
+			summarizerModel = "direct"
+			summary = text
+			points = nil
+			extract = ""
+		}
+		estimatedTokens := estimateTokens(compactInlineText(text, page.Title, page.Text, opts.Query))
+		if outputClass == "tiny_direct_answer" {
+			estimatedTokens = originalTokens
+		}
 		out = append(out, compactCrawlPage{
 			URL:                  page.URL,
 			Depth:                page.Depth,
-			OutputClass:          webOutputClass(includeText),
-			SummaryMode:          "extractive",
+			OutputClass:          outputClass,
+			SummaryMode:          summaryMode,
 			Title:                page.Title,
 			Summary:              summary,
 			SummaryChars:         webSummaryChars(summary, points, extract),
 			SummarizerProvider:   "native",
-			SummarizerModel:      "extractive",
+			SummarizerModel:      summarizerModel,
 			WebsumInputTokens:    int64(originalTokens),
 			WebsumOutputTokens:   int64(estimatedTokens),
-			WebsumModel:          "extractive",
+			WebsumModel:          summarizerModel,
 			KeyPoints:            points,
 			Extract:              extract,
 			Text:                 text,
@@ -1966,6 +1999,9 @@ func (r *Registry) applyModelSummaryToPage(ctx context.Context, compact *compact
 	if compact == nil || r == nil || config.NormalizeWebSummaryMode(r.cfg.WebSummaryMode) != "model" {
 		return
 	}
+	if compact.OutputClass == "tiny_direct_answer" {
+		return
+	}
 	summary, err := r.modelWebSummary(ctx, webSummarySource{
 		URL:   page.URL,
 		Title: page.Title,
@@ -1981,6 +2017,9 @@ func (r *Registry) applyModelSummaryToPage(ctx context.Context, compact *compact
 
 func (r *Registry) applyModelSummaryToCrawlPage(ctx context.Context, compact *compactCrawlPage, page crawlPage, opts webFetchOptions) {
 	if compact == nil || r == nil || config.NormalizeWebSummaryMode(r.cfg.WebSummaryMode) != "model" {
+		return
+	}
+	if compact.OutputClass == "tiny_direct_answer" {
 		return
 	}
 	summary, err := r.modelWebSummary(ctx, webSummarySource{
@@ -2174,7 +2213,11 @@ func (r *Registry) compactCrawlResult(ctx context.Context, pages []crawlPage, op
 			}
 		}
 	}
+	allTinyDirect := len(out.Pages) > 0 && !opts.IncludeText && !opts.FullText
 	for _, page := range out.Pages {
+		if page.Error != "" || page.OutputClass != "tiny_direct_answer" {
+			allTinyDirect = false
+		}
 		out.RawBytesFetched += page.RawBytesFetched
 		out.SummaryChars += page.SummaryChars
 		out.WebsumInputTokens += page.WebsumInputTokens
@@ -2206,6 +2249,13 @@ func (r *Registry) compactCrawlResult(ctx context.Context, pages []crawlPage, op
 		out.EstimatedTextTokens += page.EstimatedTextTokens
 		out.EstimatedTokensSaved += page.EstimatedTokensSaved
 		out.OutputTextTruncated = out.OutputTextTruncated || page.OutputTextTruncated
+	}
+	if allTinyDirect {
+		out.OutputClass = "tiny_direct_answer"
+		out.SummaryMode = "direct"
+		out.SummarizerProvider = "native"
+		out.SummarizerModel = "direct"
+		out.WebsumModel = "direct"
 	}
 	if out.OutputTextTruncated {
 		out.CompactNote = "full extracted crawl text is saved out-of-band in output_ref; inline response contains only digest/extract to protect context cost"
@@ -2606,6 +2656,17 @@ func webOutputClass(inlineText bool) string {
 		return "raw_excerpt"
 	}
 	return "extractive_summary"
+}
+
+func tinyDirectWebAnswer(text string, links []string, truncated, includeText bool, originalTokens int) bool {
+	if includeText || truncated || len(links) > 0 {
+		return false
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	return originalTokens > 0 && originalTokens <= webTinyDirectTokens && len([]rune(text)) <= webTinyDirectTokens*4
 }
 
 func webSummaryChars(summary string, keyPoints []string, extract string) int {

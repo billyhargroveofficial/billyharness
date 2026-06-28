@@ -453,6 +453,54 @@ func TestWebCompactionDefaultsStaySmall(t *testing.T) {
 	}
 }
 
+func TestTinyDirectWebAnswerAvoidsSummaryBloatAndModelSummarizer(t *testing.T) {
+	oldProvider := newWebSummaryProvider
+	newWebSummaryProvider = func(config.Config) (provider.Provider, error) {
+		t.Fatalf("tiny direct answer should not call model summarizer")
+		return scriptedProvider{}, nil
+	}
+	t.Cleanup(func() { newWebSummaryProvider = oldProvider })
+
+	cfg := config.Default()
+	cfg.WebSummaryMode = "model"
+	cfg.WebSummaryProvider = "mock"
+	cfg.WebSummaryModel = "mock-summarizer"
+	registry := NewRegistry(cfg)
+	page := fetchedPage{
+		URL:             "https://wttr.in/Moscow?format=3",
+		Status:          200,
+		ContentType:     "text/plain",
+		Text:            "Moscow: +19C, partly cloudy",
+		RawBytesFetched: 28,
+		MaxBytes:        65536,
+	}
+	compact := compactFetchedPage(page, webFetchOptions{})
+	registry.applyModelSummaryToPage(context.Background(), &compact, page, webFetchOptions{})
+	if compact.OutputClass != "tiny_direct_answer" || compact.SummaryMode != "direct" ||
+		compact.SummarizerModel != "direct" || compact.Text != page.Text || compact.Summary != page.Text {
+		t.Fatalf("tiny direct compact = %#v", compact)
+	}
+	if compact.OutputTextTruncated || compact.EstimatedTextTokens != compact.OriginalTextTokens || compact.EstimatedTokensSaved != 0 {
+		t.Fatalf("tiny direct metrics = %#v", compact)
+	}
+	meta := webPageMetadata(compact)
+	if meta["output_class"] != "tiny_direct_answer" || meta["summary_mode"] != "direct" ||
+		anyInt64(meta["tool_summary_api_total_tokens"]) != 0 {
+		t.Fatalf("tiny direct metadata = %#v", meta)
+	}
+
+	crawl := compactCrawlPages([]crawlPage{{
+		URL:             "https://wttr.in/Moscow?format=3",
+		Depth:           0,
+		Text:            page.Text,
+		RawBytesFetched: page.RawBytesFetched,
+		MaxBytes:        page.MaxBytes,
+	}}, webFetchOptions{})
+	if len(crawl) != 1 || crawl[0].OutputClass != "tiny_direct_answer" || crawl[0].Text != page.Text {
+		t.Fatalf("tiny crawl page = %#v", crawl)
+	}
+}
+
 func TestCompactFetchedPageHonorsTokenBudgetEvenForFullText(t *testing.T) {
 	text := strings.Repeat("Alpha beta gamma. ", 2000)
 	page := fetchedPage{
