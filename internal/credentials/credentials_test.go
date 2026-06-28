@@ -58,6 +58,46 @@ func TestManagerResolveDeepSeekAPIKeyUsesConfiguredEnvName(t *testing.T) {
 	}
 }
 
+func TestManagerResolvesCredentialFileSecrets(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	t.Setenv("CODEX_ACCESS_TOKEN", "")
+	t.Setenv("CODEX_CHATGPT_ACCOUNT_ID", "")
+	t.Setenv("FAST_AGENT_ENV_FILE", filepath.Join(root, "missing.env"))
+	credentialFile := filepath.Join(root, "auth", "credentials.json")
+	if err := os.MkdirAll(filepath.Dir(credentialFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(credentialFile, map[string]any{
+		"deepseek_api_key":   "sk-from-credential-file",
+		"codex_access_token": "codex-token-from-file",
+		"codex_account_id":   "acct_file",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(config.Config{CredentialFile: credentialFile})
+
+	deepseek, err := manager.ResolveDeepSeekAPIKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deepseek.Value != "sk-from-credential-file" || deepseek.Source != credentialFile || deepseek.Path != credentialFile {
+		t.Fatalf("deepseek secret = %#v", deepseek)
+	}
+	resolved := manager.ResolveCodexAuth()
+	if resolved.AccessToken.Value != "codex-token-from-file" || resolved.AccessToken.Source != credentialFile || resolved.AccountID.Value != "acct_file" {
+		t.Fatalf("codex resolution = %#v", resolved)
+	}
+	status := manager.CodexStatus()
+	if !status.Configured || status.Source != credentialFile || status.AccountID != "acct_file" {
+		t.Fatalf("codex status = %#v", status)
+	}
+	if strings.Contains(status.Source, "codex-token-from-file") || strings.Contains(status.Path, "codex-token-from-file") {
+		t.Fatalf("status leaked credential file token: %#v", status)
+	}
+}
+
 func TestImportCodexAuthCopiesOAuthJSONToBillyHome(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", root)

@@ -57,6 +57,9 @@ func TestDefaultRuntimeLimits(t *testing.T) {
 	if cfg.CodexAuthFile != filepath.Join(os.Getenv("BILLYHARNESS_HOME"), "auth", "codex.json") {
 		t.Fatalf("CodexAuthFile = %q", cfg.CodexAuthFile)
 	}
+	if cfg.CredentialFile != filepath.Join(os.Getenv("BILLYHARNESS_HOME"), "auth", "credentials.json") {
+		t.Fatalf("CredentialFile = %q", cfg.CredentialFile)
+	}
 	if cfg.Profile != "billy" {
 		t.Fatalf("Profile = %q, want billy", cfg.Profile)
 	}

@@ -19,6 +19,7 @@ type Config struct {
 	Profile                   string
 	BaseURL                   string
 	APIKeyEnv                 string
+	CredentialFile            string
 	CodexBaseURL              string
 	CodexAuthFile             string
 	CodexRefreshURL           string
@@ -228,6 +229,10 @@ func DefaultMCPConfigFile() string {
 
 func DefaultCodexAuthFile() string {
 	return filepath.Join(BillyHomeDir(), "auth", "codex.json")
+}
+
+func DefaultCredentialFile() string {
+	return filepath.Join(BillyHomeDir(), "auth", "credentials.json")
 }
 
 const DefaultProfileName = "billy"

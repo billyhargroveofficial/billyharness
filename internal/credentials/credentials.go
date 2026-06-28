@@ -56,6 +56,9 @@ func NewManager(cfg config.Config) Manager {
 	if strings.TrimSpace(cfg.APIKeyEnv) == "" {
 		cfg.APIKeyEnv = deepSeekKeyEnv
 	}
+	if strings.TrimSpace(cfg.CredentialFile) == "" {
+		cfg.CredentialFile = config.DefaultCredentialFile()
+	}
 	if strings.TrimSpace(cfg.CodexAuthFile) == "" {
 		cfg.CodexAuthFile = config.DefaultCodexAuthFile()
 	}
@@ -97,6 +100,9 @@ func (m Manager) ResolveDeepSeekAPIKey() (SecretValue, error) {
 	if value, ok := dotenvValue(path, envKey); ok && strings.TrimSpace(value) != "" {
 		return SecretValue{Value: strings.TrimSpace(value), Source: path, Path: path, EnvVar: envKey}, nil
 	}
+	if secret := m.lookupCredentialFileSecret(envKey, "deepseek_api_key"); strings.TrimSpace(secret.Value) != "" {
+		return secret, nil
+	}
 	if value, ok := config.LookupEnvOrDotenv(envKey); ok && strings.TrimSpace(value) != "" {
 		return SecretValue{Value: strings.TrimSpace(value), Source: ".env", EnvVar: envKey}, nil
 	}
@@ -105,8 +111,8 @@ func (m Manager) ResolveDeepSeekAPIKey() (SecretValue, error) {
 
 func (m Manager) ResolveCodexAuth() CodexAuthResolution {
 	return CodexAuthResolution{
-		AccessToken: lookupSecret(CodexAccessTokenEnv),
-		AccountID:   lookupSecret(CodexAccountIDEnv),
+		AccessToken: m.lookupSecret(CodexAccessTokenEnv, "codex_access_token"),
+		AccountID:   m.lookupSecret(CodexAccountIDEnv, "codex_account_id"),
 		AuthFile:    m.CodexAuthFilePath(),
 	}
 }
@@ -116,6 +122,13 @@ func (m Manager) CodexAuthFilePath() string {
 		return path
 	}
 	return config.DefaultCodexAuthFile()
+}
+
+func (m Manager) CredentialFilePath() string {
+	if path := strings.TrimSpace(m.cfg.CredentialFile); path != "" {
+		return path
+	}
+	return config.DefaultCredentialFile()
 }
 
 func SaveDeepSeekAPIKey(apiKey string) (ProviderStatus, error) {
@@ -186,7 +199,7 @@ func (m Manager) CodexStatus() ProviderStatus {
 	return status
 }
 
-func lookupSecret(envKey string) SecretValue {
+func (m Manager) lookupSecret(envKey, fileKey string) SecretValue {
 	envKey = strings.TrimSpace(envKey)
 	if envKey == "" {
 		return SecretValue{}
@@ -194,10 +207,22 @@ func lookupSecret(envKey string) SecretValue {
 	if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
 		return SecretValue{Value: value, Source: "env:" + envKey, EnvVar: envKey}
 	}
+	if secret := m.lookupCredentialFileSecret(envKey, fileKey); strings.TrimSpace(secret.Value) != "" {
+		return secret
+	}
 	if value, ok := config.LookupEnvOrDotenv(envKey); ok && strings.TrimSpace(value) != "" {
 		return SecretValue{Value: strings.TrimSpace(value), Source: ".env", EnvVar: envKey}
 	}
 	return SecretValue{EnvVar: envKey}
+}
+
+func (m Manager) lookupCredentialFileSecret(envKey, fileKey string) SecretValue {
+	path := m.CredentialFilePath()
+	value, ok := credentialFileValue(path, fileKey, envKey)
+	if !ok || strings.TrimSpace(value) == "" {
+		return SecretValue{Path: path, EnvVar: envKey}
+	}
+	return SecretValue{Value: strings.TrimSpace(value), Source: path, Path: path, EnvVar: envKey}
 }
 
 func codexEnvStatus(token, accountID, source, path string) ProviderStatus {
@@ -377,6 +402,29 @@ func dotenvValue(path, key string) (string, bool) {
 			continue
 		}
 		return strings.Trim(strings.TrimSpace(value), `"'`), true
+	}
+	return "", false
+}
+
+func credentialFileValue(path string, keys ...string) (string, bool) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", false
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return "", false
+	}
+	for _, key := range keys {
+		for _, candidate := range []string{key, strings.ToLower(key), strings.ToUpper(key)} {
+			if value := stringField(payload, candidate); value != "" {
+				return value, true
+			}
+		}
 	}
 	return "", false
 }

@@ -306,7 +306,7 @@ Acceptance:
   - [x] `.env`
   - [x] environment
   - [x] imported Codex/OAuth credentials
-  - [ ] future keyring/file store
+  - [x] future keyring/file store
 - [x] Add refresh serialization and status.
 - [x] Add redacted auth inspect output.
 - [x] Add gateway auth status endpoint.
