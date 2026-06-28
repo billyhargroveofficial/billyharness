@@ -127,9 +127,12 @@ func TestRunMessagesCompactsBeforeProviderCall(t *testing.T) {
 		{Role: protocol.RoleUser, Content: "latest prompt"},
 	}
 	var compacted bool
+	var compactEvent map[string]any
 	next, err := a.RunMessages(context.Background(), messages, func(event protocol.Event) {
 		if event.Type == protocol.EventContextCompacted {
 			compacted = true
+			bytes, _ := json.Marshal(event.Data)
+			_ = json.Unmarshal(bytes, &compactEvent)
 		}
 	})
 	if err != nil {
@@ -137,6 +140,12 @@ func TestRunMessagesCompactsBeforeProviderCall(t *testing.T) {
 	}
 	if !compacted {
 		t.Fatalf("expected context compaction event")
+	}
+	if compactEvent["compaction_id"] == "" ||
+		compactEvent["trigger_prompt_tokens"] == nil ||
+		compactEvent["threshold_tokens"] == nil ||
+		compactEvent["compacted_messages"] == nil {
+		t.Fatalf("compaction event missing structured fields: %#v", compactEvent)
 	}
 	if len(capture.messages) < 3 {
 		t.Fatalf("provider messages were not compacted: %#v", capture.messages)

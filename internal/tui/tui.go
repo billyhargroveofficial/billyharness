@@ -2981,14 +2981,26 @@ func helpText() string {
 func compactEventText(value any) string {
 	bytes, _ := json.Marshal(value)
 	var data struct {
-		ActiveMessages int    `json:"active_messages"`
-		SummaryChars   int    `json:"summary_chars"`
-		Detail         string `json:"detail"`
+		ActiveMessages    int    `json:"active_messages"`
+		SummaryChars      int    `json:"summary_chars"`
+		Detail            string `json:"detail"`
+		CompactionID      string `json:"compaction_id"`
+		TriggerPromptToks int64  `json:"trigger_prompt_tokens"`
+		ThresholdTokens   int64  `json:"threshold_tokens"`
+		CompactedMessages int    `json:"compacted_messages"`
 	}
 	_ = json.Unmarshal(bytes, &data)
 	var lines []string
-	if data.Detail != "" {
+	if data.CompactionID != "" {
+		lines = append(lines, "id: "+data.CompactionID)
+	}
+	if data.TriggerPromptToks > 0 || data.ThresholdTokens > 0 {
+		lines = append(lines, fmt.Sprintf("trigger: %d / threshold %d tokens", data.TriggerPromptToks, data.ThresholdTokens))
+	} else if data.Detail != "" {
 		lines = append(lines, data.Detail)
+	}
+	if data.CompactedMessages > 0 {
+		lines = append(lines, fmt.Sprintf("compacted messages: %d", data.CompactedMessages))
 	}
 	if data.ActiveMessages > 0 {
 		lines = append(lines, fmt.Sprintf("active messages: %d", data.ActiveMessages))

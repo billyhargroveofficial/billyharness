@@ -754,6 +754,28 @@ func TestInlineStatusShowsModelAccessCacheCostAndSession(t *testing.T) {
 	}
 }
 
+func TestCompactEventTextShowsStructuredCompactionFields(t *testing.T) {
+	text := compactEventText(map[string]any{
+		"compaction_id":         "abc123",
+		"trigger_prompt_tokens": 610000,
+		"threshold_tokens":      600000,
+		"compacted_messages":    42,
+		"active_messages":       35,
+		"summary_chars":         12000,
+	})
+	for _, want := range []string{
+		"id: abc123",
+		"trigger: 610000 / threshold 600000 tokens",
+		"compacted messages: 42",
+		"active messages: 35",
+		"summary chars: 12000",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("compact text %q missing %q", text, want)
+		}
+	}
+}
+
 func TestResumeChatDoesNotTreatLifetimeTokensAsContextUsage(t *testing.T) {
 	m := newTestModel(t)
 	session := chatSession{

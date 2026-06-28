@@ -1,7 +1,10 @@
 package agent
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
@@ -84,9 +87,10 @@ func compactCutIndex(messages []protocol.Message, prefixEnd, keep int) int {
 
 func buildCompactionSummary(messages []protocol.Message, maxChars int, triggerTokens, threshold int64) protocol.Message {
 	var b strings.Builder
+	id := compactionID(messages, triggerTokens, threshold)
 	fmt.Fprintf(&b, "%s\n", compactionMarker)
 	fmt.Fprintf(&b, "Earlier conversation context was compacted before the next model call.\n")
-	fmt.Fprintf(&b, "Trigger prompt tokens: %d; threshold: %d; compacted messages: %d.\n", triggerTokens, threshold, len(messages))
+	fmt.Fprintf(&b, "Compaction id: %s; trigger prompt tokens: %d; threshold: %d; compacted messages: %d.\n", id, triggerTokens, threshold, len(messages))
 	b.WriteString("Do not treat omitted assistant reasoning as missing user intent. Continue from the preserved recent messages.\n\n")
 	b.WriteString("Compacted transcript:\n")
 	for i, msg := range messages {
@@ -99,6 +103,19 @@ func buildCompactionSummary(messages []protocol.Message, maxChars int, triggerTo
 		b.WriteByte('\n')
 	}
 	return protocol.Message{Role: protocol.RoleSystem, Content: b.String()}
+}
+
+func compactionID(messages []protocol.Message, triggerTokens, threshold int64) string {
+	hash := sha256.New()
+	fmt.Fprintf(hash, "trigger=%d threshold=%d messages=%d\n", triggerTokens, threshold, len(messages))
+	for _, msg := range messages {
+		fmt.Fprintf(hash, "role=%s name=%s tool_call_id=%s content=%s\n", msg.Role, msg.Name, msg.ToolCallID, msg.Content)
+		for _, call := range msg.ToolCalls {
+			fmt.Fprintf(hash, "call=%s name=%s args=%s\n", call.ID, call.Name, string(call.Arguments))
+		}
+	}
+	sum := hash.Sum(nil)
+	return hex.EncodeToString(sum[:6])
 }
 
 func compactMessageEntry(index int, msg protocol.Message) string {
@@ -160,8 +177,9 @@ func compactionEventData(messages []protocol.Message) map[string]any {
 			data["summary_chars"] = len(msg.Content)
 			for _, line := range strings.Split(msg.Content, "\n") {
 				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "Trigger prompt tokens:") {
+				if strings.HasPrefix(line, "Compaction id:") || strings.HasPrefix(line, "Trigger prompt tokens:") {
 					data["detail"] = line
+					parseCompactionDetail(data, line)
 					break
 				}
 			}
@@ -169,4 +187,34 @@ func compactionEventData(messages []protocol.Message) map[string]any {
 		}
 	}
 	return data
+}
+
+func parseCompactionDetail(data map[string]any, line string) {
+	line = strings.TrimSuffix(strings.TrimSpace(line), ".")
+	for _, part := range strings.Split(line, ";") {
+		key, value, ok := strings.Cut(strings.TrimSpace(part), ":")
+		if !ok {
+			continue
+		}
+		key = strings.ToLower(strings.TrimSpace(key))
+		value = strings.TrimSpace(value)
+		switch key {
+		case "compaction id":
+			if value != "" {
+				data["compaction_id"] = value
+			}
+		case "trigger prompt tokens":
+			if n, err := strconv.ParseInt(value, 10, 64); err == nil {
+				data["trigger_prompt_tokens"] = n
+			}
+		case "threshold":
+			if n, err := strconv.ParseInt(value, 10, 64); err == nil {
+				data["threshold_tokens"] = n
+			}
+		case "compacted messages":
+			if n, err := strconv.Atoi(value); err == nil {
+				data["compacted_messages"] = n
+			}
+		}
+	}
 }
