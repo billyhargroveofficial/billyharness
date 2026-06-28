@@ -165,14 +165,14 @@ Purpose: centralize permission, attempt, retry, cancellation, audit, output refs
   - [x] truncation status
   - [x] output ref id/path/hash when applicable
 - [ ] Ensure parallel batches update each call by `call_id`.
-- [ ] Ensure cancellation stops in-flight local operations where possible and records abort events.
+- [x] Ensure cancellation stops in-flight local operations where possible and records abort events.
 
 Acceptance:
 
 - [x] Golden event test covers one successful safe tool.
 - [x] Golden event test covers one denied dangerous tool.
 - [x] Golden event test covers one parallel read-only batch.
-- [ ] Golden event test covers cancellation while a tool is active.
+- [x] Golden event test covers cancellation while a tool is active.
 - [x] TUI and Telegram can still render compact tool lines.
 
 ### 1.3 Parallel Policy

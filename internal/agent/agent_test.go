@@ -660,6 +660,68 @@ func TestRunMessagesExecutesParallelSafeToolsConcurrentlyAndPreservesOrder(t *te
 	}
 }
 
+func TestRunMessagesRecordsAbortWhenActiveToolIsCanceled(t *testing.T) {
+	cfg := config.Default()
+	cfg.MaxToolRounds = 3
+	started := make(chan struct{})
+	registry := tools.NewRegistry(cfg)
+	if err := registry.Register(tools.Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "wait_for_cancel",
+			Description: "Wait until the run context is canceled.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+			Risk:        protocol.RiskReadOnly,
+		},
+		Handler: func(ctx context.Context, _ json.RawMessage) (tools.Result, error) {
+			close(started)
+			<-ctx.Done()
+			return tools.Result{}, ctx.Err()
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prov := &cancelAfterToolProvider{}
+	a := New(cfg, prov, registry)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var events []protocol.Event
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.RunMessages(ctx, []protocol.Message{
+			{Role: protocol.RoleSystem, Content: "system"},
+			{Role: protocol.RoleUser, Content: "cancel tool"},
+		}, func(event protocol.Event) {
+			events = append(events, event)
+		})
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not start")
+	}
+	cancel()
+	err := <-done
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("run error = %v, want context.Canceled", err)
+	}
+	var aborted protocol.ToolResult
+	var sawAborted bool
+	for _, event := range events {
+		if event.Type != protocol.EventToolCallAborted {
+			continue
+		}
+		bytes, _ := json.Marshal(event.Data)
+		if json.Unmarshal(bytes, &aborted) == nil {
+			sawAborted = true
+			break
+		}
+	}
+	if !sawAborted || aborted.CallID != "call_cancel" || aborted.ErrorCode != "tool_aborted" || aborted.Metadata["attempt_id"] == "" {
+		t.Fatalf("aborted result = %#v saw=%v events=%#v", aborted, sawAborted, events)
+	}
+}
+
 func TestRunMessagesStoresLargeToolOutputAndSendsPreview(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", home)
@@ -947,6 +1009,29 @@ func (p *scriptedProvider) Stream(ctx context.Context, req provider.Request) (<-
 				return
 			}
 		}
+	}()
+	return events, errs
+}
+
+type cancelAfterToolProvider struct {
+	calls int
+}
+
+func (p *cancelAfterToolProvider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, <-chan error) {
+	p.calls++
+	events := make(chan provider.Event, 2)
+	errs := make(chan error, 1)
+	call := p.calls
+	go func() {
+		defer close(events)
+		defer close(errs)
+		if call == 1 {
+			events <- provider.Event{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_cancel", ToolName: "wait_for_cancel", ArgsDelta: `{}`}
+			events <- provider.Event{Kind: provider.EventDone}
+			return
+		}
+		<-ctx.Done()
+		errs <- ctx.Err()
 	}()
 	return events, errs
 }
