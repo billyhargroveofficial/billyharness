@@ -859,7 +859,7 @@ Purpose: prove the harness is fast and effective, not just nice to look at.
 - [x] Include web-search tasks with output caps.
 - [x] Include MCP/tool discovery tasks.
 - [x] Include cancellation/resume tests.
-- [ ] Record:
+- [x] Record:
   - [x] success/failure
   - [x] total time
   - [x] first delta latency
@@ -880,7 +880,7 @@ Acceptance:
 
 - [x] Compare DeepSeek Flash versus DeepSeek Pro.
 - [x] Compare Codex/OpenAI OAuth path when available.
-- [ ] Track:
+- [x] Track:
   - [x] quality outcome
   - [x] elapsed time
   - [x] tool correctness
