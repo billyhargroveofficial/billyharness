@@ -120,11 +120,14 @@ func printSessionInspection(out io.Writer, inspection gateway.StoredSessionInspe
 		inspection.History.MessageCount,
 		emptyDash(inspection.History.HistorySHA256),
 	)
-	fmt.Fprintf(out, "events: exists=%t records=%d last=%s output_refs=%d\n",
+	fmt.Fprintf(out, "events: exists=%t records=%d last=%s output_refs=%d verified=%t missing=%d hash_mismatch=%d\n",
 		inspection.Events.Exists,
 		inspection.Events.Records,
 		emptyDash(inspection.Events.LastEvent),
 		inspection.Events.OutputRefs,
+		inspection.Events.OutputRefsVerified,
+		inspection.Events.MissingOutputRefs,
+		inspection.Events.OutputRefHashMismatch,
 	)
 	fmt.Fprintln(out, "files:")
 	for _, file := range inspection.Files {

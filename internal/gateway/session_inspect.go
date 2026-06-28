@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -80,13 +82,17 @@ type StoredSessionHistoryInspection struct {
 }
 
 type StoredSessionEventsInspection struct {
-	Path       string         `json:"path,omitempty"`
-	Exists     bool           `json:"exists"`
-	Records    int            `json:"records,omitempty"`
-	LastSeq    int64          `json:"last_seq,omitempty"`
-	LastEvent  string         `json:"last_event,omitempty"`
-	OutputRefs int            `json:"output_refs,omitempty"`
-	EventTypes map[string]int `json:"event_types,omitempty"`
+	Path                  string         `json:"path,omitempty"`
+	Exists                bool           `json:"exists"`
+	Records               int            `json:"records,omitempty"`
+	LastSeq               int64          `json:"last_seq,omitempty"`
+	LastEvent             string         `json:"last_event,omitempty"`
+	OutputRefs            int            `json:"output_refs,omitempty"`
+	OutputRefsVerified    bool           `json:"output_refs_verified,omitempty"`
+	OutputRefBytes        int64          `json:"output_ref_bytes,omitempty"`
+	MissingOutputRefs     int            `json:"missing_output_refs,omitempty"`
+	OutputRefHashMismatch int            `json:"output_ref_hash_mismatch,omitempty"`
+	EventTypes            map[string]int `json:"event_types,omitempty"`
 }
 
 func ListStoredSessions(dir string) (StoredSessionList, error) {
@@ -277,13 +283,60 @@ func inspectSessionEvents(path string, events []protocol.Event) StoredSessionEve
 			out.EventTypes[string(event.Type)]++
 		}
 		if event.Type == protocol.EventToolOutputRefCreated {
+			ref := outputRefFromEvent(event)
 			out.OutputRefs++
+			if ref.OutputRef == "" {
+				out.MissingOutputRefs++
+				continue
+			}
+			info, err := os.Stat(ref.OutputRef)
+			if err != nil || info.IsDir() {
+				out.MissingOutputRefs++
+				continue
+			}
+			out.OutputRefBytes += info.Size()
+			if ref.Bytes > 0 && info.Size() != ref.Bytes {
+				out.OutputRefHashMismatch++
+				continue
+			}
+			if ref.SHA256 != "" {
+				ok, err := fileSHA256Matches(ref.OutputRef, ref.SHA256)
+				if err != nil || !ok {
+					out.OutputRefHashMismatch++
+				}
+			}
 		}
 	}
+	out.OutputRefsVerified = out.OutputRefs > 0 && out.MissingOutputRefs == 0 && out.OutputRefHashMismatch == 0
 	if len(out.EventTypes) == 0 {
 		out.EventTypes = nil
 	}
 	return out
+}
+
+type outputRefEventData struct {
+	OutputRef string `json:"output_ref"`
+	SHA256    string `json:"output_ref_sha256"`
+	Bytes     int64  `json:"output_ref_bytes"`
+}
+
+func outputRefFromEvent(event protocol.Event) outputRefEventData {
+	body, err := json.Marshal(event.Data)
+	if err != nil {
+		return outputRefEventData{}
+	}
+	var out outputRefEventData
+	_ = json.Unmarshal(body, &out)
+	return out
+}
+
+func fileSHA256Matches(path, want string) (bool, error) {
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	sum := sha256.Sum256(bytes)
+	return strings.EqualFold(hex.EncodeToString(sum[:]), strings.TrimSpace(want)), nil
 }
 
 func storedSessionManifest(manifest sessionManifest) StoredSessionManifest {

@@ -1078,6 +1078,16 @@ func TestRunMessagesStoresLargeToolOutputAndSendsPreview(t *testing.T) {
 		result.Metadata["output_ref_sha256"] == "" {
 		t.Fatalf("metadata should make plaintext persistence explicit: %#v", result.Metadata)
 	}
+	refEvent, ok := firstEventData(events, protocol.EventToolOutputRefCreated)
+	if !ok ||
+		refEvent["output_ref"] != result.OutputRef ||
+		refEvent["output_ref_id"] != result.Metadata["output_ref_id"] ||
+		refEvent["output_ref_sha256"] != result.Metadata["output_ref_sha256"] ||
+		refEvent["output_ref_permissions"] != "0600" ||
+		refEvent["output_ref_plaintext"] != true ||
+		refEvent["output_ref_bytes"] == nil {
+		t.Fatalf("output ref event = %#v metadata=%#v ok=%v", refEvent, result.Metadata, ok)
+	}
 	var toolMessage protocol.Message
 	for _, msg := range next {
 		if msg.Role == protocol.RoleTool && msg.Name == "big_output" {

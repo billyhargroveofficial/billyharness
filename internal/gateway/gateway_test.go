@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -651,6 +653,55 @@ func TestGatewaySessionEventsRejectsInvalidAfterSeq(t *testing.T) {
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID+"/events?follow=maybe", nil))
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "follow") {
 		t.Fatalf("follow response = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGatewaySessionInspectorVerifiesOutputRefs(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+	session := newGatewaySession("with-output-ref", time.Now().UTC(), []protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	server.attachSessionStore(session)
+	server.sessions[session.ID] = session
+	if err := server.saveSession(session); err != nil {
+		t.Fatal(err)
+	}
+
+	refDir := filepath.Join(t.TempDir(), "tool-output")
+	if err := os.MkdirAll(refDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	refPath := filepath.Join(refDir, "large-output.txt")
+	body := []byte("large output payload")
+	if err := os.WriteFile(refPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	session.publish(protocol.Event{Type: protocol.EventToolOutputRefCreated, Data: map[string]any{
+		"call_id":                "call-1",
+		"name":                   "big_output",
+		"attempt_id":             "turn-001:tool-call-001:attempt-001",
+		"output_ref":             refPath,
+		"output_ref_id":          filepath.Base(refPath),
+		"output_ref_bytes":       int64(len(body)),
+		"output_ref_sha256":      hex.EncodeToString(sum[:]),
+		"output_ref_permissions": "0600",
+		"output_ref_plaintext":   true,
+		"truncated":              true,
+	}})
+
+	inspection, err := InspectStoredSession(storeDir, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.Events.OutputRefs != 1 ||
+		!inspection.Events.OutputRefsVerified ||
+		inspection.Events.MissingOutputRefs != 0 ||
+		inspection.Events.OutputRefHashMismatch != 0 ||
+		inspection.Events.OutputRefBytes != int64(len(body)) {
+		t.Fatalf("inspection events = %#v", inspection.Events)
 	}
 }
 

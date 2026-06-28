@@ -793,11 +793,11 @@ Purpose: make every session and benchmark explainable after the fact.
 ### 8.1 Session Store
 
 - [x] JSONL remains canonical.
-- [ ] Add or verify files:
+- [x] Add or verify files:
   - [x] manifest
   - [x] history JSONL
   - [x] events JSONL
-  - [ ] payload refs
+  - [x] payload refs
   - [x] config snapshot
   - [x] model/provider snapshot
   - [x] MCP snapshot

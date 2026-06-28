@@ -545,13 +545,25 @@ func (o *toolOrchestrator) EmitAttemptFinished(result toolExecutionResult) {
 	}
 	progressStatus := toolResultProgressStatus(result.Result)
 	if result.Result.OutputRef != "" {
-		o.emit(protocol.Event{Type: protocol.EventToolOutputRefCreated, Data: map[string]any{
+		data := map[string]any{
 			"call_id":    result.Call.ID,
 			"name":       result.Call.Name,
 			"attempt_id": result.AttemptID,
 			"output_ref": result.Result.OutputRef,
 			"truncated":  result.Result.Truncated,
-		}})
+		}
+		for _, key := range []string{
+			"output_ref_id",
+			"output_ref_bytes",
+			"output_ref_sha256",
+			"output_ref_permissions",
+			"output_ref_plaintext",
+		} {
+			if value := result.Result.Metadata[key]; value != nil {
+				data[key] = value
+			}
+		}
+		o.emit(protocol.Event{Type: protocol.EventToolOutputRefCreated, Data: data})
 	}
 	if result.Result.IsError {
 		eventType := protocol.EventToolCallFailed
