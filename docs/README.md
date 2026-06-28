@@ -8,6 +8,7 @@ Start here:
 - [Provider comparison report](provider-comparison-report.md): first live DeepSeek/Codex smoke results and failure modes.
 - [Hooks](hooks.md): local command hooks, config format, event payloads, and failure behavior.
 - [Skills](skills.md): on-demand skill directories and bounded `skill_list`/`skill_read` usage.
+- [Web tools](web.md): compact web fetch/extract/crawl output, external summaries, and web cache.
 
 Planned docs:
 
@@ -18,4 +19,5 @@ Planned docs:
 - `skills.md`: on-demand skill loading and compatibility input.
 - `tui.md`: commands, themes, copy, tool views, and chat controls.
 - `telegram.md`: bot setup, allowed users, commands, and sessions.
+- `web.md`: web cache, output refs, and summary economics.
 - `benchmarks.md`: local loops, Terminal-Bench adapter, replay verification, and provider comparisons.

@@ -430,7 +430,7 @@ Purpose: stop web/tool output from exploding context and token use.
   - [x] extracted chars
   - [x] summary chars
   - [x] estimated tokens saved
-  - [ ] cache hit/miss
+  - [x] cache hit/miss
   - [x] summarizer model/provider
   - [x] summary cost if model-based
 
@@ -462,20 +462,20 @@ Acceptance:
 
 ### 4.3 Web Cache
 
-- [ ] Add cache key:
-  - [ ] URL/query
-  - [ ] extraction mode
-  - [ ] max budget
-  - [ ] summarizer config hash
-  - [ ] freshness TTL
-- [ ] Store sanitized fetch metadata.
-- [ ] Add cache size limit and cleanup.
-- [ ] Add metrics to TUI/Telegram.
+- [x] Add cache key:
+  - [x] URL/query
+  - [x] extraction mode
+  - [x] max budget
+  - [x] summarizer config hash
+  - [x] freshness TTL
+- [x] Store sanitized fetch metadata.
+- [x] Add cache size limit and cleanup.
+- [x] Add metrics to TUI/Telegram.
 
 Acceptance:
 
-- [ ] Repeated fetches do not repeatedly consume summarizer/model tokens.
-- [ ] Cache can be inspected and cleared.
+- [x] Repeated fetches do not repeatedly consume summarizer/model tokens.
+- [x] Cache can be inspected and cleared.
 
 ### 4.4 Context Guardrails
 

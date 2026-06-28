@@ -123,6 +123,9 @@ func ResultKeyAndLine(data any, base string, style Style) (string, string) {
 	if result.OutputRef != "" {
 		parts = append(parts, "ref "+CompactText(filepathBase(result.OutputRef), 56))
 	}
+	if cacheLabel := webCacheLabel(result.Metadata); cacheLabel != "" {
+		parts = append(parts, cacheLabel)
+	}
 	if tokens := metadataInt(result.Metadata, "estimated_text_tokens"); tokens > 0 {
 		parts = append(parts, "~"+CompactInt(tokens)+" tok")
 	}
@@ -393,6 +396,39 @@ func metadataInt(metadata map[string]any, key string) int64 {
 		return n
 	default:
 		return 0
+	}
+}
+
+func webCacheLabel(metadata map[string]any) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	if metadataBool(metadata, "web_cache_hit") {
+		return "cache hit"
+	}
+	if metadataBool(metadata, "web_cache_miss") {
+		return "cache miss"
+	}
+	return ""
+}
+
+func metadataBool(metadata map[string]any, key string) bool {
+	if len(metadata) == 0 {
+		return false
+	}
+	switch value := metadata[key].(type) {
+	case bool:
+		return value
+	case string:
+		return strings.EqualFold(strings.TrimSpace(value), "true")
+	case int:
+		return value != 0
+	case int64:
+		return value != 0
+	case float64:
+		return value != 0
+	default:
+		return false
 	}
 }
 

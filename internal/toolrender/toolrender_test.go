@@ -55,12 +55,12 @@ func TestResultKeyAndLineCompactsMetadata(t *testing.T) {
 		Name:      "web_fetch",
 		Truncated: true,
 		OutputRef: "/root/billyharness/tool-output/20260627/123456-web_fetch-call_fetch-abcd.txt",
-		Metadata:  map[string]any{"estimated_text_tokens": int64(1800)},
+		Metadata:  map[string]any{"estimated_text_tokens": int64(1800), "web_cache_hit": true},
 	}, "🌐 web_fetch example.com/path?…", StyleTelegram)
 	if key != "call_fetch" {
 		t.Fatalf("key = %q", key)
 	}
-	for _, want := range []string{"✅", "🌐 web_fetch", "truncated", "123456-web_fetch-call_fetch-abcd.txt", "~1.8k tok"} {
+	for _, want := range []string{"✅", "🌐 web_fetch", "truncated", "123456-web_fetch-call_fetch-abcd.txt", "cache hit", "~1.8k tok"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("line missing %q: %q", want, line)
 		}

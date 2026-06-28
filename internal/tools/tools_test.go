@@ -662,6 +662,87 @@ func TestModelWebSummarizerFallsBackToExtractiveOnProviderError(t *testing.T) {
 	}
 }
 
+func TestWebCacheStoresAndClearsCompactOutputs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	cfg := config.Default()
+	cfg.WebCacheEnabled = true
+	cfg.WebCacheTTL = time.Hour
+	cfg.WebCacheMaxBytes = 1 << 20
+	registry := NewRegistry(cfg)
+	ctx := context.Background()
+	opts := webFetchOptions{Query: "weather", MaxBytes: 65536}
+	key, ok := registry.webCacheKey(ctx, "web_fetch", "http://93.184.216.34/article", opts, nil)
+	if !ok || key == "" {
+		t.Fatalf("web cache key missing")
+	}
+	otherQuery, _ := registry.webCacheKey(ctx, "web_fetch", "http://93.184.216.34/article", webFetchOptions{Query: "news", MaxBytes: 65536}, nil)
+	if otherQuery == key {
+		t.Fatalf("web cache key should include query")
+	}
+	cfg.WebSummaryMode = "model"
+	cfg.WebSummaryProvider = "mock"
+	cfg.WebSummaryModel = "mock-summarizer"
+	modelRegistry := NewRegistry(cfg)
+	modelKey, _ := modelRegistry.webCacheKey(ctx, "web_fetch", "http://93.184.216.34/article", opts, nil)
+	if modelKey == key {
+		t.Fatalf("web cache key should include summarizer config")
+	}
+
+	page := compactPage{
+		URL:                 "http://93.184.216.34/article",
+		OutputClass:         "extractive_summary",
+		SummaryMode:         "extractive",
+		Summary:             "cached summary",
+		EstimatedTextTokens: 17,
+	}
+	if err := registry.saveWebPageCache(key, page); err != nil {
+		t.Fatal(err)
+	}
+	cached, hit := registry.loadWebPageCache(key)
+	if !hit || !cached.WebCacheHit || cached.WebCacheKey != key || cached.WebCacheTTLMS != int64(time.Hour/time.Millisecond) {
+		t.Fatalf("cached page = %#v hit=%v", cached, hit)
+	}
+
+	crawlKey, ok := registry.webCacheKey(ctx, "web_crawl", "http://93.184.216.34/", webFetchOptions{}, map[string]any{"max_pages": 1})
+	if !ok {
+		t.Fatalf("crawl cache key missing")
+	}
+	crawl := compactCrawlOutput{
+		Pages:       []compactCrawlPage{{URL: "http://93.184.216.34/", Summary: "cached crawl"}},
+		OutputClass: "extractive_summary",
+		SummaryMode: "extractive",
+	}
+	if err := registry.saveWebCrawlCache(crawlKey, crawl); err != nil {
+		t.Fatal(err)
+	}
+	cachedCrawl, hit := registry.loadWebCrawlCache(crawlKey)
+	if !hit || !cachedCrawl.WebCacheHit || len(cachedCrawl.Pages) != 1 || !cachedCrawl.Pages[0].WebCacheHit {
+		t.Fatalf("cached crawl = %#v hit=%v", cachedCrawl, hit)
+	}
+
+	status, err := registry.Call(ctx, protocol.ToolCall{Name: "web_cache_status", Arguments: rawArgs(map[string]any{})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"enabled": true`, `"entries":`} {
+		if !strings.Contains(status.Content, want) {
+			t.Fatalf("status missing %q in:\n%s", want, status.Content)
+		}
+	}
+	cleared, err := registry.Call(ctx, protocol.ToolCall{Name: "web_cache_clear", Arguments: rawArgs(map[string]any{})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cleared.Content, `"removed_entries":`) || anyInt64(cleared.Metadata["web_cache_removed_entries"]) == 0 {
+		t.Fatalf("clear result = %#v content=\n%s", cleared, cleared.Content)
+	}
+	after := registry.webCacheStatus()
+	if after.Entries != 0 {
+		t.Fatalf("cache should be empty after clear: %#v", after)
+	}
+}
+
 func TestCompactCrawlResultReturnsSingleOutputRef(t *testing.T) {
 	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
 	pages := []crawlPage{

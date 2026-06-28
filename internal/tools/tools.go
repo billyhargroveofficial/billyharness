@@ -106,6 +106,7 @@ func NewRegistry(cfg config.Config) *Registry {
 	r.addWebSearch()
 	r.addWebCrawl()
 	r.addWebExtract()
+	r.addWebCache()
 	r.addToolSearch()
 	r.addSkills()
 	return r
@@ -295,11 +296,11 @@ func normalizeParallelMetadata(name string, risk protocol.Risk, meta ParallelMet
 
 func defaultParallelMetadata(name string, risk protocol.Risk) ParallelMetadata {
 	switch name {
-	case "time_now", "fs_read_file", "fs_list", "fs_search", "tool_search", "skill_list", "skill_read":
+	case "time_now", "fs_read_file", "fs_list", "fs_search", "tool_search", "skill_list", "skill_read", "web_cache_status":
 		return ParallelMetadata{Policy: ParallelPolicyReadOnly, Idempotent: true, Cancellable: true}
 	case "web_search", "web_fetch", "web_extract", "web_crawl":
 		return ParallelMetadata{Policy: ParallelPolicyNetworkRateLimited, Idempotent: true, RateLimitKey: "web", Cancellable: true, MaxConcurrency: 3}
-	case "fs_write_file", "fs_make_dir", "shell_exec":
+	case "fs_write_file", "fs_make_dir", "shell_exec", "web_cache_clear":
 		return ParallelMetadata{Policy: ParallelPolicyExclusiveWorkspace, RequiresExclusiveWorkspace: true, Cancellable: true, MaxConcurrency: 1}
 	case "mcp_list_tools", "mcp_call":
 		return ParallelMetadata{Policy: ParallelPolicyUnknownExternal, RequiresExclusiveWorkspace: true, Cancellable: true, RateLimitKey: "mcp", MaxConcurrency: 1}
@@ -729,11 +730,7 @@ func (r *Registry) addWebCrawl() {
 			if in.SameHost != nil {
 				sameHost = *in.SameHost
 			}
-			pages, err := crawl(ctx, in.URL, in.MaxPages, in.MaxDepth, sameHost, boundedBytes(in.MaxBytesPerPage))
-			if err != nil {
-				return Result{}, err
-			}
-			compact, ref, storeErr := r.compactCrawlResult(ctx, pages, webFetchOptions{
+			opts := webFetchOptions{
 				Query:          in.Query,
 				MaxChars:       in.MaxCharsPerPage,
 				MaxTokens:      in.MaxTokensPerPage,
@@ -741,12 +738,77 @@ func (r *Registry) addWebCrawl() {
 				IncludeText:    in.IncludeText,
 				FullText:       in.FullText,
 				MaxLinks:       0,
+			}
+			cacheKey, cacheOK := r.webCacheKey(ctx, "web_crawl", in.URL, opts, map[string]any{
+				"max_pages":          normalizedCrawlMaxPages(in.MaxPages),
+				"max_depth":          normalizedCrawlMaxDepth(in.MaxDepth),
+				"same_host":          sameHost,
+				"max_bytes_per_page": boundedBytes(in.MaxBytesPerPage),
 			})
+			if cacheOK {
+				if compact, hit := r.loadWebCrawlCache(cacheKey); hit {
+					out, _ := json.MarshalIndent(compact, "", "  ")
+					return Result{Content: string(out), Metadata: crawlMetadata(compact), Truncated: compact.OutputTextTruncated, OutputRef: compact.OutputRef}, nil
+				}
+			}
+			pages, err := r.crawl(ctx, in.URL, in.MaxPages, in.MaxDepth, sameHost, boundedBytes(in.MaxBytesPerPage))
+			if err != nil {
+				return Result{}, err
+			}
+			compact, ref, storeErr := r.compactCrawlResult(ctx, pages, opts)
 			if storeErr != nil {
 				compact.CompactNote = strings.TrimSpace(compact.CompactNote + " full crawl text save failed: " + storeErr.Error())
 			}
+			if cacheOK {
+				compact.applyWebCache(cacheKey, false, 0, r.cfg.WebCacheTTL)
+				_ = r.saveWebCrawlCache(cacheKey, compact)
+			}
 			out, _ := json.MarshalIndent(compact, "", "  ")
 			return Result{Content: string(out), Metadata: crawlMetadata(compact), Truncated: compact.OutputTextTruncated, OutputRef: ref}, nil
+		},
+	})
+}
+
+func (r *Registry) addWebCache() {
+	r.add(Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "web_cache_status",
+			Description: "Inspect the native web fetch/extract/crawl cache. Shows entry count, total bytes, TTL, max size, and expired entries.",
+			Parameters:  raw(`{"type":"object","properties":{},"additionalProperties":false}`),
+			Risk:        protocol.RiskReadOnly,
+		},
+		Handler: func(context.Context, json.RawMessage) (Result, error) {
+			status := r.webCacheStatus()
+			out, _ := json.MarshalIndent(status, "", "  ")
+			return Result{Content: string(out), Metadata: map[string]any{
+				"web_cache_enabled": status.Enabled,
+				"web_cache_entries": status.Entries,
+				"web_cache_bytes":   status.Bytes,
+				"web_cache_expired": status.ExpiredEntries,
+			}}, nil
+		},
+	})
+	r.add(Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "web_cache_clear",
+			Description: "Clear the native web cache under $BILLYHARNESS_HOME/web-cache. This does not delete saved tool-output refs.",
+			Parameters:  raw(`{"type":"object","properties":{},"additionalProperties":false}`),
+			Risk:        protocol.RiskWrite,
+		},
+		Handler: func(context.Context, json.RawMessage) (Result, error) {
+			removed, bytes, err := r.clearWebCache()
+			if err != nil {
+				return Result{}, err
+			}
+			out, _ := json.MarshalIndent(map[string]any{
+				"removed_entries": removed,
+				"removed_bytes":   bytes,
+				"cache_dir":       r.webCacheDir(),
+			}, "", "  ")
+			return Result{Content: string(out), Metadata: map[string]any{
+				"web_cache_removed_entries": removed,
+				"web_cache_removed_bytes":   bytes,
+			}}, nil
 		},
 	})
 }
@@ -1637,6 +1699,10 @@ type compactPage struct {
 	WebsumCost           float64  `json:"websum_cost,omitempty"`
 	WebsumModel          string   `json:"websum_model,omitempty"`
 	WebsumError          string   `json:"websum_error,omitempty"`
+	WebCacheHit          bool     `json:"web_cache_hit"`
+	WebCacheKey          string   `json:"web_cache_key,omitempty"`
+	WebCacheAgeMS        int64    `json:"web_cache_age_ms,omitempty"`
+	WebCacheTTLMS        int64    `json:"web_cache_ttl_ms,omitempty"`
 	KeyPoints            []string `json:"key_points,omitempty"`
 	Extract              string   `json:"extract,omitempty"`
 	Text                 string   `json:"text,omitempty"`
@@ -1672,6 +1738,10 @@ type compactCrawlPage struct {
 	WebsumCost           float64  `json:"websum_cost,omitempty"`
 	WebsumModel          string   `json:"websum_model,omitempty"`
 	WebsumError          string   `json:"websum_error,omitempty"`
+	WebCacheHit          bool     `json:"web_cache_hit,omitempty"`
+	WebCacheKey          string   `json:"web_cache_key,omitempty"`
+	WebCacheAgeMS        int64    `json:"web_cache_age_ms,omitempty"`
+	WebCacheTTLMS        int64    `json:"web_cache_ttl_ms,omitempty"`
 	KeyPoints            []string `json:"key_points,omitempty"`
 	Extract              string   `json:"extract,omitempty"`
 	Text                 string   `json:"text,omitempty"`
@@ -1704,6 +1774,10 @@ type compactCrawlOutput struct {
 	WebsumCost           float64            `json:"websum_cost,omitempty"`
 	WebsumModel          string             `json:"websum_model,omitempty"`
 	WebsumError          string             `json:"websum_error,omitempty"`
+	WebCacheHit          bool               `json:"web_cache_hit"`
+	WebCacheKey          string             `json:"web_cache_key,omitempty"`
+	WebCacheAgeMS        int64              `json:"web_cache_age_ms,omitempty"`
+	WebCacheTTLMS        int64              `json:"web_cache_ttl_ms,omitempty"`
 	OutputRef            string             `json:"output_ref,omitempty"`
 	RawBytesFetched      int                `json:"raw_bytes_fetched,omitempty"`
 	MaxBytesPerPage      int                `json:"max_bytes_per_page,omitempty"`
@@ -1833,7 +1907,20 @@ func compactCrawlPages(pages []crawlPage, opts webFetchOptions) []compactCrawlPa
 }
 
 func (r *Registry) fetchCompactPageResult(ctx context.Context, toolName, rawURL string, opts webFetchOptions) (Result, error) {
-	page, err := fetchPage(ctx, rawURL, boundedBytes(opts.MaxBytes))
+	opts.MaxBytes = boundedBytes(opts.MaxBytes)
+	cacheKey, cacheOK := r.webCacheKey(ctx, toolName, rawURL, opts, nil)
+	if cacheOK {
+		if compact, hit := r.loadWebPageCache(cacheKey); hit {
+			out, _ := json.MarshalIndent(compact, "", "  ")
+			return Result{
+				Content:   string(out),
+				Metadata:  webPageMetadata(compact),
+				Truncated: compact.OutputTextTruncated,
+				OutputRef: compact.OutputRef,
+			}, nil
+		}
+	}
+	page, err := fetchPage(ctx, rawURL, opts.MaxBytes)
 	if err != nil {
 		return Result{}, err
 	}
@@ -1844,6 +1931,10 @@ func (r *Registry) fetchCompactPageResult(ctx context.Context, toolName, rawURL 
 		compact.CompactNote = strings.TrimSpace(compact.CompactNote + " full extracted text save failed: " + err.Error())
 	} else {
 		compact.OutputRef = ref
+	}
+	if cacheOK {
+		compact.applyWebCache(cacheKey, false, 0, r.cfg.WebCacheTTL)
+		_ = r.saveWebPageCache(cacheKey, compact)
 	}
 	out, _ := json.MarshalIndent(compact, "", "  ")
 	return Result{
@@ -2137,6 +2228,11 @@ func crawlMetadata(out compactCrawlOutput) map[string]any {
 		"websum_cache_hit":                 out.WebsumCacheHit,
 		"websum_model":                     out.WebsumModel,
 		"websum_error":                     out.WebsumError,
+		"web_cache_hit":                    out.WebCacheHit,
+		"web_cache_miss":                   out.WebCacheKey != "" && !out.WebCacheHit,
+		"web_cache_key":                    out.WebCacheKey,
+		"web_cache_age_ms":                 out.WebCacheAgeMS,
+		"web_cache_ttl_ms":                 out.WebCacheTTLMS,
 		"pages":                            len(out.Pages),
 		"raw_bytes_fetched":                out.RawBytesFetched,
 		"max_bytes_per_page":               out.MaxBytesPerPage,
@@ -2565,6 +2661,11 @@ func webPageMetadata(page compactPage) map[string]any {
 		"websum_cache_hit":                 page.WebsumCacheHit,
 		"websum_model":                     page.WebsumModel,
 		"websum_error":                     page.WebsumError,
+		"web_cache_hit":                    page.WebCacheHit,
+		"web_cache_miss":                   page.WebCacheKey != "" && !page.WebCacheHit,
+		"web_cache_key":                    page.WebCacheKey,
+		"web_cache_age_ms":                 page.WebCacheAgeMS,
+		"web_cache_ttl_ms":                 page.WebCacheTTLMS,
 		"raw_bytes_fetched":                page.RawBytesFetched,
 		"max_bytes":                        page.MaxBytes,
 		"original_text_chars":              page.OriginalTextChars,
@@ -2764,13 +2865,23 @@ func fetchPage(ctx context.Context, rawURL string, maxBytes int) (fetchedPage, e
 	return page, nil
 }
 
-func crawl(ctx context.Context, rawURL string, maxPages, maxDepth int, sameHost bool, maxBytesPerPage int) ([]crawlPage, error) {
+func normalizedCrawlMaxPages(maxPages int) int {
 	if maxPages <= 0 || maxPages > 10 {
-		maxPages = 3
+		return 3
 	}
+	return maxPages
+}
+
+func normalizedCrawlMaxDepth(maxDepth int) int {
 	if maxDepth < 0 || maxDepth > 2 {
-		maxDepth = 1
+		return 1
 	}
+	return maxDepth
+}
+
+func (r *Registry) crawl(ctx context.Context, rawURL string, maxPages, maxDepth int, sameHost bool, maxBytesPerPage int) ([]crawlPage, error) {
+	maxPages = normalizedCrawlMaxPages(maxPages)
+	maxDepth = normalizedCrawlMaxDepth(maxDepth)
 	start, err := validatePublicHTTPURL(ctx, rawURL)
 	if err != nil {
 		return nil, err

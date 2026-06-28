@@ -133,6 +133,12 @@ See [docs/hooks.md](docs/hooks.md) for the config format and supported events.
 Skills live under `$BILLYHARNESS_HOME/skills/<name>/SKILL.md` or project `.billyharness/skills/<name>/SKILL.md`.
 They are loaded on demand with `skill_list` and `skill_read`; `.claude/skills` compatibility input requires `include_compat=true`.
 
+## Web tools and cache
+
+`web_fetch`, `web_extract`, and `web_crawl` return compact summaries by default and store full extracted text in output refs.
+Compact web outputs are cached under `$BILLYHARNESS_HOME/web-cache`; inspect or clear them with `web_cache_status` and `web_cache_clear`.
+See [docs/web.md](docs/web.md).
+
 ## Codex / GPT subscription mode
 
 `/model gpt`, `/model gpt-5.5`, `/model gpt-5.4`, `/model gpt-5.4-mini`, and `/model spark`

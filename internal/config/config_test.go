@@ -69,6 +69,9 @@ func TestDefaultRuntimeLimits(t *testing.T) {
 	if cfg.WebSummaryMaxInputTokens != 12_000 || cfg.WebSummaryMaxOutputTokens != 700 || cfg.WebSummaryTimeout != time.Minute {
 		t.Fatalf("web summary budgets = in:%d out:%d timeout:%s", cfg.WebSummaryMaxInputTokens, cfg.WebSummaryMaxOutputTokens, cfg.WebSummaryTimeout)
 	}
+	if !cfg.WebCacheEnabled || cfg.WebCacheTTL != 10*time.Minute || cfg.WebCacheMaxBytes != 128*1024*1024 {
+		t.Fatalf("web cache defaults = enabled:%v ttl:%s max:%d", cfg.WebCacheEnabled, cfg.WebCacheTTL, cfg.WebCacheMaxBytes)
+	}
 }
 
 func TestMCPAllowedServersEnvOverridesDefault(t *testing.T) {
@@ -274,6 +277,16 @@ func TestWebSummaryEnvOverridesDefaults(t *testing.T) {
 	}
 	if cfg.WebSummaryMaxInputTokens != 333 || cfg.WebSummaryMaxOutputTokens != 44 || cfg.WebSummaryTimeout != 7*time.Second {
 		t.Fatalf("web summary env budgets = in:%d out:%d timeout:%s", cfg.WebSummaryMaxInputTokens, cfg.WebSummaryMaxOutputTokens, cfg.WebSummaryTimeout)
+	}
+}
+
+func TestWebCacheEnvOverridesDefaults(t *testing.T) {
+	t.Setenv("FAST_AGENT_WEB_CACHE_ENABLED", "false")
+	t.Setenv("FAST_AGENT_WEB_CACHE_TTL_SEC", "123")
+	t.Setenv("FAST_AGENT_WEB_CACHE_MAX_BYTES", "456789")
+	cfg := Default()
+	if cfg.WebCacheEnabled || cfg.WebCacheTTL != 123*time.Second || cfg.WebCacheMaxBytes != 456789 {
+		t.Fatalf("web cache env = enabled:%v ttl:%s max:%d", cfg.WebCacheEnabled, cfg.WebCacheTTL, cfg.WebCacheMaxBytes)
 	}
 }
 

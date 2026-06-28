@@ -43,6 +43,9 @@ type Config struct {
 	WebSummaryMaxInputTokens  int
 	WebSummaryMaxOutputTokens int
 	WebSummaryTimeout         time.Duration
+	WebCacheEnabled           bool
+	WebCacheTTL               time.Duration
+	WebCacheMaxBytes          int64
 	RequestTimeout            time.Duration
 	StreamIdleTimeout         time.Duration
 	WorkspaceRoots            []string
