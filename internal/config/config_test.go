@@ -305,6 +305,18 @@ func TestWebSummaryEnvOverridesDefaults(t *testing.T) {
 	}
 }
 
+func TestContextCompactModelStrategyEnvOverridesDefaults(t *testing.T) {
+	t.Setenv("FAST_AGENT_CONTEXT_COMPACT_STRATEGY", "llm")
+	t.Setenv("FAST_AGENT_CONTEXT_COMPACT_SUMMARY_PROVIDER", "mock")
+	t.Setenv("FAST_AGENT_CONTEXT_COMPACT_SUMMARY_MODEL", "custom-compact-mini")
+	cfg := Default()
+	if cfg.ContextCompactStrategy != "model" ||
+		cfg.ContextCompactSummaryProvider != "mock" ||
+		cfg.ContextCompactSummaryModel != "custom-compact-mini" {
+		t.Fatalf("context compact strategy = strategy:%q provider:%q model:%q", cfg.ContextCompactStrategy, cfg.ContextCompactSummaryProvider, cfg.ContextCompactSummaryModel)
+	}
+}
+
 func TestWebCacheEnvOverridesDefaults(t *testing.T) {
 	t.Setenv("FAST_AGENT_WEB_CACHE_ENABLED", "false")
 	t.Setenv("FAST_AGENT_WEB_CACHE_TTL_SEC", "123")

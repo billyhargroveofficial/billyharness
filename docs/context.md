@@ -14,7 +14,17 @@ Provider usage counters such as cache hit/miss can be larger than active context
 
 During a run, the agent emits `context.threshold` events when active context crosses 50%, 70%, 85%, or 95% of `context_window_tokens`. TUI renders these as `CONTEXT` blocks. Telegram shows them as compact progress lines.
 
-When compaction fires, the `context.compacted` event includes before/after token estimates, cut range, replacement index, deterministic summary strategy, protected prefix details, and `top_context_contributors` from the pre-compaction messages so the UI can show what dominated the window before it was summarized.
+When compaction fires, the `context.compacted` event includes before/after token estimates, cut range, replacement index, summary strategy, protected prefix details, and `top_context_contributors` from the pre-compaction messages so the UI can show what dominated the window before it was summarized.
+
+Compaction is deterministic by default for speed. To opt into a bounded model summary of the deterministic compact transcript:
+
+```bash
+FAST_AGENT_CONTEXT_COMPACT_STRATEGY=model
+FAST_AGENT_CONTEXT_COMPACT_SUMMARY_PROVIDER=deepseek
+FAST_AGENT_CONTEXT_COMPACT_SUMMARY_MODEL=deepseek-v4-flash
+```
+
+If the model summary fails, billyharness keeps the deterministic summary and records `summary_error` in the `context.compacted` event.
 
 Gateway API:
 

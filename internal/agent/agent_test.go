@@ -431,6 +431,55 @@ func TestCompactMessagesReportsTopContextContributors(t *testing.T) {
 	}
 }
 
+func TestModelCompactionStrategyReplacesSummaryAndReportsModel(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.ContextCompactTokens = 10
+	cfg.ContextCompactKeep = 1
+	cfg.ContextCompactMaxChars = 2000
+	cfg.ContextCompactStrategy = "model"
+	cfg.ContextCompactSummaryProvider = "mock"
+	cfg.ContextCompactSummaryModel = "mock-summary"
+	cfg.WebSummaryMaxOutputTokens = 100
+	capture := &captureProvider{}
+	oldSummaryProvider := newCompactionSummaryProvider
+	newCompactionSummaryProvider = func(got config.Config) (provider.Provider, error) {
+		if got.Model != "mock-summary" || got.Provider != "mock" || got.Thinking != "disabled" {
+			t.Fatalf("summary cfg = provider:%q model:%q thinking:%q", got.Provider, got.Model, got.Thinking)
+		}
+		return staticContentProvider{text: "model says keep latest task and important file path", usage: provider.Usage{InputTokens: 123, OutputTokens: 9}}, nil
+	}
+	t.Cleanup(func() { newCompactionSummaryProvider = oldSummaryProvider })
+
+	a := New(cfg, capture, tools.NewRegistry(cfg))
+	var compactEvent map[string]any
+	_, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: strings.Repeat("old context ", 100)},
+		{Role: protocol.RoleAssistant, Content: "old answer"},
+		{Role: protocol.RoleUser, Content: "latest task"},
+	}, func(event protocol.Event) {
+		if event.Type == protocol.EventContextCompacted {
+			compactEvent = eventDataMap(event)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capture.messages) < 3 || !strings.Contains(capture.messages[1].Content, "Model summary:") ||
+		!strings.Contains(capture.messages[1].Content, "model says keep latest task") {
+		t.Fatalf("provider messages missing model compaction summary: %#v", capture.messages)
+	}
+	if compactEvent["summary_strategy"] != "model" ||
+		compactEvent["summary_provider"] != "mock" ||
+		compactEvent["summary_model"] != "mock-summary" ||
+		int64(compactEvent["model_summary_input_tokens"].(float64)) != 123 ||
+		int64(compactEvent["model_summary_output_tokens"].(float64)) != 9 {
+		t.Fatalf("compaction event missing model summary fields: %#v", compactEvent)
+	}
+}
+
 func TestCompactMessagesPreservesToolAdjacency(t *testing.T) {
 	cfg := config.Default()
 	cfg.ContextCompactTokens = 1
@@ -1444,6 +1493,31 @@ type scriptedProvider struct {
 	err       error
 	calls     int
 	lastTools []protocol.ToolSpec
+}
+
+type staticContentProvider struct {
+	text  string
+	usage provider.Usage
+}
+
+func (p staticContentProvider) Stream(ctx context.Context, _ provider.Request) (<-chan provider.Event, <-chan error) {
+	events := make(chan provider.Event, 3)
+	errs := make(chan error, 1)
+	go func() {
+		defer close(events)
+		defer close(errs)
+		select {
+		case events <- provider.Event{Kind: provider.EventContent, Text: p.text}:
+		case <-ctx.Done():
+			errs <- ctx.Err()
+			return
+		}
+		if p.usage != (provider.Usage{}) {
+			events <- provider.Event{Kind: provider.EventUsage, Usage: p.usage}
+		}
+		events <- provider.Event{Kind: provider.EventDone}
+	}()
+	return events, errs
 }
 
 func (p *scriptedProvider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, <-chan error) {

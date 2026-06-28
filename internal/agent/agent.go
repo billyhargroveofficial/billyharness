@@ -94,7 +94,7 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 		emitContextThresholdEvents(messages, a.cfg, roundNum, "before_turn", emittedContextThresholds, emit)
 		var compacted bool
 		var compaction *compactionReport
-		messages, compaction, compacted = compactMessages(messages, a.cfg, lastPromptTokens)
+		messages, compaction, compacted = a.compactMessages(ctx, messages, lastPromptTokens)
 		if compacted {
 			lastPromptTokens = 0
 			emit(protocol.Event{Type: protocol.EventContextCompacted, Data: compaction})

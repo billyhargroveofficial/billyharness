@@ -225,6 +225,7 @@ func builtInConfig() Config {
 		ContextCompactTokens:      600_000,
 		ContextCompactKeep:        32,
 		ContextCompactMaxChars:    120_000,
+		ContextCompactStrategy:    "deterministic",
 		WebSummaryMode:            "extractive",
 		WebSummaryMaxInputTokens:  12_000,
 		WebSummaryMaxOutputTokens: 700,
@@ -270,6 +271,9 @@ func configSpecs() []configSpec {
 		intSpec("context_compact_tokens", []string{"FAST_AGENT_CONTEXT_COMPACT_TOKENS"}, func(c Config) any { return c.ContextCompactTokens }, func(c *Config, v int) { c.ContextCompactTokens = v }),
 		intSpec("context_compact_keep", []string{"FAST_AGENT_CONTEXT_COMPACT_KEEP"}, func(c Config) any { return c.ContextCompactKeep }, func(c *Config, v int) { c.ContextCompactKeep = v }),
 		intSpec("context_compact_max_chars", []string{"FAST_AGENT_CONTEXT_COMPACT_MAX_CHARS"}, func(c Config) any { return c.ContextCompactMaxChars }, func(c *Config, v int) { c.ContextCompactMaxChars = v }),
+		stringSpec("context_compact_strategy", []string{"FAST_AGENT_CONTEXT_COMPACT_STRATEGY"}, func(c Config) any { return c.ContextCompactStrategy }, func(c *Config, v string) { c.ContextCompactStrategy = v }),
+		stringSpec("context_compact_summary_provider", []string{"FAST_AGENT_CONTEXT_COMPACT_SUMMARY_PROVIDER"}, func(c Config) any { return c.ContextCompactSummaryProvider }, func(c *Config, v string) { c.ContextCompactSummaryProvider = v }),
+		stringSpec("context_compact_summary_model", []string{"FAST_AGENT_CONTEXT_COMPACT_SUMMARY_MODEL"}, func(c Config) any { return c.ContextCompactSummaryModel }, func(c *Config, v string) { c.ContextCompactSummaryModel = v }),
 		stringSpec("web_summary_mode", []string{"FAST_AGENT_WEB_SUMMARY_MODE"}, func(c Config) any { return c.WebSummaryMode }, func(c *Config, v string) { c.WebSummaryMode = v }),
 		stringSpec("web_summary_provider", []string{"FAST_AGENT_WEB_SUMMARY_PROVIDER"}, func(c Config) any { return c.WebSummaryProvider }, func(c *Config, v string) { c.WebSummaryProvider = v }),
 		stringSpec("web_summary_model", []string{"FAST_AGENT_WEB_SUMMARY_MODEL"}, func(c Config) any { return c.WebSummaryModel }, func(c *Config, v string) { c.WebSummaryModel = v }),
@@ -557,6 +561,9 @@ func (s *resolveState) finalizeDerivedValues() {
 	beforeWebProvider := s.cfg.WebSummaryProvider
 	beforeWebModel := s.cfg.WebSummaryModel
 	beforeWebMode := s.cfg.WebSummaryMode
+	beforeCompactStrategy := s.cfg.ContextCompactStrategy
+	beforeCompactProvider := s.cfg.ContextCompactSummaryProvider
+	beforeCompactModel := s.cfg.ContextCompactSummaryModel
 	s.cfg.ApplyWebSummaryDefaults()
 	if s.cfg.WebSummaryMode != beforeWebMode {
 		s.record("web_summary_mode", s.cfg.WebSummaryMode, SourceDerived, "", "web_summary_mode", false, "normalized from "+beforeWebMode, "")
@@ -570,6 +577,15 @@ func (s *resolveState) finalizeDerivedValues() {
 	}
 	if s.cfg.WebSummaryProvider != beforeWebProvider {
 		s.record("web_summary_provider", s.cfg.WebSummaryProvider, SourceDerived, "", "web_summary_model", false, "derived from web summary model "+s.cfg.WebSummaryModel, "")
+	}
+	if s.cfg.ContextCompactStrategy != beforeCompactStrategy {
+		s.record("context_compact_strategy", s.cfg.ContextCompactStrategy, SourceDerived, "", "context_compact_strategy", false, "normalized from "+beforeCompactStrategy, "")
+	}
+	if s.cfg.ContextCompactSummaryModel != beforeCompactModel {
+		s.record("context_compact_summary_model", s.cfg.ContextCompactSummaryModel, SourceDerived, "", "context_compact_summary_model", false, "defaulted from web summary model "+s.cfg.WebSummaryModel, "")
+	}
+	if s.cfg.ContextCompactSummaryProvider != beforeCompactProvider {
+		s.record("context_compact_summary_provider", s.cfg.ContextCompactSummaryProvider, SourceDerived, "", "context_compact_summary_model", false, "derived from context compact summary model "+s.cfg.ContextCompactSummaryModel, "")
 	}
 	for _, spec := range configSpecs() {
 		if _, ok := s.values[spec.Key]; !ok {

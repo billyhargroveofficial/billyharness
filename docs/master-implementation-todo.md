@@ -500,7 +500,7 @@ Acceptance:
 ### 4.5 Compaction
 
 - [x] Keep deterministic compaction default for speed.
-- [ ] Add optional model summary compaction strategy.
+- [x] Add optional model summary compaction strategy.
 - [x] Add structured compaction report:
   - [x] trigger
   - [x] reason

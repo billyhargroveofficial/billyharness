@@ -43,28 +43,31 @@ type doctorReport struct {
 }
 
 type doctorConfigStatus struct {
-	Provider              string `json:"provider"`
-	Model                 string `json:"model"`
-	Profile               string `json:"profile"`
-	Thinking              string `json:"thinking"`
-	ReasoningEffort       string `json:"reasoning_effort"`
-	DisableSpark          bool   `json:"disable_spark"`
-	ContextWindowTokens   int64  `json:"context_window_tokens"`
-	ContextCompactTokens  int    `json:"context_compact_tokens"`
-	WebSummaryMode        string `json:"web_summary_mode"`
-	WebSummaryProvider    string `json:"web_summary_provider"`
-	WebSummaryModel       string `json:"web_summary_model"`
-	WebCacheEnabled       bool   `json:"web_cache_enabled"`
-	WebCacheTTLMS         int64  `json:"web_cache_ttl_ms"`
-	WebCacheMaxBytes      int64  `json:"web_cache_max_bytes"`
-	MaxToolRounds         int    `json:"max_tool_rounds"`
-	MaxParallelTools      int    `json:"max_parallel_tools"`
-	GatewayAddr           string `json:"gateway_addr"`
-	AutoApproveDangerous  bool   `json:"auto_approve_dangerous"`
-	MCPEnabled            bool   `json:"mcp_enabled"`
-	MCPAllowedServers     string `json:"mcp_allowed_servers"`
-	MaxToolOutputBytes    int    `json:"max_tool_output_bytes"`
-	StoreReasoningContent bool   `json:"store_reasoning_content"`
+	Provider                      string `json:"provider"`
+	Model                         string `json:"model"`
+	Profile                       string `json:"profile"`
+	Thinking                      string `json:"thinking"`
+	ReasoningEffort               string `json:"reasoning_effort"`
+	DisableSpark                  bool   `json:"disable_spark"`
+	ContextWindowTokens           int64  `json:"context_window_tokens"`
+	ContextCompactTokens          int    `json:"context_compact_tokens"`
+	ContextCompactStrategy        string `json:"context_compact_strategy"`
+	ContextCompactSummaryProvider string `json:"context_compact_summary_provider"`
+	ContextCompactSummaryModel    string `json:"context_compact_summary_model"`
+	WebSummaryMode                string `json:"web_summary_mode"`
+	WebSummaryProvider            string `json:"web_summary_provider"`
+	WebSummaryModel               string `json:"web_summary_model"`
+	WebCacheEnabled               bool   `json:"web_cache_enabled"`
+	WebCacheTTLMS                 int64  `json:"web_cache_ttl_ms"`
+	WebCacheMaxBytes              int64  `json:"web_cache_max_bytes"`
+	MaxToolRounds                 int    `json:"max_tool_rounds"`
+	MaxParallelTools              int    `json:"max_parallel_tools"`
+	GatewayAddr                   string `json:"gateway_addr"`
+	AutoApproveDangerous          bool   `json:"auto_approve_dangerous"`
+	MCPEnabled                    bool   `json:"mcp_enabled"`
+	MCPAllowedServers             string `json:"mcp_allowed_servers"`
+	MaxToolOutputBytes            int    `json:"max_tool_output_bytes"`
+	StoreReasoningContent         bool   `json:"store_reasoning_content"`
 }
 
 type doctorCheck struct {
@@ -142,28 +145,31 @@ func collectDoctorReport(ctx context.Context, cfg config.Config, opts doctorOpti
 		CodexAuthPath:     cfg.CodexAuthFile,
 		GatewaySessionDir: gateway.DefaultSessionStoreDir(),
 		Config: doctorConfigStatus{
-			Provider:              cfg.Provider,
-			Model:                 cfg.Model,
-			Profile:               cfg.Profile,
-			Thinking:              cfg.Thinking,
-			ReasoningEffort:       cfg.ReasoningEffort,
-			DisableSpark:          cfg.DisableSpark,
-			ContextWindowTokens:   cfg.ContextWindowTokens,
-			ContextCompactTokens:  cfg.ContextCompactTokens,
-			WebSummaryMode:        cfg.WebSummaryMode,
-			WebSummaryProvider:    cfg.WebSummaryProvider,
-			WebSummaryModel:       cfg.WebSummaryModel,
-			WebCacheEnabled:       cfg.WebCacheEnabled,
-			WebCacheTTLMS:         cfg.WebCacheTTL.Milliseconds(),
-			WebCacheMaxBytes:      cfg.WebCacheMaxBytes,
-			MaxToolRounds:         cfg.MaxToolRounds,
-			MaxParallelTools:      cfg.MaxParallelTools,
-			GatewayAddr:           cfg.GatewayAddr,
-			AutoApproveDangerous:  cfg.AutoApproveDangerous,
-			MCPEnabled:            cfg.MCPEnabled,
-			MCPAllowedServers:     strings.Join(cfg.MCPAllowedServers, ","),
-			MaxToolOutputBytes:    cfg.MaxToolOutputBytes,
-			StoreReasoningContent: cfg.StoreReasoningContent,
+			Provider:                      cfg.Provider,
+			Model:                         cfg.Model,
+			Profile:                       cfg.Profile,
+			Thinking:                      cfg.Thinking,
+			ReasoningEffort:               cfg.ReasoningEffort,
+			DisableSpark:                  cfg.DisableSpark,
+			ContextWindowTokens:           cfg.ContextWindowTokens,
+			ContextCompactTokens:          cfg.ContextCompactTokens,
+			ContextCompactStrategy:        cfg.ContextCompactStrategy,
+			ContextCompactSummaryProvider: cfg.ContextCompactSummaryProvider,
+			ContextCompactSummaryModel:    cfg.ContextCompactSummaryModel,
+			WebSummaryMode:                cfg.WebSummaryMode,
+			WebSummaryProvider:            cfg.WebSummaryProvider,
+			WebSummaryModel:               cfg.WebSummaryModel,
+			WebCacheEnabled:               cfg.WebCacheEnabled,
+			WebCacheTTLMS:                 cfg.WebCacheTTL.Milliseconds(),
+			WebCacheMaxBytes:              cfg.WebCacheMaxBytes,
+			MaxToolRounds:                 cfg.MaxToolRounds,
+			MaxParallelTools:              cfg.MaxParallelTools,
+			GatewayAddr:                   cfg.GatewayAddr,
+			AutoApproveDangerous:          cfg.AutoApproveDangerous,
+			MCPEnabled:                    cfg.MCPEnabled,
+			MCPAllowedServers:             strings.Join(cfg.MCPAllowedServers, ","),
+			MaxToolOutputBytes:            cfg.MaxToolOutputBytes,
+			StoreReasoningContent:         cfg.StoreReasoningContent,
 		},
 	}
 
@@ -316,7 +322,7 @@ func printDoctorReport(w io.Writer, report doctorReport) {
 	fmt.Fprintf(w, "env: %s\n", report.EnvPath)
 	fmt.Fprintf(w, "mcp config: %s\n", report.MCPConfigPath)
 	fmt.Fprintf(w, "sessions: %s\n", report.GatewaySessionDir)
-	fmt.Fprintf(w, "config: provider=%s model=%s profile=%s reasoning=%s/%s spark_disabled=%v context=%d compact_at=%d websum=%s/%s/%s webcache=%v/%s/%d gateway=%s\n",
+	fmt.Fprintf(w, "config: provider=%s model=%s profile=%s reasoning=%s/%s spark_disabled=%v context=%d compact_at=%d compact=%s/%s/%s websum=%s/%s/%s webcache=%v/%s/%d gateway=%s\n",
 		report.Config.Provider,
 		report.Config.Model,
 		report.Config.Profile,
@@ -325,6 +331,9 @@ func printDoctorReport(w io.Writer, report doctorReport) {
 		report.Config.DisableSpark,
 		report.Config.ContextWindowTokens,
 		report.Config.ContextCompactTokens,
+		report.Config.ContextCompactStrategy,
+		report.Config.ContextCompactSummaryProvider,
+		report.Config.ContextCompactSummaryModel,
 		report.Config.WebSummaryMode,
 		report.Config.WebSummaryProvider,
 		report.Config.WebSummaryModel,

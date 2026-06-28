@@ -40,6 +40,9 @@ type compactionReport struct {
 	SummaryStrategy          string                          `json:"summary_strategy"`
 	SummaryProvider          string                          `json:"summary_provider,omitempty"`
 	SummaryModel             string                          `json:"summary_model,omitempty"`
+	SummaryError             string                          `json:"summary_error,omitempty"`
+	ModelSummaryInputTokens  int64                           `json:"model_summary_input_tokens,omitempty"`
+	ModelSummaryOutputTokens int64                           `json:"model_summary_output_tokens,omitempty"`
 	ProtectedPrefix          compactionProtectedPrefixReport `json:"protected_prefix"`
 	ProtectedPrefixMessages  int                             `json:"protected_prefix_messages"`
 	ProtectedPrefixChars     int                             `json:"protected_prefix_chars"`

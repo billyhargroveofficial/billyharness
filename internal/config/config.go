@@ -15,54 +15,57 @@ import (
 )
 
 type Config struct {
-	Provider                  string
-	Model                     string
-	Profile                   string
-	BaseURL                   string
-	APIKeyEnv                 string
-	CredentialFile            string
-	CodexBaseURL              string
-	CodexAuthFile             string
-	CodexRefreshURL           string
-	CodexAuthAPIBaseURL       string
-	CodexClientID             string
-	CodexOriginator           string
-	Thinking                  string
-	ReasoningEffort           string
-	DisableSpark              bool
-	MaxTokens                 int
-	MaxToolRounds             int
-	MaxParallelTools          int
-	ProviderMaxRetries        int
-	ContextWindowTokens       int64
-	ContextCompactTokens      int
-	ContextCompactKeep        int
-	ContextCompactMaxChars    int
-	WebSummaryMode            string
-	WebSummaryProvider        string
-	WebSummaryModel           string
-	WebSummaryMaxInputTokens  int
-	WebSummaryMaxOutputTokens int
-	WebSummaryTimeout         time.Duration
-	WebCacheEnabled           bool
-	WebCacheTTL               time.Duration
-	WebCacheMaxBytes          int64
-	RequestTimeout            time.Duration
-	StreamIdleTimeout         time.Duration
-	WorkspaceRoots            []string
-	ProjectDocMaxBytes        int
-	ProjectDocFallbacks       []string
-	MaxToolOutputBytes        int
-	AutoApproveDangerous      bool
-	StoreReasoningContent     bool
-	GatewayAddr               string
-	MCPEnabled                bool
-	MCPConfigFiles            []string
-	MCPAllowedServers         []string
-	MCPServers                []MCPServer
-	HooksEnabled              bool
-	HookConfigFiles           []string
-	Hooks                     []Hook
+	Provider                      string
+	Model                         string
+	Profile                       string
+	BaseURL                       string
+	APIKeyEnv                     string
+	CredentialFile                string
+	CodexBaseURL                  string
+	CodexAuthFile                 string
+	CodexRefreshURL               string
+	CodexAuthAPIBaseURL           string
+	CodexClientID                 string
+	CodexOriginator               string
+	Thinking                      string
+	ReasoningEffort               string
+	DisableSpark                  bool
+	MaxTokens                     int
+	MaxToolRounds                 int
+	MaxParallelTools              int
+	ProviderMaxRetries            int
+	ContextWindowTokens           int64
+	ContextCompactTokens          int
+	ContextCompactKeep            int
+	ContextCompactMaxChars        int
+	ContextCompactStrategy        string
+	ContextCompactSummaryProvider string
+	ContextCompactSummaryModel    string
+	WebSummaryMode                string
+	WebSummaryProvider            string
+	WebSummaryModel               string
+	WebSummaryMaxInputTokens      int
+	WebSummaryMaxOutputTokens     int
+	WebSummaryTimeout             time.Duration
+	WebCacheEnabled               bool
+	WebCacheTTL                   time.Duration
+	WebCacheMaxBytes              int64
+	RequestTimeout                time.Duration
+	StreamIdleTimeout             time.Duration
+	WorkspaceRoots                []string
+	ProjectDocMaxBytes            int
+	ProjectDocFallbacks           []string
+	MaxToolOutputBytes            int
+	AutoApproveDangerous          bool
+	StoreReasoningContent         bool
+	GatewayAddr                   string
+	MCPEnabled                    bool
+	MCPConfigFiles                []string
+	MCPAllowedServers             []string
+	MCPServers                    []MCPServer
+	HooksEnabled                  bool
+	HookConfigFiles               []string
+	Hooks                         []Hook
 }
 
 type MCPServer struct {
@@ -144,6 +147,18 @@ func (c *Config) ApplyWebSummaryDefaults() {
 	if c.WebSummaryTimeout <= 0 {
 		c.WebSummaryTimeout = 60 * time.Second
 	}
+	c.ContextCompactStrategy = NormalizeContextCompactStrategy(c.ContextCompactStrategy)
+	c.ContextCompactSummaryModel = modelinfo.NormalizeAlias(c.ContextCompactSummaryModel)
+	if c.DisableSpark && modelinfo.IsSparkModel(c.ContextCompactSummaryModel) {
+		c.ContextCompactSummaryModel = "gpt-5.4-mini"
+	}
+	c.ContextCompactSummaryProvider = modelinfo.NormalizeProvider(c.ContextCompactSummaryProvider)
+	if c.ContextCompactSummaryModel == "" {
+		c.ContextCompactSummaryModel = c.WebSummaryModel
+	}
+	if c.ContextCompactSummaryProvider == "" {
+		c.ContextCompactSummaryProvider = modelinfo.ProviderForModel(c.ContextCompactSummaryModel, c.WebSummaryProvider)
+	}
 }
 
 func NormalizeWebSummaryMode(value string) string {
@@ -152,6 +167,15 @@ func NormalizeWebSummaryMode(value string) string {
 		return "model"
 	default:
 		return "extractive"
+	}
+}
+
+func NormalizeContextCompactStrategy(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "model", "external", "llm", "provider":
+		return "model"
+	default:
+		return "deterministic"
 	}
 }
 

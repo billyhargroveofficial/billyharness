@@ -3784,6 +3784,9 @@ func compactEventText(value any) string {
 		SummaryStrategy          string              `json:"summary_strategy"`
 		SummaryProvider          string              `json:"summary_provider"`
 		SummaryModel             string              `json:"summary_model"`
+		SummaryError             string              `json:"summary_error"`
+		ModelSummaryInputTokens  int64               `json:"model_summary_input_tokens"`
+		ModelSummaryOutputTokens int64               `json:"model_summary_output_tokens"`
 		CompactedMessages        int                 `json:"compacted_messages"`
 		CompactedChars           int                 `json:"compacted_chars"`
 		CompactedEstimatedTokens int64               `json:"compacted_estimated_tokens"`
@@ -3822,6 +3825,12 @@ func compactEventText(value any) string {
 			line += " " + strings.TrimSpace(data.SummaryProvider+"/"+data.SummaryModel)
 		}
 		lines = append(lines, line)
+	}
+	if data.ModelSummaryInputTokens > 0 || data.ModelSummaryOutputTokens > 0 {
+		lines = append(lines, fmt.Sprintf("summary usage: in %s / out %s", compactNumber(data.ModelSummaryInputTokens), compactNumber(data.ModelSummaryOutputTokens)))
+	}
+	if data.SummaryError != "" {
+		lines = append(lines, "summary error: "+data.SummaryError)
 	}
 	if data.CompactedMessages > 0 {
 		lines = append(lines, fmt.Sprintf("compacted messages: %d", data.CompactedMessages))
