@@ -534,7 +534,7 @@ Purpose: make the terminal feel like a serious agent UI rather than a pile of st
   - [x] audit/security
   - [x] compaction
   - [x] MCP status
-  - [ ] run summary
+  - [x] run summary
   - [x] error
 - [ ] Each cell has:
   - [x] stable id

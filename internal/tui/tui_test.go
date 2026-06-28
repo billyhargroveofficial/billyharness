@@ -545,6 +545,9 @@ func TestTranscriptBlocksCarryTypedCellMetadata(t *testing.T) {
 	if m.blocks[assistantIndex].cellType != cellTypeAssistantFinal || m.blocks[assistantIndex].live || m.blocks[assistantIndex].renderCacheKey == streamKey {
 		t.Fatalf("assistant final cell = %#v", m.blocks[assistantIndex])
 	}
+	if got := m.blocks[len(m.blocks)-1].cellType; got != cellTypeRunSummary {
+		t.Fatalf("run summary cellType = %q", got)
+	}
 
 	m.applyEvent(protocol.Event{Type: protocol.EventAssistantReasoning, Data: "hidden"})
 	if got := m.blocks[len(m.blocks)-1].cellType; got != cellTypeThinking {
@@ -624,6 +627,46 @@ func TestTranscriptBlocksCarryTypedCellMetadata(t *testing.T) {
 			t.Fatalf("decoded block[%d] missing metadata: %#v", i, block)
 		}
 	}
+}
+
+func TestRunSummaryCellUpdatesByRunLifecycle(t *testing.T) {
+	m := newTestModel(t)
+	m.runStartedAt = time.Now().Add(-2 * time.Second)
+	m.modelCalls = 4
+	m.toolCalls = 7
+	m.applyEvent(protocol.Event{Type: protocol.EventRunStarted})
+	if len(m.blocks) != 1 || m.blocks[0].cellType != cellTypeRunSummary {
+		t.Fatalf("run start should create one summary cell: %#v", m.blocks)
+	}
+	if !strings.Contains(m.blocks[0].title, "Run running") {
+		t.Fatalf("run start title = %q", m.blocks[0].title)
+	}
+	m.applyEvent(protocol.Event{Type: protocol.EventModelCallStarted})
+	m.applyEvent(protocol.Event{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{ID: "call-1", Name: "fs_read_file"}})
+	m.applyEvent(protocol.Event{Type: protocol.EventRunCompleted})
+
+	if summaries := countCells(m.blocks, cellTypeRunSummary); summaries != 1 {
+		t.Fatalf("run completion should update summary cell, got %d summaries: %#v", summaries, m.blocks)
+	}
+	summary := m.blocks[0]
+	if !strings.Contains(summary.title, "Run done") {
+		t.Fatalf("run completion title = %q", summary.title)
+	}
+	for _, want := range []string{"agent turns: 1 / session 5", "tools: 1 / session 8", "context:"} {
+		if !strings.Contains(summary.content, want) {
+			t.Fatalf("run summary missing %q:\n%s", want, summary.content)
+		}
+	}
+}
+
+func countCells(blocks []block, cellType string) int {
+	var count int
+	for _, block := range blocks {
+		if block.cellType == cellType {
+			count++
+		}
+	}
+	return count
 }
 
 func TestToolAuditUpdatesMatchingBlockByCallID(t *testing.T) {

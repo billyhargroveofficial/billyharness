@@ -146,6 +146,8 @@ type Model struct {
 	events             chan tea.Msg
 	modelCalls         int
 	toolCalls          int
+	runStartModelCalls int
+	runStartToolCalls  int
 	inputTok           int64
 	outputTok          int64
 	cacheHitTok        int64
@@ -2685,6 +2687,12 @@ func (m *Model) applyEvent(event protocol.Event) {
 		m.finishLiveBlocks()
 		m.status = "run started"
 		m.usageAccounting.Reset()
+		m.runStartModelCalls = m.modelCalls
+		m.runStartToolCalls = m.toolCalls
+		if m.runStartedAt.IsZero() {
+			m.runStartedAt = time.Now()
+		}
+		m.upsertRunSummaryBlock(event.Type, "running", "")
 	case protocol.EventModelCallStarted:
 		m.modelCalls++
 		m.status = fmt.Sprintf("model call %d", m.modelCalls)
@@ -2728,11 +2736,93 @@ func (m *Model) applyEvent(event protocol.Event) {
 	case protocol.EventRunCompleted:
 		m.finishLiveBlocks()
 		m.status = "completed"
+		m.upsertRunSummaryBlock(event.Type, "completed", "")
 	case protocol.EventRunFailed:
 		m.finishLiveBlocks()
+		m.upsertRunSummaryBlock(event.Type, "failed", fmt.Sprint(event.Data))
 		m.addEventBlock(event.Type, "ERROR", fmt.Sprint(event.Data))
 		m.status = "failed"
 	}
+}
+
+func (m *Model) upsertRunSummaryBlock(eventType protocol.EventType, state, errText string) {
+	title := m.runSummaryTitle(state)
+	body := m.runSummaryBody(state, errText)
+	i, found := m.runSummaryBlockIndex()
+	if !found || eventType == protocol.EventRunStarted {
+		b := m.newBlock("status", title, body)
+		b.cellType = cellTypeRunSummary
+		b.eventType = eventType
+		b.rawCopy = body
+		refreshBlockDerivedFields(&b)
+		m.blocks = append(m.blocks, b)
+		m.selected = len(m.blocks) - 1
+		return
+	}
+	m.blocks[i].title = title
+	m.blocks[i].content = body
+	m.blocks[i].rawCopy = body
+	m.blocks[i].eventType = eventType
+	m.blocks[i].updated = time.Now().UTC()
+	m.refreshBlockDerivedFields(i)
+	m.selected = i
+}
+
+func (m Model) runSummaryBlockIndex() (int, bool) {
+	for i := len(m.blocks) - 1; i >= 0; i-- {
+		if m.blocks[i].cellType == cellTypeRunSummary {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+func (m Model) runSummaryTitle(state string) string {
+	label := "Run " + strings.TrimSpace(state)
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "completed":
+		label = "Run done"
+	case "failed":
+		label = "Run failed"
+	case "running":
+		label = "Run running"
+	}
+	parts := []string{label}
+	if model := strings.TrimSpace(m.currentModel()); model != "" {
+		parts = append(parts, model)
+	}
+	if reasoning := strings.TrimSpace(m.currentThinking().effortLabel()); reasoning != "" {
+		parts = append(parts, reasoning)
+	}
+	if elapsed := m.currentRunDuration(); elapsed > 0 {
+		parts = append(parts, compactDuration(elapsed))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func (m Model) runSummaryBody(state, errText string) string {
+	var lines []string
+	lines = append(lines, "state: "+state)
+	if elapsed := m.currentRunDuration(); elapsed > 0 {
+		lines = append(lines, "elapsed: "+compactDuration(elapsed))
+	}
+	lines = append(lines, fmt.Sprintf("agent turns: %d / session %d", max(0, m.modelCalls-m.runStartModelCalls), m.modelCalls))
+	lines = append(lines, fmt.Sprintf("tools: %d / session %d", max(0, m.toolCalls-m.runStartToolCalls), m.toolCalls))
+	lines = append(lines, "context: "+compactNumber(m.contextTokens())+" / "+compactNumber(m.settings.ContextWindowTokens))
+	if cost := m.costText(); cost != "" {
+		lines = append(lines, cost)
+	}
+	if strings.TrimSpace(errText) != "" {
+		lines = append(lines, "error: "+strings.TrimSpace(errText))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m Model) currentRunDuration() time.Duration {
+	if !m.runStartedAt.IsZero() {
+		return time.Since(m.runStartedAt)
+	}
+	return m.lastRunDuration
 }
 
 func (m *Model) applyStepEvent(event protocol.Event) {
