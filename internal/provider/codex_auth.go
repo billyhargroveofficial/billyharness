@@ -20,11 +20,9 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/secrets"
 )
-
-const codexAccessTokenEnv = "CODEX_ACCESS_TOKEN"
-const codexAccountIDEnv = "CODEX_CHATGPT_ACCOUNT_ID"
 
 type codexAuth struct {
 	AccessToken  string
@@ -39,10 +37,11 @@ type codexAuth struct {
 }
 
 func loadCodexAuth(ctx context.Context, cfg config.Config, client *http.Client) (*codexAuth, error) {
-	if token := envOrDotenv(codexAccessTokenEnv); token != "" {
+	resolved := credentials.NewManager(cfg).ResolveCodexAuth()
+	if token := strings.TrimSpace(resolved.AccessToken.Value); token != "" {
 		auth := &codexAuth{
-			AccessToken: strings.TrimSpace(token),
-			AccountID:   envOrDotenv(codexAccountIDEnv),
+			AccessToken: token,
+			AccountID:   strings.TrimSpace(resolved.AccountID.Value),
 		}
 		if strings.HasPrefix(auth.AccessToken, "at-") {
 			if err := auth.hydratePAT(ctx, cfg, client); err != nil {
@@ -59,9 +58,9 @@ func loadCodexAuth(ctx context.Context, cfg config.Config, client *http.Client) 
 		return auth, nil
 	}
 
-	path := codexAuthPath(cfg)
+	path := resolved.AuthFile
 	if path == "" {
-		return nil, fmt.Errorf("missing %s or Codex auth file; run `codex login` or set FAST_AGENT_CODEX_AUTH_FILE", codexAccessTokenEnv)
+		return nil, fmt.Errorf("missing %s or Codex auth file; run `codex login` or set FAST_AGENT_CODEX_AUTH_FILE", credentials.CodexAccessTokenEnv)
 	}
 	auth, err := readCodexAuthFile(ctx, cfg, client, path)
 	if err != nil {
@@ -316,58 +315,7 @@ func writeCodexAuthFile(path string, payload map[string]any) error {
 }
 
 func codexAuthPath(cfg config.Config) string {
-	if cfg.CodexAuthFile != "" {
-		return cfg.CodexAuthFile
-	}
-	return config.DefaultCodexAuthFile()
-}
-
-func envOrDotenv(key string) string {
-	if value := os.Getenv(key); value != "" {
-		return strings.TrimSpace(value)
-	}
-	if value, ok := config.LookupEnvOrDotenv(key); ok {
-		return strings.TrimSpace(value)
-	}
-	return ""
-}
-
-func dotenvValueForProvider(key string) string {
-	path := os.Getenv("FAST_AGENT_ENV_FILE")
-	if path == "" {
-		dir, err := os.Getwd()
-		if err != nil {
-			return ""
-		}
-		for {
-			candidate := filepath.Join(dir, ".env")
-			if _, err := os.Stat(candidate); err == nil {
-				path = candidate
-				break
-			}
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				return ""
-			}
-			dir = parent
-		}
-	}
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(body), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		name, value, ok := strings.Cut(line, "=")
-		if !ok || strings.TrimSpace(name) != key {
-			continue
-		}
-		return strings.Trim(strings.TrimSpace(value), `"'`)
-	}
-	return ""
+	return credentials.NewManager(cfg).CodexAuthFilePath()
 }
 
 func jwtClaims(token string) map[string]any {

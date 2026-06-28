@@ -118,6 +118,30 @@ func TestCodexStatusSeesEnvAccessToken(t *testing.T) {
 	}
 }
 
+func TestManagerResolveCodexAuthUsesSharedSources(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	t.Setenv("CODEX_ACCESS_TOKEN", "")
+	t.Setenv("CODEX_CHATGPT_ACCOUNT_ID", "")
+	envPath := filepath.Join(root, ".env")
+	if err := os.WriteFile(envPath, []byte("CODEX_ACCESS_TOKEN=token-from-dotenv\nCODEX_CHATGPT_ACCOUNT_ID=acct_dotenv\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	authPath := filepath.Join(root, "custom-auth.json")
+	manager := NewManager(config.Config{CodexAuthFile: authPath})
+
+	resolved := manager.ResolveCodexAuth()
+	if resolved.AccessToken.Value != "token-from-dotenv" || resolved.AccessToken.Source != ".env" || resolved.AccessToken.EnvVar != CodexAccessTokenEnv {
+		t.Fatalf("access token source = %#v", resolved.AccessToken)
+	}
+	if resolved.AccountID.Value != "acct_dotenv" || resolved.AccountID.EnvVar != CodexAccountIDEnv {
+		t.Fatalf("account source = %#v", resolved.AccountID)
+	}
+	if resolved.AuthFile != authPath {
+		t.Fatalf("auth file = %q", resolved.AuthFile)
+	}
+}
+
 func TestCodexStatusShowsRefreshStateForAuthFile(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", root)

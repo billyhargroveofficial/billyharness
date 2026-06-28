@@ -301,7 +301,7 @@ Acceptance:
 
 ### 2.4 AuthManager
 
-- [ ] Centralize API key and OAuth resolution.
+- [x] Centralize API key and OAuth resolution.
 - [ ] Support sources:
   - [x] `.env`
   - [x] environment

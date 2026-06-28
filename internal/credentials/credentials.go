@@ -14,8 +14,11 @@ import (
 )
 
 const deepSeekKeyEnv = "DEEPSEEK_API_KEY"
-const codexAccessTokenEnv = "CODEX_ACCESS_TOKEN"
-const codexAccountIDEnv = "CODEX_CHATGPT_ACCOUNT_ID"
+
+const (
+	CodexAccessTokenEnv = "CODEX_ACCESS_TOKEN"
+	CodexAccountIDEnv   = "CODEX_CHATGPT_ACCOUNT_ID"
+)
 
 type ProviderStatus struct {
 	Configured bool   `json:"configured"`
@@ -37,6 +40,12 @@ type SecretValue struct {
 	Source string
 	Path   string
 	EnvVar string
+}
+
+type CodexAuthResolution struct {
+	AccessToken SecretValue
+	AccountID   SecretValue
+	AuthFile    string
 }
 
 type Manager struct {
@@ -94,6 +103,21 @@ func (m Manager) ResolveDeepSeekAPIKey() (SecretValue, error) {
 	return SecretValue{Path: path, EnvVar: envKey}, fmt.Errorf("missing API key env var %s", envKey)
 }
 
+func (m Manager) ResolveCodexAuth() CodexAuthResolution {
+	return CodexAuthResolution{
+		AccessToken: lookupSecret(CodexAccessTokenEnv),
+		AccountID:   lookupSecret(CodexAccountIDEnv),
+		AuthFile:    m.CodexAuthFilePath(),
+	}
+}
+
+func (m Manager) CodexAuthFilePath() string {
+	if path := strings.TrimSpace(m.cfg.CodexAuthFile); path != "" {
+		return path
+	}
+	return config.DefaultCodexAuthFile()
+}
+
 func SaveDeepSeekAPIKey(apiKey string) (ProviderStatus, error) {
 	return NewManager(config.Config{APIKeyEnv: deepSeekKeyEnv}).SaveDeepSeekAPIKey(apiKey)
 }
@@ -118,17 +142,11 @@ func CodexStatus(cfg config.Config) ProviderStatus {
 }
 
 func (m Manager) CodexStatus() ProviderStatus {
-	path := m.cfg.CodexAuthFile
-	if strings.TrimSpace(path) == "" {
-		path = config.DefaultCodexAuthFile()
-	}
+	resolved := m.ResolveCodexAuth()
+	path := resolved.AuthFile
 	status := ProviderStatus{Path: path}
-	if token := strings.TrimSpace(os.Getenv(codexAccessTokenEnv)); token != "" {
-		return codexEnvStatus(token, strings.TrimSpace(os.Getenv(codexAccountIDEnv)), "env:"+codexAccessTokenEnv, path)
-	}
-	if token, ok := config.LookupEnvOrDotenv(codexAccessTokenEnv); ok && strings.TrimSpace(token) != "" {
-		accountID, _ := config.LookupEnvOrDotenv(codexAccountIDEnv)
-		return codexEnvStatus(token, strings.TrimSpace(accountID), ".env", path)
+	if token := strings.TrimSpace(resolved.AccessToken.Value); token != "" {
+		return codexEnvStatus(token, strings.TrimSpace(resolved.AccountID.Value), resolved.AccessToken.Source, path)
 	}
 	payload, err := readAuthPayload(path)
 	if err != nil {
@@ -166,6 +184,20 @@ func (m Manager) CodexStatus() ProviderStatus {
 		status.ExpiresAt = exp.UTC().Format(time.RFC3339)
 	}
 	return status
+}
+
+func lookupSecret(envKey string) SecretValue {
+	envKey = strings.TrimSpace(envKey)
+	if envKey == "" {
+		return SecretValue{}
+	}
+	if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+		return SecretValue{Value: value, Source: "env:" + envKey, EnvVar: envKey}
+	}
+	if value, ok := config.LookupEnvOrDotenv(envKey); ok && strings.TrimSpace(value) != "" {
+		return SecretValue{Value: strings.TrimSpace(value), Source: ".env", EnvVar: envKey}
+	}
+	return SecretValue{EnvVar: envKey}
 }
 
 func codexEnvStatus(token, accountID, source, path string) ProviderStatus {
