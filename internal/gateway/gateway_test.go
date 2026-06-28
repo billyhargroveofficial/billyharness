@@ -800,6 +800,82 @@ func TestGatewayConfigStatusIsSanitized(t *testing.T) {
 	}
 }
 
+func TestGatewayAPIRedactsSecretsAcrossResponsesAndStreams(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	envSecret := "env-secret-value-123456789"
+	t.Setenv("BILLY_TEST_TOKEN", envSecret)
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("DEEPSEEK_API_KEY=sk-gateway-boundary-secret-1234567890\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+	rawKey := "sk-session-boundary-secret-1234567890"
+	rawPAT := "github_pat_" + strings.Repeat("A", 30)
+	assertRedacted := func(label, body string) {
+		t.Helper()
+		for _, secret := range []string{rawKey, rawPAT, envSecret, "sk-gateway-boundary-secret-1234567890"} {
+			if strings.Contains(body, secret) {
+				t.Fatalf("%s leaked %q in body: %s", label, secret, body)
+			}
+		}
+		if strings.Contains(body, "github_pat_") || strings.Contains(body, "sk-session-boundary-secret") {
+			t.Fatalf("%s retained token-looking material: %s", label, body)
+		}
+	}
+
+	createPayload, err := json.Marshal(CreateSessionRequest{Messages: []protocol.Message{
+		{Role: protocol.RoleUser, Content: "user pasted " + rawKey},
+		{Role: protocol.RoleAssistant, Content: "tool output had " + rawPAT + " and " + envSecret},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := httptest.NewRecorder()
+	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(createPayload)))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.ID == "" {
+		t.Fatal("empty session id")
+	}
+	assertRedacted("create session", create.Body.String())
+
+	for _, tc := range []struct {
+		label  string
+		method string
+		path   string
+		body   string
+	}{
+		{label: "config", method: http.MethodGet, path: "/v1/config"},
+		{label: "auth status", method: http.MethodGet, path: "/v1/auth/status"},
+		{label: "session", method: http.MethodGet, path: "/v1/sessions/" + created.ID},
+		{label: "session context", method: http.MethodGet, path: "/v1/sessions/" + created.ID + "/context"},
+		{label: "global run stream", method: http.MethodPost, path: "/v1/run", body: `{"prompt":"repeat ` + rawKey + `"}`},
+		{label: "session run stream", method: http.MethodPost, path: "/v1/sessions/" + created.ID + "/run", body: `{"prompt":"repeat ` + rawPAT + `"}`},
+		{label: "event replay stream", method: http.MethodGet, path: "/v1/sessions/" + created.ID + "/events?after_seq=0&follow=false"},
+	} {
+		rec := httptest.NewRecorder()
+		var reader io.Reader
+		if tc.body != "" {
+			reader = strings.NewReader(tc.body)
+		}
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, reader))
+		if rec.Code < 200 || rec.Code >= 300 {
+			t.Fatalf("%s status = %d body=%s", tc.label, rec.Code, rec.Body.String())
+		}
+		assertRedacted(tc.label, rec.Body.String())
+	}
+}
+
 func TestGatewayAuthMiddlewareProtectsNonLoopbackClients(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"

@@ -25,6 +25,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
+	"github.com/billyhargroveofficial/billyharness/internal/secrets"
 	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 	"github.com/billyhargroveofficial/billyharness/internal/trace"
@@ -469,16 +470,9 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	enc := json.NewEncoder(w)
 	flusher, _ := w.(http.Flusher)
 	emit := func(event protocol.Event) bool {
-		if err := enc.Encode(event); err != nil {
-			return false
-		}
-		if flusher != nil {
-			flusher.Flush()
-		}
-		return true
+		return writeNDJSONEvent(w, flusher, event)
 	}
 	events, unsubscribe := session.Subscribe()
 	defer unsubscribe()
@@ -983,23 +977,40 @@ func streamEvents(w http.ResponseWriter, run func(func(protocol.Event)) error) {
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	enc := json.NewEncoder(w)
 	flusher, _ := w.(http.Flusher)
 	emit := func(event protocol.Event) {
-		_ = enc.Encode(event)
-		if flusher != nil {
-			flusher.Flush()
-		}
+		_ = writeNDJSONEvent(w, flusher, event)
 	}
 	if err := run(emit); err != nil {
 		emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
 	}
 }
 
+func writeNDJSONEvent(w http.ResponseWriter, flusher http.Flusher, event protocol.Event) bool {
+	body, err := json.Marshal(event)
+	if err != nil {
+		return false
+	}
+	body = append([]byte(secrets.Redact(string(body))), '\n')
+	if _, err := w.Write(body); err != nil {
+		return false
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
+	return true
+}
+
 func writeJSON(w http.ResponseWriter, status int, value any) {
+	body, err := json.Marshal(value)
+	if err != nil {
+		http.Error(w, `{"error":"failed to encode JSON"}`, http.StatusInternalServerError)
+		return
+	}
+	body = append([]byte(secrets.Redact(string(body))), '\n')
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
+	_, _ = w.Write(body)
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
