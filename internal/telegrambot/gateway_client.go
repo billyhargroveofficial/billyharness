@@ -24,6 +24,7 @@ type Harness interface {
 	CancelSession(context.Context, string) (bool, error)
 	MCPStatus(context.Context) (string, error)
 	ConfigStatus(context.Context) (string, error)
+	ContextStatus(context.Context, string) (string, error)
 	AuthStatus(context.Context) (credentials.Status, error)
 	SaveDeepSeekAPIKey(context.Context, string) (credentials.ProviderStatus, error)
 	ImportCodexAuth(context.Context) (credentials.ProviderStatus, error)
@@ -190,6 +191,18 @@ func (c *GatewayClient) ConfigStatus(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return config.FormatSummary(out.Values, out.Warnings), nil
+}
+
+func (c *GatewayClient) ContextStatus(ctx context.Context, sessionID string) (string, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return "", fmt.Errorf("empty session id")
+	}
+	var out gateway.SessionContextResponse
+	path := "/v1/sessions/" + url.PathEscape(sessionID) + "/context"
+	if err := c.gatewayJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return "", err
+	}
+	return gateway.FormatSessionContext(out), nil
 }
 
 func (c *GatewayClient) AuthStatus(ctx context.Context) (credentials.Status, error) {

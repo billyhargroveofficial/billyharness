@@ -134,15 +134,34 @@ type SessionContextResponse struct {
 	CompactThresholdPercent float64              `json:"compact_threshold_percent"`
 	OverCompactThreshold    bool                 `json:"over_compact_threshold"`
 	Estimator               string               `json:"estimator"`
+	Sources                 []ContextSource      `json:"sources,omitempty"`
+	Thresholds              []ContextThreshold   `json:"thresholds,omitempty"`
 	TopContributors         []ContextContributor `json:"top_contributors,omitempty"`
 }
 
 type ContextContributor struct {
 	Index           int    `json:"index"`
 	Role            string `json:"role"`
+	Source          string `json:"source,omitempty"`
+	Name            string `json:"name,omitempty"`
 	Chars           int    `json:"chars"`
 	EstimatedTokens int64  `json:"estimated_tokens"`
 	Preview         string `json:"preview,omitempty"`
+}
+
+type ContextSource struct {
+	Source          string  `json:"source"`
+	MessageCount    int     `json:"message_count"`
+	Chars           int     `json:"chars"`
+	EstimatedTokens int64   `json:"estimated_tokens"`
+	Percent         float64 `json:"percent"`
+}
+
+type ContextThreshold struct {
+	Percent         int   `json:"percent"`
+	Tokens          int64 `json:"tokens"`
+	Crossed         bool  `json:"crossed"`
+	RemainingTokens int64 `json:"remaining_tokens"`
 }
 
 type CancelSessionResponse struct {
@@ -699,7 +718,10 @@ func sessionSummary(session *Session) SessionSummary {
 }
 
 func sessionContextResponse(cfg config.Config, session *Session) SessionContextResponse {
-	messages := session.messages()
+	return BuildContextResponse(cfg, session.ID, session.messages())
+}
+
+func BuildContextResponse(cfg config.Config, id string, messages []protocol.Message) SessionContextResponse {
 	estimatedTokens := estimateGatewayMessagesTokens(messages)
 	contextWindow := cfg.ContextWindowTokens
 	compactAt := int64(cfg.ContextCompactTokens)
@@ -711,18 +733,33 @@ func sessionContextResponse(cfg config.Config, session *Session) SessionContextR
 	if contextWindow > 0 && compactAt > 0 {
 		thresholdPercent = float64(compactAt) / float64(contextWindow) * 100
 	}
+	sourceStats := map[string]*ContextSource{}
 	contributors := make([]ContextContributor, 0, len(messages))
 	for i, msg := range messages {
 		chars := gatewayMessageChars(msg)
 		if chars == 0 {
 			continue
 		}
+		source := gatewayContextSource(msg)
+		tokens := gatewayMessageTokens(msg)
+		for _, contribution := range gatewayContextSourceContributions(msg) {
+			stat := sourceStats[contribution.source]
+			if stat == nil {
+				stat = &ContextSource{Source: contribution.source}
+				sourceStats[contribution.source] = stat
+			}
+			stat.MessageCount++
+			stat.Chars += contribution.chars
+			stat.EstimatedTokens += int64((contribution.chars + 3) / 4)
+		}
 		contributors = append(contributors, ContextContributor{
 			Index:           i,
 			Role:            string(msg.Role),
+			Source:          source,
+			Name:            msg.Name,
 			Chars:           chars,
-			EstimatedTokens: int64((chars + 3) / 4),
-			Preview:         previewGatewayMessage(msg.Content, 120),
+			EstimatedTokens: tokens,
+			Preview:         previewGatewayMessage(gatewayMessagePreviewText(msg), 120),
 		})
 	}
 	sort.Slice(contributors, func(i, j int) bool {
@@ -734,8 +771,21 @@ func sessionContextResponse(cfg config.Config, session *Session) SessionContextR
 	if len(contributors) > 5 {
 		contributors = contributors[:5]
 	}
+	sources := make([]ContextSource, 0, len(sourceStats))
+	for _, stat := range sourceStats {
+		if estimatedTokens > 0 {
+			stat.Percent = float64(stat.EstimatedTokens) / float64(estimatedTokens) * 100
+		}
+		sources = append(sources, *stat)
+	}
+	sort.Slice(sources, func(i, j int) bool {
+		if sources[i].EstimatedTokens == sources[j].EstimatedTokens {
+			return sources[i].Source < sources[j].Source
+		}
+		return sources[i].EstimatedTokens > sources[j].EstimatedTokens
+	})
 	return SessionContextResponse{
-		ID:                      session.ID,
+		ID:                      id,
 		MessageCount:            len(messages),
 		EstimatedTokens:         estimatedTokens,
 		ContextWindowTokens:     contextWindow,
@@ -744,27 +794,198 @@ func sessionContextResponse(cfg config.Config, session *Session) SessionContextR
 		CompactThresholdPercent: thresholdPercent,
 		OverCompactThreshold:    compactAt > 0 && estimatedTokens >= compactAt,
 		Estimator:               "chars_div_4",
+		Sources:                 sources,
+		Thresholds:              contextThresholds(estimatedTokens, contextWindow),
 		TopContributors:         contributors,
 	}
 }
 
+func contextThresholds(estimatedTokens, contextWindow int64) []ContextThreshold {
+	if contextWindow <= 0 {
+		return nil
+	}
+	thresholds := []int{50, 70, 85, 95}
+	out := make([]ContextThreshold, 0, len(thresholds))
+	for _, percent := range thresholds {
+		tokens := (contextWindow*int64(percent) + 99) / 100
+		remaining := tokens - estimatedTokens
+		if remaining < 0 {
+			remaining = 0
+		}
+		out = append(out, ContextThreshold{
+			Percent:         percent,
+			Tokens:          tokens,
+			Crossed:         estimatedTokens >= tokens,
+			RemainingTokens: remaining,
+		})
+	}
+	return out
+}
+
+func gatewayContextSource(msg protocol.Message) string {
+	switch msg.Role {
+	case protocol.RoleSystem:
+		if strings.HasPrefix(strings.TrimSpace(msg.Content), "Conversation summary (auto-compact)") {
+			return "compaction_summary"
+		}
+		return "system_instructions"
+	case protocol.RoleUser:
+		return "user_messages"
+	case protocol.RoleAssistant:
+		if len(msg.ToolCalls) > 0 {
+			return "assistant_tool_calls"
+		}
+		return "assistant_messages"
+	case protocol.RoleTool:
+		name := strings.ToLower(strings.TrimSpace(msg.Name))
+		switch {
+		case strings.HasPrefix(name, "web_"):
+			return "web_summaries"
+		case strings.HasPrefix(name, "mcp_") || strings.HasPrefix(name, "mcp "):
+			return "mcp_outputs"
+		default:
+			return "tool_outputs"
+		}
+	default:
+		return string(msg.Role)
+	}
+}
+
+type contextSourceContribution struct {
+	source string
+	chars  int
+}
+
+func gatewayContextSourceContributions(msg protocol.Message) []contextSourceContribution {
+	var out []contextSourceContribution
+	baseChars := gatewayMessageCharsWithoutReasoning(msg)
+	if baseChars > 0 {
+		out = append(out, contextSourceContribution{source: gatewayContextSource(msg), chars: baseChars})
+	}
+	if msg.ReasoningContent != "" {
+		out = append(out, contextSourceContribution{source: "reasoning_summaries", chars: len(msg.ReasoningContent)})
+	}
+	return out
+}
+
+func gatewayMessagePreviewText(msg protocol.Message) string {
+	if strings.TrimSpace(msg.Content) != "" {
+		return msg.Content
+	}
+	if len(msg.ToolCalls) == 0 {
+		return ""
+	}
+	var calls []string
+	for _, call := range msg.ToolCalls {
+		args := strings.TrimSpace(string(call.Arguments))
+		if args != "" {
+			calls = append(calls, call.Name+" "+args)
+		} else {
+			calls = append(calls, call.Name)
+		}
+	}
+	return strings.Join(calls, "; ")
+}
+
 func estimateGatewayMessagesTokens(messages []protocol.Message) int64 {
-	var chars int
+	var tokens int64
 	for _, msg := range messages {
-		chars += gatewayMessageChars(msg)
+		tokens += gatewayMessageTokens(msg)
 	}
-	if chars == 0 {
-		return 0
+	return tokens
+}
+
+func gatewayMessageTokens(msg protocol.Message) int64 {
+	var tokens int64
+	for _, contribution := range gatewayContextSourceContributions(msg) {
+		tokens += int64((contribution.chars + 3) / 4)
 	}
-	return int64((chars + 3) / 4)
+	return tokens
 }
 
 func gatewayMessageChars(msg protocol.Message) int {
+	chars := gatewayMessageCharsWithoutReasoning(msg)
+	if msg.ReasoningContent != "" {
+		chars += len(msg.ReasoningContent)
+	}
+	return chars
+}
+
+func gatewayMessageCharsWithoutReasoning(msg protocol.Message) int {
 	chars := len(msg.Content) + len(msg.Name) + len(msg.ToolCallID) + len(string(msg.Role))
 	for _, call := range msg.ToolCalls {
 		chars += len(call.ID) + len(call.Name) + len(call.Arguments)
 	}
 	return chars
+}
+
+func FormatSessionContext(resp SessionContextResponse) string {
+	var b strings.Builder
+	if resp.ID != "" {
+		fmt.Fprintf(&b, "session: %s\n", resp.ID)
+	}
+	fmt.Fprintf(&b, "messages: %d\n", resp.MessageCount)
+	if resp.ContextWindowTokens > 0 {
+		fmt.Fprintf(&b, "active context: %s / %s (%.1f%%)\n", compactContextNumber(resp.EstimatedTokens), compactContextNumber(resp.ContextWindowTokens), resp.PercentUsed)
+	} else {
+		fmt.Fprintf(&b, "active context: %s\n", compactContextNumber(resp.EstimatedTokens))
+	}
+	if resp.ContextCompactTokens > 0 {
+		state := "below"
+		if resp.OverCompactThreshold {
+			state = "over"
+		}
+		fmt.Fprintf(&b, "compact threshold: %s (%.1f%%, %s)\n", compactContextNumber(resp.ContextCompactTokens), resp.CompactThresholdPercent, state)
+	}
+	if len(resp.Thresholds) > 0 {
+		var parts []string
+		for _, threshold := range resp.Thresholds {
+			marker := "○"
+			if threshold.Crossed {
+				marker = "●"
+			}
+			parts = append(parts, fmt.Sprintf("%s%d%%", marker, threshold.Percent))
+		}
+		fmt.Fprintf(&b, "thresholds: %s\n", strings.Join(parts, " "))
+	}
+	if len(resp.Sources) > 0 {
+		b.WriteString("\nsources:\n")
+		for _, source := range resp.Sources {
+			fmt.Fprintf(&b, "  %s: %s (%.1f%%, %d msg)\n", source.Source, compactContextNumber(source.EstimatedTokens), source.Percent, source.MessageCount)
+		}
+	}
+	if len(resp.TopContributors) > 0 {
+		b.WriteString("\ntop contributors:\n")
+		for _, contributor := range resp.TopContributors {
+			name := contributor.Source
+			if contributor.Name != "" {
+				name += "/" + contributor.Name
+			}
+			preview := contributor.Preview
+			if preview == "" {
+				preview = "(no text)"
+			}
+			fmt.Fprintf(&b, "  #%d %s %s: %s - %s\n", contributor.Index, contributor.Role, name, compactContextNumber(contributor.EstimatedTokens), preview)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func compactContextNumber(value int64) string {
+	abs := value
+	if abs < 0 {
+		abs = -abs
+	}
+	switch {
+	case abs >= 1_000_000:
+		return fmt.Sprintf("%.2fM", float64(value)/1_000_000)
+	case abs >= 10_000:
+		return fmt.Sprintf("%.1fk", float64(value)/1_000)
+	case abs >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(value)/1_000)
+	default:
+		return strconv.FormatInt(value, 10)
+	}
 }
 
 func previewGatewayMessage(content string, maxChars int) string {

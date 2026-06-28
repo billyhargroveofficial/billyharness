@@ -38,7 +38,7 @@ The goal is complete only when all of these are true:
 - [ ] DeepSeek Flash/Pro and Codex OAuth provider paths still work.
 - [ ] TUI and Telegram both consume the same typed event semantics for turns, steps, tools, compaction, usage, and summaries.
 - [ ] Web fetch/extract/crawl do not dump large raw pages into the main loop by default.
-- [ ] Context status shows active context, percentage, compaction status, and major context contributors.
+- [x] Context status shows active context, percentage, compaction status, and major context contributors.
 - [ ] Tool lifecycle is keyed by stable ids and replayable from JSONL.
 - [ ] MCP servers are configured by billyharness config, not inherited by accident.
 - [x] Bench runs create replayable bundles and at least one 50-100 turn local loop can be executed.
@@ -479,23 +479,23 @@ Acceptance:
 
 ### 4.4 Context Guardrails
 
-- [ ] Track context contributors:
-  - [ ] user messages
-  - [ ] assistant messages
-  - [ ] reasoning summaries
-  - [ ] tool outputs
-  - [ ] web summaries
-  - [ ] MCP outputs
-  - [ ] system/instructions
-- [ ] Show active context as tokens and percent.
+- [x] Track context contributors:
+  - [x] user messages
+  - [x] assistant messages
+  - [x] reasoning summaries
+  - [x] tool outputs
+  - [x] web summaries
+  - [x] MCP outputs
+  - [x] system/instructions
+- [x] Show active context as tokens and percent.
 - [ ] Show top context contributors before compaction.
 - [ ] Add threshold events at 50%, 70%, 85%, 95%.
-- [ ] Add `/context` in TUI and Telegram.
+- [x] Add `/context` in TUI and Telegram.
 
 Acceptance:
 
-- [ ] User can understand why context grew.
-- [ ] Cache hit/miss counters are not confused with active context.
+- [x] User can understand why context grew.
+- [x] Cache hit/miss counters are not confused with active context.
 
 ### 4.5 Compaction
 

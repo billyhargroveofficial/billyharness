@@ -28,10 +28,11 @@ type blockingHarness struct {
 }
 
 type scriptedHarness struct {
-	events       []protocol.Event
-	delay        time.Duration
-	configStatus string
-	authStatus   credentials.Status
+	events        []protocol.Event
+	delay         time.Duration
+	configStatus  string
+	contextStatus string
+	authStatus    credentials.Status
 }
 
 type replayScriptedHarness struct {
@@ -73,6 +74,10 @@ func (h *blockingHarness) MCPStatus(context.Context) (string, error) {
 
 func (h *blockingHarness) ConfigStatus(context.Context) (string, error) {
 	return "billyharness config", nil
+}
+
+func (h *blockingHarness) ContextStatus(context.Context, string) (string, error) {
+	return "active context: 0", nil
 }
 
 func (h *blockingHarness) AuthStatus(context.Context) (credentials.Status, error) {
@@ -137,6 +142,13 @@ func (h scriptedHarness) ConfigStatus(context.Context) (string, error) {
 		return h.configStatus, nil
 	}
 	return "billyharness config", nil
+}
+
+func (h scriptedHarness) ContextStatus(context.Context, string) (string, error) {
+	if h.contextStatus != "" {
+		return h.contextStatus, nil
+	}
+	return "active context: 0", nil
 }
 
 func (h scriptedHarness) AuthStatus(context.Context) (credentials.Status, error) {
@@ -417,6 +429,50 @@ func TestTelegramConfigCommandSendsSanitizedSummary(t *testing.T) {
 	}
 	if strings.Contains(sentText, "sk-secret") {
 		t.Fatalf("config leaked secret: %q", sentText)
+	}
+}
+
+func TestTelegramContextCommandShowsSessionContext(t *testing.T) {
+	var sentText string
+	var parseMode string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/botbottoken/sendMessage" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		sentText, _ = payload["text"].(string)
+		parseMode, _ = payload["parse_mode"].(string)
+		writeTelegramResult(w, SentMessage{MessageID: 12, Chat: Chat{ID: 123}})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{BaseURL: server.URL, Token: "bottoken", MinInterval: time.Nanosecond})
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      t.TempDir() + "/state.json",
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, scriptedHarness{contextStatus: "active context: 580.0k / 1.00M\nsources:\n  web_summaries: 320.0k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := bot.chatState(chatKey(123, 0))
+	state.SessionID = "session-1"
+	bot.setChatState(chatKey(123, 0), state)
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/context"})
+	if parseMode != "HTML" || !strings.Contains(sentText, "<b>Context</b>") || !strings.Contains(sentText, "web_summaries") {
+		t.Fatalf("context message parse=%q text=%q", parseMode, sentText)
 	}
 }
 

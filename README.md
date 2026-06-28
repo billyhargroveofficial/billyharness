@@ -77,6 +77,7 @@ Slash commands autocomplete in the composer with `Tab`, `Up`, and `Down`.
 /reasoning low|medium|high|xhigh|max|off
 /toolview auto|expanded|collapsed|hidden
 /thinkview expanded|collapsed|hidden
+/context
 /new
 /resume [session-id-prefix]
 /fork [session-id-prefix]

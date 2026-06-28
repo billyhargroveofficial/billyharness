@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -44,6 +45,43 @@ func TestGatewayClientMCPStatusUsesSharedFormatter(t *testing.T) {
 	}
 	if strings.Contains(text, `"servers"`) || strings.Contains(text, `"tool_count"`) {
 		t.Fatalf("MCP status should be formatted text, got JSON-ish output: %q", text)
+	}
+}
+
+func TestGatewayClientContextStatusUsesSharedFormatter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/sessions/session-1/context" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(gateway.SessionContextResponse{
+			ID:                   "session-1",
+			MessageCount:         3,
+			EstimatedTokens:      580000,
+			ContextWindowTokens:  1000000,
+			ContextCompactTokens: 600000,
+			PercentUsed:          58,
+			Sources: []gateway.ContextSource{{
+				Source:          "web_summaries",
+				MessageCount:    1,
+				EstimatedTokens: 400000,
+				Percent:         69,
+			}},
+			Thresholds: []gateway.ContextThreshold{
+				{Percent: 50, Tokens: 500000, Crossed: true},
+				{Percent: 70, Tokens: 700000, RemainingTokens: 120000},
+			},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	text, err := NewGatewayClient(server.URL).ContextStatus(context.Background(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"active context: 580.0k / 1.00M", "thresholds: ●50% ○70%", "web_summaries"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("context status missing %q: %q", want, text)
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ Start here:
 - [Hooks](hooks.md): local command hooks, config format, event payloads, and failure behavior.
 - [Skills](skills.md): on-demand skill directories and bounded `skill_list`/`skill_read` usage.
 - [Web tools](web.md): compact web fetch/extract/crawl output, external summaries, and web cache.
+- [Context](context.md): active context accounting, source contributors, thresholds, and `/context`.
 
 Planned docs:
 
@@ -17,6 +18,7 @@ Planned docs:
 - `mcp.md`: billyharness MCP config and troubleshooting.
 - `hooks.md`: local command hooks and event payloads.
 - `skills.md`: on-demand skill loading and compatibility input.
+- `context.md`: context accounting, contributors, and cache-vs-context troubleshooting.
 - `tui.md`: commands, themes, copy, tool views, and chat controls.
 - `telegram.md`: bot setup, allowed users, commands, and sessions.
 - `web.md`: web cache, output refs, and summary economics.

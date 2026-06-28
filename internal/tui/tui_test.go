@@ -16,6 +16,7 @@ import (
 	xansi "github.com/charmbracelet/x/ansi"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
@@ -1493,6 +1494,52 @@ func TestConfigCommandShowsSanitizedGatewaySummary(t *testing.T) {
 	}
 	if strings.Contains(msg.text, "sk-") || strings.Contains(msg.text, "DEEPSEEK_API_KEY=") {
 		t.Fatalf("config summary leaked secret-ish content:\n%s", msg.text)
+	}
+}
+
+func TestContextCommandShowsGatewayContextReport(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/sessions/session-1/context" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(gateway.SessionContextResponse{
+			ID:                   "session-1",
+			MessageCount:         4,
+			EstimatedTokens:      580000,
+			ContextWindowTokens:  1000000,
+			ContextCompactTokens: 600000,
+			PercentUsed:          58,
+			Estimator:            "chars_div_4",
+			Sources: []gateway.ContextSource{
+				{Source: "web_summaries", MessageCount: 2, EstimatedTokens: 320000, Percent: 55.2},
+				{Source: "user_messages", MessageCount: 1, EstimatedTokens: 1000, Percent: 0.2},
+			},
+			Thresholds: []gateway.ContextThreshold{
+				{Percent: 50, Tokens: 500000, Crossed: true},
+				{Percent: 70, Tokens: 700000, RemainingTokens: 120000},
+			},
+			TopContributors: []gateway.ContextContributor{
+				{Index: 2, Role: "tool", Source: "web_summaries", Name: "web_fetch", EstimatedTokens: 320000, Preview: "summary"},
+			},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	m := newTestModel(t)
+	m.gatewayURL = server.URL
+	m.sessionID = "session-1"
+	handled, cmd := m.handleSlashCommand("/context")
+	if !handled || cmd == nil {
+		t.Fatalf("handled=%v cmd=%v", handled, cmd)
+	}
+	msg := cmd().(contextStatusMsg)
+	if msg.err != nil {
+		t.Fatal(msg.err)
+	}
+	for _, want := range []string{"active context: 580.0k / 1.00M", "thresholds: ●50% ○70%", "web_summaries", "top contributors"} {
+		if !strings.Contains(msg.text, want) {
+			t.Fatalf("context report missing %q:\n%s", want, msg.text)
+		}
 	}
 }
 

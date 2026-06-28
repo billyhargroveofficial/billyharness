@@ -204,6 +204,11 @@ type configStatusMsg struct {
 	err  error
 }
 
+type contextStatusMsg struct {
+	text string
+	err  error
+}
+
 type authResultMsg struct {
 	text string
 	err  error
@@ -598,6 +603,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		reflow = true
 		gotoBottom = m.followOutput
+	case contextStatusMsg:
+		if msg.err != nil {
+			m.addBlock("error", "CONTEXT", msg.err.Error())
+			m.status = "context failed"
+		} else {
+			m.addInfoBlock("CONTEXT", msg.text)
+			m.status = "context shown"
+		}
+		reflow = true
+		gotoBottom = m.followOutput
 	case authResultMsg:
 		m.cancelAuthInput()
 		if msg.err != nil {
@@ -776,6 +791,7 @@ func slashCommands() []slashCommand {
 	return []slashCommand{
 		{"/help", "", "show commands and key bindings"},
 		{"/status", "", "show current session details"},
+		{"/context", "", "show active context and contributors"},
 		{"/config", "", "show resolved config summary"},
 		{"/auth", "deepseek|codex", "configure DeepSeek key or Codex OAuth"},
 		{"/theme", "light|dark", "switch active theme"},
@@ -1648,6 +1664,29 @@ func (m Model) configStatusCmd() tea.Cmd {
 	}
 }
 
+func (m Model) contextStatusCmd() tea.Cmd {
+	return func() tea.Msg {
+		text, err := m.loadContextStatus()
+		return contextStatusMsg{text: text, err: err}
+	}
+}
+
+func (m Model) loadContextStatus() (string, error) {
+	if m.gatewayURL != "" {
+		if m.sessionID == "" {
+			return "", fmt.Errorf("gateway session is not ready")
+		}
+		var out gateway.SessionContextResponse
+		path := "/v1/sessions/" + url.PathEscape(m.sessionID) + "/context"
+		if err := m.gatewayJSON(http.MethodGet, path, nil, &out); err != nil {
+			return "", err
+		}
+		return gateway.FormatSessionContext(out), nil
+	}
+	resp := gateway.BuildContextResponse(m.currentConfig(), m.localChatID, m.messages)
+	return gateway.FormatSessionContext(resp), nil
+}
+
 func (m Model) loadConfigSummary() (string, error) {
 	if m.gatewayURL != "" {
 		var out configStatusResponse
@@ -1958,6 +1997,9 @@ func (m *Model) handleSlashCommand(prompt string) (bool, tea.Cmd) {
 	case "/config":
 		m.status = "loading config"
 		return true, m.configStatusCmd()
+	case "/context":
+		m.status = "loading context"
+		return true, m.contextStatusCmd()
 	case "/profile":
 		return true, m.setProfile(arg)
 	case "/mcp":
@@ -3680,6 +3722,7 @@ func helpText() string {
 		"/models                                show known models and providers",
 		"/profile [billy|name]                  switch SOUL.md system profile",
 		"/mcp                                   show MCP servers and status",
+		"/context                               show active context and contributors",
 		"/config                                show resolved config summary",
 		"/reasoning [low|medium|high|xhigh|off] set provider reasoning effort",
 		"/thinkview [expanded|collapsed|hidden] show/collapse/hide thinking blocks",

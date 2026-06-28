@@ -481,6 +481,18 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 			return
 		}
 		_ = b.sendHTML(ctx, msg, "<b>Config</b>\n<pre>"+esc(status)+"</pre>")
+	case "/context":
+		state := b.chatState(key)
+		if state.SessionID == "" {
+			_ = b.sendPlain(ctx, msg, "No active session. Send a message first or use /new.")
+			return
+		}
+		status, err := b.harness.ContextStatus(ctx, state.SessionID)
+		if err != nil {
+			_ = b.sendPlain(ctx, msg, "Context status failed: "+err.Error())
+			return
+		}
+		_ = b.sendHTML(ctx, msg, "<b>Context</b>\n<pre>"+esc(status)+"</pre>")
 	case "/auth":
 		b.handleAuthCommand(ctx, msg, arg)
 	case "/cancel":
@@ -728,7 +740,7 @@ func bypassActiveRunLock(text string) bool {
 	}
 	cmd := strings.ToLower(strings.SplitN(fields[0], "@", 2)[0])
 	switch cmd {
-	case "/cancel", "/status", "/config", "/auth", "/start", "/help":
+	case "/cancel", "/status", "/context", "/config", "/auth", "/start", "/help":
 		return true
 	default:
 		return false
@@ -764,6 +776,7 @@ Commands:
 <code>/profile billy</code>
 <code>/reasoning low|medium|high|xhigh|off</code>
 <code>/mcp</code> MCP status
+<code>/context</code> active context and contributors
 <code>/config</code> resolved config summary
 <code>/auth</code> auth status
 <code>/auth deepseek sk-...</code> save DeepSeek key
