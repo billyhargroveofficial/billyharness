@@ -11,3 +11,5 @@
 /mcp.config.toml
 /auth/
 /sessions/
+/gateway-sessions/
+/tool-output/
