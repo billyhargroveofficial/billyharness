@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -427,16 +429,27 @@ func (o *toolOrchestrator) Execute(ctx context.Context, index int, call protocol
 		o.agent.compactToolResult(index, call, &out)
 	}
 	ensureToolMetadata(&out)
+	ended := time.Now()
+	duration := ended.Sub(started).Milliseconds()
+	out.Metadata["tool_name"] = call.Name
+	out.Metadata["args_summary"] = summarizeToolArgs(call.Arguments)
 	out.Metadata["attempt_id"] = attemptID
 	out.Metadata["permission_decision"] = decision.Decision
 	out.Metadata["permission_source"] = decision.Source
 	out.Metadata["permission_reason"] = decision.Reason
+	out.Metadata["started_at"] = started.UTC().Format(time.RFC3339Nano)
+	out.Metadata["finished_at"] = ended.UTC().Format(time.RFC3339Nano)
+	out.Metadata["duration_ms"] = duration
 	if decision.KnownRisk {
 		out.Metadata["risk"] = decision.Risk
 	}
 	out.Metadata["output_bytes"] = len(out.Content)
 	out.Metadata["output_estimated_tokens"] = estimateMessagesTokens([]protocol.Message{{Role: protocol.RoleTool, Content: out.Content}})
-	return toolExecutionResult{Index: index, Call: call, Result: out, DurationMS: durationMS(started), AttemptID: attemptID}
+	out.Metadata["truncated"] = out.Truncated
+	if out.OutputRef != "" {
+		annotateOutputRefMetadata(out.OutputRef, out.Metadata)
+	}
+	return toolExecutionResult{Index: index, Call: call, Result: out, DurationMS: duration, AttemptID: attemptID}
 }
 
 func (o *toolOrchestrator) EmitAttemptFinished(result toolExecutionResult) {
@@ -567,6 +580,125 @@ func ensureToolMetadata(out *protocol.ToolResult) {
 	if out.Metadata == nil {
 		out.Metadata = map[string]any{}
 	}
+}
+
+func summarizeToolArgs(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "{}"
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return compactText(string(raw), 160)
+	}
+	return compactText(summarizeArgValue(value, 0), 240)
+}
+
+func summarizeArgValue(value any, depth int) string {
+	if depth > 2 {
+		return "..."
+	}
+	switch v := value.(type) {
+	case map[string]any:
+		if len(v) == 0 {
+			return "{}"
+		}
+		keys := make([]string, 0, len(v))
+		for key := range v {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, minInt(len(keys), 6))
+		for i, key := range keys {
+			if i >= 6 {
+				parts = append(parts, fmt.Sprintf("...+%d", len(keys)-i))
+				break
+			}
+			if sensitiveArgKey(key) {
+				parts = append(parts, key+"=<redacted>")
+				continue
+			}
+			if bulkyArgKey(key) {
+				parts = append(parts, key+"=<omitted>")
+				continue
+			}
+			parts = append(parts, key+"="+summarizeArgValue(v[key], depth+1))
+		}
+		return "{" + strings.Join(parts, ", ") + "}"
+	case []any:
+		return fmt.Sprintf("[%d items]", len(v))
+	case string:
+		return strconvQuote(compactText(v, 64))
+	case float64, bool, nil:
+		body, _ := json.Marshal(v)
+		return string(body)
+	default:
+		body, _ := json.Marshal(v)
+		return compactText(string(body), 64)
+	}
+}
+
+func sensitiveArgKey(key string) bool {
+	key = strings.ToLower(key)
+	return strings.Contains(key, "token") ||
+		strings.Contains(key, "secret") ||
+		strings.Contains(key, "password") ||
+		strings.Contains(key, "api_key") ||
+		strings.Contains(key, "apikey") ||
+		strings.Contains(key, "authorization")
+}
+
+func bulkyArgKey(key string) bool {
+	key = strings.ToLower(key)
+	return key == "content" ||
+		key == "text" ||
+		key == "body" ||
+		key == "input" ||
+		key == "full_text"
+}
+
+func compactText(text string, limit int) string {
+	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	if limit <= 3 {
+		return "..."
+	}
+	return strings.TrimSpace(trimUTF8Bytes(text, limit-3)) + "..."
+}
+
+func strconvQuote(text string) string {
+	body, _ := json.Marshal(text)
+	return string(body)
+}
+
+func annotateOutputRefMetadata(ref string, metadata map[string]any) {
+	if strings.TrimSpace(ref) == "" || metadata == nil {
+		return
+	}
+	metadata["output_ref"] = ref
+	metadata["output_ref_id"] = filepath.Base(ref)
+	file, err := os.Open(ref)
+	if err != nil {
+		metadata["output_ref_hash_error"] = err.Error()
+		return
+	}
+	defer file.Close()
+	hash := sha256.New()
+	bytes, err := io.Copy(hash, file)
+	if err != nil {
+		metadata["output_ref_hash_error"] = err.Error()
+		return
+	}
+	metadata["output_ref_bytes"] = bytes
+	metadata["output_ref_sha256"] = hex.EncodeToString(hash.Sum(nil))
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func dangerousToolDisabledMessage() string {

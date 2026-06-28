@@ -153,17 +153,17 @@ Purpose: centralize permission, attempt, retry, cancellation, audit, output refs
   - [x] `tool.call_aborted`
   - [x] `tool.output_ref_created`
 - [x] Keep `tool.audit` as a derived/security event, not the only permission record.
-- [ ] Add attempt metadata:
-  - [ ] tool name
-  - [ ] args summary
-  - [ ] risk
-  - [ ] permission source
-  - [ ] start/end timestamps
-  - [ ] duration
-  - [ ] output bytes
-  - [ ] output token estimate
-  - [ ] truncation status
-  - [ ] output ref id/path/hash when applicable
+- [x] Add attempt metadata:
+  - [x] tool name
+  - [x] args summary
+  - [x] risk
+  - [x] permission source
+  - [x] start/end timestamps
+  - [x] duration
+  - [x] output bytes
+  - [x] output token estimate
+  - [x] truncation status
+  - [x] output ref id/path/hash when applicable
 - [ ] Ensure parallel batches update each call by `call_id`.
 - [ ] Ensure cancellation stops in-flight local operations where possible and records abort events.
 

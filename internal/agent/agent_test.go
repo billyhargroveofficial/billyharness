@@ -492,7 +492,19 @@ func TestRunMessagesToolOrchestratorEmitsSafePermissionAndAttempt(t *testing.T) 
 		t.Fatalf("permission decision should precede call start; decision=%d start=%d events=%#v", decisionIndex, startIndex, events)
 	}
 	result, ok := firstToolResult(events)
-	if !ok || result.CallID != "call_time" || result.Metadata["attempt_id"] == "" || result.Metadata["output_estimated_tokens"] == nil {
+	if !ok ||
+		result.CallID != "call_time" ||
+		result.Metadata["attempt_id"] == "" ||
+		result.Metadata["tool_name"] != "time_now" ||
+		result.Metadata["args_summary"] != "{}" ||
+		result.Metadata["permission_decision"] != "allow" ||
+		result.Metadata["permission_source"] != "auto" ||
+		result.Metadata["started_at"] == nil ||
+		result.Metadata["finished_at"] == nil ||
+		result.Metadata["duration_ms"] == nil ||
+		result.Metadata["output_bytes"] == nil ||
+		result.Metadata["output_estimated_tokens"] == nil ||
+		result.Metadata["truncated"] == nil {
 		t.Fatalf("tool result metadata = %#v ok=%v", result, ok)
 	}
 }
@@ -710,7 +722,11 @@ func TestRunMessagesStoresLargeToolOutputAndSendsPreview(t *testing.T) {
 	assertMode(t, filepath.Join(home, "tool-output"), 0o700)
 	assertMode(t, filepath.Dir(result.OutputRef), 0o700)
 	assertMode(t, result.OutputRef, 0o600)
-	if result.Metadata["output_ref_plaintext"] != true || result.Metadata["output_ref_permissions"] != "0600" {
+	if result.Metadata["output_ref_plaintext"] != true ||
+		result.Metadata["output_ref_permissions"] != "0600" ||
+		result.Metadata["output_ref_id"] == "" ||
+		result.Metadata["output_ref_bytes"] == nil ||
+		result.Metadata["output_ref_sha256"] == "" {
 		t.Fatalf("metadata should make plaintext persistence explicit: %#v", result.Metadata)
 	}
 	var toolMessage protocol.Message
