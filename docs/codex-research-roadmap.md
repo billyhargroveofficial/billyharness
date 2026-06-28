@@ -65,19 +65,25 @@ Completed:
 - Codex auth refresh serialization: snapshot/mutex around refresh and request headers.
 - Lightweight `tool_search`: native and hidden MCP discovery without exposing raw MCP tools.
 - Smaller default web budgets: cheaper web fetch/crawl outputs unless explicitly expanded.
+- Lightweight `internal/session`: history snapshots, active-run guard, cancellation.
+- Gateway session locking/cancel over the session runner.
+- Trace replay verifier compares event aggregates against result rows.
+- Trace replay verifies payload ref files, byte counts, and SHA-256 hashes.
+- Shared compact tool summary renderer for TUI and Telegram.
+- Provider/model metadata layer for DeepSeek and Codex subscription models.
+- Structured compaction telemetry: stable compaction IDs, trigger/threshold/message counts.
+- Telegram `/cancel` explicitly cancels gateway sessions as well as local streams.
 
 Next:
 
-1. `internal/session`: add a lightweight session runner around `agent.RunMessages`.
-2. Gateway session locking/cancel/subscribe over the session runner.
-3. Trace replay verifier that compares event counts against result rows.
-4. Shared tool summary renderer for TUI and Telegram.
-5. TUI transcript cells without changing saved session format.
-6. Active live stream cell and newline-gated markdown streaming.
-7. Telegram single progress message for tools/thinking.
-8. Provider info layer for DeepSeek/OpenAI/Codex instead of model-prefix routing.
-9. MCP manager status/reconnect events surfaced through gateway/TUI.
-10. Context window state with explicit compaction IDs and protected prefix.
+1. Gateway subscribe/status stream over the session runner.
+2. TUI transcript cells without changing saved session format.
+3. Active live stream cell and newline-gated markdown streaming.
+4. Telegram single progress message for tools/thinking.
+5. MCP manager status/reconnect events surfaced through gateway/TUI.
+6. Context window protected-prefix audit and compaction policy controls.
+7. JSONL session persistence for gateway sessions.
+8. Tool policy/audit events for dangerous local defaults.
 
 ## Engineering Rules
 
