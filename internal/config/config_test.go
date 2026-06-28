@@ -400,6 +400,39 @@ default_tools_approval_mode = "prompt"
 	}
 }
 
+func TestLoadMCPServersParsesRemoteAsUnsupportedDiagnostic(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "remote.toml")
+	if err := os.WriteFile(path, []byte(`
+[mcp_servers.remote]
+url = "https://example.com/mcp"
+bearer_token_env_var = "REMOTE_MCP_TOKEN"
+http_headers = { X_Client = "billyharness" }
+env_http_headers = { Authorization = "REMOTE_MCP_AUTH_HEADER" }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := LoadMCPServers([]string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(servers) != 1 {
+		t.Fatalf("servers = %#v", servers)
+	}
+	server := servers[0]
+	if server.Name != "remote" || server.URL != "https://example.com/mcp" || server.Command != "" {
+		t.Fatalf("remote server = %#v", server)
+	}
+	if server.BearerTokenEnvVar != "REMOTE_MCP_TOKEN" ||
+		server.HTTPHeaders["X_Client"] != "billyharness" ||
+		server.EnvHTTPHeaders["Authorization"] != "REMOTE_MCP_AUTH_HEADER" {
+		t.Fatalf("remote headers = %#v", server)
+	}
+	if !strings.Contains(server.UnsupportedReason, "streamable HTTP MCP is not implemented") {
+		t.Fatalf("unsupported reason = %q", server.UnsupportedReason)
+	}
+}
+
 func TestFilterMCPServersKeepsOnlyAllowedNames(t *testing.T) {
 	servers := []MCPServer{
 		{Name: "context7"},

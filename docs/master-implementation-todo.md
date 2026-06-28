@@ -343,9 +343,9 @@ Acceptance:
 
 ### 3.2 Remote MCP
 
-- [ ] Decide MVP:
+- [x] Decide MVP:
   - [ ] either implement streamable HTTP MCP with bearer/env headers;
-  - [ ] or reject URL MCP during config validation with a clear unsupported diagnostic.
+  - [x] or reject URL MCP during config validation with a clear unsupported diagnostic.
 - [ ] If implementing remote MCP:
   - [ ] support URL transport;
   - [ ] support headers from env;
@@ -356,8 +356,8 @@ Acceptance:
 
 Acceptance:
 
-- [ ] URL MCP configs never silently fail at runtime.
-- [ ] Status explains what happened.
+- [x] URL MCP configs never silently fail at runtime.
+- [x] Status explains what happened.
 
 ### 3.3 Tool Search And MCP Discovery
 

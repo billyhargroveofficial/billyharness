@@ -78,6 +78,9 @@ func Format(status Response) string {
 		if server.LastError != "" && server.LastError != server.Error {
 			line += "\n  last: " + oneLine(server.LastError, 180)
 		}
+		if server.UnsupportedReason != "" {
+			line += "\n  unsupported: " + oneLine(server.UnsupportedReason, 180)
+		}
 		if server.LastErrorAt != nil && !server.LastErrorAt.IsZero() {
 			line += "\n  last_error_at: " + server.LastErrorAt.Local().Format("2006-01-02 15:04:05")
 		}

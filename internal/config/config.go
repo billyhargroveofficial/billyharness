@@ -65,6 +65,7 @@ type MCPServer struct {
 	EnvVars                  []string
 	CWD                      string
 	URL                      string
+	UnsupportedReason        string
 	BearerTokenEnvVar        string
 	HTTPHeaders              map[string]string
 	EnvHTTPHeaders           map[string]string
@@ -500,6 +501,7 @@ func (s codexMCPServer) toConfig(name string) MCPServer {
 		EnvVars:                  append([]string(nil), s.EnvVars...),
 		CWD:                      s.CWD,
 		URL:                      s.URL,
+		UnsupportedReason:        s.unsupportedReason(),
 		BearerTokenEnvVar:        s.BearerTokenEnvVar,
 		HTTPHeaders:              cloneStringMap(s.HTTPHeaders),
 		EnvHTTPHeaders:           cloneStringMap(s.EnvHTTPHeaders),
@@ -511,6 +513,13 @@ func (s codexMCPServer) toConfig(name string) MCPServer {
 		DisabledTools:            append([]string(nil), s.DisabledTools...),
 		DefaultToolsApprovalMode: s.DefaultToolsApprovalMode,
 	}
+}
+
+func (s codexMCPServer) unsupportedReason() string {
+	if strings.TrimSpace(s.URL) == "" {
+		return ""
+	}
+	return "streamable HTTP MCP is not implemented in billyharness yet; use stdio MCP or remove the url server"
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

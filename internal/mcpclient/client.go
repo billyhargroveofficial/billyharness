@@ -52,27 +52,28 @@ type ExternalTool struct {
 }
 
 type ServerStatus struct {
-	Name            string     `json:"name"`
-	Transport       string     `json:"transport"`
-	Command         string     `json:"command,omitempty"`
-	URL             string     `json:"url,omitempty"`
-	Enabled         bool       `json:"enabled"`
-	Required        bool       `json:"required"`
-	Connected       bool       `json:"connected"`
-	State           string     `json:"state"`
-	ToolCount       int        `json:"tool_count"`
-	PID             int        `json:"pid,omitempty"`
-	StartedAt       *time.Time `json:"started_at,omitempty"`
-	LastConnectedAt *time.Time `json:"last_connected_at,omitempty"`
-	LastEventAt     *time.Time `json:"last_event_at,omitempty"`
-	LastError       string     `json:"last_error,omitempty"`
-	LastErrorAt     *time.Time `json:"last_error_at,omitempty"`
-	StderrTail      string     `json:"stderr_tail,omitempty"`
-	Error           string     `json:"error,omitempty"`
-	RetryCount      int        `json:"retry_count"`
-	RestartCount    int        `json:"restart_count"`
-	RetryBackoffMS  int64      `json:"retry_backoff_ms,omitempty"`
-	NextRetryAt     *time.Time `json:"next_retry_at,omitempty"`
+	Name              string     `json:"name"`
+	Transport         string     `json:"transport"`
+	Command           string     `json:"command,omitempty"`
+	URL               string     `json:"url,omitempty"`
+	UnsupportedReason string     `json:"unsupported_reason,omitempty"`
+	Enabled           bool       `json:"enabled"`
+	Required          bool       `json:"required"`
+	Connected         bool       `json:"connected"`
+	State             string     `json:"state"`
+	ToolCount         int        `json:"tool_count"`
+	PID               int        `json:"pid,omitempty"`
+	StartedAt         *time.Time `json:"started_at,omitempty"`
+	LastConnectedAt   *time.Time `json:"last_connected_at,omitempty"`
+	LastEventAt       *time.Time `json:"last_event_at,omitempty"`
+	LastError         string     `json:"last_error,omitempty"`
+	LastErrorAt       *time.Time `json:"last_error_at,omitempty"`
+	StderrTail        string     `json:"stderr_tail,omitempty"`
+	Error             string     `json:"error,omitempty"`
+	RetryCount        int        `json:"retry_count"`
+	RestartCount      int        `json:"restart_count"`
+	RetryBackoffMS    int64      `json:"retry_backoff_ms,omitempty"`
+	NextRetryAt       *time.Time `json:"next_retry_at,omitempty"`
 }
 
 type Manager struct {
@@ -93,7 +94,8 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 			continue
 		}
 		if server.URL != "" {
-			err := fmt.Errorf("MCP server %s uses streamable HTTP; billyharness currently supports stdio MCP only", server.Name)
+			reason := unsupportedRemoteReason(server)
+			err := fmt.Errorf("MCP server %s unsupported: %s", server.Name, reason)
 			runtime.recordStaticErrorState(mcpStateUnsupported, err)
 			manager.addServer(runtime)
 			if server.Required {
@@ -242,20 +244,33 @@ func newManagedServer(cfg config.Config, server config.MCPServer) *managedServer
 	if !server.Enabled {
 		state = mcpStateDisabled
 	}
+	unsupportedReason := strings.TrimSpace(server.UnsupportedReason)
+	if strings.TrimSpace(server.URL) != "" {
+		unsupportedReason = unsupportedRemoteReason(server)
+	}
 	return &managedServer{
 		cfg:           cfg,
 		server:        server,
 		reconnectable: server.Enabled && server.URL == "" && strings.TrimSpace(server.Command) != "",
 		status: ServerStatus{
-			Name:      server.Name,
-			Transport: mcpTransport(server),
-			Command:   strings.TrimSpace(server.Command),
-			URL:       strings.TrimSpace(server.URL),
-			Enabled:   server.Enabled,
-			Required:  server.Required,
-			State:     state,
+			Name:              server.Name,
+			Transport:         mcpTransport(server),
+			Command:           strings.TrimSpace(server.Command),
+			URL:               strings.TrimSpace(server.URL),
+			UnsupportedReason: unsupportedReason,
+			Enabled:           server.Enabled,
+			Required:          server.Required,
+			State:             state,
 		},
 	}
+}
+
+func unsupportedRemoteReason(server config.MCPServer) string {
+	reason := strings.TrimSpace(server.UnsupportedReason)
+	if reason != "" {
+		return reason
+	}
+	return "streamable HTTP MCP is not implemented in billyharness yet; use stdio MCP or remove the url server"
 }
 
 func (s *managedServer) start(ctx context.Context, reconnect bool) ([]protocol.ToolSpec, string, error) {

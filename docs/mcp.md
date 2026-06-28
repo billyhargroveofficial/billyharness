@@ -66,4 +66,4 @@ Stdio MCP is supported today. Streamable HTTP MCP config is parsed and surfaced 
 url = "https://example.com/mcp"
 ```
 
-Bearer/OAuth remote MCP is intentionally left for a later slice.
+The structured status includes `unsupported_reason`, and the human `/mcp` view prints the same reason. Bearer/OAuth remote MCP is intentionally left for a later slice.

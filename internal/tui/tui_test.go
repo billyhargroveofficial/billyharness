@@ -1350,12 +1350,13 @@ func TestFormatMCPStatusShowsOwnConfigAndNativeWebTools(t *testing.T) {
 			RetryBackoffMS: 5000,
 			NextRetryAt:    &nextRetryAt,
 		}, {
-			Name:      "remote",
-			Transport: "streamable-http",
-			URL:       "https://example.com/mcp",
-			Enabled:   true,
-			State:     "unsupported",
-			Error:     "MCP server remote uses streamable HTTP; billyharness currently supports stdio MCP only",
+			Name:              "remote",
+			Transport:         "streamable-http",
+			URL:               "https://example.com/mcp",
+			Enabled:           true,
+			State:             "unsupported",
+			UnsupportedReason: "streamable HTTP MCP is not implemented in billyharness yet; use stdio MCP or remove the url server",
+			Error:             "MCP server remote unsupported: streamable HTTP MCP is not implemented in billyharness yet; use stdio MCP or remove the url server",
 		}},
 	})
 	for _, want := range []string{
@@ -1382,6 +1383,7 @@ func TestFormatMCPStatusShowsOwnConfigAndNativeWebTools(t *testing.T) {
 		"unsupported",
 		"streamable-http",
 		"url:https://example.com/mcp",
+		"unsupported: streamable HTTP MCP is not implemented",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("mcp status missing %q: %q", want, text)

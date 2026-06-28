@@ -910,19 +910,20 @@ func (r *Registry) addMCPGateway() {
 				InputSchema json.RawMessage `json:"input_schema,omitempty"`
 			}
 			type serverItem struct {
-				Name           string     `json:"name"`
-				Transport      string     `json:"transport,omitempty"`
-				Enabled        bool       `json:"enabled"`
-				Required       bool       `json:"required"`
-				Connected      bool       `json:"connected"`
-				State          string     `json:"state,omitempty"`
-				ToolCount      int        `json:"tool_count,omitempty"`
-				LastError      string     `json:"last_error,omitempty"`
-				RetryCount     int        `json:"retry_count,omitempty"`
-				RestartCount   int        `json:"restart_count,omitempty"`
-				RetryBackoffMS int64      `json:"retry_backoff_ms,omitempty"`
-				NextRetryAt    *time.Time `json:"next_retry_at,omitempty"`
-				Error          string     `json:"error,omitempty"`
+				Name              string     `json:"name"`
+				Transport         string     `json:"transport,omitempty"`
+				Enabled           bool       `json:"enabled"`
+				Required          bool       `json:"required"`
+				Connected         bool       `json:"connected"`
+				State             string     `json:"state,omitempty"`
+				ToolCount         int        `json:"tool_count,omitempty"`
+				UnsupportedReason string     `json:"unsupported_reason,omitempty"`
+				LastError         string     `json:"last_error,omitempty"`
+				RetryCount        int        `json:"retry_count,omitempty"`
+				RestartCount      int        `json:"restart_count,omitempty"`
+				RetryBackoffMS    int64      `json:"retry_backoff_ms,omitempty"`
+				NextRetryAt       *time.Time `json:"next_retry_at,omitempty"`
+				Error             string     `json:"error,omitempty"`
 			}
 			if r.manager != nil {
 				r.manager.Refresh(ctx)
@@ -972,19 +973,20 @@ func (r *Registry) addMCPGateway() {
 					continue
 				}
 				servers = append(servers, serverItem{
-					Name:           displayMCPServerName(normalized),
-					Transport:      status.Transport,
-					Enabled:        status.Enabled,
-					Required:       status.Required,
-					Connected:      status.Connected,
-					State:          status.State,
-					ToolCount:      status.ToolCount,
-					LastError:      status.LastError,
-					RetryCount:     status.RetryCount,
-					RestartCount:   status.RestartCount,
-					RetryBackoffMS: status.RetryBackoffMS,
-					NextRetryAt:    status.NextRetryAt,
-					Error:          status.Error,
+					Name:              displayMCPServerName(normalized),
+					Transport:         status.Transport,
+					Enabled:           status.Enabled,
+					Required:          status.Required,
+					Connected:         status.Connected,
+					State:             status.State,
+					ToolCount:         status.ToolCount,
+					UnsupportedReason: status.UnsupportedReason,
+					LastError:         status.LastError,
+					RetryCount:        status.RetryCount,
+					RestartCount:      status.RestartCount,
+					RetryBackoffMS:    status.RetryBackoffMS,
+					NextRetryAt:       status.NextRetryAt,
+					Error:             status.Error,
 				})
 			}
 			out, _ := json.MarshalIndent(map[string]any{

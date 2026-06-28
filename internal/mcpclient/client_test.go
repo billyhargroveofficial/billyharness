@@ -115,7 +115,8 @@ func TestOptionalRequiredShellCWDAndCollisionRules(t *testing.T) {
 		statuses := manager.Statuses()
 		if len(statuses) != 1 || statuses[0].Name != "remote" || statuses[0].State != mcpStateUnsupported ||
 			statuses[0].Transport != "streamable-http" || statuses[0].URL != "https://example.com/mcp" ||
-			!strings.Contains(statuses[0].Error, "currently supports stdio") {
+			!strings.Contains(statuses[0].UnsupportedReason, "streamable HTTP MCP is not implemented") ||
+			!strings.Contains(statuses[0].Error, "unsupported") {
 			t.Fatalf("unsupported status = %#v", statuses)
 		}
 	})
