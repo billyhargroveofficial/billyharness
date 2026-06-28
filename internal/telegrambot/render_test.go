@@ -167,6 +167,43 @@ func TestToolProgressDeduplicatesToolLines(t *testing.T) {
 	}
 }
 
+func TestStreamPlainTextEmbedsToolProgress(t *testing.T) {
+	renderer := NewRenderer()
+	renderer.Content.WriteString("Looking it up...")
+	progress := NewToolProgress()
+	if !progress.Add(RenderEvent{Kind: "tool", Title: "Tool", Body: "🌐 web_search Moscow weather", Key: "search"}) {
+		t.Fatal("tool progress add returned false")
+	}
+
+	text := renderer.StreamPlainText("deepseek-v4-flash", "high", progress)
+	for _, want := range []string{"⚡ Billyharness · Running", "Looking it up...", "Tools running", "• 🌐 web_search Moscow weather"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("stream text missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "<b>") || strings.Contains(text, "&lt;") {
+		t.Fatalf("stream text should stay plain, got:\n%s", text)
+	}
+}
+
+func TestStreamPlainTextKeepsToolsVisibleWhenContentIsLong(t *testing.T) {
+	renderer := NewRenderer()
+	renderer.Content.WriteString(strings.Repeat("old content ", 900))
+	renderer.Content.WriteString("fresh tail")
+	progress := NewToolProgress()
+	_ = progress.Add(RenderEvent{Kind: "tool", Title: "Tool", Body: "🌐 web_fetch example.com/forecast", Key: "fetch"})
+
+	text := renderer.StreamPlainText("deepseek-v4-flash", "high", progress)
+	if got := telegramUTF16Len(text); got > telegramLimit {
+		t.Fatalf("stream text exceeds telegram limit: %d", got)
+	}
+	for _, want := range []string{"…", "fresh tail", "Tools running", "🌐 web_fetch example.com/forecast"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("stream text missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestToolProgressUpdatesToolLineOnFinish(t *testing.T) {
 	progress := NewToolProgress()
 	renderer := NewRenderer()

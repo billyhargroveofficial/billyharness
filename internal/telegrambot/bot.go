@@ -179,9 +179,6 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 	tools := NewToolProgress()
 	var renderMu sync.Mutex
 	answerDirty := true
-	toolDirty := false
-	var toolMsg SentMessage
-	toolMsgOK := false
 	stopStreamEdits := make(chan struct{})
 	streamEditsDone := make(chan struct{})
 	go func() {
@@ -189,18 +186,12 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 		ticker := time.NewTicker(b.opts.EditInterval)
 		defer ticker.Stop()
 		lastText := ""
-		lastToolText := ""
 		flush := func() {
 			renderMu.Lock()
 			body := ""
 			if answerDirty {
-				body = renderer.StreamPlainText(state.Model, state.ReasoningEffort)
+				body = renderer.StreamPlainText(state.Model, state.ReasoningEffort, tools)
 				answerDirty = false
-			}
-			toolBody := ""
-			if toolDirty {
-				toolBody = tools.HTML()
-				toolDirty = false
 			}
 			renderMu.Unlock()
 
@@ -209,23 +200,6 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 				if err := b.edit(parent, msg.Chat.ID, sent.MessageID, body, ""); err != nil {
 					log.Printf("telegram edit: %v", err)
 				}
-			}
-			if toolBody == "" || toolBody == lastToolText {
-				return
-			}
-			lastToolText = toolBody
-			if !toolMsgOK {
-				created, err := b.send(parent, msg.Chat.ID, msg.ThreadID, toolBody, "HTML", false)
-				if err != nil {
-					log.Printf("telegram tool send: %v", err)
-					return
-				}
-				toolMsg = created
-				toolMsgOK = true
-				return
-			}
-			if err := b.edit(parent, msg.Chat.ID, toolMsg.MessageID, toolBody, "HTML"); err != nil {
-				log.Printf("telegram tool edit: %v", err)
 			}
 		}
 		for {
@@ -263,7 +237,7 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 			switch rendered.Kind {
 			case "tool":
 				if tools.Add(rendered) {
-					toolDirty = true
+					answerDirty = true
 				}
 			case "error":
 				answerDirty = true
@@ -285,7 +259,6 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 			renderer = NewRenderer()
 			tools = NewToolProgress()
 			answerDirty = true
-			toolDirty = false
 			renderMu.Unlock()
 			runStarted = time.Now()
 			firstDelta = time.Time{}
@@ -300,7 +273,6 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 	}
 	tools.Done = true
 	answerDirty = true
-	toolDirty = true
 	renderMu.Unlock()
 	close(stopStreamEdits)
 	<-streamEditsDone
@@ -316,9 +288,6 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 	)
 
 	if b.finishRich(parent, msg, sent, renderer, state.Model, state.ReasoningEffort) {
-		if toolMsgOK {
-			b.delete(parent, msg.Chat.ID, toolMsg.MessageID)
-		}
 		return
 	}
 
@@ -326,9 +295,6 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 	if len(chunks) == 0 {
 		if err := b.edit(parent, msg.Chat.ID, sent.MessageID, renderer.StatusText(state.Model, state.ReasoningEffort), "HTML"); err != nil {
 			log.Printf("telegram final edit: %v", err)
-		}
-		if toolMsgOK {
-			b.delete(parent, msg.Chat.ID, toolMsg.MessageID)
 		}
 		return
 	}
@@ -340,9 +306,6 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 			log.Printf("telegram final chunk send: %v", err)
 			return
 		}
-	}
-	if toolMsgOK {
-		b.delete(parent, msg.Chat.ID, toolMsg.MessageID)
 	}
 }
 
@@ -704,16 +667,58 @@ func StatusHTML(state ChatState, opts Options) string {
 		"allowlist: <code>" + esc(strings.Join(allowed, ",")) + "</code>"
 }
 
-func (r *Renderer) StreamPlainText(model, reasoning string) string {
+func (r *Renderer) StreamPlainText(model, reasoning string, tools *ToolProgress) string {
 	content := strings.TrimSpace(r.Content.String())
 	if content == "" {
 		content = "Working..."
 	}
 	elapsed := time.Since(r.Started).Round(time.Second)
-	text := "⚡ Billyharness · Running\n" +
-		"🧬 " + model + " · 🧠 " + reasoning + " · ⏱ " + elapsed.String() + "\n\n" +
-		content + "\n\n" + r.footerLine()
+	header := "⚡ Billyharness · Running\n" +
+		"🧬 " + model + " · 🧠 " + reasoning + " · ⏱ " + elapsed.String() + "\n\n"
+	var suffixParts []string
+	if toolText := tools.PlainText(); toolText != "" {
+		suffixParts = append(suffixParts, toolText)
+	}
+	suffixParts = append(suffixParts, r.footerLine())
+	suffix := "\n\n" + strings.Join(suffixParts, "\n\n")
+	budget := telegramLimit - telegramUTF16Len(header) - telegramUTF16Len(suffix) - 16
+	if budget < 800 {
+		budget = 800
+	}
+	text := header + streamContentPreview(content, budget) + suffix
 	return trimTelegram(text)
+}
+
+func streamContentPreview(content string, budget int) string {
+	if budget <= 0 || telegramUTF16Len(content) <= budget {
+		return content
+	}
+	prefix := "…\n"
+	available := budget - telegramUTF16Len(prefix)
+	if available <= 0 {
+		return prefix
+	}
+	runes := []rune(content)
+	n := telegramRuneSuffixLen(runes, available)
+	return prefix + string(runes[len(runes)-n:])
+}
+
+func telegramRuneSuffixLen(runes []rune, limit int) int {
+	if len(runes) == 0 {
+		return 0
+	}
+	used := 0
+	for i := len(runes) - 1; i >= 0; i-- {
+		next := 1
+		if runes[i] > 0xFFFF {
+			next = 2
+		}
+		if used+next > limit {
+			return max(1, len(runes)-1-i)
+		}
+		used += next
+	}
+	return len(runes)
 }
 
 func modelAlias(value string) string {

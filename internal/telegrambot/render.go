@@ -278,6 +278,22 @@ func (p *ToolProgress) HTML() string {
 	return trimTelegram(text)
 }
 
+func (p *ToolProgress) PlainText() string {
+	if p == nil || len(p.lines) == 0 {
+		return ""
+	}
+	state := "running"
+	if p.Done {
+		state = "done"
+	}
+	elapsed := time.Since(p.Started).Round(time.Second)
+	lines := make([]string, 0, len(p.lines))
+	for _, line := range p.lines {
+		lines = append(lines, line.text)
+	}
+	return "Tools " + state + " · " + elapsed.String() + "\n" + strings.Join(lines, "\n")
+}
+
 func ErrorMessageHTML(text string) string {
 	return trimTelegram("<b>Error</b>\n" + esc(text))
 }

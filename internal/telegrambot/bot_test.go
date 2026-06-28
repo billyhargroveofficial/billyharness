@@ -24,6 +24,11 @@ type blockingHarness struct {
 	gatewayCancelCalled chan struct{}
 }
 
+type scriptedHarness struct {
+	events []protocol.Event
+	delay  time.Duration
+}
+
 func newBlockingHarness() *blockingHarness {
 	return &blockingHarness{
 		runStarted:          make(chan struct{}),
@@ -50,6 +55,33 @@ func (h *blockingHarness) MCPStatus(context.Context) (string, error) {
 func (h *blockingHarness) CancelSession(context.Context, string) (bool, error) {
 	h.gatewayCancelOnce.Do(func() { close(h.gatewayCancelCalled) })
 	return true, nil
+}
+
+func (h scriptedHarness) CreateSession(context.Context, string) (string, error) {
+	return "session-1", nil
+}
+
+func (h scriptedHarness) RunSession(ctx context.Context, _ string, _ gateway.RunRequest, emit func(protocol.Event)) error {
+	for _, event := range h.events {
+		emit(event)
+	}
+	if h.delay > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(h.delay):
+		}
+	}
+	emit(protocol.Event{Type: protocol.EventRunCompleted})
+	return nil
+}
+
+func (h scriptedHarness) MCPStatus(context.Context) (string, error) {
+	return "{}", nil
+}
+
+func (h scriptedHarness) CancelSession(context.Context, string) (bool, error) {
+	return false, nil
 }
 
 func TestCancelCommandBypassesActiveRunLock(t *testing.T) {
@@ -112,6 +144,88 @@ func TestCancelCommandBypassesActiveRunLock(t *testing.T) {
 	case <-runDone:
 	case <-time.After(time.Second):
 		t.Fatal("run handler did not finish after cancel")
+	}
+}
+
+func TestTelegramRunUsesSingleProgressMessageWithInlineTools(t *testing.T) {
+	var mu sync.Mutex
+	sendMessageCalls := 0
+	var editTexts []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		switch r.URL.Path {
+		case "/botbottoken/sendMessage":
+			mu.Lock()
+			sendMessageCalls++
+			mu.Unlock()
+			writeTelegramResult(w, SentMessage{MessageID: 11, Chat: Chat{ID: 123}})
+		case "/botbottoken/editMessageText":
+			if text, ok := payload["text"].(string); ok {
+				mu.Lock()
+				editTexts = append(editTexts, text)
+				mu.Unlock()
+			}
+			writeTelegramResult(w, true)
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{
+		BaseURL:     server.URL,
+		Token:       "bottoken",
+		MinInterval: time.Nanosecond,
+	})
+	harness := scriptedHarness{
+		delay: 25 * time.Millisecond,
+		events: []protocol.Event{
+			{Type: protocol.EventRunStarted},
+			{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{
+				ID:        "search-1",
+				Name:      "web_search",
+				Arguments: json.RawMessage(`{"query":"Moscow weather"}`),
+			}},
+			{Type: protocol.EventAssistantDelta, Data: "Checking weather..."},
+		},
+	}
+	bot, err := New(Options{
+		BotToken:        "bottoken",
+		StatePath:       t.TempDir() + "/state.json",
+		Model:           "deepseek-v4-flash",
+		Profile:         "billy",
+		ReasoningEffort: "high",
+		EditInterval:    time.Millisecond,
+		AllowedChatIDs:  map[int64]bool{123: true},
+		SendEnabled:     true,
+		DryRunDefault:   false,
+	}, client, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "weather"})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if sendMessageCalls != 1 {
+		t.Fatalf("sendMessageCalls = %d, want only placeholder send", sendMessageCalls)
+	}
+	foundInlineTools := false
+	for _, text := range editTexts {
+		if strings.Contains(text, "Tools running") && strings.Contains(text, "web_search") && strings.Contains(text, "Moscow weather") {
+			foundInlineTools = true
+			break
+		}
+	}
+	if !foundInlineTools {
+		t.Fatalf("stream edits did not include inline tool progress: %#v", editTexts)
 	}
 }
 
