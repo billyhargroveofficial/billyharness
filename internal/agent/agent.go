@@ -19,6 +19,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
+	"github.com/billyhargroveofficial/billyharness/internal/runstate"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
@@ -72,17 +73,19 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 			lastPromptTokens = 0
 			emit(protocol.Event{Type: protocol.EventContextCompacted, Data: compaction})
 		}
+		toolSpecs := a.tools.Specs()
+		turnSnapshot := runstate.NewSnapshot(a.cfg, messages, toolSpecs)
 		emit(protocol.Event{Type: protocol.EventTurnStarted, Data: protocol.TurnEvent{
 			TurnID:       turnID,
 			Round:        roundNum,
 			Status:       protocol.TurnStatusStarted,
 			Model:        a.cfg.Model,
 			MessageCount: len(messages),
+			Metadata:     turnSnapshot.Metadata(),
 		}})
 		modelStepID := agentStepID(turnID, protocol.StepKindModelCall, 1)
 		requestID := agentRequestID(turnID, roundNum)
-		toolSpecs := a.tools.Specs()
-		modelCallBase := a.modelCallMetadata(requestID, roundNum, len(messages), len(toolSpecs))
+		modelCallBase := a.modelCallMetadata(requestID, roundNum, len(messages), len(toolSpecs), turnSnapshot)
 		modelStarted := time.Now()
 		emit(protocol.Event{Type: protocol.EventStepStarted, Data: protocol.StepEvent{
 			TurnID:       turnID,
@@ -762,17 +765,22 @@ func newAgentRunID() string {
 	return fmt.Sprintf("run-%s-%d", time.Now().UTC().Format("20060102T150405.000000000Z"), os.Getpid())
 }
 
-func (a *Agent) modelCallMetadata(requestID string, round, messageCount, toolCount int) map[string]any {
-	providerID := modelinfo.ProviderForModel(a.cfg.Model, a.cfg.Provider)
-	return map[string]any{
-		"request_id":    requestID,
-		"provider_id":   providerID,
-		"model_id":      a.cfg.Model,
-		"round":         round,
-		"message_count": messageCount,
-		"tool_count":    toolCount,
-		"reasoning":     a.cfg.ReasoningEffort,
+func (a *Agent) modelCallMetadata(requestID string, round, messageCount, toolCount int, snapshot runstate.Snapshot) map[string]any {
+	metadata := snapshot.Metadata()
+	if metadata["provider_id"] == nil {
+		metadata["provider_id"] = modelinfo.ProviderForModel(a.cfg.Model, a.cfg.Provider)
 	}
+	if metadata["model_id"] == nil {
+		metadata["model_id"] = a.cfg.Model
+	}
+	metadata["request_id"] = requestID
+	metadata["round"] = round
+	metadata["message_count"] = messageCount
+	metadata["tool_count"] = toolCount
+	if a.cfg.ReasoningEffort != "" {
+		metadata["reasoning"] = a.cfg.ReasoningEffort
+	}
+	return metadata
 }
 
 func modelCallEventData(base map[string]any, status string, totalLatencyMS, firstDeltaMS int64, usage provider.Usage, meta provider.RequestMetadata, errText string) map[string]any {

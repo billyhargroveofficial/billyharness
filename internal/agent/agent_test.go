@@ -62,6 +62,11 @@ func TestRunMessagesEmitsTypedTurnAndModelStepEvents(t *testing.T) {
 	if !ok || started.TurnID != "turn-001" || started.Round != 1 || started.Status != protocol.TurnStatusStarted || started.Model != "mock" {
 		t.Fatalf("turn started = %#v ok=%v", started, ok)
 	}
+	for _, key := range []string{"provider_id", "model_id", "tool_snapshot_hash", "mcp_status_snapshot_hash", "profile_instruction_hash", "dangerous_permission_mode"} {
+		if started.Metadata[key] == nil {
+			t.Fatalf("turn snapshot missing %s: %#v", key, started.Metadata)
+		}
+	}
 	completed, ok := firstTurnEvent(events, protocol.EventTurnCompleted)
 	if !ok || completed.TurnID != "turn-001" || completed.Status != protocol.TurnStatusCompleted || completed.StopReason != protocol.TurnStopFinalAnswer || completed.DurationMS < 0 {
 		t.Fatalf("turn completed = %#v ok=%v", completed, ok)

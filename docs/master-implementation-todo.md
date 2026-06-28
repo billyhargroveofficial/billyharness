@@ -98,8 +98,8 @@ Purpose: turn the current loop into a real, replayable runtime without losing sp
 
 ### 1.1 Runtime Model
 
-- [ ] Introduce explicit `Submission`, `Run`, `Turn`, and `Step` types.
-- [ ] Keep existing public API compatible while adding the internal model.
+- [x] Introduce explicit `Submission`, `Run`, `Turn`, and `Step` types.
+- [x] Keep existing public API compatible while adding the internal model.
 - [ ] Add stable ids:
   - [ ] `submission_id`
   - [ ] `run_id`
@@ -108,15 +108,15 @@ Purpose: turn the current loop into a real, replayable runtime without losing sp
   - [ ] `call_id`
   - [ ] `attempt_id`
   - [ ] `parent_step_id`
-- [ ] Add a per-turn immutable snapshot:
-  - [ ] provider id
-  - [ ] model id
-  - [ ] reasoning mode
-  - [ ] context budget
-  - [ ] tool snapshot hash
-  - [ ] MCP status snapshot
-  - [ ] profile/instruction hash
-  - [ ] dangerous permission mode
+- [x] Add a per-turn immutable snapshot:
+  - [x] provider id
+  - [x] model id
+  - [x] reasoning mode
+  - [x] context budget
+  - [x] tool snapshot hash
+  - [x] MCP status snapshot
+  - [x] profile/instruction hash
+  - [x] dangerous permission mode
 - [ ] Add input queue semantics:
   - [ ] immediate run if idle
   - [ ] reject or queue while active, based on policy
