@@ -110,6 +110,27 @@ func TestRendererContextShowsLastModelCallNotCumulativeSpend(t *testing.T) {
 	}
 }
 
+func TestRendererFooterShowsChatTotalsForTurnsAndTools(t *testing.T) {
+	r := NewRendererWithContextWindowAndTotals(10_000, 7, 9)
+	r.Apply(protocol.Event{Type: protocol.EventRunStarted})
+	r.Apply(protocol.Event{Type: protocol.EventModelCallStarted})
+	r.Apply(protocol.Event{Type: protocol.EventAssistantReasoning, Data: strings.Repeat("hidden ", 400)})
+	r.Apply(protocol.Event{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{Name: "web_search", Arguments: []byte(`{"query":"one"}`)}})
+	r.Apply(protocol.Event{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{Name: "web_fetch", Arguments: []byte(`{"url":"https://example.com"}`)}})
+
+	footer := r.footerLine()
+	for _, want := range []string{"🔁 agent turns 8", "🛠 tools 11"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("footer missing %q: %q", want, footer)
+		}
+	}
+	for _, bad := range []string{"🤖 LLM", "💭", "hidden"} {
+		if strings.Contains(footer, bad) {
+			t.Fatalf("footer should not contain %q: %q", bad, footer)
+		}
+	}
+}
+
 func TestStreamPlainTextShowsContextAboveProgress(t *testing.T) {
 	renderer := NewRendererWithContextWindow(10_000)
 	renderer.Apply(protocol.Event{Type: protocol.EventRunStarted})

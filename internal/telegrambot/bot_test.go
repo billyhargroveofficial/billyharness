@@ -229,6 +229,55 @@ func TestTelegramRunUsesSingleProgressMessageWithInlineTools(t *testing.T) {
 	}
 }
 
+func TestTelegramChatStateAccumulatesTurnsAndTools(t *testing.T) {
+	statePath := t.TempDir() + "/state.json"
+	harness := scriptedHarness{
+		events: []protocol.Event{
+			{Type: protocol.EventRunStarted},
+			{Type: protocol.EventModelCallStarted},
+			{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{Name: "web_search", Arguments: json.RawMessage(`{"query":"one"}`)}},
+			{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{Name: "web_fetch", Arguments: json.RawMessage(`{"url":"https://example.com"}`)}},
+			{Type: protocol.EventAssistantDelta, Data: "done"},
+		},
+	}
+	bot, err := New(Options{
+		BotToken:        "token",
+		StatePath:       statePath,
+		Model:           "deepseek-v4-flash",
+		Profile:         "billy",
+		ReasoningEffort: "high",
+		EditInterval:    time.Millisecond,
+		AllowedChatIDs:  map[int64]bool{123: true},
+		SendEnabled:     false,
+		DryRunDefault:   true,
+	}, nil, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "first"})
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "second"})
+
+	state, err := (Store{Path: statePath}).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat := state.Chats["123"]
+	if chat.AgentTurns != 2 || chat.ToolCalls != 4 {
+		t.Fatalf("chat totals = turns:%d tools:%d", chat.AgentTurns, chat.ToolCalls)
+	}
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/new"})
+	state, err = (Store{Path: statePath}).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat = state.Chats["123"]
+	if chat.AgentTurns != 0 || chat.ToolCalls != 0 {
+		t.Fatalf("/new should reset chat totals, got turns:%d tools:%d", chat.AgentTurns, chat.ToolCalls)
+	}
+}
+
 func TestLiveTelegramRequiresAllowlistUnlessExplicitlyAllowed(t *testing.T) {
 	bot, err := New(Options{
 		BotToken:      "token",

@@ -23,6 +23,8 @@ type Renderer struct {
 	ThinkingChars    int
 	ModelCalls       int
 	ToolCalls        int
+	BaseAgentTurns   int
+	BaseToolCalls    int
 	InputTokens      int64
 	OutputTokens     int64
 	LastInputTokens  int64
@@ -55,13 +57,19 @@ func NewRenderer() *Renderer {
 }
 
 func NewRendererWithContextWindow(contextWindow int64) *Renderer {
+	return NewRendererWithContextWindowAndTotals(contextWindow, 0, 0)
+}
+
+func NewRendererWithContextWindowAndTotals(contextWindow int64, agentTurns, toolCalls int) *Renderer {
 	if contextWindow <= 0 {
 		contextWindow = defaultContextWindowTokens
 	}
 	return &Renderer{
-		Started:       time.Now(),
-		ContextWindow: contextWindow,
-		toolSummaries: map[string]string{},
+		Started:        time.Now(),
+		ContextWindow:  contextWindow,
+		BaseAgentTurns: max(0, agentTurns),
+		BaseToolCalls:  max(0, toolCalls),
+		toolSummaries:  map[string]string{},
 	}
 }
 
@@ -205,11 +213,11 @@ func (r *Renderer) footerLineWithoutContext() string {
 
 func (r *Renderer) footerLineWithContext(includeContext bool) string {
 	var parts []string
-	if r.ModelCalls > 0 {
-		parts = append(parts, fmt.Sprintf("🤖 LLM %d", r.ModelCalls))
+	if turns := r.BaseAgentTurns + r.ModelCalls; turns > 0 {
+		parts = append(parts, fmt.Sprintf("🔁 agent turns %d", turns))
 	}
-	if r.ToolCalls > 0 {
-		parts = append(parts, fmt.Sprintf("🛠 tools %d", r.ToolCalls))
+	if tools := r.BaseToolCalls + r.ToolCalls; tools > 0 {
+		parts = append(parts, fmt.Sprintf("🛠 tools %d", tools))
 	}
 	if context := r.contextLine(); includeContext && context != "" {
 		parts = append(parts, context)
@@ -220,9 +228,6 @@ func (r *Renderer) footerLineWithContext(includeContext bool) string {
 	if r.ToolSummaryIn+r.ToolSummaryOut > 0 {
 		parts = append(parts, fmt.Sprintf("🧩 websum %s→%s", compactInt(r.ToolSummaryIn), compactInt(r.ToolSummaryOut)))
 		parts = append(parts, fmt.Sprintf("sumapi %s", compactInt(r.ToolSummaryAPI)))
-	}
-	if r.ThinkingChars > 0 {
-		parts = append(parts, fmt.Sprintf("💭 thinking %s hidden", compactInt(int64(r.ThinkingChars))))
 	}
 	if len(parts) == 0 {
 		return "⚡ streaming"

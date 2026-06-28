@@ -66,6 +66,8 @@ type ChatState struct {
 	Model           string    `json:"model,omitempty"`
 	Profile         string    `json:"profile,omitempty"`
 	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
+	AgentTurns      int       `json:"agent_turns,omitempty"`
+	ToolCalls       int       `json:"tool_calls,omitempty"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 

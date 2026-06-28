@@ -177,7 +177,7 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 		log.Printf("telegram initial send: %v", err)
 		return
 	}
-	renderer := NewRendererWithContextWindow(b.opts.ContextWindow)
+	renderer := NewRendererWithContextWindowAndTotals(b.opts.ContextWindow, state.AgentTurns, state.ToolCalls)
 	tools := NewToolProgress()
 	var renderMu sync.Mutex
 	answerDirty := true
@@ -258,7 +258,7 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 			state.UpdatedAt = time.Now().UTC()
 			b.setChatState(key, state)
 			renderMu.Lock()
-			renderer = NewRendererWithContextWindow(b.opts.ContextWindow)
+			renderer = NewRendererWithContextWindowAndTotals(b.opts.ContextWindow, state.AgentTurns, state.ToolCalls)
 			tools = NewToolProgress()
 			answerDirty = true
 			renderMu.Unlock()
@@ -288,6 +288,12 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 		eventCount,
 		err,
 	)
+	if renderer.ModelCalls > 0 || renderer.ToolCalls > 0 {
+		state.AgentTurns += renderer.ModelCalls
+		state.ToolCalls += renderer.ToolCalls
+		state.UpdatedAt = time.Now().UTC()
+		b.setChatState(key, state)
+	}
 
 	if b.finishRich(parent, msg, sent, renderer, state.Model, state.ReasoningEffort) {
 		return
@@ -365,6 +371,8 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 			return
 		}
 		state.SessionID = id
+		state.AgentTurns = 0
+		state.ToolCalls = 0
 		state.UpdatedAt = time.Now().UTC()
 		b.setChatState(key, state)
 		_ = b.sendPlain(ctx, msg, "New Billyharness session: "+short(id))
@@ -389,6 +397,8 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 		}
 		state.Profile = config.NormalizeProfileName(arg)
 		state.SessionID = ""
+		state.AgentTurns = 0
+		state.ToolCalls = 0
 		state.UpdatedAt = time.Now().UTC()
 		b.setChatState(key, state)
 		_ = b.sendPlain(ctx, msg, "Profile: "+state.Profile+"; next message starts a new session")
@@ -679,6 +689,8 @@ func StatusHTML(state ChatState, opts Options) string {
 		"model: <code>" + esc(fallback(state.Model, opts.Model)) + "</code>\n" +
 		"profile: <code>" + esc(fallback(state.Profile, opts.Profile)) + "</code>\n" +
 		"reasoning: <code>" + esc(fallback(state.ReasoningEffort, opts.ReasoningEffort)) + "</code>\n" +
+		"agent turns: <code>" + esc(strconv.Itoa(state.AgentTurns)) + "</code>\n" +
+		"tools: <code>" + esc(strconv.Itoa(state.ToolCalls)) + "</code>\n" +
 		"context window: <code>" + esc(compactInt(opts.ContextWindow)) + "</code>\n" +
 		"send: <code>" + esc(fmt.Sprint(opts.SendEnabled && !opts.DryRunDefault)) + "</code>\n" +
 		"allowed chats: <code>" + esc(strings.Join(allowedChats, ",")) + "</code>\n" +
