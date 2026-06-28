@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -224,6 +225,84 @@ func TestWebSummaryEnvOverridesDefaults(t *testing.T) {
 	}
 	if cfg.WebSummaryMaxInputTokens != 333 || cfg.WebSummaryMaxOutputTokens != 44 || cfg.WebSummaryTimeout != 7*time.Second {
 		t.Fatalf("web summary env budgets = in:%d out:%d timeout:%s", cfg.WebSummaryMaxInputTokens, cfg.WebSummaryMaxOutputTokens, cfg.WebSummaryTimeout)
+	}
+}
+
+func TestResolveConfigRecordsPrecedenceAndDoesNotLeakSecrets(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	t.Setenv("FAST_AGENT_MODEL", "gpt-5.5")
+	t.Setenv("DEEPSEEK_REASONING_EFFORT", "xhigh")
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(`
+model = "deepseek-v4-flash"
+profile = "home-profile"
+max_tool_rounds = 55
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(project, ".billyharness"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".billyharness", "config.toml"), []byte(`
+profile = "project-profile"
+max_tool_rounds = 77
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".env"), []byte(`
+FAST_AGENT_WEB_SUMMARY_MODE=model
+DEEPSEEK_REASONING_EFFORT=medium
+DEEPSEEK_API_KEY=sk-secret-should-not-appear
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+	if err := os.Chdir(project); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := Resolve(ResolveOverride{Key: "model", Value: "deepseek-v4-pro", Source: SourceCLI, SourceKey: "-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Config.Model != "deepseek-v4-pro" || resolved.Config.Profile != "project-profile" ||
+		resolved.Config.ReasoningEffort != "xhigh" || resolved.Config.MaxToolRounds != 77 ||
+		resolved.Config.WebSummaryMode != "model" {
+		t.Fatalf("resolved config = %#v", resolved.Config)
+	}
+	assertResolvedSource(t, resolved, "model", SourceCLI, "-model")
+	assertResolvedSource(t, resolved, "profile", SourceProject, "profile")
+	assertResolvedSource(t, resolved, "reasoning_effort", SourceEnvironment, "DEEPSEEK_REASONING_EFFORT")
+	assertResolvedSource(t, resolved, "max_tool_rounds", SourceProject, "max_tool_rounds")
+	assertResolvedSource(t, resolved, "web_summary_mode", SourceDotenv, "FAST_AGENT_WEB_SUMMARY_MODE")
+	body, err := json.Marshal(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "sk-secret-should-not-appear") {
+		t.Fatalf("resolved config leaked secret: %s", string(body))
+	}
+
+	cfg := Default()
+	if cfg.Model != "gpt-5.5" || cfg.Profile != "project-profile" || cfg.WebSummaryMode != "model" {
+		t.Fatalf("Default() should use resolved config layers, got %#v", cfg)
+	}
+}
+
+func assertResolvedSource(t *testing.T, resolved ResolvedConfig, key, source, sourceKey string) {
+	t.Helper()
+	value, ok := resolved.Value(key)
+	if !ok {
+		t.Fatalf("missing resolved value %q in %#v", key, resolved.Values)
+	}
+	if value.Source != source || value.SourceKey != sourceKey {
+		t.Fatalf("%s source = %q/%q, want %q/%q; value=%#v", key, value.Source, value.SourceKey, source, sourceKey, value)
 	}
 }
 

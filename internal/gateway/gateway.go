@@ -171,6 +171,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/auth/status", s.handleAuthStatus)
 	s.mux.HandleFunc("POST /v1/auth/deepseek", s.handleDeepSeekAuth)
 	s.mux.HandleFunc("POST /v1/auth/codex/import", s.handleCodexImport)
+	s.mux.HandleFunc("GET /v1/config", s.handleConfigStatus)
 	s.mux.HandleFunc("GET /v1/tools", s.handleTools)
 	s.mux.HandleFunc("GET /v1/mcp", s.handleMCP)
 	s.mux.HandleFunc("POST /v1/run", s.handleRun)
@@ -196,6 +197,24 @@ func (s *Server) handleTools(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleAuthStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, credentials.CurrentStatus(s.cfg))
+}
+
+func (s *Server) handleConfigStatus(w http.ResponseWriter, _ *http.Request) {
+	base, err := config.Resolve()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resolved, err := config.Resolve(config.RuntimeDiffOverrides(base.Config, s.cfg, config.SourceGateway)...)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"config":   resolved.SanitizedConfig(),
+		"values":   resolved.SanitizedValues(),
+		"warnings": resolved.Warnings,
+	})
 }
 
 func (s *Server) handleDeepSeekAuth(w http.ResponseWriter, r *http.Request) {

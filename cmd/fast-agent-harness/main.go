@@ -60,6 +60,8 @@ func run() error {
 		return nil
 	case "mcp":
 		return mcp(os.Args[2:])
+	case "config":
+		return configCommand(os.Args[2:], os.Stdout)
 	case "bench":
 		return benchCmd(os.Args[2:])
 	case "tools":
@@ -469,6 +471,93 @@ func mcp(args []string) error {
 	return server.Serve(context.Background(), os.Stdin, os.Stdout)
 }
 
+func configCommand(args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		configUsage(stdout)
+		return nil
+	}
+	switch args[0] {
+	case "inspect", "status":
+		return configInspectCommand(args[1:], stdout)
+	default:
+		configUsage(stdout)
+		return fmt.Errorf("unknown config command %q", args[0])
+	}
+}
+
+func configInspectCommand(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("config inspect", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "print resolved config as JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	resolved, err := config.Resolve()
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(struct {
+			Config   map[string]any         `json:"config"`
+			Values   []config.ResolvedValue `json:"values"`
+			Warnings []string               `json:"warnings,omitempty"`
+		}{
+			Config:   resolved.SanitizedConfig(),
+			Values:   resolved.SanitizedValues(),
+			Warnings: resolved.Warnings,
+		})
+	}
+	fmt.Fprintf(stdout, "billyharness config inspect\n")
+	fmt.Fprintf(stdout, "provider=%s model=%s profile=%s reasoning=%s/%s gateway=%s\n",
+		resolved.Config.Provider,
+		resolved.Config.Model,
+		resolved.Config.Profile,
+		resolved.Config.Thinking,
+		resolved.Config.ReasoningEffort,
+		resolved.Config.GatewayAddr,
+	)
+	fmt.Fprintf(stdout, "%-34s  %-28s  %-26s  %s\n", "key", "value", "source", "source key/path")
+	fmt.Fprintf(stdout, "%-34s  %-28s  %-26s  %s\n", strings.Repeat("-", 34), strings.Repeat("-", 28), strings.Repeat("-", 26), strings.Repeat("-", 24))
+	for _, value := range resolved.SanitizedValues() {
+		location := value.SourceKey
+		if value.SourcePath != "" {
+			location = location + " @ " + value.SourcePath
+		}
+		if value.Warning != "" {
+			location = strings.TrimSpace(location + " warning=" + value.Warning)
+		}
+		if value.Error != "" {
+			location = strings.TrimSpace(location + " error=" + value.Error)
+		}
+		fmt.Fprintf(stdout, "%-34s  %-28s  %-26s  %s\n",
+			value.Key,
+			truncateConfigInspectValue(fmt.Sprint(value.Value), 28),
+			value.Source,
+			location,
+		)
+	}
+	for _, warning := range resolved.Warnings {
+		fmt.Fprintf(stdout, "warning: %s\n", warning)
+	}
+	return nil
+}
+
+func configUsage(w io.Writer) {
+	fmt.Fprintln(w, "Usage: fast-agent-harness config inspect [-json]")
+}
+
+func truncateConfigInspectValue(value string, maxLen int) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= maxLen {
+		return value
+	}
+	if maxLen <= 3 {
+		return value[:maxLen]
+	}
+	return value[:maxLen-3] + "..."
+}
+
 func benchCmd(args []string) error {
 	if len(args) == 0 {
 		benchUsage()
@@ -771,6 +860,7 @@ func usage() {
 	fmt.Println("  chat [-gateway http://127.0.0.1:8765]")
 	fmt.Println("  serve|gateway [-mock] [-addr 127.0.0.1:8765]")
 	fmt.Println("  mcp")
+	fmt.Println("  config inspect [-json]")
 	fmt.Println("  bench run -tasks tasks.jsonl -out runs [-model deepseek-v4-flash] [-max-rounds 100]")
 	fmt.Println("  bench terminal-bench export -tasks tasks.jsonl -out tb-dataset")
 	fmt.Println("  bench terminal-bench import -dataset tb-dataset [-out tasks.jsonl]")

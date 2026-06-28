@@ -515,6 +515,31 @@ func TestGatewayAuthEndpointsSaveDeepSeekAndImportCodex(t *testing.T) {
 	}
 }
 
+func TestGatewayConfigStatusIsSanitized(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("DEEPSEEK_API_KEY=sk-gateway-config-secret\nFAST_AGENT_MODEL=deepseek-v4-pro\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/config", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "sk-gateway-config-secret") {
+		t.Fatalf("config endpoint leaked secret: %s", body)
+	}
+	if !strings.Contains(body, `"key":"model"`) || !strings.Contains(body, config.SourceGateway) {
+		t.Fatalf("config endpoint missing runtime model provenance: %s", body)
+	}
+}
+
 func TestGatewayAuthMiddlewareProtectsNonLoopbackClients(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"

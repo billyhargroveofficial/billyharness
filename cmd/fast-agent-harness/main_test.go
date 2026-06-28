@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -101,6 +104,25 @@ func TestNormalizeGatewayURL(t *testing.T) {
 		if got := normalizeGatewayURL(input); got != want {
 			t.Fatalf("normalizeGatewayURL(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestConfigInspectJSONDoesNotLeakDotenvSecrets(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	if err := os.WriteFile(filepath.Join(home, ".env"), []byte("DEEPSEEK_API_KEY=sk-config-inspect-secret\nFAST_AGENT_MODEL=deepseek-v4-pro\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := configCommand([]string{"inspect", "-json"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "sk-config-inspect-secret") {
+		t.Fatalf("config inspect leaked secret: %s", out.String())
+	}
+	if !strings.Contains(out.String(), `"model"`) || !strings.Contains(out.String(), `deepseek-v4-pro`) {
+		t.Fatalf("config inspect missing model: %s", out.String())
 	}
 }
 

@@ -217,30 +217,30 @@ Purpose: stop scattering config logic across env, CLI flags, TUI, gateway, and s
 
 ### 2.1 ResolvedConfig
 
-- [ ] Add a resolved config model with provenance.
-- [ ] Define precedence:
-  - [ ] built-in defaults
-  - [ ] `$BILLYHARNESS_HOME/config.toml`
-  - [ ] project `.billyharness/config.toml`
-  - [ ] `.env`
-  - [ ] environment variables
-  - [ ] CLI flags
-  - [ ] gateway/TUI runtime overrides
-- [ ] For each resolved value record:
-  - [ ] value
-  - [ ] source
-  - [ ] source path/key
-  - [ ] redaction status
-  - [ ] validation warning/error
-- [ ] Add `config inspect` command.
-- [ ] Add gateway endpoint for sanitized config status.
+- [x] Add a resolved config model with provenance.
+- [x] Define precedence:
+  - [x] built-in defaults
+  - [x] `$BILLYHARNESS_HOME/config.toml`
+  - [x] project `.billyharness/config.toml`
+  - [x] `.env`
+  - [x] environment variables
+  - [x] CLI flags
+  - [x] gateway/TUI runtime overrides
+- [x] For each resolved value record:
+  - [x] value
+  - [x] source
+  - [x] source path/key
+  - [x] redaction status
+  - [x] validation warning/error
+- [x] Add `config inspect` command.
+- [x] Add gateway endpoint for sanitized config status.
 - [ ] Add TUI/Telegram command to show config summary.
 
 Acceptance:
 
-- [ ] User can answer "why is this model selected?" from config inspect output.
-- [ ] Secrets are never printed raw.
-- [ ] Tests cover precedence and redaction.
+- [x] User can answer "why is this model selected?" from config inspect output.
+- [x] Secrets are never printed raw.
+- [x] Tests cover precedence and redaction.
 
 ### 2.2 Profiles
 
