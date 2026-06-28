@@ -58,6 +58,10 @@ type EventType string
 
 const (
 	EventRunStarted          EventType = "run.started"
+	EventTurnStarted         EventType = "turn.started"
+	EventTurnCompleted       EventType = "turn.completed"
+	EventStepStarted         EventType = "step.started"
+	EventStepCompleted       EventType = "step.completed"
 	EventModelCallStarted    EventType = "model.call_started"
 	EventModelCallFinished   EventType = "model.call_finished"
 	EventAssistantReasoning  EventType = "assistant.reasoning_delta"
@@ -76,4 +80,54 @@ const (
 type Event struct {
 	Type EventType `json:"type"`
 	Data any       `json:"data,omitempty"`
+}
+
+const (
+	TurnStatusStarted   = "started"
+	TurnStatusCompleted = "completed"
+	TurnStatusFailed    = "failed"
+
+	TurnStopFinalAnswer = "final_answer"
+	TurnStopToolResults = "tool_results"
+	TurnStopError       = "error"
+
+	StepStatusStarted   = "started"
+	StepStatusCompleted = "completed"
+	StepStatusFailed    = "failed"
+
+	StepKindModelCall = "model_call"
+	StepKindToolBatch = "tool_batch"
+	StepKindToolCall  = "tool_call"
+)
+
+type TurnEvent struct {
+	TurnID        string         `json:"turn_id"`
+	Round         int            `json:"round"`
+	Status        string         `json:"status"`
+	StopReason    string         `json:"stop_reason,omitempty"`
+	Model         string         `json:"model,omitempty"`
+	MessageCount  int            `json:"message_count,omitempty"`
+	ToolCallCount int            `json:"tool_call_count,omitempty"`
+	DurationMS    int64          `json:"duration_ms,omitempty"`
+	Error         string         `json:"error,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
+}
+
+type StepEvent struct {
+	TurnID        string         `json:"turn_id"`
+	StepID        string         `json:"step_id"`
+	Round         int            `json:"round"`
+	Index         int            `json:"index,omitempty"`
+	Kind          string         `json:"kind"`
+	Status        string         `json:"status"`
+	Name          string         `json:"name,omitempty"`
+	MessageCount  int            `json:"message_count,omitempty"`
+	ToolCallID    string         `json:"tool_call_id,omitempty"`
+	BatchID       string         `json:"batch_id,omitempty"`
+	BatchSize     int            `json:"batch_size,omitempty"`
+	Parallel      bool           `json:"parallel,omitempty"`
+	ParallelLimit int            `json:"parallel_limit,omitempty"`
+	DurationMS    int64          `json:"duration_ms,omitempty"`
+	Error         string         `json:"error,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
 }

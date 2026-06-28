@@ -99,6 +99,8 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 	writer := NewEventWriter("run-1", &out)
 	events := []protocol.Event{
 		{Type: protocol.EventRunStarted},
+		{Type: protocol.EventTurnStarted, Data: protocol.TurnEvent{TurnID: "turn-001", Round: 1, Status: protocol.TurnStatusStarted}},
+		{Type: protocol.EventStepStarted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:model-call-001", Round: 1, Kind: protocol.StepKindModelCall, Status: protocol.StepStatusStarted}},
 		{Type: protocol.EventModelCallStarted},
 		{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
 			"input_tokens":      100,
@@ -107,9 +109,13 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 			"cache_miss_tokens": 20,
 		}},
 		{Type: protocol.EventContextCompacted},
+		{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:model-call-001", Round: 1, Kind: protocol.StepKindModelCall, Status: protocol.StepStatusCompleted}},
+		{Type: protocol.EventStepStarted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:tool-batch-001", Round: 1, Kind: protocol.StepKindToolBatch, Status: protocol.StepStatusStarted, Parallel: true, BatchSize: 2}},
 		{Type: protocol.EventToolCallStarted, Data: "time_now"},
 		{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{Name: "time_now", Content: "ok"}},
+		{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:tool-batch-001", Round: 1, Kind: protocol.StepKindToolBatch, Status: protocol.StepStatusCompleted, Parallel: true, BatchSize: 2}},
 		{Type: protocol.EventModelCallFinished},
+		{Type: protocol.EventTurnCompleted, Data: protocol.TurnEvent{TurnID: "turn-001", Round: 1, Status: protocol.TurnStatusCompleted, StopReason: protocol.TurnStopToolResults}},
 		{Type: protocol.EventRunCompleted},
 	}
 	for _, event := range events {
@@ -127,6 +133,9 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 		t.Fatal(err)
 	}
 	if summary.RunStarted != 1 || summary.RunCompleted != 1 ||
+		summary.TurnsStarted != 1 || summary.TurnsCompleted != 1 || summary.TurnsFailed != 0 ||
+		summary.StepsStarted != 2 || summary.StepsCompleted != 2 || summary.StepsFailed != 0 ||
+		summary.ParallelBatches != 1 ||
 		summary.ModelCallsStarted != 1 || summary.ModelCallsFinished != 1 ||
 		summary.ToolCallsStarted != 1 || summary.ToolCallsFinished != 1 ||
 		summary.ContextCompactions != 1 {

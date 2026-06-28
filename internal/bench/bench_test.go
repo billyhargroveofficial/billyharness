@@ -106,6 +106,9 @@ func TestRunMockScriptedLoopCountsRoundsAndCompactions(t *testing.T) {
 	if summary.ModelCalls != 6 || summary.ToolCalls != 5 {
 		t.Fatalf("calls = model %d tools %d, want 6/5", summary.ModelCalls, summary.ToolCalls)
 	}
+	if summary.Turns != 6 || summary.Steps != 11 || summary.StepErrors != 0 || summary.ParallelBatches != 0 {
+		t.Fatalf("turn/step counters = turns %d steps %d errors %d batches %d, want 6/11/0/0", summary.Turns, summary.Steps, summary.StepErrors, summary.ParallelBatches)
+	}
 	if summary.ContextCompactions == 0 {
 		t.Fatalf("expected compactions in summary: %#v", summary)
 	}
@@ -121,7 +124,9 @@ func TestRunMockScriptedLoopCountsRoundsAndCompactions(t *testing.T) {
 		t.Fatal(err)
 	}
 	if replay.EventTypes[string(protocol.EventContextCompacted)] == 0 ||
-		replay.EventTypes[string(protocol.EventToolCallStarted)] != 5 {
+		replay.EventTypes[string(protocol.EventToolCallStarted)] != 5 ||
+		replay.TurnsStarted != 6 ||
+		replay.StepsStarted != 11 {
 		t.Fatalf("replay = %#v", replay)
 	}
 	results, err := os.ReadFile(summary.ResultsJSONL)
@@ -130,6 +135,9 @@ func TestRunMockScriptedLoopCountsRoundsAndCompactions(t *testing.T) {
 	}
 	if !strings.Contains(string(results), `"context_compactions":`) {
 		t.Fatalf("results missing context compaction count: %s", results)
+	}
+	if !strings.Contains(string(results), `"turns":6`) || !strings.Contains(string(results), `"steps":11`) {
+		t.Fatalf("results missing turn/step counts: %s", results)
 	}
 }
 
@@ -339,6 +347,9 @@ func TestPrepareWorkspaceCopiesTemplateWithPrivateModesAndSafeTaskID(t *testing.
 
 func TestObserveCountsUsageToolErrorsAndNames(t *testing.T) {
 	result := Result{ToolCallsByName: map[string]int{}}
+	observe(&result, protocol.Event{Type: protocol.EventTurnStarted, Data: protocol.TurnEvent{TurnID: "turn-001", Round: 1, Status: protocol.TurnStatusStarted}})
+	observe(&result, protocol.Event{Type: protocol.EventStepStarted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:tool-batch-001", Kind: protocol.StepKindToolBatch, Status: protocol.StepStatusStarted, Parallel: true}})
+	observe(&result, protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:tool-batch-001", Kind: protocol.StepKindToolBatch, Status: protocol.StepStatusFailed}})
 	observe(&result, protocol.Event{Type: protocol.EventModelCallStarted})
 	observe(&result, protocol.Event{Type: protocol.EventToolCallStarted, Data: "fs_read_file"})
 	observe(&result, protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
@@ -355,6 +366,9 @@ func TestObserveCountsUsageToolErrorsAndNames(t *testing.T) {
 	}})
 	if result.ModelCalls != 1 || result.ToolCalls != 1 || result.ToolCallsByName["fs_read_file"] != 1 || result.ToolErrors != 1 {
 		t.Fatalf("counts = %#v", result)
+	}
+	if result.Turns != 1 || result.Steps != 1 || result.StepErrors != 1 || result.ParallelBatches != 1 {
+		t.Fatalf("turn/step counts = %#v", result)
 	}
 	if result.InputTokens != 10 || result.OutputTokens != 3 || result.CacheHitTokens != 7 || result.CacheMissTokens != 3 {
 		t.Fatalf("usage = %#v", result)

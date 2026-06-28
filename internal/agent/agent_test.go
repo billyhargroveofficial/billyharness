@@ -42,6 +42,40 @@ func TestRunWithMockProvider(t *testing.T) {
 	}
 }
 
+func TestRunMessagesEmitsTypedTurnAndModelStepEvents(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.MaxToolRounds = 3
+	a := New(cfg, &captureProvider{}, tools.NewRegistry(cfg))
+	var events []protocol.Event
+	_, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "hello"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, ok := firstTurnEvent(events, protocol.EventTurnStarted)
+	if !ok || started.TurnID != "turn-001" || started.Round != 1 || started.Status != protocol.TurnStatusStarted || started.Model != "mock" {
+		t.Fatalf("turn started = %#v ok=%v", started, ok)
+	}
+	completed, ok := firstTurnEvent(events, protocol.EventTurnCompleted)
+	if !ok || completed.TurnID != "turn-001" || completed.Status != protocol.TurnStatusCompleted || completed.StopReason != protocol.TurnStopFinalAnswer || completed.DurationMS < 0 {
+		t.Fatalf("turn completed = %#v ok=%v", completed, ok)
+	}
+	modelStarted, ok := firstStepEvent(events, protocol.EventStepStarted, protocol.StepKindModelCall)
+	if !ok || modelStarted.StepID != "turn-001:model-call-001" || modelStarted.Status != protocol.StepStatusStarted || modelStarted.MessageCount != 2 {
+		t.Fatalf("model step started = %#v ok=%v", modelStarted, ok)
+	}
+	modelCompleted, ok := firstStepEvent(events, protocol.EventStepCompleted, protocol.StepKindModelCall)
+	if !ok || modelCompleted.StepID != modelStarted.StepID || modelCompleted.Status != protocol.StepStatusCompleted || modelCompleted.Metadata["tool_call_count"] == nil {
+		t.Fatalf("model step completed = %#v ok=%v", modelCompleted, ok)
+	}
+}
+
 func TestSystemPromptDocumentsTerminalSafeMarkdown(t *testing.T) {
 	prompt := systemPrompt()
 	for _, want := range []string{
@@ -438,10 +472,13 @@ func TestRunMessagesExecutesParallelSafeToolsConcurrentlyAndPreservesOrder(t *te
 	a := New(cfg, prov, registry)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+	var events []protocol.Event
 	next, err := a.RunMessages(ctx, []protocol.Message{
 		{Role: protocol.RoleSystem, Content: "system"},
 		{Role: protocol.RoleUser, Content: "run tools"},
-	}, func(protocol.Event) {})
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,6 +494,24 @@ func TestRunMessagesExecutesParallelSafeToolsConcurrentlyAndPreservesOrder(t *te
 	if toolMessages[0].Name != "slow_a" || toolMessages[0].Content != "A" ||
 		toolMessages[1].Name != "slow_b" || toolMessages[1].Content != "B" {
 		t.Fatalf("tool message order/content = %#v", toolMessages)
+	}
+	batchStarted, ok := firstStepEvent(events, protocol.EventStepStarted, protocol.StepKindToolBatch)
+	if !ok || !batchStarted.Parallel || batchStarted.BatchSize != 2 || batchStarted.ParallelLimit != 2 || batchStarted.BatchID == "" {
+		t.Fatalf("parallel batch step started = %#v ok=%v", batchStarted, ok)
+	}
+	batchCompleted, ok := firstStepEvent(events, protocol.EventStepCompleted, protocol.StepKindToolBatch)
+	if !ok || batchCompleted.StepID != batchStarted.StepID || batchCompleted.Status != protocol.StepStatusCompleted {
+		t.Fatalf("parallel batch step completed = %#v ok=%v", batchCompleted, ok)
+	}
+	var parallelToolStarts int
+	for _, event := range events {
+		step, ok := stepEvent(event, protocol.EventStepStarted)
+		if ok && step.Kind == protocol.StepKindToolCall && step.BatchID == batchStarted.BatchID && step.Parallel {
+			parallelToolStarts++
+		}
+	}
+	if parallelToolStarts != 2 {
+		t.Fatalf("parallel tool step starts = %d; events=%#v", parallelToolStarts, events)
 	}
 }
 
@@ -744,6 +799,42 @@ func sawEvent(events []protocol.Event, typ protocol.EventType) bool {
 		}
 	}
 	return false
+}
+
+func firstTurnEvent(events []protocol.Event, typ protocol.EventType) (protocol.TurnEvent, bool) {
+	for _, event := range events {
+		if event.Type != typ {
+			continue
+		}
+		var turn protocol.TurnEvent
+		bytes, _ := json.Marshal(event.Data)
+		if err := json.Unmarshal(bytes, &turn); err == nil {
+			return turn, true
+		}
+	}
+	return protocol.TurnEvent{}, false
+}
+
+func firstStepEvent(events []protocol.Event, typ protocol.EventType, kind string) (protocol.StepEvent, bool) {
+	for _, event := range events {
+		step, ok := stepEvent(event, typ)
+		if ok && step.Kind == kind {
+			return step, true
+		}
+	}
+	return protocol.StepEvent{}, false
+}
+
+func stepEvent(event protocol.Event, typ protocol.EventType) (protocol.StepEvent, bool) {
+	if event.Type != typ {
+		return protocol.StepEvent{}, false
+	}
+	var step protocol.StepEvent
+	bytes, _ := json.Marshal(event.Data)
+	if err := json.Unmarshal(bytes, &step); err != nil {
+		return protocol.StepEvent{}, false
+	}
+	return step, true
 }
 
 func sawToolStarted(events []protocol.Event, name string) bool {

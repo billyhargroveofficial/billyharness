@@ -73,17 +73,58 @@ Completed:
 - Provider/model metadata layer for DeepSeek and Codex subscription models.
 - Structured compaction telemetry: stable compaction IDs, trigger/threshold/message counts.
 - Telegram `/cancel` explicitly cancels gateway sessions as well as local streams.
+- Gateway subscribe/status stream over the session runner.
+- TUI saved chats, `/resume`, `/fork`, active live assistant block, and newline-gated markdown streaming.
+- Telegram single progress message for model/tool/thinking progress, compact tool rendering, context footer, profile switching, and user allowlist.
+- MCP manager status/reconnect fields surfaced through gateway, TUI, and Telegram.
+- Context window protected-prefix audit and compaction policy controls.
+- JSONL session persistence for gateway sessions: manifest, `history.jsonl`, `events.jsonl`, replay, legacy snapshot fallback.
+- Tool policy/audit events for dangerous local defaults.
+- Parallel execution for read-only/network tool batches, capped by `FAST_AGENT_MAX_PARALLEL_TOOLS`.
+- Terminal-Bench export/import adapter for local dataset workflows.
+- Graceful systemd shutdown for gateway/Telegram service processes.
+- Typed `turn.started`, `turn.completed`, `step.started`, and `step.completed` events over the current agent loop.
+- Replay and bench counters for turns, steps, step errors, and parallel tool batches.
 
-Next:
+## Active Backlog
 
-1. Gateway subscribe/status stream over the session runner.
-2. TUI transcript cells without changing saved session format.
-3. Active live stream cell and newline-gated markdown streaming.
-4. Telegram single progress message for tools/thinking.
-5. MCP manager status/reconnect events surfaced through gateway/TUI.
-6. Context window protected-prefix audit and compaction policy controls.
-7. JSONL session persistence for gateway sessions.
-8. Tool policy/audit events for dangerous local defaults.
+P0 runtime correctness and speed:
+
+- Promote typed `Turn` and `Step` events into an internal runtime model: input queue, cancellation, step storage, and replayable state transitions.
+- Extend replay/bench timing metrics: first-token latency, model latency distributions, tool latency distributions, compaction timing, and per-provider retry timing.
+- Harden parallel tools with clearer policy metadata: why a tool can or cannot run in parallel, batch ids, limits, cancellation behavior.
+- Add real long-loop benchmark runs: Terminal-Bench import/export smoke, local 50-100 turn loop, DeepSeek Flash/Pro comparison, Codex subscription comparison when available.
+
+P1 context and web economy:
+
+- Add optional external summarizer for web fetch/extract/crawl with a cheap configured model, while keeping current extractive summarizer as the free default.
+- Add a web cache keyed by URL, query, extraction mode, and max budget, with TTL and cache metrics.
+- Add context-growth guardrails that show which messages/tool outputs dominate the active context before compaction fires.
+
+P1 UI and operator UX:
+
+- Move TUI closer to typed transcript cells: assistant, user, reasoning, tool, audit, compaction, status, run summary.
+- Add a richer resume picker and session inspector backed by gateway JSONL, not only local TUI session JSON.
+- Surface MCP lifecycle changes as live transcript/status events instead of only `/mcp` snapshots.
+- Make Telegram and TUI share the same compact run-summary renderer where possible.
+
+P2 provider/auth:
+
+- Keep DeepSeek and Codex OAuth behind the same provider/auth contracts, but add request-body reuse and explicit retry telemetry.
+- Add provider capability metadata tests: parallel tool calls, reasoning modes, cache usage fields, token accounting fields.
+
+P2 storage:
+
+- Add optional rebuildable indexes over JSONL stores after replay invariants are stable.
+- Add trace/session export bundles that include config, model metadata, profile hash, MCP status snapshot, and sanitized event payload refs.
+
+## Acceptance Criteria For Next Pass
+
+- `go test -count=1 ./...` stays green.
+- Gateway and Telegram services restart without systemd timeout.
+- Every new runtime feature emits replayable JSONL events.
+- Every benchmark run can be replay-checked from its bundle without API access.
+- Default web/tool behavior remains cheap; large raw outputs require explicit opt-in or output refs.
 
 ## Engineering Rules
 

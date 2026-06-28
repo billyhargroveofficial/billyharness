@@ -56,6 +56,9 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 	messages = a.withMCPInstructions(messages)
 	var lastPromptTokens int64
 	for round := 0; round < a.cfg.MaxToolRounds; round++ {
+		roundNum := round + 1
+		turnID := agentTurnID(roundNum)
+		turnStarted := time.Now()
 		var compacted bool
 		var compaction *compactionReport
 		messages, compaction, compacted = compactMessages(messages, a.cfg, lastPromptTokens)
@@ -63,7 +66,25 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 			lastPromptTokens = 0
 			emit(protocol.Event{Type: protocol.EventContextCompacted, Data: compaction})
 		}
-		emit(protocol.Event{Type: protocol.EventModelCallStarted, Data: map[string]any{"round": round + 1}})
+		emit(protocol.Event{Type: protocol.EventTurnStarted, Data: protocol.TurnEvent{
+			TurnID:       turnID,
+			Round:        roundNum,
+			Status:       protocol.TurnStatusStarted,
+			Model:        a.cfg.Model,
+			MessageCount: len(messages),
+		}})
+		modelStepID := agentStepID(turnID, protocol.StepKindModelCall, 1)
+		modelStarted := time.Now()
+		emit(protocol.Event{Type: protocol.EventStepStarted, Data: protocol.StepEvent{
+			TurnID:       turnID,
+			StepID:       modelStepID,
+			Round:        roundNum,
+			Kind:         protocol.StepKindModelCall,
+			Status:       protocol.StepStatusStarted,
+			Name:         a.cfg.Model,
+			MessageCount: len(messages),
+		}})
+		emit(protocol.Event{Type: protocol.EventModelCallStarted, Data: map[string]any{"round": roundNum}})
 		events, errs := a.provider.Stream(ctx, provider.Request{
 			Model:    a.cfg.Model,
 			Messages: messages,
@@ -91,21 +112,82 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 			}
 		}
 		if err := <-errs; err != nil {
+			emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
+				TurnID:     turnID,
+				StepID:     modelStepID,
+				Round:      roundNum,
+				Kind:       protocol.StepKindModelCall,
+				Status:     protocol.StepStatusFailed,
+				Name:       a.cfg.Model,
+				DurationMS: durationMS(modelStarted),
+				Error:      err.Error(),
+			}})
+			emit(protocol.Event{Type: protocol.EventTurnCompleted, Data: protocol.TurnEvent{
+				TurnID:     turnID,
+				Round:      roundNum,
+				Status:     protocol.TurnStatusFailed,
+				StopReason: protocol.TurnStopError,
+				Model:      a.cfg.Model,
+				DurationMS: durationMS(turnStarted),
+				Error:      err.Error(),
+			}})
 			emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
 			return messages, err
 		}
-		emit(protocol.Event{Type: protocol.EventModelCallFinished, Data: map[string]any{"round": round + 1}})
+		emit(protocol.Event{Type: protocol.EventModelCallFinished, Data: map[string]any{"round": roundNum}})
 		calls, err := acc.Finish()
 		if err != nil {
+			emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
+				TurnID:     turnID,
+				StepID:     modelStepID,
+				Round:      roundNum,
+				Kind:       protocol.StepKindModelCall,
+				Status:     protocol.StepStatusFailed,
+				Name:       a.cfg.Model,
+				DurationMS: durationMS(modelStarted),
+				Error:      err.Error(),
+			}})
+			emit(protocol.Event{Type: protocol.EventTurnCompleted, Data: protocol.TurnEvent{
+				TurnID:     turnID,
+				Round:      roundNum,
+				Status:     protocol.TurnStatusFailed,
+				StopReason: protocol.TurnStopError,
+				Model:      a.cfg.Model,
+				DurationMS: durationMS(turnStarted),
+				Error:      err.Error(),
+			}})
 			emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
 			return messages, err
 		}
+		emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
+			TurnID:     turnID,
+			StepID:     modelStepID,
+			Round:      roundNum,
+			Kind:       protocol.StepKindModelCall,
+			Status:     protocol.StepStatusCompleted,
+			Name:       a.cfg.Model,
+			DurationMS: durationMS(modelStarted),
+			Metadata: map[string]any{
+				"content_chars":   len(content),
+				"reasoning_chars": len(reasoning),
+				"tool_call_count": len(calls),
+			},
+		}})
 		if len(calls) == 0 {
 			messages = append(messages, protocol.Message{
 				Role:             protocol.RoleAssistant,
 				Content:          content,
 				ReasoningContent: optionalReasoning(a.cfg, reasoning),
 			})
+			emit(protocol.Event{Type: protocol.EventTurnCompleted, Data: protocol.TurnEvent{
+				TurnID:       turnID,
+				Round:        roundNum,
+				Status:       protocol.TurnStatusCompleted,
+				StopReason:   protocol.TurnStopFinalAnswer,
+				Model:        a.cfg.Model,
+				MessageCount: len(messages),
+				DurationMS:   durationMS(turnStarted),
+			}})
 			emit(protocol.Event{Type: protocol.EventRunCompleted})
 			return messages, nil
 		}
@@ -115,7 +197,7 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 			ReasoningContent: optionalReasoning(a.cfg, reasoning),
 			ToolCalls:        calls,
 		})
-		results := a.executeToolCalls(ctx, calls, emit)
+		results := a.executeToolCalls(ctx, turnID, roundNum, calls, emit)
 		for _, result := range results {
 			messages = append(messages, protocol.Message{
 				Role:       protocol.RoleTool,
@@ -124,6 +206,16 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 				Name:       result.Call.Name,
 			})
 		}
+		emit(protocol.Event{Type: protocol.EventTurnCompleted, Data: protocol.TurnEvent{
+			TurnID:        turnID,
+			Round:         roundNum,
+			Status:        protocol.TurnStatusCompleted,
+			StopReason:    protocol.TurnStopToolResults,
+			Model:         a.cfg.Model,
+			MessageCount:  len(messages),
+			ToolCallCount: len(calls),
+			DurationMS:    durationMS(turnStarted),
+		}})
 	}
 	err := fmt.Errorf("exceeded max tool rounds: %d", a.cfg.MaxToolRounds)
 	emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
@@ -131,12 +223,13 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 }
 
 type toolExecutionResult struct {
-	Index  int
-	Call   protocol.ToolCall
-	Result protocol.ToolResult
+	Index      int
+	Call       protocol.ToolCall
+	Result     protocol.ToolResult
+	DurationMS int64
 }
 
-func (a *Agent) executeToolCalls(ctx context.Context, calls []protocol.ToolCall, emit func(protocol.Event)) []toolExecutionResult {
+func (a *Agent) executeToolCalls(ctx context.Context, turnID string, round int, calls []protocol.ToolCall, emit func(protocol.Event)) []toolExecutionResult {
 	results := make([]toolExecutionResult, len(calls))
 	for _, call := range calls {
 		emit(protocol.Event{Type: protocol.EventToolCallRequested, Data: call})
@@ -144,7 +237,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, calls []protocol.ToolCall,
 	}
 	for i := 0; i < len(calls); {
 		if !a.canRunToolParallel(calls[i]) {
-			results[i] = a.executeOneTool(ctx, i, calls[i], emit)
+			results[i] = a.executeOneTool(ctx, turnID, round, i, calls[i], false, "", 0, 0, emit)
 			i++
 			continue
 		}
@@ -152,7 +245,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, calls []protocol.ToolCall,
 		for j < len(calls) && a.canRunToolParallel(calls[j]) {
 			j++
 		}
-		a.executeParallelToolBatch(ctx, calls, i, j, results, emit)
+		a.executeParallelToolBatch(ctx, turnID, round, calls, i, j, results, emit)
 		i = j
 	}
 	return results
@@ -179,18 +272,34 @@ func (a *Agent) emitToolAudit(call protocol.ToolCall, emit func(protocol.Event))
 	}})
 }
 
-func (a *Agent) executeParallelToolBatch(ctx context.Context, calls []protocol.ToolCall, start, end int, results []toolExecutionResult, emit func(protocol.Event)) {
+func (a *Agent) executeParallelToolBatch(ctx context.Context, turnID string, round int, calls []protocol.ToolCall, start, end int, results []toolExecutionResult, emit func(protocol.Event)) {
 	limit := a.cfg.MaxParallelTools
 	if limit <= 1 || end-start == 1 {
 		for i := start; i < end; i++ {
-			results[i] = a.executeOneTool(ctx, i, calls[i], emit)
+			results[i] = a.executeOneTool(ctx, turnID, round, i, calls[i], false, "", 0, 0, emit)
 		}
 		return
 	}
 	if limit > end-start {
 		limit = end - start
 	}
+	batchID := agentStepID(turnID, protocol.StepKindToolBatch, start+1)
+	batchStarted := time.Now()
+	batchSize := end - start
+	emit(protocol.Event{Type: protocol.EventStepStarted, Data: protocol.StepEvent{
+		TurnID:        turnID,
+		StepID:        batchID,
+		Round:         round,
+		Index:         start,
+		Kind:          protocol.StepKindToolBatch,
+		Status:        protocol.StepStatusStarted,
+		BatchID:       batchID,
+		BatchSize:     batchSize,
+		Parallel:      true,
+		ParallelLimit: limit,
+	}})
 	for i := start; i < end; i++ {
+		emitToolStepStarted(emit, turnID, round, i, calls[i], true, batchID, batchSize, limit)
 		emit(protocol.Event{Type: protocol.EventToolCallStarted, Data: calls[i].Name})
 	}
 	jobs := make(chan int)
@@ -215,18 +324,97 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, calls []protocol.T
 	}()
 	for result := range done {
 		results[result.Index] = result
+		emitToolStepCompleted(emit, turnID, round, result, true, batchID, batchSize, limit)
 		emit(protocol.Event{Type: protocol.EventToolCallFinished, Data: result.Result})
 	}
+	emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
+		TurnID:        turnID,
+		StepID:        batchID,
+		Round:         round,
+		Index:         start,
+		Kind:          protocol.StepKindToolBatch,
+		Status:        protocol.StepStatusCompleted,
+		BatchID:       batchID,
+		BatchSize:     batchSize,
+		Parallel:      true,
+		ParallelLimit: limit,
+		DurationMS:    durationMS(batchStarted),
+	}})
 }
 
-func (a *Agent) executeOneTool(ctx context.Context, index int, call protocol.ToolCall, emit func(protocol.Event)) toolExecutionResult {
+func (a *Agent) executeOneTool(ctx context.Context, turnID string, round, index int, call protocol.ToolCall, parallel bool, batchID string, batchSize, limit int, emit func(protocol.Event)) toolExecutionResult {
+	emitToolStepStarted(emit, turnID, round, index, call, parallel, batchID, batchSize, limit)
 	emit(protocol.Event{Type: protocol.EventToolCallStarted, Data: call.Name})
 	result := a.callTool(ctx, index, call)
+	emitToolStepCompleted(emit, turnID, round, result, parallel, batchID, batchSize, limit)
 	emit(protocol.Event{Type: protocol.EventToolCallFinished, Data: result.Result})
 	return result
 }
 
+func emitToolStepStarted(emit func(protocol.Event), turnID string, round, index int, call protocol.ToolCall, parallel bool, batchID string, batchSize, limit int) {
+	emit(protocol.Event{Type: protocol.EventStepStarted, Data: protocol.StepEvent{
+		TurnID:        turnID,
+		StepID:        agentStepID(turnID, protocol.StepKindToolCall, index+1),
+		Round:         round,
+		Index:         index,
+		Kind:          protocol.StepKindToolCall,
+		Status:        protocol.StepStatusStarted,
+		Name:          call.Name,
+		ToolCallID:    call.ID,
+		BatchID:       batchID,
+		BatchSize:     batchSize,
+		Parallel:      parallel,
+		ParallelLimit: limit,
+	}})
+}
+
+func emitToolStepCompleted(emit func(protocol.Event), turnID string, round int, result toolExecutionResult, parallel bool, batchID string, batchSize, limit int) {
+	status := protocol.StepStatusCompleted
+	errorText := ""
+	if result.Result.IsError {
+		status = protocol.StepStatusFailed
+		errorText = result.Result.Content
+	}
+	emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
+		TurnID:        turnID,
+		StepID:        agentStepID(turnID, protocol.StepKindToolCall, result.Index+1),
+		Round:         round,
+		Index:         result.Index,
+		Kind:          protocol.StepKindToolCall,
+		Status:        status,
+		Name:          result.Call.Name,
+		ToolCallID:    result.Call.ID,
+		BatchID:       batchID,
+		BatchSize:     batchSize,
+		Parallel:      parallel,
+		ParallelLimit: limit,
+		DurationMS:    result.DurationMS,
+		Error:         errorText,
+		Metadata: map[string]any{
+			"truncated":  result.Result.Truncated,
+			"output_ref": result.Result.OutputRef,
+		},
+	}})
+}
+
+func agentTurnID(round int) string {
+	return fmt.Sprintf("turn-%03d", round)
+}
+
+func agentStepID(turnID, kind string, index int) string {
+	kind = strings.ReplaceAll(kind, "_", "-")
+	return fmt.Sprintf("%s:%s-%03d", turnID, kind, index)
+}
+
+func durationMS(started time.Time) int64 {
+	if started.IsZero() {
+		return 0
+	}
+	return time.Since(started).Milliseconds()
+}
+
 func (a *Agent) callTool(ctx context.Context, index int, call protocol.ToolCall) toolExecutionResult {
+	started := time.Now()
 	result, err := a.tools.Call(ctx, call)
 	out := protocol.ToolResult{
 		CallID:    call.ID,
@@ -248,7 +436,7 @@ func (a *Agent) callTool(ctx context.Context, index int, call protocol.ToolCall)
 		}
 	}
 	a.compactToolResult(index, call, &out)
-	return toolExecutionResult{Index: index, Call: call, Result: out}
+	return toolExecutionResult{Index: index, Call: call, Result: out, DurationMS: durationMS(started)}
 }
 
 func (a *Agent) compactToolResult(index int, call protocol.ToolCall, out *protocol.ToolResult) {

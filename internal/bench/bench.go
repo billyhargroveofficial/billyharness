@@ -65,6 +65,10 @@ type Result struct {
 	Tags                  []string       `json:"tags,omitempty"`
 	Outcome               string         `json:"outcome"`
 	WallTimeMS            int64          `json:"wall_time_ms"`
+	Turns                 int            `json:"turns,omitempty"`
+	Steps                 int            `json:"steps,omitempty"`
+	StepErrors            int            `json:"step_errors,omitempty"`
+	ParallelBatches       int            `json:"parallel_batches,omitempty"`
 	ModelCalls            int            `json:"model_calls"`
 	ToolCalls             int            `json:"tool_calls"`
 	ToolCallsByName       map[string]int `json:"tool_calls_by_name,omitempty"`
@@ -90,6 +94,10 @@ type Summary struct {
 	Crashes               int     `json:"crashes"`
 	PassRate              float64 `json:"pass_rate"`
 	WallTimeMS            int64   `json:"wall_time_ms"`
+	Turns                 int     `json:"turns,omitempty"`
+	Steps                 int     `json:"steps,omitempty"`
+	StepErrors            int     `json:"step_errors,omitempty"`
+	ParallelBatches       int     `json:"parallel_batches,omitempty"`
 	ModelCalls            int     `json:"model_calls"`
 	ToolCalls             int     `json:"tool_calls"`
 	InputTokens           int64   `json:"input_tokens,omitempty"`
@@ -161,6 +169,10 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 			return summary, err
 		}
 		summary.ModelCalls += result.ModelCalls
+		summary.Turns += result.Turns
+		summary.Steps += result.Steps
+		summary.StepErrors += result.StepErrors
+		summary.ParallelBatches += result.ParallelBatches
 		summary.ToolCalls += result.ToolCalls
 		summary.InputTokens += result.InputTokens
 		summary.OutputTokens += result.OutputTokens
@@ -210,6 +222,10 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 
 type replayExpectations struct {
 	ModelCalls         int
+	Turns              int
+	Steps              int
+	StepErrors         int
+	ParallelBatches    int
 	ToolCalls          int
 	ContextCompactions int
 	InputTokens        int64
@@ -226,6 +242,12 @@ func verifyReplayAgainstResults(replay trace.ReplaySummary, results []Result) er
 		want int
 	}{
 		{"model_calls_started", replay.ModelCallsStarted, expected.ModelCalls},
+		{"turns_started", replay.TurnsStarted, expected.Turns},
+		{"turns_completed", replay.TurnsCompleted, expected.Turns},
+		{"steps_started", replay.StepsStarted, expected.Steps},
+		{"steps_completed", replay.StepsCompleted, expected.Steps},
+		{"steps_failed", replay.StepsFailed, expected.StepErrors},
+		{"parallel_batches", replay.ParallelBatches, expected.ParallelBatches},
 		{"tool_calls_started", replay.ToolCallsStarted, expected.ToolCalls},
 		{"tool_calls_finished", replay.ToolCallsFinished, expected.ToolCalls},
 		{"context_compactions", replay.ContextCompactions, expected.ContextCompactions},
@@ -257,6 +279,10 @@ func replayExpectationsFromResults(results []Result) replayExpectations {
 	var expected replayExpectations
 	for _, result := range results {
 		expected.ModelCalls += result.ModelCalls
+		expected.Turns += result.Turns
+		expected.Steps += result.Steps
+		expected.StepErrors += result.StepErrors
+		expected.ParallelBatches += result.ParallelBatches
 		expected.ToolCalls += result.ToolCalls
 		expected.ContextCompactions += result.ContextCompactions
 		expected.InputTokens += result.InputTokens
@@ -435,6 +461,21 @@ func shouldWritePayloadRef(event protocol.Event) bool {
 
 func observe(result *Result, event protocol.Event) {
 	switch event.Type {
+	case protocol.EventTurnStarted:
+		result.Turns++
+	case protocol.EventStepStarted:
+		step, ok := decodeStepEvent(event.Data)
+		if ok {
+			result.Steps++
+			if step.Kind == protocol.StepKindToolBatch && step.Parallel {
+				result.ParallelBatches++
+			}
+		}
+	case protocol.EventStepCompleted:
+		step, ok := decodeStepEvent(event.Data)
+		if ok && step.Status == protocol.StepStatusFailed {
+			result.StepErrors++
+		}
 	case protocol.EventContextCompacted:
 		result.ContextCompactions++
 	case protocol.EventModelCallStarted:
@@ -511,6 +552,15 @@ func decodeToolResult(value any) (protocol.ToolResult, bool) {
 		return protocol.ToolResult{}, false
 	}
 	return result, result.Name != "" || result.CallID != "" || result.Content != ""
+}
+
+func decodeStepEvent(value any) (protocol.StepEvent, bool) {
+	bytes, _ := json.Marshal(value)
+	var step protocol.StepEvent
+	if err := json.Unmarshal(bytes, &step); err != nil {
+		return protocol.StepEvent{}, false
+	}
+	return step, step.StepID != "" && step.Kind != ""
 }
 
 type scriptedLoopProvider struct {

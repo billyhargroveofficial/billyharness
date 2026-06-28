@@ -205,6 +205,13 @@ type ReplaySummary struct {
 	RunStarted         int            `json:"run_started,omitempty"`
 	RunCompleted       int            `json:"run_completed,omitempty"`
 	RunFailed          int            `json:"run_failed,omitempty"`
+	TurnsStarted       int            `json:"turns_started,omitempty"`
+	TurnsCompleted     int            `json:"turns_completed,omitempty"`
+	TurnsFailed        int            `json:"turns_failed,omitempty"`
+	StepsStarted       int            `json:"steps_started,omitempty"`
+	StepsCompleted     int            `json:"steps_completed,omitempty"`
+	StepsFailed        int            `json:"steps_failed,omitempty"`
+	ParallelBatches    int            `json:"parallel_batches,omitempty"`
 	ModelCallsStarted  int            `json:"model_calls_started,omitempty"`
 	ModelCallsFinished int            `json:"model_calls_finished,omitempty"`
 	ToolCallsStarted   int            `json:"tool_calls_started,omitempty"`
@@ -317,6 +324,35 @@ func (s *ReplaySummary) observe(record EventRecord) error {
 		s.RunCompleted++
 	case protocol.EventRunFailed:
 		s.RunFailed++
+	case protocol.EventTurnStarted:
+		s.TurnsStarted++
+	case protocol.EventTurnCompleted:
+		turn, err := turnFromEvent(record.Event)
+		if err != nil {
+			return err
+		}
+		s.TurnsCompleted++
+		if turn.Status == protocol.TurnStatusFailed {
+			s.TurnsFailed++
+		}
+	case protocol.EventStepStarted:
+		step, err := stepFromEvent(record.Event)
+		if err != nil {
+			return err
+		}
+		s.StepsStarted++
+		if step.Kind == protocol.StepKindToolBatch && step.Parallel {
+			s.ParallelBatches++
+		}
+	case protocol.EventStepCompleted:
+		step, err := stepFromEvent(record.Event)
+		if err != nil {
+			return err
+		}
+		s.StepsCompleted++
+		if step.Status == protocol.StepStatusFailed {
+			s.StepsFailed++
+		}
 	case protocol.EventModelCallStarted:
 		s.ModelCallsStarted++
 	case protocol.EventModelCallFinished:
@@ -338,6 +374,56 @@ func (s *ReplaySummary) observe(record EventRecord) error {
 		s.CacheMissTokens += usage.CacheMissTokens
 	}
 	return nil
+}
+
+func turnFromEvent(value any) (protocol.TurnEvent, error) {
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return protocol.TurnEvent{}, fmt.Errorf("invalid turn event: %w", err)
+	}
+	var event struct {
+		Type protocol.EventType `json:"type"`
+		Data json.RawMessage    `json:"data"`
+	}
+	if err := json.Unmarshal(bytes, &event); err != nil {
+		return protocol.TurnEvent{}, fmt.Errorf("invalid turn event: %w", err)
+	}
+	if event.Type != "" && event.Type != protocol.EventTurnStarted && event.Type != protocol.EventTurnCompleted {
+		return protocol.TurnEvent{}, fmt.Errorf("invalid turn event type %q", event.Type)
+	}
+	if len(event.Data) == 0 {
+		return protocol.TurnEvent{}, fmt.Errorf("turn event missing data")
+	}
+	var turn protocol.TurnEvent
+	if err := json.Unmarshal(event.Data, &turn); err != nil {
+		return protocol.TurnEvent{}, fmt.Errorf("invalid turn event data: %w", err)
+	}
+	return turn, nil
+}
+
+func stepFromEvent(value any) (protocol.StepEvent, error) {
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return protocol.StepEvent{}, fmt.Errorf("invalid step event: %w", err)
+	}
+	var event struct {
+		Type protocol.EventType `json:"type"`
+		Data json.RawMessage    `json:"data"`
+	}
+	if err := json.Unmarshal(bytes, &event); err != nil {
+		return protocol.StepEvent{}, fmt.Errorf("invalid step event: %w", err)
+	}
+	if event.Type != "" && event.Type != protocol.EventStepStarted && event.Type != protocol.EventStepCompleted {
+		return protocol.StepEvent{}, fmt.Errorf("invalid step event type %q", event.Type)
+	}
+	if len(event.Data) == 0 {
+		return protocol.StepEvent{}, fmt.Errorf("step event missing data")
+	}
+	var step protocol.StepEvent
+	if err := json.Unmarshal(event.Data, &step); err != nil {
+		return protocol.StepEvent{}, fmt.Errorf("invalid step event data: %w", err)
+	}
+	return step, nil
 }
 
 type replayUsage struct {
