@@ -878,8 +878,8 @@ Acceptance:
 
 ### 9.2 Provider Comparison
 
-- [ ] Compare DeepSeek Flash versus DeepSeek Pro.
-- [ ] Compare Codex/OpenAI OAuth path when available.
+- [x] Compare DeepSeek Flash versus DeepSeek Pro.
+- [x] Compare Codex/OpenAI OAuth path when available.
 - [ ] Track:
   - [x] quality outcome
   - [x] elapsed time
@@ -887,7 +887,7 @@ Acceptance:
   - [x] token/context growth
   - [x] cost/subscription
   - [x] failure modes
-- [ ] Keep provider-specific bugs in separate report.
+- [x] Keep provider-specific bugs in separate report.
 
 Acceptance:
 

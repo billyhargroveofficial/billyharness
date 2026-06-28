@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -63,6 +64,39 @@ func TestEventWriterRecordsContiguousEventsAndPayloadRefs(t *testing.T) {
 	}
 	if _, err := os.Stat(second.PayloadRefs[0].Path); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestEventWriterConcurrentRecordsStayContiguous(t *testing.T) {
+	var out bytes.Buffer
+	writer := NewEventWriter("run-1", &out)
+	var wg sync.WaitGroup
+	errs := make(chan error, 64)
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := writer.Record("task-1", protocol.Event{Type: protocol.EventRunStarted})
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := ReplayEvents(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Records != 64 || summary.FirstSeq != 1 || summary.LastSeq != 64 {
+		t.Fatalf("summary = %#v", summary)
 	}
 }
 

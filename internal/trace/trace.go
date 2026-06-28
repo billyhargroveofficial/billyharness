@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
@@ -57,6 +58,7 @@ type PayloadRef struct {
 type EventWriter struct {
 	runID         string
 	encoder       *json.Encoder
+	mu            sync.Mutex
 	now           func() time.Time
 	sanitize      func(any) any
 	seq           int64
@@ -105,6 +107,8 @@ func (w *EventWriter) Record(taskID string, event protocol.Event) (EventRecord, 
 	if w == nil {
 		return EventRecord{}, fmt.Errorf("nil event writer")
 	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.seq++
 	now := w.now()
 	event = protocol.EnrichEvent(event, protocol.EventEnvelope{
