@@ -1864,6 +1864,9 @@ func formatProviderStatus(name string, status credentials.ProviderStatus) string
 	if status.Mode != "" {
 		parts = append(parts, "mode "+status.Mode)
 	}
+	if status.Refresh != "" {
+		parts = append(parts, "refresh "+status.Refresh)
+	}
 	if status.AccountID != "" {
 		parts = append(parts, "account "+status.AccountID)
 	}

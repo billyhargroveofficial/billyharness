@@ -24,6 +24,7 @@ type ProviderStatus struct {
 	AccountID  string `json:"account_id,omitempty"`
 	ExpiresAt  string `json:"expires_at,omitempty"`
 	Mode       string `json:"mode,omitempty"`
+	Refresh    string `json:"refresh_status,omitempty"`
 }
 
 type Status struct {
@@ -139,6 +140,7 @@ func (m Manager) CodexStatus() ProviderStatus {
 		status.Source = path
 		status.Mode = "personalAccessToken"
 		status.AccountID = stringField(payload, "chatgpt_account_id")
+		status.Refresh = "not_required"
 		return status
 	}
 	tokens, _ := payload["tokens"].(map[string]any)
@@ -158,7 +160,9 @@ func (m Manager) CodexStatus() ProviderStatus {
 	if status.AccountID == "" {
 		status.AccountID = accountIDFromJWT(accessToken)
 	}
-	if exp := expirationFromJWT(accessToken); !exp.IsZero() {
+	exp := expirationFromJWT(accessToken)
+	status.Refresh = codexRefreshStatus(accessToken, refreshToken, exp, false)
+	if !exp.IsZero() {
 		status.ExpiresAt = exp.UTC().Format(time.RFC3339)
 	}
 	return status
@@ -168,16 +172,53 @@ func codexEnvStatus(token, accountID, source, path string) ProviderStatus {
 	status := ProviderStatus{Configured: true, Source: source, Path: path, AccountID: accountID}
 	if strings.HasPrefix(strings.TrimSpace(token), "at-") {
 		status.Mode = "personalAccessToken"
+		status.Refresh = "not_required"
 		return status
 	}
 	status.Mode = "accessToken"
 	if status.AccountID == "" {
 		status.AccountID = accountIDFromJWT(token)
 	}
-	if exp := expirationFromJWT(token); !exp.IsZero() {
+	exp := expirationFromJWT(token)
+	status.Refresh = codexRefreshStatus(token, "", exp, false)
+	if !exp.IsZero() {
 		status.ExpiresAt = exp.UTC().Format(time.RFC3339)
 	}
 	return status
+}
+
+func codexRefreshStatus(accessToken, refreshToken string, expiresAt time.Time, personalAccessToken bool) string {
+	if personalAccessToken || strings.HasPrefix(strings.TrimSpace(accessToken), "at-") {
+		return "not_required"
+	}
+	hasAccess := strings.TrimSpace(accessToken) != ""
+	hasRefresh := strings.TrimSpace(refreshToken) != ""
+	if !hasAccess && hasRefresh {
+		return "refresh_required"
+	}
+	if !hasAccess {
+		return ""
+	}
+	if expiresAt.IsZero() {
+		if hasRefresh {
+			return "refreshable_unknown_expiry"
+		}
+		return "unknown"
+	}
+	now := time.Now()
+	if !expiresAt.After(now) {
+		if hasRefresh {
+			return "refresh_required"
+		}
+		return "expired"
+	}
+	if !expiresAt.After(now.Add(5 * time.Minute)) {
+		if hasRefresh {
+			return "refresh_soon"
+		}
+		return "expires_soon"
+	}
+	return "fresh"
 }
 
 func ImportCodexAuth(cfg config.Config, sourcePath string) (ProviderStatus, error) {

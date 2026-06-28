@@ -307,7 +307,7 @@ Acceptance:
   - [x] environment
   - [x] imported Codex/OAuth credentials
   - [ ] future keyring/file store
-- [ ] Add refresh serialization and status.
+- [x] Add refresh serialization and status.
 - [x] Add redacted auth inspect output.
 - [x] Add gateway auth status endpoint.
 - [ ] Add TUI/Telegram setup menu for DeepSeek key and Codex OAuth status.

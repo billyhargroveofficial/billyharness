@@ -110,11 +110,49 @@ func TestCodexStatusSeesEnvAccessToken(t *testing.T) {
 	t.Setenv("CODEX_ACCESS_TOKEN", testJWT(t, map[string]any{"exp": exp, "chatgpt_account_id": "acct_env"}))
 
 	status := CodexStatus(config.Default())
-	if !status.Configured || status.Source != "env:CODEX_ACCESS_TOKEN" || status.AccountID != "acct_env" || status.Mode != "accessToken" {
+	if !status.Configured || status.Source != "env:CODEX_ACCESS_TOKEN" || status.AccountID != "acct_env" || status.Mode != "accessToken" || status.Refresh != "fresh" {
 		t.Fatalf("status = %#v", status)
 	}
 	if status.ExpiresAt == "" {
 		t.Fatalf("expires_at missing: %#v", status)
+	}
+}
+
+func TestCodexStatusShowsRefreshStateForAuthFile(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	t.Setenv("FAST_AGENT_ENV_FILE", filepath.Join(root, "missing.env"))
+	path := filepath.Join(root, "auth", "codex.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(path, map[string]any{
+		"auth_mode": "chatgpt",
+		"tokens": map[string]any{
+			"access_token":  testJWT(t, map[string]any{"exp": time.Now().Add(-time.Hour).Unix()}),
+			"refresh_token": "refresh-secret",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	status := CodexStatus(config.Default())
+	if !status.Configured || status.Refresh != "refresh_required" {
+		t.Fatalf("status = %#v", status)
+	}
+	if strings.Contains(status.Source, "refresh-secret") || strings.Contains(status.Path, "refresh-secret") {
+		t.Fatalf("status leaked refresh token: %#v", status)
+	}
+}
+
+func TestCodexStatusPATDoesNotNeedRefresh(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	t.Setenv("CODEX_ACCESS_TOKEN", "at-secret")
+
+	status := CodexStatus(config.Default())
+	if !status.Configured || status.Mode != "personalAccessToken" || status.Refresh != "not_required" {
+		t.Fatalf("status = %#v", status)
 	}
 }
 
