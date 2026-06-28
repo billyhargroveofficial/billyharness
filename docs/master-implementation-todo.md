@@ -554,16 +554,16 @@ Acceptance:
 
 ### 5.2 Streaming Controller
 
-- [ ] Split streaming state:
+- [x] Split streaming state:
   - [x] raw markdown source
   - [x] stable committed region
   - [x] mutable live tail
   - [x] table holdback
   - [x] code fence holdback
   - [x] final canonical render
-- [ ] Reduce full transcript re-rendering.
-- [ ] Keep scroll anchored when user is at bottom.
-- [ ] Preserve selection during live updates as much as possible.
+- [x] Reduce full transcript re-rendering.
+- [x] Keep scroll anchored when user is at bottom.
+- [x] Preserve selection during live updates as much as possible.
 
 Acceptance:
 

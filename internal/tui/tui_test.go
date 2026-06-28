@@ -1141,6 +1141,23 @@ func TestMouseScrollDisablesFollowOutput(t *testing.T) {
 	}
 }
 
+func TestLiveUpdateKeepsViewportAnchoredAtBottom(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 80
+	m.height = 18
+	m.addBlock("assistant", "ASSISTANT", strings.Repeat("old line\n", 80))
+	m.resize(true)
+	if !m.viewport.AtBottom() {
+		t.Fatalf("viewport should start at bottom")
+	}
+	m.followOutput = true
+	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: strings.Repeat("new line\n", 8)})
+	m.reflow(m.followOutput)
+	if !m.viewport.AtBottom() {
+		t.Fatalf("viewport should stay anchored at bottom during live update")
+	}
+}
+
 func TestTranscriptSelectionText(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 80
@@ -1195,6 +1212,25 @@ func TestTranscriptSelectionIsVisiblyHighlighted(t *testing.T) {
 	}
 	if !strings.Contains(highlighted, "48;2;255;209;102") {
 		t.Fatalf("selection highlight should use visible yellow background, rendered=%q", highlighted)
+	}
+}
+
+func TestReflowPreservesSelectionHighlightDuringLiveUpdate(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 80
+	m.height = 24
+	m.addBlock("assistant", "ASSISTANT", "alpha\nbeta\ngamma")
+	m.resize(true)
+	target := "bet"
+	m.selectStart = selectionPoint{row: 1, col: 1}
+	m.selectEnd = selectionPoint{row: 1, col: 1 + len(target)}
+	m.applySelectionHighlight()
+
+	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: "\ndelta"})
+	m.reflow(false)
+	highlighted := m.viewport.GetContent()
+	if got := selectionBackgroundText(highlighted); got != target {
+		t.Fatalf("highlighted selection after live update = %q, want %q; rendered=%q", got, target, highlighted)
 	}
 }
 
