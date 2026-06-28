@@ -187,6 +187,14 @@ func (r *Registry) CanRunParallel(name string) bool {
 	}
 }
 
+func (r *Registry) Risk(name string) (protocol.Risk, bool) {
+	tool, ok := r.lookup(name)
+	if !ok {
+		return "", false
+	}
+	return tool.Spec.Risk, true
+}
+
 func (r *Registry) lookup(name string) (Tool, bool) {
 	tool, ok := r.tools[name]
 	return tool, ok

@@ -63,6 +63,7 @@ const (
 	EventAssistantReasoning  EventType = "assistant.reasoning_delta"
 	EventAssistantDelta      EventType = "assistant.content_delta"
 	EventToolCallRequested   EventType = "tool.call_requested"
+	EventToolAudit           EventType = "tool.audit"
 	EventToolCallStarted     EventType = "tool.call_started"
 	EventToolCallFinished    EventType = "tool.call_finished"
 	EventContextCompacted    EventType = "context.compacted"

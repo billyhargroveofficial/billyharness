@@ -139,6 +139,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, calls []protocol.ToolCall,
 	results := make([]toolExecutionResult, len(calls))
 	for _, call := range calls {
 		emit(protocol.Event{Type: protocol.EventToolCallRequested, Data: call})
+		a.emitToolAudit(call, emit)
 	}
 	for i := 0; i < len(calls); {
 		if !a.canRunToolParallel(calls[i]) {
@@ -154,6 +155,27 @@ func (a *Agent) executeToolCalls(ctx context.Context, calls []protocol.ToolCall,
 		i = j
 	}
 	return results
+}
+
+func (a *Agent) emitToolAudit(call protocol.ToolCall, emit func(protocol.Event)) {
+	if a == nil || a.tools == nil || emit == nil {
+		return
+	}
+	risk, ok := a.tools.Risk(call.Name)
+	if !ok {
+		return
+	}
+	switch risk {
+	case protocol.RiskWrite, protocol.RiskExecute, protocol.RiskExternal:
+	default:
+		return
+	}
+	emit(protocol.Event{Type: protocol.EventToolAudit, Data: map[string]any{
+		"call_id":       call.ID,
+		"name":          call.Name,
+		"risk":          risk,
+		"auto_approved": a.cfg.AutoApproveDangerous,
+	}})
 }
 
 func (a *Agent) executeParallelToolBatch(ctx context.Context, calls []protocol.ToolCall, start, end int, results []toolExecutionResult, emit func(protocol.Event)) {

@@ -302,6 +302,9 @@ func TestRunMessagesExecutesToolAndContinuesLoop(t *testing.T) {
 	if !sawEvent(events, protocol.EventToolCallRequested) || !sawEvent(events, protocol.EventToolCallFinished) || !sawEvent(events, protocol.EventRunCompleted) {
 		t.Fatalf("events missing tool/run completion: %#v", events)
 	}
+	if !sawToolAudit(events, "fs_write_file", protocol.RiskWrite, true) {
+		t.Fatalf("write tool audit event missing: %#v", events)
+	}
 	if result, ok := firstToolResult(events); !ok || result.Name != "fs_write_file" || result.CallID != "call_1" || result.IsError {
 		t.Fatalf("tool result event = %#v ok=%v", result, ok)
 	}
@@ -670,6 +673,25 @@ func sawEvent(events []protocol.Event, typ protocol.EventType) bool {
 func sawToolStarted(events []protocol.Event, name string) bool {
 	for _, event := range events {
 		if event.Type == protocol.EventToolCallStarted && fmt.Sprint(event.Data) == name {
+			return true
+		}
+	}
+	return false
+}
+
+func sawToolAudit(events []protocol.Event, name string, risk protocol.Risk, autoApproved bool) bool {
+	for _, event := range events {
+		if event.Type != protocol.EventToolAudit {
+			continue
+		}
+		bytes, _ := json.Marshal(event.Data)
+		var data struct {
+			Name         string        `json:"name"`
+			Risk         protocol.Risk `json:"risk"`
+			AutoApproved bool          `json:"auto_approved"`
+		}
+		_ = json.Unmarshal(bytes, &data)
+		if data.Name == name && data.Risk == risk && data.AutoApproved == autoApproved {
 			return true
 		}
 	}
