@@ -682,23 +682,23 @@ Acceptance:
 
 ### 6.2 Progress Message
 
-- [ ] Keep one editable progress message per active run.
-- [ ] Throttle edits to avoid Telegram rate limits.
-- [ ] Show:
-  - [ ] run state
-  - [ ] model/reasoning
-  - [ ] elapsed time
-  - [ ] compact current tool list
-  - [ ] current assistant delta tail
-  - [ ] context percent
-  - [ ] turn totals
-- [ ] Truncate from the beginning for long live progress so the end keeps updating.
-- [ ] Remove or finalize stale progress tool details when complete.
+- [x] Keep one editable progress message per active run.
+- [x] Throttle edits to avoid Telegram rate limits.
+- [x] Show:
+  - [x] run state
+  - [x] model/reasoning
+  - [x] elapsed time
+  - [x] compact current tool list
+  - [x] current assistant delta tail
+  - [x] context percent
+  - [x] turn totals
+- [x] Truncate from the beginning for long live progress so the end keeps updating.
+- [x] Remove or finalize stale progress tool details when complete.
 
 Acceptance:
 
-- [ ] Long tool runs show movement.
-- [ ] Completed answer does not include giant full tool JSON unless user asks.
+- [x] Long tool runs show movement.
+- [x] Completed answer does not include giant full tool JSON unless user asks.
 
 ### 6.3 Telegram Sessions And Users
 

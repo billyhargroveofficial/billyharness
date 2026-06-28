@@ -218,14 +218,20 @@ func TestTelegramRunUsesSingleProgressMessageWithInlineTools(t *testing.T) {
 		t.Fatalf("sendMessageCalls = %d, want only placeholder send", sendMessageCalls)
 	}
 	foundInlineTools := false
+	foundDoneTools := false
 	for _, text := range editTexts {
 		if strings.Contains(text, "Tools running") && strings.Contains(text, "web_search") && strings.Contains(text, "Moscow weather") {
 			foundInlineTools = true
-			break
+		}
+		if strings.Contains(text, "Tools done") && strings.Contains(text, "web_search") && strings.Contains(text, "Moscow weather") {
+			foundDoneTools = true
 		}
 	}
 	if !foundInlineTools {
 		t.Fatalf("stream edits did not include inline tool progress: %#v", editTexts)
+	}
+	if !foundDoneTools {
+		t.Fatalf("final stream edit did not finalize tool progress: %#v", editTexts)
 	}
 }
 

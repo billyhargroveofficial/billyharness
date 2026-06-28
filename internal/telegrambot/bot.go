@@ -207,6 +207,7 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 		for {
 			select {
 			case <-stopStreamEdits:
+				flush()
 				return
 			case <-ticker.C:
 				flush()
