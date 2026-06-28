@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
@@ -20,6 +21,9 @@ type Harness interface {
 	CancelSession(context.Context, string) (bool, error)
 	MCPStatus(context.Context) (string, error)
 	ConfigStatus(context.Context) (string, error)
+	AuthStatus(context.Context) (credentials.Status, error)
+	SaveDeepSeekAPIKey(context.Context, string) (credentials.ProviderStatus, error)
+	ImportCodexAuth(context.Context) (credentials.ProviderStatus, error)
 }
 
 type GatewayClient struct {
@@ -155,6 +159,38 @@ func (c *GatewayClient) ConfigStatus(ctx context.Context) (string, error) {
 	return config.FormatSummary(out.Values, out.Warnings), nil
 }
 
+func (c *GatewayClient) AuthStatus(ctx context.Context) (credentials.Status, error) {
+	var out credentials.Status
+	if err := c.gatewayJSON(ctx, http.MethodGet, "/v1/auth/status", nil, &out); err != nil {
+		return credentials.Status{}, err
+	}
+	return out, nil
+}
+
+func (c *GatewayClient) SaveDeepSeekAPIKey(ctx context.Context, apiKey string) (credentials.ProviderStatus, error) {
+	body, err := json.Marshal(gateway.DeepSeekAuthRequest{APIKey: apiKey})
+	if err != nil {
+		return credentials.ProviderStatus{}, err
+	}
+	var out struct {
+		DeepSeek credentials.ProviderStatus `json:"deepseek"`
+	}
+	if err := c.gatewayJSON(ctx, http.MethodPost, "/v1/auth/deepseek", body, &out); err != nil {
+		return credentials.ProviderStatus{}, err
+	}
+	return out.DeepSeek, nil
+}
+
+func (c *GatewayClient) ImportCodexAuth(ctx context.Context) (credentials.ProviderStatus, error) {
+	var out struct {
+		Codex credentials.ProviderStatus `json:"codex"`
+	}
+	if err := c.gatewayJSON(ctx, http.MethodPost, "/v1/auth/codex/import", []byte(`{}`), &out); err != nil {
+		return credentials.ProviderStatus{}, err
+	}
+	return out.Codex, nil
+}
+
 func (c *GatewayClient) CancelSession(ctx context.Context, sessionID string) (bool, error) {
 	resp, err := gateway.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/sessions/"+sessionID+"/cancel", nil)
@@ -179,6 +215,36 @@ func (c *GatewayClient) CancelSession(ctx context.Context, sessionID string) (bo
 		return false, err
 	}
 	return out.Cancelled, nil
+}
+
+func (c *GatewayClient) gatewayJSON(ctx context.Context, method, path string, body []byte, out any) error {
+	resp, err := gateway.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
+		var reader io.Reader
+		if body != nil {
+			reader = bytes.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, reader)
+		if err != nil {
+			return nil, err
+		}
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		gateway.SetAuthHeaderFromEnv(req)
+		return req, nil
+	})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("gateway %s %s HTTP %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(limited)))
+	}
+	if out == nil {
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
 }
 
 func (c *GatewayClient) client() *http.Client {

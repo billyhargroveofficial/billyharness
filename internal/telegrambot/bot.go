@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
@@ -439,6 +440,8 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 			return
 		}
 		_ = b.sendHTML(ctx, msg, "<b>Config</b>\n<pre>"+esc(status)+"</pre>")
+	case "/auth":
+		b.handleAuthCommand(ctx, msg, arg)
 	case "/cancel":
 		state := b.chatState(key)
 		localCancelled := b.cancelChat(key)
@@ -454,6 +457,44 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 		}
 	default:
 		_ = b.sendPlain(ctx, msg, "Unknown command. Use /help.")
+	}
+}
+
+func (b *Bot) handleAuthCommand(ctx context.Context, msg Message, arg string) {
+	fields := strings.Fields(arg)
+	if len(fields) == 0 || strings.EqualFold(fields[0], "status") {
+		status, err := b.harness.AuthStatus(ctx)
+		if err != nil {
+			_ = b.sendPlain(ctx, msg, "Auth status failed: "+err.Error())
+			return
+		}
+		_ = b.sendHTML(ctx, msg, formatAuthStatusHTML(status))
+		return
+	}
+
+	switch strings.ToLower(fields[0]) {
+	case "deepseek", "api", "key":
+		if len(fields) < 2 {
+			_ = b.sendHTML(ctx, msg, authUsageHTML())
+			return
+		}
+		apiKey := strings.TrimSpace(strings.Join(fields[1:], ""))
+		b.delete(ctx, msg.Chat.ID, msg.MessageID)
+		status, err := b.harness.SaveDeepSeekAPIKey(ctx, apiKey)
+		if err != nil {
+			_ = b.sendPlain(ctx, msg, "DeepSeek auth failed: "+err.Error())
+			return
+		}
+		_ = b.sendHTML(ctx, msg, "<b>Auth updated</b>\n<pre>"+esc(formatProviderStatusText("deepseek", status))+"</pre>")
+	case "codex", "oauth", "chatgpt":
+		status, err := b.harness.ImportCodexAuth(ctx)
+		if err != nil {
+			_ = b.sendPlain(ctx, msg, "Codex OAuth import failed: "+err.Error())
+			return
+		}
+		_ = b.sendHTML(ctx, msg, "<b>Auth updated</b>\n<pre>"+esc(formatProviderStatusText("codex", status))+"</pre>")
+	default:
+		_ = b.sendHTML(ctx, msg, authUsageHTML())
 	}
 }
 
@@ -646,7 +687,7 @@ func bypassActiveRunLock(text string) bool {
 	}
 	cmd := strings.ToLower(strings.SplitN(fields[0], "@", 2)[0])
 	switch cmd {
-	case "/cancel", "/status", "/config", "/start", "/help":
+	case "/cancel", "/status", "/config", "/auth", "/start", "/help":
 		return true
 	default:
 		return false
@@ -683,7 +724,52 @@ Commands:
 <code>/reasoning low|medium|high|xhigh|off</code>
 <code>/mcp</code> MCP status
 <code>/config</code> resolved config summary
+<code>/auth</code> auth status
+<code>/auth deepseek sk-...</code> save DeepSeek key
+<code>/auth codex</code> import Codex OAuth
 <code>/cancel</code> cancel current run`
+}
+
+func authUsageHTML() string {
+	return `<b>Auth</b>
+<code>/auth</code> status
+<code>/auth deepseek sk-...</code> save DeepSeek API key
+<code>/auth codex</code> import Codex OAuth from local codex login`
+}
+
+func formatAuthStatusHTML(status credentials.Status) string {
+	return "<b>Auth</b>\n<pre>" + esc(strings.Join([]string{
+		formatProviderStatusText("deepseek", status.DeepSeek),
+		formatProviderStatusText("codex", status.Codex),
+	}, "\n\n")) + "</pre>"
+}
+
+func formatProviderStatusText(name string, status credentials.ProviderStatus) string {
+	parts := []string{name}
+	if status.Configured {
+		parts = append(parts, "configured")
+	} else {
+		parts = append(parts, "not configured")
+	}
+	if status.Source != "" {
+		parts = append(parts, "source="+status.Source)
+	}
+	if status.Path != "" {
+		parts = append(parts, "path="+status.Path)
+	}
+	if status.Mode != "" {
+		parts = append(parts, "mode="+status.Mode)
+	}
+	if status.Refresh != "" {
+		parts = append(parts, "refresh="+status.Refresh)
+	}
+	if status.ExpiresAt != "" {
+		parts = append(parts, "expires="+status.ExpiresAt)
+	}
+	if status.AccountID != "" {
+		parts = append(parts, "account="+status.AccountID)
+	}
+	return strings.Join(parts, "\n  ")
 }
 
 func StatusHTML(state ChatState, opts Options) string {

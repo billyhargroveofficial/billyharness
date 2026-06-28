@@ -310,13 +310,13 @@ Acceptance:
 - [x] Add refresh serialization and status.
 - [x] Add redacted auth inspect output.
 - [x] Add gateway auth status endpoint.
-- [ ] Add TUI/Telegram setup menu for DeepSeek key and Codex OAuth status.
+- [x] Add TUI/Telegram setup menu for DeepSeek key and Codex OAuth status.
 
 Acceptance:
 
-- [ ] DeepSeek key can be added once and reused.
-- [ ] Codex OAuth refresh does not race under concurrent requests.
-- [ ] Auth inspect shows enough to debug without leaking secrets.
+- [x] DeepSeek key can be added once and reused.
+- [x] Codex OAuth refresh does not race under concurrent requests.
+- [x] Auth inspect shows enough to debug without leaking secrets.
 
 ## Phase 3: MCP And Extension Surface
 

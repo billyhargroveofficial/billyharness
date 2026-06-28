@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
@@ -30,6 +31,7 @@ type scriptedHarness struct {
 	events       []protocol.Event
 	delay        time.Duration
 	configStatus string
+	authStatus   credentials.Status
 }
 
 func newBlockingHarness() *blockingHarness {
@@ -57,6 +59,18 @@ func (h *blockingHarness) MCPStatus(context.Context) (string, error) {
 
 func (h *blockingHarness) ConfigStatus(context.Context) (string, error) {
 	return "billyharness config", nil
+}
+
+func (h *blockingHarness) AuthStatus(context.Context) (credentials.Status, error) {
+	return credentials.Status{}, nil
+}
+
+func (h *blockingHarness) SaveDeepSeekAPIKey(context.Context, string) (credentials.ProviderStatus, error) {
+	return credentials.ProviderStatus{Configured: true, Source: ".env", Path: ".env"}, nil
+}
+
+func (h *blockingHarness) ImportCodexAuth(context.Context) (credentials.ProviderStatus, error) {
+	return credentials.ProviderStatus{Configured: true, Source: "imported", Path: "auth/codex.json"}, nil
 }
 
 func (h *blockingHarness) CancelSession(context.Context, string) (bool, error) {
@@ -94,8 +108,49 @@ func (h scriptedHarness) ConfigStatus(context.Context) (string, error) {
 	return "billyharness config", nil
 }
 
+func (h scriptedHarness) AuthStatus(context.Context) (credentials.Status, error) {
+	return h.authStatus, nil
+}
+
+func (h scriptedHarness) SaveDeepSeekAPIKey(context.Context, string) (credentials.ProviderStatus, error) {
+	return credentials.ProviderStatus{Configured: true, Source: ".env", Path: ".env"}, nil
+}
+
+func (h scriptedHarness) ImportCodexAuth(context.Context) (credentials.ProviderStatus, error) {
+	return credentials.ProviderStatus{Configured: true, Source: "imported", Path: "auth/codex.json"}, nil
+}
+
 func (h scriptedHarness) CancelSession(context.Context, string) (bool, error) {
 	return false, nil
+}
+
+type telegramAuthHarness struct {
+	scriptedHarness
+
+	mu               sync.Mutex
+	savedDeepSeekKey string
+	importedCodex    bool
+}
+
+func (h *telegramAuthHarness) SaveDeepSeekAPIKey(_ context.Context, apiKey string) (credentials.ProviderStatus, error) {
+	h.mu.Lock()
+	h.savedDeepSeekKey = apiKey
+	h.mu.Unlock()
+	return credentials.ProviderStatus{Configured: true, Source: "/root/billyharness/.env", Path: "/root/billyharness/.env"}, nil
+}
+
+func (h *telegramAuthHarness) ImportCodexAuth(context.Context) (credentials.ProviderStatus, error) {
+	h.mu.Lock()
+	h.importedCodex = true
+	h.mu.Unlock()
+	return credentials.ProviderStatus{
+		Configured: true,
+		Source:     "imported",
+		Path:       "/root/billyharness/auth/codex.json",
+		AccountID:  "acct_123",
+		Mode:       "chatgpt",
+		Refresh:    "fresh",
+	}, nil
 }
 
 func TestCancelCommandBypassesActiveRunLock(t *testing.T) {
@@ -331,6 +386,143 @@ func TestTelegramConfigCommandSendsSanitizedSummary(t *testing.T) {
 	}
 	if strings.Contains(sentText, "sk-secret") {
 		t.Fatalf("config leaked secret: %q", sentText)
+	}
+}
+
+func TestTelegramAuthDeepSeekDeletesSecretMessageAndDoesNotRenderKey(t *testing.T) {
+	var (
+		mu             sync.Mutex
+		sentText       string
+		parseMode      string
+		deleteCalls    int
+		deletedMessage int
+		deletedChatID  int64
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		switch r.URL.Path {
+		case "/botbottoken/sendMessage":
+			mu.Lock()
+			sentText, _ = payload["text"].(string)
+			parseMode, _ = payload["parse_mode"].(string)
+			mu.Unlock()
+			writeTelegramResult(w, SentMessage{MessageID: 11, Chat: Chat{ID: 123}})
+		case "/botbottoken/deleteMessage":
+			mu.Lock()
+			deleteCalls++
+			deletedChatID = int64(payload["chat_id"].(float64))
+			deletedMessage = int(payload["message_id"].(float64))
+			mu.Unlock()
+			writeTelegramResult(w, true)
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	harness := &telegramAuthHarness{}
+	client := NewClient(ClientOptions{BaseURL: server.URL, Token: "bottoken", MinInterval: time.Nanosecond})
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      t.TempDir() + "/state.json",
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const secret = "sk-test-telegram-secret"
+	bot.handleMessage(context.Background(), Message{MessageID: 77, Chat: Chat{ID: 123}, Text: "/auth deepseek " + secret})
+
+	harness.mu.Lock()
+	saved := harness.savedDeepSeekKey
+	harness.mu.Unlock()
+	if saved != secret {
+		t.Fatalf("saved DeepSeek key = %q, want %q", saved, secret)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if deleteCalls != 1 || deletedChatID != 123 || deletedMessage != 77 {
+		t.Fatalf("delete call = count %d chat %d message %d", deleteCalls, deletedChatID, deletedMessage)
+	}
+	if parseMode != "HTML" || !strings.Contains(sentText, "<b>Auth updated</b>") || !strings.Contains(sentText, "deepseek") {
+		t.Fatalf("auth response parse=%q text=%q", parseMode, sentText)
+	}
+	if strings.Contains(sentText, secret) || strings.Contains(sentText, "sk-test") {
+		t.Fatalf("auth response leaked secret: %q", sentText)
+	}
+}
+
+func TestTelegramAuthCodexImportAndStatus(t *testing.T) {
+	var sentTexts []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/botbottoken/sendMessage" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		text, _ := payload["text"].(string)
+		sentTexts = append(sentTexts, text)
+		writeTelegramResult(w, SentMessage{MessageID: 11, Chat: Chat{ID: 123}})
+	}))
+	defer server.Close()
+
+	harness := &telegramAuthHarness{
+		scriptedHarness: scriptedHarness{authStatus: credentials.Status{
+			DeepSeek: credentials.ProviderStatus{Configured: true, Source: ".env", Path: "/root/billyharness/.env"},
+			Codex:    credentials.ProviderStatus{Configured: true, Source: "imported", Path: "/root/billyharness/auth/codex.json", Mode: "chatgpt", Refresh: "fresh"},
+		}},
+	}
+	client := NewClient(ClientOptions{BaseURL: server.URL, Token: "bottoken", MinInterval: time.Nanosecond})
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      t.TempDir() + "/state.json",
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bot.handleMessage(context.Background(), Message{MessageID: 78, Chat: Chat{ID: 123}, Text: "/auth"})
+	bot.handleMessage(context.Background(), Message{MessageID: 79, Chat: Chat{ID: 123}, Text: "/auth codex"})
+
+	harness.mu.Lock()
+	imported := harness.importedCodex
+	harness.mu.Unlock()
+	if !imported {
+		t.Fatal("codex import was not called")
+	}
+	if len(sentTexts) != 2 {
+		t.Fatalf("sent %d auth messages, want 2: %#v", len(sentTexts), sentTexts)
+	}
+	if !strings.Contains(sentTexts[0], "<b>Auth</b>") || !strings.Contains(sentTexts[0], "refresh=fresh") {
+		t.Fatalf("auth status text = %q", sentTexts[0])
+	}
+	if !strings.Contains(sentTexts[1], "<b>Auth updated</b>") || !strings.Contains(sentTexts[1], "acct_123") {
+		t.Fatalf("auth import text = %q", sentTexts[1])
+	}
+	if strings.Contains(strings.Join(sentTexts, "\n"), "refresh_token") {
+		t.Fatalf("auth text leaked token-ish payload: %#v", sentTexts)
 	}
 }
 
