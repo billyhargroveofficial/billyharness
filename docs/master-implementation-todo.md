@@ -771,7 +771,7 @@ Acceptance:
 
 Acceptance:
 
-- [ ] TUI and Telegram can reconnect and replay missed session events.
+- [x] TUI and Telegram can reconnect and replay missed session events.
 - [ ] Gateway API does not expose secrets.
 
 ### 7.3 Service Management

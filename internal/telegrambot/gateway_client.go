@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
@@ -18,6 +19,7 @@ import (
 
 type Harness interface {
 	CreateSession(context.Context, string) (string, error)
+	ReplaySessionEvents(context.Context, string, int64, func(protocol.Event)) error
 	RunSession(context.Context, string, gateway.RunRequest, func(protocol.Event)) error
 	CancelSession(context.Context, string) (bool, error)
 	MCPStatus(context.Context) (string, error)
@@ -94,6 +96,37 @@ func (c *GatewayClient) RunSession(ctx context.Context, sessionID string, run ga
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("gateway run HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(limited)))
+	}
+	dec := json.NewDecoder(resp.Body)
+	for {
+		var event protocol.Event
+		if err := dec.Decode(&event); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		emit(event)
+	}
+}
+
+func (c *GatewayClient) ReplaySessionEvents(ctx context.Context, sessionID string, afterSeq int64, emit func(protocol.Event)) error {
+	path := fmt.Sprintf("/v1/sessions/%s/events?after_seq=%d&follow=false", url.PathEscape(sessionID), afterSeq)
+	resp, err := gateway.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
+		if err != nil {
+			return nil, err
+		}
+		gateway.SetAuthHeaderFromEnv(req)
+		return req, nil
+	})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("gateway events HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(limited)))
 	}
 	dec := json.NewDecoder(resp.Body)
 	for {

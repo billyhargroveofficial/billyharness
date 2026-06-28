@@ -34,6 +34,16 @@ type scriptedHarness struct {
 	authStatus   credentials.Status
 }
 
+type replayScriptedHarness struct {
+	scriptedHarness
+
+	mu         sync.Mutex
+	replaySeq  int64
+	replayID   string
+	replayed   int
+	replayFrom []protocol.Event
+}
+
 func newBlockingHarness() *blockingHarness {
 	return &blockingHarness{
 		runStarted:          make(chan struct{}),
@@ -51,6 +61,10 @@ func (h *blockingHarness) RunSession(ctx context.Context, _ string, _ gateway.Ru
 	<-ctx.Done()
 	h.cancelOnce.Do(func() { close(h.cancelled) })
 	return ctx.Err()
+}
+
+func (h *blockingHarness) ReplaySessionEvents(context.Context, string, int64, func(protocol.Event)) error {
+	return nil
 }
 
 func (h *blockingHarness) MCPStatus(context.Context) (string, error) {
@@ -94,6 +108,23 @@ func (h scriptedHarness) RunSession(ctx context.Context, _ string, _ gateway.Run
 		}
 	}
 	emit(protocol.Event{Type: protocol.EventRunCompleted})
+	return nil
+}
+
+func (h scriptedHarness) ReplaySessionEvents(context.Context, string, int64, func(protocol.Event)) error {
+	return nil
+}
+
+func (h *replayScriptedHarness) ReplaySessionEvents(_ context.Context, sessionID string, afterSeq int64, emit func(protocol.Event)) error {
+	h.mu.Lock()
+	h.replayID = sessionID
+	h.replaySeq = afterSeq
+	h.replayed++
+	events := append([]protocol.Event(nil), h.replayFrom...)
+	h.mu.Unlock()
+	for _, event := range events {
+		emit(event)
+	}
 	return nil
 }
 
@@ -572,6 +603,70 @@ func TestTelegramChatStateAccumulatesTurnsAndTools(t *testing.T) {
 	chat = state.Chats["123"]
 	if chat.AgentTurns != 0 || chat.ToolCalls != 0 {
 		t.Fatalf("/new should reset chat totals, got turns:%d tools:%d", chat.AgentTurns, chat.ToolCalls)
+	}
+}
+
+func TestTelegramReplaysMissedGatewayEventsBeforeRun(t *testing.T) {
+	statePath := t.TempDir() + "/state.json"
+	if err := (Store{Path: statePath}).Save(State{Chats: map[string]ChatState{
+		"123": {
+			SessionID:       "session-1",
+			Model:           "deepseek-v4-flash",
+			Profile:         "billy",
+			ReasoningEffort: "high",
+			LastEventSeq:    7,
+			UpdatedAt:       time.Now().UTC(),
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	harness := &replayScriptedHarness{
+		scriptedHarness: scriptedHarness{
+			events: []protocol.Event{
+				{Seq: 10, Type: protocol.EventModelCallStarted},
+				{Seq: 11, Type: protocol.EventAssistantDelta, Data: "new"},
+			},
+		},
+		replayFrom: []protocol.Event{
+			{Seq: 8, Type: protocol.EventModelCallStarted},
+			{Seq: 9, Type: protocol.EventAssistantDelta, Data: "missed"},
+		},
+	}
+	bot, err := New(Options{
+		BotToken:        "token",
+		StatePath:       statePath,
+		Model:           "deepseek-v4-flash",
+		Profile:         "billy",
+		ReasoningEffort: "high",
+		EditInterval:    time.Millisecond,
+		AllowedChatIDs:  map[int64]bool{123: true},
+		SendEnabled:     false,
+		DryRunDefault:   true,
+	}, nil, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "continue"})
+
+	harness.mu.Lock()
+	replayed := harness.replayed
+	replayID := harness.replayID
+	replaySeq := harness.replaySeq
+	harness.mu.Unlock()
+	if replayed != 1 || replayID != "session-1" || replaySeq != 7 {
+		t.Fatalf("replay = count:%d id:%q seq:%d", replayed, replayID, replaySeq)
+	}
+	state, err := (Store{Path: statePath}).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat := state.Chats["123"]
+	if chat.LastEventSeq != 11 {
+		t.Fatalf("LastEventSeq = %d, want 11", chat.LastEventSeq)
+	}
+	if chat.AgentTurns != 2 {
+		t.Fatalf("AgentTurns = %d, want replayed+new model calls", chat.AgentTurns)
 	}
 }
 

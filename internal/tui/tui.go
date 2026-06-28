@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -100,11 +101,12 @@ type selectionPoint struct {
 }
 
 type Model struct {
-	cfg        config.Config
-	gatewayURL string
-	sessionID  string
-	messages   []protocol.Message
-	version    string
+	cfg                 config.Config
+	gatewayURL          string
+	sessionID           string
+	lastGatewayEventSeq int64
+	messages            []protocol.Message
+	version             string
 
 	models       []string
 	modelIndex   int
@@ -174,6 +176,13 @@ type sessionReadyMsg struct {
 
 type streamEventMsg struct {
 	event protocol.Event
+}
+
+type replayEventsMsg struct {
+	events         []protocol.Event
+	messages       []protocol.Message
+	err            error
+	fallbackCreate bool
 }
 
 type runDoneMsg struct {
@@ -423,6 +432,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			skipViewportUpdate = true
 		case "ctrl+g":
 			if m.gatewayURL != "" {
+				if strings.TrimSpace(m.sessionID) != "" {
+					m.status = "replaying gateway"
+					return m, m.replayGatewayEventsCmd(true)
+				}
 				m.status = "connecting gateway"
 				return m, m.createSessionCmd()
 			}
@@ -498,10 +511,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case sessionReadyMsg:
 		m.sessionID = msg.id
+		m.lastGatewayEventSeq = 0
 		m.status = "gateway session " + msg.id[:min(len(msg.id), 8)]
 		m.settings.LastGatewaySessionID = msg.id
 		_ = m.saveSettings()
 		_ = m.saveCurrentSession()
+	case replayEventsMsg:
+		if msg.err != nil {
+			if msg.fallbackCreate {
+				m.status = "gateway replay failed; creating session"
+				cmds = append(cmds, m.createSessionCmd())
+			} else {
+				m.err = msg.err.Error()
+				m.addBlock("error", "GATEWAY", m.err)
+				m.status = "gateway replay failed"
+				reflow = true
+				gotoBottom = m.followOutput
+			}
+			break
+		}
+		for _, event := range msg.events {
+			m.applyEvent(event)
+		}
+		if len(msg.messages) > 0 {
+			m.messages = msg.messages
+		}
+		m.status = fmt.Sprintf("gateway replayed %d events", len(msg.events))
+		_ = m.saveCurrentSession()
+		reflow = true
+		gotoBottom = m.followOutput
 	case streamEventMsg:
 		m.applyEvent(msg.event)
 		reflow = true
@@ -1460,6 +1498,43 @@ func (m Model) createSessionCmd() tea.Cmd {
 	}
 }
 
+func (m Model) replayGatewayEventsCmd(fallbackCreate bool) tea.Cmd {
+	sessionID := strings.TrimSpace(m.sessionID)
+	afterSeq := m.lastGatewayEventSeq
+	return func() tea.Msg {
+		if sessionID == "" {
+			return replayEventsMsg{err: fmt.Errorf("gateway session id is empty"), fallbackCreate: fallbackCreate}
+		}
+		path := fmt.Sprintf("/v1/sessions/%s/events?after_seq=%d&follow=false", url.PathEscape(sessionID), afterSeq)
+		resp, err := m.gatewayRequest(context.Background(), http.DefaultClient, http.MethodGet, path, nil)
+		if err != nil {
+			return replayEventsMsg{err: err, fallbackCreate: fallbackCreate}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			return replayEventsMsg{err: fmt.Errorf("gateway HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(limited))), fallbackCreate: fallbackCreate}
+		}
+		dec := json.NewDecoder(resp.Body)
+		var events []protocol.Event
+		for {
+			var event protocol.Event
+			if err := dec.Decode(&event); err != nil {
+				if err == io.EOF {
+					break
+				}
+				return replayEventsMsg{err: err, fallbackCreate: fallbackCreate}
+			}
+			events = append(events, event)
+		}
+		messages, err := m.fetchGatewayMessagesForSession(sessionID)
+		if err != nil {
+			return replayEventsMsg{events: events, err: err, fallbackCreate: fallbackCreate}
+		}
+		return replayEventsMsg{events: events, messages: messages, fallbackCreate: fallbackCreate}
+	}
+}
+
 func (m Model) runLocal(prompt string) {
 	cfg := m.currentConfig()
 	prov, err := provider.New(cfg)
@@ -1535,7 +1610,11 @@ func (m Model) runGateway(prompt string) {
 }
 
 func (m Model) fetchGatewayMessages() ([]protocol.Message, error) {
-	path := fmt.Sprintf("/v1/sessions/%s", m.sessionID)
+	return m.fetchGatewayMessagesForSession(m.sessionID)
+}
+
+func (m Model) fetchGatewayMessagesForSession(sessionID string) ([]protocol.Message, error) {
+	path := fmt.Sprintf("/v1/sessions/%s", url.PathEscape(sessionID))
 	resp, err := m.gatewayRequest(context.Background(), http.DefaultClient, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
@@ -2014,6 +2093,7 @@ func (m *Model) setProfile(value string) tea.Cmd {
 	m.toolSummaryOutTok = 0
 	m.toolSummaryAPITok = 0
 	m.sessionID = ""
+	m.lastGatewayEventSeq = 0
 	m.followOutput = true
 	m.status = "profile " + m.currentProfile() + "; new chat"
 	_ = m.saveSettings()
@@ -2210,6 +2290,7 @@ func (m *Model) newChat() tea.Cmd {
 	m.status = "new chat " + shortID(m.localChatID)
 	m.followOutput = true
 	m.sessionID = ""
+	m.lastGatewayEventSeq = 0
 	_ = m.saveSettings()
 	_ = m.saveCurrentSession()
 	if m.gatewayURL != "" {
@@ -2241,7 +2322,9 @@ func (m *Model) resumeChat(prefix string) tea.Cmd {
 	m.applyChatSession(session)
 	m.status = "resumed " + shortID(m.localChatID)
 	if m.gatewayURL != "" {
-		m.sessionID = ""
+		if strings.TrimSpace(m.sessionID) != "" {
+			return m.replayGatewayEventsCmd(true)
+		}
 		return m.createSessionCmd()
 	}
 	return nil
@@ -2270,6 +2353,7 @@ func (m *Model) forkChat(prefix string) tea.Cmd {
 	m.chatTitle = "fork of " + shortID(old)
 	m.chatCreated = time.Now().UTC()
 	m.sessionID = ""
+	m.lastGatewayEventSeq = 0
 	m.status = "forked " + shortID(old) + " -> " + shortID(m.localChatID)
 	m.addInfoBlock("FORK", m.status)
 	_ = m.saveSettings()
@@ -2318,6 +2402,8 @@ func (m *Model) applyChatSession(session chatSession) {
 	m.usageAccounting.Reset()
 	m.toolCalls = session.ToolCalls
 	m.modelCalls = session.ModelCalls
+	m.sessionID = session.GatewaySessionID
+	m.lastGatewayEventSeq = session.GatewayEventSeq
 	if session.Model != "" {
 		m.models = appendIfMissing(m.models, session.Model)
 		for i, model := range m.models {
@@ -2406,6 +2492,7 @@ func (m *Model) saveCurrentSession() error {
 		ReasoningKind:    m.currentThinking().kind,
 		ReasoningEffort:  m.currentThinking().effort,
 		GatewaySessionID: m.sessionID,
+		GatewayEventSeq:  m.lastGatewayEventSeq,
 		Messages:         append([]protocol.Message(nil), m.messages...),
 		Blocks:           encodeBlocks(m.blocks),
 		InputTokens:      m.inputTok,
@@ -2688,6 +2775,9 @@ func (m Model) modelsText() string {
 }
 
 func (m *Model) applyEvent(event protocol.Event) {
+	if event.Seq > m.lastGatewayEventSeq {
+		m.lastGatewayEventSeq = event.Seq
+	}
 	switch event.Type {
 	case protocol.EventRunStarted:
 		m.finishLiveBlocks()

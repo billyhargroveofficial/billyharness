@@ -551,7 +551,7 @@ func TestGatewaySessionEventsReplayAfterSeqAcrossRestart(t *testing.T) {
 	defer httpServer.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, httpServer.URL+"/v1/sessions/"+created.ID+"/events?after_seq="+strconv.FormatInt(afterSeq, 10), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, httpServer.URL+"/v1/sessions/"+created.ID+"/events?after_seq="+strconv.FormatInt(afterSeq, 10)+"&follow=false", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -574,6 +574,10 @@ func TestGatewaySessionEventsReplayAfterSeqAcrossRestart(t *testing.T) {
 		if got.Seq <= afterSeq || got.Seq != want.Seq || got.Type != want.Type {
 			t.Fatalf("replayed event %d = seq %d type %s, want seq %d type %s after %d", i, got.Seq, got.Type, want.Seq, want.Type, afterSeq)
 		}
+	}
+	var extra protocol.Event
+	if err := dec.Decode(&extra); err != io.EOF {
+		t.Fatalf("one-shot replay decode after stored events = %v event=%#v, want EOF", err, extra)
 	}
 }
 
@@ -599,6 +603,12 @@ func TestGatewaySessionEventsRejectsInvalidAfterSeq(t *testing.T) {
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID+"/events?after_seq=not-a-number", nil))
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "after_seq") {
 		t.Fatalf("response = %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID+"/events?follow=maybe", nil))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "follow") {
+		t.Fatalf("follow response = %d %s", rec.Code, rec.Body.String())
 	}
 }
 

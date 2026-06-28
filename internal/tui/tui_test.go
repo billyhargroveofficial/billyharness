@@ -168,6 +168,64 @@ func TestRunGatewaySendsSelectedProviderModelAndReasoning(t *testing.T) {
 	}
 }
 
+func TestTUITracksGatewayEventSeq(t *testing.T) {
+	m := newTestModel(t)
+	m.applyEvent(protocol.Event{Seq: 5, Type: protocol.EventRunStarted})
+	m.applyEvent(protocol.Event{Seq: 3, Type: protocol.EventAssistantDelta, Data: "older"})
+	if got := m.lastGatewayEventSeq; got != 5 {
+		t.Fatalf("lastGatewayEventSeq = %d, want 5", got)
+	}
+}
+
+func TestReplayGatewayEventsCmdFetchesAfterSeq(t *testing.T) {
+	var sawReplay bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/sessions/session-1/events":
+			if got := r.URL.Query().Get("after_seq"); got != "7" {
+				t.Fatalf("after_seq = %q, want 7", got)
+			}
+			if got := r.URL.Query().Get("follow"); got != "false" {
+				t.Fatalf("follow = %q, want false", got)
+			}
+			sawReplay = true
+			_ = json.NewEncoder(w).Encode(protocol.Event{Seq: 8, Type: protocol.EventRunStarted})
+			_ = json.NewEncoder(w).Encode(protocol.Event{Seq: 9, Type: protocol.EventAssistantDelta, Data: "replayed"})
+		case "/v1/sessions/session-1":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"messages": []protocol.Message{{Role: protocol.RoleAssistant, Content: "replayed"}},
+			})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	m := newTestModel(t)
+	m.gatewayURL = server.URL
+	m.sessionID = "session-1"
+	m.lastGatewayEventSeq = 7
+	msg := m.replayGatewayEventsCmd(false)()
+	typed, ok := msg.(replayEventsMsg)
+	if !ok {
+		t.Fatalf("message = %T, want replayEventsMsg", msg)
+	}
+	if typed.err != nil {
+		t.Fatal(typed.err)
+	}
+	next, _ := m.Update(typed)
+	updated := next.(Model)
+	if !sawReplay {
+		t.Fatal("replay endpoint was not called")
+	}
+	if updated.lastGatewayEventSeq != 9 {
+		t.Fatalf("lastGatewayEventSeq = %d, want 9", updated.lastGatewayEventSeq)
+	}
+	if len(updated.messages) != 1 || updated.messages[0].Content != "replayed" {
+		t.Fatalf("messages = %#v", updated.messages)
+	}
+}
+
 func TestProfileSlashCommandStartsNewProfileChat(t *testing.T) {
 	m := newTestModel(t)
 	oldChat := m.localChatID

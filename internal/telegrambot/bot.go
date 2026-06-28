@@ -163,6 +163,7 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 			return
 		}
 		state.SessionID = id
+		state.LastEventSeq = 0
 	}
 	if state.Model == "" {
 		state.Model = b.opts.Model
@@ -227,8 +228,12 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 	firstDelta := time.Time{}
 	contentChars := 0
 	eventCount := 0
+	lastEventSeq := state.LastEventSeq
 	emitEvent := func(event protocol.Event) {
 		eventCount++
+		if event.Seq > lastEventSeq {
+			lastEventSeq = event.Seq
+		}
 		if event.Type == protocol.EventAssistantDelta {
 			if firstDelta.IsZero() {
 				firstDelta = time.Now()
@@ -249,6 +254,35 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 		}
 		answerDirty = true
 	}
+	if state.LastEventSeq > 0 {
+		if err := b.harness.ReplaySessionEvents(runCtx, state.SessionID, state.LastEventSeq, emitEvent); err != nil {
+			if gatewaySessionMissing(err) {
+				log.Printf("telegram gateway replay session missing; recreating chat=%d old_session=%s", msg.Chat.ID, short(state.SessionID))
+				id, createErr := b.harness.CreateSession(runCtx, state.Profile)
+				if createErr != nil {
+					renderMu.Lock()
+					renderer.LastError = createErr.Error()
+					answerDirty = true
+					renderMu.Unlock()
+					close(stopStreamEdits)
+					<-streamEditsDone
+					return
+				}
+				state.SessionID = id
+				state.LastEventSeq = 0
+				lastEventSeq = 0
+				state.UpdatedAt = time.Now().UTC()
+				b.setChatState(key, state)
+				renderMu.Lock()
+				renderer = NewRendererWithContextWindowAndTotals(b.opts.ContextWindow, state.AgentTurns, state.ToolCalls)
+				tools = NewToolProgress()
+				answerDirty = true
+				renderMu.Unlock()
+			} else {
+				log.Printf("telegram replay events failed chat=%d session=%s after_seq=%d: %v", msg.Chat.ID, short(state.SessionID), state.LastEventSeq, err)
+			}
+		}
+	}
 	err = b.harness.RunSession(runCtx, state.SessionID, runReq, emitEvent)
 	if gatewaySessionMissing(err) {
 		log.Printf("telegram gateway session missing; recreating chat=%d old_session=%s", msg.Chat.ID, short(state.SessionID))
@@ -257,6 +291,8 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 			err = createErr
 		} else {
 			state.SessionID = id
+			state.LastEventSeq = 0
+			lastEventSeq = 0
 			state.UpdatedAt = time.Now().UTC()
 			b.setChatState(key, state)
 			renderMu.Lock()
@@ -293,6 +329,9 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 	if renderer.ModelCalls > 0 || renderer.ToolCalls > 0 {
 		state.AgentTurns += renderer.ModelCalls
 		state.ToolCalls += renderer.ToolCalls
+	}
+	if state.LastEventSeq != lastEventSeq || renderer.ModelCalls > 0 || renderer.ToolCalls > 0 {
+		state.LastEventSeq = lastEventSeq
 		state.UpdatedAt = time.Now().UTC()
 		b.setChatState(key, state)
 	}
@@ -375,6 +414,7 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 		state.SessionID = id
 		state.AgentTurns = 0
 		state.ToolCalls = 0
+		state.LastEventSeq = 0
 		state.UpdatedAt = time.Now().UTC()
 		b.setChatState(key, state)
 		_ = b.sendPlain(ctx, msg, "New Billyharness session: "+short(id))
@@ -413,6 +453,7 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 		state.SessionID = ""
 		state.AgentTurns = 0
 		state.ToolCalls = 0
+		state.LastEventSeq = 0
 		state.UpdatedAt = time.Now().UTC()
 		b.setChatState(key, state)
 		_ = b.sendPlain(ctx, msg, "Profile: "+state.Profile+"; next message starts a new session")
@@ -798,6 +839,7 @@ func StatusHTML(state ChatState, opts Options) string {
 		"reasoning: <code>" + esc(fallback(state.ReasoningEffort, opts.ReasoningEffort)) + "</code>\n" +
 		"agent turns: <code>" + esc(strconv.Itoa(state.AgentTurns)) + "</code>\n" +
 		"tools: <code>" + esc(strconv.Itoa(state.ToolCalls)) + "</code>\n" +
+		"event cursor: <code>" + esc(strconv.FormatInt(state.LastEventSeq, 10)) + "</code>\n" +
 		"context window: <code>" + esc(compactInt(opts.ContextWindow)) + "</code>\n" +
 		"send: <code>" + esc(fmt.Sprint(opts.SendEnabled && !opts.DryRunDefault)) + "</code>\n" +
 		"allowed chats: <code>" + esc(strings.Join(allowedChats, ",")) + "</code>\n" +
@@ -910,7 +952,7 @@ func gatewaySessionMissing(err error) bool {
 		return false
 	}
 	text := strings.ToLower(err.Error())
-	return strings.Contains(text, "gateway run http 404") && strings.Contains(text, "session not found")
+	return (strings.Contains(text, "gateway run http 404") || strings.Contains(text, "gateway events http 404")) && strings.Contains(text, "session not found")
 }
 
 func durationSince(start, mark time.Time) string {

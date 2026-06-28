@@ -24,6 +24,7 @@ type chatSession struct {
 	ReasoningKind    string             `json:"reasoning_kind"`
 	ReasoningEffort  string             `json:"reasoning_effort"`
 	GatewaySessionID string             `json:"gateway_session_id,omitempty"`
+	GatewayEventSeq  int64              `json:"gateway_event_seq,omitempty"`
 	Messages         []protocol.Message `json:"messages,omitempty"`
 	Blocks           []savedBlock       `json:"blocks,omitempty"`
 	InputTokens      int64              `json:"input_tokens"`

@@ -461,6 +461,11 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	follow, err := parseEventFollow(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
@@ -496,6 +501,9 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
 		if !emit(protocol.Event{Type: protocol.EventSessionStatus, Data: session.Status()}) {
 			return
 		}
+	}
+	if !follow {
+		return
 	}
 	if hasAfterSeq {
 		for {
@@ -545,6 +553,21 @@ func parseEventReplayCursor(r *http.Request) (int64, bool, error) {
 		return 0, true, fmt.Errorf("after_seq must be a non-negative integer")
 	}
 	return seq, true, nil
+}
+
+func parseEventFollow(r *http.Request) (bool, error) {
+	raw := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("follow")))
+	if raw == "" {
+		return true, nil
+	}
+	switch raw {
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("follow must be true or false")
+	}
 }
 
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
