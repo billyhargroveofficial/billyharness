@@ -511,7 +511,7 @@ Acceptance:
   - [x] replacement id
   - [x] summary model if used
 - [ ] Preserve tool refs and important outputs.
-- [ ] Add replay tests around compaction boundaries.
+- [x] Add replay tests around compaction boundaries.
 
 Acceptance:
 

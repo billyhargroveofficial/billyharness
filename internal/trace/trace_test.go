@@ -2,6 +2,7 @@ package trace
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,7 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/agent"
+	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/provider"
+	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
 func TestEventWriterRecordsContiguousEventsAndPayloadRefs(t *testing.T) {
@@ -293,6 +298,59 @@ func TestReplayEventsRejectsSequenceGap(t *testing.T) {
 	_, err := ReplayEvents(path)
 	if err == nil || !strings.Contains(err.Error(), "sequence gap") {
 		t.Fatalf("expected sequence gap error, got %v", err)
+	}
+}
+
+func TestReplayEventsIncludesRealAgentCompactionBoundary(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.ContextCompactTokens = 50
+	cfg.ContextCompactKeep = 1
+	cfg.ContextCompactMaxChars = 2000
+	cfg.MaxToolRounds = 1
+	runner := agent.New(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+
+	messages := []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: strings.Repeat("old context ", 120)},
+		{Role: protocol.RoleAssistant, Content: "old answer"},
+		{Role: protocol.RoleUser, Content: "latest task"},
+	}
+	var out bytes.Buffer
+	writer := NewEventWriter("replay-compaction", &out, WithNow(func() time.Time { return time.Unix(20, 0).UTC() }))
+	var recordErr error
+	_, runErr := runner.RunMessages(context.Background(), messages, func(event protocol.Event) {
+		if _, err := writer.Record("task-compaction", event); err != nil && recordErr == nil {
+			recordErr = err
+		}
+	})
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	if recordErr != nil {
+		t.Fatal(recordErr)
+	}
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := ReplayEvents(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.ContextCompactions != 1 {
+		t.Fatalf("summary should include compaction: %#v", summary)
+	}
+	found := false
+	for _, item := range summary.Timeline {
+		if item.EventType == string(protocol.EventContextCompacted) && item.Kind == "context_compaction" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("timeline missing compaction boundary: %#v", summary.Timeline)
 	}
 }
 
