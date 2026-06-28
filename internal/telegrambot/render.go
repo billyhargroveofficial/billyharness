@@ -335,6 +335,49 @@ func (p *ToolProgress) PlainText() string {
 	return "Tools " + state + " · " + elapsed.String() + "\n" + strings.Join(lines, "\n")
 }
 
+func (p *ToolProgress) PlainTextLimit(limit int) string {
+	if p == nil || len(p.lines) == 0 || limit <= 0 {
+		return ""
+	}
+	text := p.PlainText()
+	if telegramUTF16Len(text) <= limit {
+		return text
+	}
+	state := "running"
+	if p.Done {
+		state = "done"
+	}
+	elapsed := time.Since(p.Started).Round(time.Second)
+	header := "Tools " + state + " · " + elapsed.String()
+	marker := "…[truncated]"
+	budget := limit - telegramUTF16Len(header) - telegramUTF16Len(marker) - 2
+	if budget <= 0 {
+		return trimToUTF16Tail(header+"\n"+marker, limit)
+	}
+	var selected []string
+	used := 0
+	for i := len(p.lines) - 1; i >= 0; i-- {
+		line := p.lines[i].text
+		lineLen := telegramUTF16Len(line)
+		if len(selected) > 0 {
+			lineLen++
+		}
+		if used+lineLen <= budget {
+			selected = append([]string{line}, selected...)
+			used += lineLen
+			continue
+		}
+		if len(selected) == 0 {
+			selected = append(selected, trimToUTF16Tail(line, budget))
+		}
+		break
+	}
+	if len(selected) == 0 {
+		return header + "\n" + marker
+	}
+	return header + "\n" + marker + "\n" + strings.Join(selected, "\n")
+}
+
 func ErrorMessageHTML(text string) string {
 	return trimTelegram("<b>Error</b>\n" + esc(text))
 }
@@ -864,6 +907,35 @@ func trimTelegram(text string) string {
 	runes := []rune(text)
 	n := telegramRunePrefixLen(runes, telegramLimit-64)
 	return string(runes[:n]) + "\n...[truncated]"
+}
+
+func trimTelegramTail(text string) string {
+	if telegramUTF16Len(text) <= telegramLimit {
+		return text
+	}
+	marker := "…[truncated]\n"
+	budget := telegramLimit - telegramUTF16Len(marker)
+	if budget <= 0 {
+		return marker
+	}
+	return marker + trimToUTF16Tail(text, budget)
+}
+
+func trimToUTF16Tail(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if telegramUTF16Len(text) <= limit {
+		return text
+	}
+	marker := "…"
+	budget := limit - telegramUTF16Len(marker)
+	if budget <= 0 {
+		return marker
+	}
+	runes := []rune(text)
+	n := telegramRuneSuffixLen(runes, budget)
+	return marker + string(runes[len(runes)-n:])
 }
 
 func esc(text string) string {

@@ -693,22 +693,30 @@ func (r *Renderer) StreamPlainText(model, reasoning string, tools *ToolProgress)
 	elapsed := time.Since(r.Started).Round(time.Second)
 	header := "⚡ Billyharness · Running\n" +
 		"🧬 " + model + " · 🧠 " + reasoning + " · ⏱ " + elapsed.String() + "\n\n"
+	footer := r.footerLine()
+	toolBudget := telegramLimit - telegramUTF16Len(header) - telegramUTF16Len(footer) - 900
+	if toolBudget < 800 {
+		toolBudget = telegramLimit - telegramUTF16Len(header) - telegramUTF16Len(footer) - 128
+	}
 	var suffixParts []string
-	if toolText := tools.PlainText(); toolText != "" {
+	if toolText := tools.PlainTextLimit(toolBudget); toolText != "" {
 		suffixParts = append(suffixParts, toolText)
 	}
-	suffixParts = append(suffixParts, r.footerLine())
+	suffixParts = append(suffixParts, footer)
 	suffix := "\n\n" + strings.Join(suffixParts, "\n\n")
 	budget := telegramLimit - telegramUTF16Len(header) - telegramUTF16Len(suffix) - 16
-	if budget < 800 {
-		budget = 800
+	if budget < 0 {
+		budget = 0
 	}
 	text := header + streamContentPreview(content, budget) + suffix
-	return trimTelegram(text)
+	return trimTelegramTail(text)
 }
 
 func streamContentPreview(content string, budget int) string {
-	if budget <= 0 || telegramUTF16Len(content) <= budget {
+	if budget <= 0 {
+		return "…"
+	}
+	if telegramUTF16Len(content) <= budget {
 		return content
 	}
 	prefix := "…\n"

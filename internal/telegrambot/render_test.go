@@ -253,6 +253,38 @@ func TestStreamPlainTextKeepsToolsVisibleWhenContentIsLong(t *testing.T) {
 	}
 }
 
+func TestStreamPlainTextTruncatesFromStartWhenToolProgressIsHuge(t *testing.T) {
+	renderer := NewRenderer()
+	renderer.Content.WriteString("initial answer that can be dropped")
+	progress := NewToolProgress()
+	for i := 0; i < 24; i++ {
+		_ = progress.Add(RenderEvent{
+			Kind: "tool",
+			Key:  fmt.Sprintf("tool-%02d", i),
+			Body: fmt.Sprintf("🌐 web_extract oldest=%02d %s newest-tool-%02d", i, strings.Repeat("payload ", 80), i),
+		})
+	}
+
+	text := renderer.StreamPlainText("deepseek-v4-flash", "high", progress)
+	if got := telegramUTF16Len(text); got > telegramLimit {
+		t.Fatalf("stream text exceeds telegram limit: %d", got)
+	}
+	if !strings.Contains(text, "…[truncated]") {
+		t.Fatalf("stream text should mark truncated progress:\n%s", text)
+	}
+	for _, want := range []string{"newest-tool-23", "Tools running"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("stream text missing fresh suffix %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "newest-tool-00") {
+		t.Fatalf("stream text kept stale beginning:\n%s", text)
+	}
+	if strings.HasSuffix(strings.TrimSpace(text), "...[truncated]") {
+		t.Fatalf("stream text should not put truncated marker at the end:\n%s", text)
+	}
+}
+
 func TestToolProgressUpdatesToolLineOnFinish(t *testing.T) {
 	progress := NewToolProgress()
 	renderer := NewRenderer()
