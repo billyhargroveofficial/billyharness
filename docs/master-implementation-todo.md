@@ -764,7 +764,7 @@ Acceptance:
   - [x] config inspect
   - [x] auth status
   - [x] MCP status
-  - [ ] context status
+  - [x] context status
   - [ ] benchmarks
 - [x] Add typed response structs and tests.
 - [x] Add event replay cursor: `after_seq`.

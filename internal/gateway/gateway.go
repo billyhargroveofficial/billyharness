@@ -119,6 +119,27 @@ type SessionResponse struct {
 	Status       SessionStatus      `json:"status"`
 }
 
+type SessionContextResponse struct {
+	ID                      string               `json:"id"`
+	MessageCount            int                  `json:"message_count"`
+	EstimatedTokens         int64                `json:"estimated_tokens"`
+	ContextWindowTokens     int64                `json:"context_window_tokens"`
+	ContextCompactTokens    int64                `json:"context_compact_tokens"`
+	PercentUsed             float64              `json:"percent_used"`
+	CompactThresholdPercent float64              `json:"compact_threshold_percent"`
+	OverCompactThreshold    bool                 `json:"over_compact_threshold"`
+	Estimator               string               `json:"estimator"`
+	TopContributors         []ContextContributor `json:"top_contributors,omitempty"`
+}
+
+type ContextContributor struct {
+	Index           int    `json:"index"`
+	Role            string `json:"role"`
+	Chars           int    `json:"chars"`
+	EstimatedTokens int64  `json:"estimated_tokens"`
+	Preview         string `json:"preview,omitempty"`
+}
+
 type CancelSessionResponse struct {
 	Cancelled bool `json:"cancelled"`
 }
@@ -227,6 +248,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/sessions", s.handleCreateSession)
 	s.mux.HandleFunc("GET /v1/sessions/{id}", s.handleGetSession)
 	s.mux.HandleFunc("GET /v1/sessions/{id}/status", s.handleSessionStatus)
+	s.mux.HandleFunc("GET /v1/sessions/{id}/context", s.handleSessionContextStatus)
 	s.mux.HandleFunc("GET /v1/sessions/{id}/events", s.handleSessionEvents)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/run", s.handleSessionRun)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/cancel", s.handleSessionCancel)
@@ -374,6 +396,15 @@ func (s *Server) handleSessionStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, session.Status())
+}
+
+func (s *Server) handleSessionContextStatus(w http.ResponseWriter, r *http.Request) {
+	session, ok := s.session(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, sessionContextResponse(s.cfg, session))
 }
 
 func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
@@ -587,6 +618,86 @@ func sessionSummary(session *Session) SessionSummary {
 		ReasoningEffort: status.ReasoningEffort,
 		LastError:       status.LastError,
 	}
+}
+
+func sessionContextResponse(cfg config.Config, session *Session) SessionContextResponse {
+	messages := session.messages()
+	estimatedTokens := estimateGatewayMessagesTokens(messages)
+	contextWindow := cfg.ContextWindowTokens
+	compactAt := int64(cfg.ContextCompactTokens)
+	var percentUsed float64
+	if contextWindow > 0 {
+		percentUsed = float64(estimatedTokens) / float64(contextWindow) * 100
+	}
+	var thresholdPercent float64
+	if contextWindow > 0 && compactAt > 0 {
+		thresholdPercent = float64(compactAt) / float64(contextWindow) * 100
+	}
+	contributors := make([]ContextContributor, 0, len(messages))
+	for i, msg := range messages {
+		chars := gatewayMessageChars(msg)
+		if chars == 0 {
+			continue
+		}
+		contributors = append(contributors, ContextContributor{
+			Index:           i,
+			Role:            string(msg.Role),
+			Chars:           chars,
+			EstimatedTokens: int64((chars + 3) / 4),
+			Preview:         previewGatewayMessage(msg.Content, 120),
+		})
+	}
+	sort.Slice(contributors, func(i, j int) bool {
+		if contributors[i].EstimatedTokens == contributors[j].EstimatedTokens {
+			return contributors[i].Index < contributors[j].Index
+		}
+		return contributors[i].EstimatedTokens > contributors[j].EstimatedTokens
+	})
+	if len(contributors) > 5 {
+		contributors = contributors[:5]
+	}
+	return SessionContextResponse{
+		ID:                      session.ID,
+		MessageCount:            len(messages),
+		EstimatedTokens:         estimatedTokens,
+		ContextWindowTokens:     contextWindow,
+		ContextCompactTokens:    compactAt,
+		PercentUsed:             percentUsed,
+		CompactThresholdPercent: thresholdPercent,
+		OverCompactThreshold:    compactAt > 0 && estimatedTokens >= compactAt,
+		Estimator:               "chars_div_4",
+		TopContributors:         contributors,
+	}
+}
+
+func estimateGatewayMessagesTokens(messages []protocol.Message) int64 {
+	var chars int
+	for _, msg := range messages {
+		chars += gatewayMessageChars(msg)
+	}
+	if chars == 0 {
+		return 0
+	}
+	return int64((chars + 3) / 4)
+}
+
+func gatewayMessageChars(msg protocol.Message) int {
+	chars := len(msg.Content) + len(msg.Name) + len(msg.ToolCallID) + len(string(msg.Role))
+	for _, call := range msg.ToolCalls {
+		chars += len(call.ID) + len(call.Name) + len(call.Arguments)
+	}
+	return chars
+}
+
+func previewGatewayMessage(content string, maxChars int) string {
+	content = strings.Join(strings.Fields(content), " ")
+	if maxChars <= 0 || len(content) <= maxChars {
+		return content
+	}
+	if maxChars <= 3 {
+		return content[:maxChars]
+	}
+	return content[:maxChars-3] + "..."
 }
 
 func (s *Server) saveSession(session *Session) error {

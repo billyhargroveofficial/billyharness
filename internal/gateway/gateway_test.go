@@ -214,6 +214,53 @@ func TestGatewaySessionListEndpointReturnsTypedSummaries(t *testing.T) {
 	}
 }
 
+func TestGatewaySessionContextStatusEndpoint(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.ContextWindowTokens = 1000
+	cfg.ContextCompactTokens = 600
+	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+
+	longText := strings.Repeat("context-heavy ", 80)
+	body, _ := json.Marshal(CreateSessionRequest{Messages: []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: longText},
+		{Role: protocol.RoleAssistant, Content: "short"},
+	}})
+	create := httptest.NewRecorder()
+	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(body)))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var created SessionResponse
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID+"/context", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("context status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var got SessionContextResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != created.ID || got.MessageCount != 3 || got.ContextWindowTokens != 1000 || got.ContextCompactTokens != 600 {
+		t.Fatalf("context status = %#v", got)
+	}
+	if got.EstimatedTokens <= 0 || got.PercentUsed <= 0 || got.CompactThresholdPercent != 60 {
+		t.Fatalf("context usage fields = %#v", got)
+	}
+	if len(got.TopContributors) == 0 || got.TopContributors[0].Role != string(protocol.RoleUser) || got.TopContributors[0].EstimatedTokens <= 0 {
+		t.Fatalf("top contributors = %#v", got.TopContributors)
+	}
+	if len(got.TopContributors[0].Preview) > 120 {
+		t.Fatalf("preview too long: %q", got.TopContributors[0].Preview)
+	}
+}
+
 func TestGatewaySessionEventsSubscribeReceivesRunEvents(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"
