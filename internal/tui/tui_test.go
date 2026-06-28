@@ -922,6 +922,31 @@ func TestLiveAssistantMarkdownKeepsUnstableTailRawUntilCompleted(t *testing.T) {
 	}
 }
 
+func TestStreamingMarkdownStateSplitsRawStableTailAndHoldback(t *testing.T) {
+	code := "Intro\n```go\nfmt.Println(1)\n"
+	codeState := newStreamingMarkdownState(code, true)
+	if codeState.rawMarkdown != code || codeState.stableCommitted != "Intro\n" ||
+		codeState.mutableLiveTail != "```go\nfmt.Println(1)\n" ||
+		codeState.holdbackKind != markdownHoldbackCodeFence ||
+		codeState.finalCanonical {
+		t.Fatalf("code state = %#v", codeState)
+	}
+
+	table := "Scores\n| Name | Value |\n| --- | --- |\n| Billy | 10 |\n"
+	tableState := newStreamingMarkdownState(table, true)
+	if tableState.rawMarkdown != table || tableState.stableCommitted != "Scores\n" ||
+		!strings.Contains(tableState.mutableLiveTail, "| Billy | 10 |") ||
+		tableState.holdbackKind != markdownHoldbackTable ||
+		tableState.finalCanonical {
+		t.Fatalf("table state = %#v", tableState)
+	}
+
+	final := newStreamingMarkdownState(table, false)
+	if !final.finalCanonical || final.stableCommitted != table || final.mutableLiveTail != "" || final.holdbackKind != "" {
+		t.Fatalf("final state = %#v", final)
+	}
+}
+
 func TestAssistantDeltasUpdateSingleLiveBlock(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 100

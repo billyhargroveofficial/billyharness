@@ -555,21 +555,21 @@ Acceptance:
 ### 5.2 Streaming Controller
 
 - [ ] Split streaming state:
-  - [ ] raw markdown source
-  - [ ] stable committed region
-  - [ ] mutable live tail
-  - [ ] table holdback
-  - [ ] code fence holdback
-  - [ ] final canonical render
+  - [x] raw markdown source
+  - [x] stable committed region
+  - [x] mutable live tail
+  - [x] table holdback
+  - [x] code fence holdback
+  - [x] final canonical render
 - [ ] Reduce full transcript re-rendering.
 - [ ] Keep scroll anchored when user is at bottom.
 - [ ] Preserve selection during live updates as much as possible.
 
 Acceptance:
 
-- [ ] Tables do not flicker into broken markdown while streaming.
-- [ ] Code fences do not render as broken blocks.
-- [ ] Final output is clean markdown-supported terminal text.
+- [x] Tables do not flicker into broken markdown while streaming.
+- [x] Code fences do not render as broken blocks.
+- [x] Final output is clean markdown-supported terminal text.
 
 ### 5.3 Tool Presentation
 

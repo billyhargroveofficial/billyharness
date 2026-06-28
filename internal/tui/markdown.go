@@ -59,23 +59,54 @@ func renderTerminalMarkdown(text string, width int, styles themeStyles) string {
 	return strings.TrimRight(strings.Join(out, "\n"), "\n")
 }
 
+type streamingMarkdownState struct {
+	rawMarkdown     string
+	stableCommitted string
+	mutableLiveTail string
+	holdbackKind    string
+	finalCanonical  bool
+}
+
+const (
+	markdownHoldbackCodeFence = "code_fence"
+	markdownHoldbackTable     = "table"
+)
+
+func newStreamingMarkdownState(text string, live bool) streamingMarkdownState {
+	state := streamingMarkdownState{rawMarkdown: text, finalCanonical: !live}
+	if !live {
+		state.stableCommitted = text
+		return state
+	}
+	cut, holdback := liveMarkdownStablePrefix(text)
+	state.stableCommitted = text[:cut]
+	state.mutableLiveTail = text[cut:]
+	state.holdbackKind = holdback
+	return state
+}
+
 func liveMarkdownStablePrefixLen(text string) int {
+	cut, _ := liveMarkdownStablePrefix(text)
+	return cut
+}
+
+func liveMarkdownStablePrefix(text string) (int, string) {
 	if text == "" {
-		return 0
+		return 0, ""
 	}
 	newline := strings.LastIndexByte(text, '\n')
 	if newline < 0 {
-		return 0
+		return 0, ""
 	}
 	cut := newline + 1
 	prefix := text[:cut]
 	if start, ok := liveOpenFenceStart(prefix); ok {
-		return start
+		return start, markdownHoldbackCodeFence
 	}
 	if start, ok := liveUnboundedTableStart(prefix); ok {
-		return start
+		return start, markdownHoldbackTable
 	}
-	return cut
+	return cut, ""
 }
 
 type markdownLineSpan struct {

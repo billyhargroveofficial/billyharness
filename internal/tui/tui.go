@@ -3422,13 +3422,14 @@ func blockTitle(b block) string {
 }
 
 func renderAssistantBody(body string, width int, styles themeStyles, live bool) string {
-	if !live {
-		return renderTerminalMarkdown(body, width, styles)
+	state := newStreamingMarkdownState(body, live)
+	if state.finalCanonical {
+		return renderTerminalMarkdown(state.rawMarkdown, width, styles)
 	}
-	stable, tail := splitLiveMarkdown(body)
+	stable, tail := state.stableCommitted, state.mutableLiveTail
 	switch {
 	case stable == "":
-		return body
+		return state.rawMarkdown
 	case tail == "":
 		return renderTerminalMarkdown(stable, width, styles)
 	default:
@@ -3441,8 +3442,8 @@ func renderAssistantBody(body string, width int, styles themeStyles, live bool) 
 }
 
 func splitLiveMarkdown(body string) (stable, tail string) {
-	cut := liveMarkdownStablePrefixLen(body)
-	return body[:cut], body[cut:]
+	state := newStreamingMarkdownState(body, true)
+	return state.stableCommitted, state.mutableLiveTail
 }
 
 func renderActivityBlock(b block, body string, width int, styles themeStyles) string {
