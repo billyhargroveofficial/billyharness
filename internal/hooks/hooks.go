@@ -141,7 +141,15 @@ func hookEventData(hook config.Hook, event string, payload map[string]any) map[s
 		"fatal":      hook.Fatal,
 		"status":     protocol.StepStatusStarted,
 	}
-	for _, key := range []string{"turn_id", "step_id", "call_id", "attempt_id", "tool_name"} {
+	if len(payload) > 0 {
+		data["payload"] = payload
+	}
+	for _, key := range []string{
+		"turn_id", "step_id", "call_id", "attempt_id", "tool_name",
+		"request_id", "provider_id", "model_id", "provider_request_id", "attempts", "retries", "status_code",
+		"args_summary", "error_code", "is_error", "duration_ms", "output_bytes", "output_estimated_tokens",
+		"truncated", "output_ref", "permission_decision", "permission_source", "permission_reason",
+	} {
 		if value := payload[key]; value != nil && value != "" {
 			data[key] = value
 		}

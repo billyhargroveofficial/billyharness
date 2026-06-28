@@ -137,6 +137,7 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 		var firstDeltaAt time.Time
 		var lastUsage provider.Usage
 		var requestMeta provider.RequestMetadata
+		var providerHookErr error
 		var acc provider.ToolAccumulator
 		for event := range events {
 			switch event.Kind {
@@ -177,10 +178,59 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 				})
 			case provider.EventRequestMetadata:
 				requestMeta = event.Request
+				if event.Request.Retries > 0 {
+					providerHookErr = joinHookError(providerHookErr, hookRunner.Run(ctx, "provider_retry", map[string]any{
+						"turn_id":             turnID,
+						"step_id":             modelStepID,
+						"request_id":          event.Request.RequestID,
+						"provider_id":         event.Request.ProviderID,
+						"model_id":            event.Request.ModelID,
+						"provider_request_id": event.Request.ProviderRequestID,
+						"attempts":            event.Request.Attempts,
+						"retries":             event.Request.Retries,
+						"status_code":         event.Request.StatusCode,
+					}, emit))
+				}
 			case provider.EventDone:
 			}
 		}
 		if err := <-errs; err != nil {
+			emit(protocol.Event{
+				Type:   protocol.EventModelCallFinished,
+				TurnID: turnID,
+				StepID: modelStepID,
+				Data:   modelCallEventData(modelCallBase, protocol.StepStatusFailed, durationMS(modelStarted), firstDeltaLatencyMS(modelStarted, firstDeltaAt), lastUsage, requestMeta, err.Error()),
+			})
+			emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
+				TurnID:     turnID,
+				StepID:     modelStepID,
+				Round:      roundNum,
+				Kind:       protocol.StepKindModelCall,
+				Status:     protocol.StepStatusFailed,
+				Name:       a.cfg.Model,
+				DurationMS: durationMS(modelStarted),
+				Error:      err.Error(),
+			}})
+			emit(protocol.Event{Type: protocol.EventTurnCompleted, Data: protocol.TurnEvent{
+				TurnID:     turnID,
+				Round:      roundNum,
+				Status:     protocol.TurnStatusFailed,
+				StopReason: protocol.TurnStopError,
+				Model:      a.cfg.Model,
+				DurationMS: durationMS(turnStarted),
+				Error:      err.Error(),
+			}})
+			err = joinHookError(err, hookRunner.Run(ctx, "session_done", map[string]any{
+				"run_id":  run.ID,
+				"status":  protocol.StepStatusFailed,
+				"error":   err.Error(),
+				"turn_id": turnID,
+			}, emit))
+			emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
+			return messages, err
+		}
+		if providerHookErr != nil {
+			err := providerHookErr
 			emit(protocol.Event{
 				Type:   protocol.EventModelCallFinished,
 				TurnID: turnID,

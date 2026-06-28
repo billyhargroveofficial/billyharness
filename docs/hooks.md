@@ -31,12 +31,12 @@ Supported hook events today:
 - `session_start`
 - `before_tool`
 - `after_tool`
+- `provider_retry`
 - `session_done`
 
 Reserved but not wired yet:
 
 - `mcp_status_change`
-- `provider_retry`
 
 The hook process receives a JSON payload on stdin:
 

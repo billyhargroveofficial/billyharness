@@ -815,6 +815,51 @@ func TestRunMessagesEmitsConfiguredHookEvents(t *testing.T) {
 	}
 }
 
+func TestRunMessagesEmitsProviderRetryHook(t *testing.T) {
+	cfg := config.Default()
+	cfg.MaxToolRounds = 1
+	cfg.HooksEnabled = true
+	cfg.Hooks = []config.Hook{testHook("provider_retry", "provider_retry")}
+	registry := tools.NewRegistry(cfg)
+	prov := &scriptedProvider{steps: [][]provider.Event{{
+		{Kind: provider.EventRequestMetadata, Request: provider.RequestMetadata{
+			RequestID:         "req-1",
+			ProviderID:        "deepseek",
+			ModelID:           "deepseek-v4-flash",
+			ProviderRequestID: "provider-req-2",
+			Attempts:          2,
+			Retries:           1,
+			StatusCode:        200,
+		}},
+		{Kind: provider.EventContent, Text: "finished"},
+		{Kind: provider.EventDone},
+	}}}
+	a := New(cfg, prov, registry)
+	var events []protocol.Event
+	_, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "say hi"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sawHookFinished(events, "provider_retry") {
+		t.Fatalf("missing provider_retry hook: %#v", events)
+	}
+	for _, event := range events {
+		if event.Type != protocol.EventHookFinished {
+			continue
+		}
+		data := eventDataMap(event)
+		if data["hook_event"] == "provider_retry" && data["request_id"] == "req-1" && data["retries"] == float64(1) {
+			return
+		}
+	}
+	t.Fatalf("provider_retry payload missing request metadata: %#v", events)
+}
+
 func testHook(name, event string) config.Hook {
 	return config.Hook{
 		Name:           name,

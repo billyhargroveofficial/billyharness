@@ -385,7 +385,7 @@ Acceptance:
   - [x] `before_tool`
   - [x] `after_tool`
   - [ ] `mcp_status_change`
-  - [ ] `provider_retry`
+  - [x] `provider_retry`
   - [x] `session_done`
 - [x] Add timeout, env, cwd, redaction, and structured event payload.
 - [x] Hooks must be disabled or no-op by default unless configured.
