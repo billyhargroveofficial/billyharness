@@ -2,6 +2,20 @@
 
 Fast Go agent harness with a gateway API, TUI chat, native tools, MCP server, and benchmark runner.
 
+## Docs
+
+- [Master implementation TODO](docs/master-implementation-todo.md) is the live execution plan.
+- [Codex research roadmap](docs/codex-research-roadmap.md) records the architecture research and rationale.
+
+Work protocol for runtime changes:
+
+1. Map the change to a checkbox in the master TODO.
+2. Add or update focused tests.
+3. Run the relevant package tests, then `go test -count=1 ./...` for broad runtime changes.
+4. Rebuild `bin/fast-agent-harness` when CLI, gateway, agent, provider, tool, TUI, or Telegram code changes.
+5. Restart `billyharness-gateway.service` and `billyharness-telegram.service` when deployed runtime behavior changes.
+6. Commit and push coherent verified slices.
+
 ## Quick start
 
 ```bash

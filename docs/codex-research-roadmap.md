@@ -1,6 +1,6 @@
 # Codex Research Roadmap
 
-This document records the Codex architecture research pass and turns it into a billyharness implementation plan.
+This document records the Codex architecture research pass and turns it into a billyharness implementation plan. The live execution checklist is `docs/master-implementation-todo.md`.
 
 ## Target Shape
 
