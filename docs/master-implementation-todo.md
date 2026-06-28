@@ -303,13 +303,13 @@ Acceptance:
 
 - [ ] Centralize API key and OAuth resolution.
 - [ ] Support sources:
-  - [ ] `.env`
-  - [ ] environment
-  - [ ] imported Codex/OAuth credentials
+  - [x] `.env`
+  - [x] environment
+  - [x] imported Codex/OAuth credentials
   - [ ] future keyring/file store
 - [ ] Add refresh serialization and status.
-- [ ] Add redacted auth inspect output.
-- [ ] Add gateway auth status endpoint.
+- [x] Add redacted auth inspect output.
+- [x] Add gateway auth status endpoint.
 - [ ] Add TUI/Telegram setup menu for DeepSeek key and Codex OAuth status.
 
 Acceptance:

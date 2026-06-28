@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -66,6 +68,35 @@ func TestIsCodexProviderReroutesOSeriesModels(t *testing.T) {
 		if !isCodexProvider(cfg) {
 			t.Fatalf("model %q should route to Codex provider", model)
 		}
+	}
+}
+
+func TestNewDeepSeekProviderUsesCredentialsManager(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	t.Setenv("BILLYHARNESS_DOTENV_HOME_ONLY", "1")
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("CUSTOM_DEEPSEEK_KEY=sk-provider-value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	prov, err := New(config.Config{
+		Provider:          "deepseek",
+		Model:             "deepseek-v4-flash",
+		BaseURL:           "https://api.deepseek.com",
+		APIKeyEnv:         "CUSTOM_DEEPSEEK_KEY",
+		RequestTimeout:    time.Second,
+		StreamIdleTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deepseek, ok := prov.(*DeepSeek)
+	if !ok {
+		t.Fatalf("provider = %T, want *DeepSeek", prov)
+	}
+	if deepseek.APIKey != "sk-provider-value" {
+		t.Fatalf("APIKey = %q", deepseek.APIKey)
 	}
 }
 

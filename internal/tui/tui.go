@@ -1780,7 +1780,7 @@ func (m Model) authStatusCmd() tea.Cmd {
 
 func (m Model) saveDeepSeekCredential(apiKey string) (string, error) {
 	if m.gatewayURL == "" {
-		status, err := credentials.SaveDeepSeekAPIKey(apiKey)
+		status, err := credentials.NewManager(m.currentConfig()).SaveDeepSeekAPIKey(apiKey)
 		if err != nil {
 			return "", err
 		}
@@ -1798,7 +1798,7 @@ func (m Model) saveDeepSeekCredential(apiKey string) (string, error) {
 
 func (m Model) importCodexCredential() (string, error) {
 	if m.gatewayURL == "" {
-		status, err := credentials.ImportCodexAuth(m.currentConfig(), "")
+		status, err := credentials.NewManager(m.currentConfig()).ImportCodexAuth("")
 		if err != nil {
 			return "", err
 		}
@@ -1815,7 +1815,7 @@ func (m Model) importCodexCredential() (string, error) {
 
 func (m Model) loadAuthStatus() (authStatusResponse, error) {
 	if m.gatewayURL == "" {
-		return credentials.CurrentStatus(m.currentConfig()), nil
+		return credentials.NewManager(m.currentConfig()).Status(), nil
 	}
 	var out authStatusResponse
 	if err := m.gatewayJSON(http.MethodGet, "/v1/auth/status", nil, &out); err != nil {

@@ -35,6 +35,29 @@ func TestSaveDeepSeekAPIKeyWritesBillyDotenv(t *testing.T) {
 	}
 }
 
+func TestManagerResolveDeepSeekAPIKeyUsesConfiguredEnvName(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	t.Setenv("BILLYHARNESS_DOTENV_HOME_ONLY", "1")
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("CUSTOM_DEEPSEEK_KEY=sk-custom-value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(config.Config{APIKeyEnv: "CUSTOM_DEEPSEEK_KEY"})
+
+	secret, err := manager.ResolveDeepSeekAPIKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secret.Value != "sk-custom-value" || secret.EnvVar != "CUSTOM_DEEPSEEK_KEY" || secret.Path != filepath.Join(root, ".env") {
+		t.Fatalf("secret = %#v", secret)
+	}
+	status := manager.DeepSeekStatus()
+	if !status.Configured || status.Source != filepath.Join(root, ".env") || status.Path != filepath.Join(root, ".env") {
+		t.Fatalf("status = %#v", status)
+	}
+}
+
 func TestImportCodexAuthCopiesOAuthJSONToBillyHome(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", root)

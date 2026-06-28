@@ -31,28 +31,73 @@ type Status struct {
 	Codex    ProviderStatus `json:"codex"`
 }
 
+type SecretValue struct {
+	Value  string
+	Source string
+	Path   string
+	EnvVar string
+}
+
+type Manager struct {
+	cfg config.Config
+}
+
+func NewManager(cfg config.Config) Manager {
+	if strings.TrimSpace(cfg.APIKeyEnv) == "" {
+		cfg.APIKeyEnv = deepSeekKeyEnv
+	}
+	if strings.TrimSpace(cfg.CodexAuthFile) == "" {
+		cfg.CodexAuthFile = config.DefaultCodexAuthFile()
+	}
+	return Manager{cfg: cfg}
+}
+
 func CurrentStatus(cfg config.Config) Status {
+	return NewManager(cfg).Status()
+}
+
+func (m Manager) Status() Status {
 	return Status{
-		DeepSeek: DeepSeekStatus(),
-		Codex:    CodexStatus(cfg),
+		DeepSeek: m.DeepSeekStatus(),
+		Codex:    m.CodexStatus(),
 	}
 }
 
 func DeepSeekStatus() ProviderStatus {
-	if value := strings.TrimSpace(os.Getenv(deepSeekKeyEnv)); value != "" {
-		return ProviderStatus{Configured: true, Source: "env:" + deepSeekKeyEnv}
+	return NewManager(config.Config{APIKeyEnv: deepSeekKeyEnv}).DeepSeekStatus()
+}
+
+func (m Manager) DeepSeekStatus() ProviderStatus {
+	secret, err := m.ResolveDeepSeekAPIKey()
+	if err != nil {
+		return ProviderStatus{Path: BillyDotenvPath()}
+	}
+	return ProviderStatus{Configured: true, Source: secret.Source, Path: secret.Path}
+}
+
+func (m Manager) ResolveDeepSeekAPIKey() (SecretValue, error) {
+	envKey := strings.TrimSpace(m.cfg.APIKeyEnv)
+	if envKey == "" {
+		envKey = deepSeekKeyEnv
+	}
+	if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+		return SecretValue{Value: value, Source: "env:" + envKey, EnvVar: envKey}, nil
 	}
 	path := BillyDotenvPath()
-	if value, ok := dotenvValue(path, deepSeekKeyEnv); ok && strings.TrimSpace(value) != "" {
-		return ProviderStatus{Configured: true, Source: path, Path: path}
+	if value, ok := dotenvValue(path, envKey); ok && strings.TrimSpace(value) != "" {
+		return SecretValue{Value: strings.TrimSpace(value), Source: path, Path: path, EnvVar: envKey}, nil
 	}
-	if value, ok := config.LookupEnvOrDotenv(deepSeekKeyEnv); ok && strings.TrimSpace(value) != "" {
-		return ProviderStatus{Configured: true, Source: ".env"}
+	if value, ok := config.LookupEnvOrDotenv(envKey); ok && strings.TrimSpace(value) != "" {
+		return SecretValue{Value: strings.TrimSpace(value), Source: ".env", EnvVar: envKey}, nil
 	}
-	return ProviderStatus{Path: path}
+	return SecretValue{Path: path, EnvVar: envKey}, fmt.Errorf("missing API key env var %s", envKey)
 }
 
 func SaveDeepSeekAPIKey(apiKey string) (ProviderStatus, error) {
+	return NewManager(config.Config{APIKeyEnv: deepSeekKeyEnv}).SaveDeepSeekAPIKey(apiKey)
+}
+
+func (m Manager) SaveDeepSeekAPIKey(apiKey string) (ProviderStatus, error) {
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
 		return ProviderStatus{}, fmt.Errorf("DeepSeek API key is empty")
@@ -68,7 +113,11 @@ func SaveDeepSeekAPIKey(apiKey string) (ProviderStatus, error) {
 }
 
 func CodexStatus(cfg config.Config) ProviderStatus {
-	path := cfg.CodexAuthFile
+	return NewManager(cfg).CodexStatus()
+}
+
+func (m Manager) CodexStatus() ProviderStatus {
+	path := m.cfg.CodexAuthFile
 	if strings.TrimSpace(path) == "" {
 		path = config.DefaultCodexAuthFile()
 	}
@@ -132,7 +181,11 @@ func codexEnvStatus(token, accountID, source, path string) ProviderStatus {
 }
 
 func ImportCodexAuth(cfg config.Config, sourcePath string) (ProviderStatus, error) {
-	dest := cfg.CodexAuthFile
+	return NewManager(cfg).ImportCodexAuth(sourcePath)
+}
+
+func (m Manager) ImportCodexAuth(sourcePath string) (ProviderStatus, error) {
+	dest := m.cfg.CodexAuthFile
 	if strings.TrimSpace(dest) == "" {
 		dest = config.DefaultCodexAuthFile()
 	}
@@ -168,14 +221,18 @@ func ImportCodexAuth(cfg config.Config, sourcePath string) (ProviderStatus, erro
 	if err := writeAuthPayload(dest, payload); err != nil {
 		return ProviderStatus{}, err
 	}
-	status := CodexStatus(config.Config{CodexAuthFile: dest})
+	status := NewManager(config.Config{CodexAuthFile: dest}).CodexStatus()
 	status.Source = sourcePath
 	status.Path = dest
 	return status, nil
 }
 
 func SaveCodexAuthJSON(cfg config.Config, raw json.RawMessage) (ProviderStatus, error) {
-	dest := cfg.CodexAuthFile
+	return NewManager(cfg).SaveCodexAuthJSON(raw)
+}
+
+func (m Manager) SaveCodexAuthJSON(raw json.RawMessage) (ProviderStatus, error) {
+	dest := m.cfg.CodexAuthFile
 	if strings.TrimSpace(dest) == "" {
 		dest = config.DefaultCodexAuthFile()
 	}
@@ -189,7 +246,7 @@ func SaveCodexAuthJSON(cfg config.Config, raw json.RawMessage) (ProviderStatus, 
 	if err := writeAuthPayload(dest, payload); err != nil {
 		return ProviderStatus{}, err
 	}
-	return CodexStatus(config.Config{CodexAuthFile: dest}), nil
+	return NewManager(config.Config{CodexAuthFile: dest}).CodexStatus(), nil
 }
 
 func BillyDotenvPath() string {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/secrets"
@@ -101,12 +102,13 @@ func New(cfg config.Config) (Provider, error) {
 			Client:            client,
 		}, nil
 	}
-	if cfg.APIKey() == "" {
-		return nil, fmt.Errorf("missing API key env var %s", cfg.APIKeyEnv)
+	apiKey, err := credentials.NewManager(cfg).ResolveDeepSeekAPIKey()
+	if err != nil {
+		return nil, err
 	}
 	return &DeepSeek{
 		BaseURL:           strings.TrimRight(cfg.BaseURL, "/"),
-		APIKey:            cfg.APIKey(),
+		APIKey:            apiKey.Value,
 		Model:             cfg.Model,
 		Thinking:          cfg.Thinking,
 		ReasoningEffort:   cfg.ReasoningEffort,

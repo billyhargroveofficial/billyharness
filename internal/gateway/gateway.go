@@ -30,6 +30,7 @@ type Server struct {
 	cfg       config.Config
 	agent     *agent.Agent
 	registry  *tools.Registry
+	auth      credentials.Manager
 	mux       *http.ServeMux
 	authToken string
 	sessions  map[string]*Session
@@ -85,6 +86,7 @@ func NewServerWithOptions(cfg config.Config, prov provider.Provider, registry *t
 		cfg:      cfg,
 		agent:    agent.New(cfg, prov, registry),
 		registry: registry,
+		auth:     credentials.NewManager(cfg),
 		mux:      http.NewServeMux(),
 		sessions: map[string]*Session{},
 	}
@@ -196,7 +198,7 @@ func (s *Server) handleTools(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleAuthStatus(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, credentials.CurrentStatus(s.cfg))
+	writeJSON(w, http.StatusOK, s.auth.Status())
 }
 
 func (s *Server) handleConfigStatus(w http.ResponseWriter, _ *http.Request) {
@@ -223,7 +225,7 @@ func (s *Server) handleDeepSeekAuth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	status, err := credentials.SaveDeepSeekAPIKey(req.APIKey)
+	status, err := s.auth.SaveDeepSeekAPIKey(req.APIKey)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -246,9 +248,9 @@ func (s *Server) handleCodexImport(w http.ResponseWriter, r *http.Request) {
 		err    error
 	)
 	if len(req.AuthJSON) > 0 {
-		status, err = credentials.SaveCodexAuthJSON(s.cfg, req.AuthJSON)
+		status, err = s.auth.SaveCodexAuthJSON(req.AuthJSON)
 	} else {
-		status, err = credentials.ImportCodexAuth(s.cfg, req.SourcePath)
+		status, err = s.auth.ImportCodexAuth(req.SourcePath)
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
