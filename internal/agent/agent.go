@@ -92,13 +92,20 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 		})
 		var content string
 		var reasoning string
+		var firstDeltaAt time.Time
 		var acc provider.ToolAccumulator
 		for event := range events {
 			switch event.Kind {
 			case provider.EventContent:
+				if firstDeltaAt.IsZero() {
+					firstDeltaAt = time.Now()
+				}
 				content += event.Text
 				emit(protocol.Event{Type: protocol.EventAssistantDelta, Data: event.Text})
 			case provider.EventReasoning:
+				if firstDeltaAt.IsZero() {
+					firstDeltaAt = time.Now()
+				}
 				reasoning += event.Text
 				emit(protocol.Event{Type: protocol.EventAssistantReasoning, Data: event.Text})
 			case provider.EventToolCallDelta:
@@ -159,6 +166,14 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 			emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
 			return messages, err
 		}
+		modelMetadata := map[string]any{
+			"content_chars":   len(content),
+			"reasoning_chars": len(reasoning),
+			"tool_call_count": len(calls),
+		}
+		if !firstDeltaAt.IsZero() {
+			modelMetadata["first_delta_ms"] = elapsedMS(modelStarted, firstDeltaAt)
+		}
 		emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
 			TurnID:     turnID,
 			StepID:     modelStepID,
@@ -167,11 +182,7 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 			Status:     protocol.StepStatusCompleted,
 			Name:       a.cfg.Model,
 			DurationMS: durationMS(modelStarted),
-			Metadata: map[string]any{
-				"content_chars":   len(content),
-				"reasoning_chars": len(reasoning),
-				"tool_call_count": len(calls),
-			},
+			Metadata:   modelMetadata,
 		}})
 		if len(calls) == 0 {
 			messages = append(messages, protocol.Message{
@@ -411,6 +422,13 @@ func durationMS(started time.Time) int64 {
 		return 0
 	}
 	return time.Since(started).Milliseconds()
+}
+
+func elapsedMS(started, ended time.Time) int64 {
+	if started.IsZero() || ended.IsZero() || ended.Before(started) {
+		return 0
+	}
+	return ended.Sub(started).Milliseconds()
 }
 
 func (a *Agent) callTool(ctx context.Context, index int, call protocol.ToolCall) toolExecutionResult {

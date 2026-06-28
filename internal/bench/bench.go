@@ -55,63 +55,71 @@ type RunConfig struct {
 }
 
 type Result struct {
-	RunID                 string         `json:"run_id"`
-	TaskID                string         `json:"task_id"`
-	TaskSuite             string         `json:"task_suite"`
-	Model                 string         `json:"model"`
-	Harness               string         `json:"harness"`
-	PromptHash            string         `json:"prompt_hash"`
-	Workspace             string         `json:"workspace,omitempty"`
-	Tags                  []string       `json:"tags,omitempty"`
-	Outcome               string         `json:"outcome"`
-	WallTimeMS            int64          `json:"wall_time_ms"`
-	Turns                 int            `json:"turns,omitempty"`
-	Steps                 int            `json:"steps,omitempty"`
-	StepErrors            int            `json:"step_errors,omitempty"`
-	ParallelBatches       int            `json:"parallel_batches,omitempty"`
-	ModelCalls            int            `json:"model_calls"`
-	ToolCalls             int            `json:"tool_calls"`
-	ToolCallsByName       map[string]int `json:"tool_calls_by_name,omitempty"`
-	ToolErrors            int            `json:"tool_errors"`
-	InputTokens           int64          `json:"input_tokens,omitempty"`
-	OutputTokens          int64          `json:"output_tokens,omitempty"`
-	CacheHitTokens        int64          `json:"cache_hit_tokens,omitempty"`
-	CacheMissTokens       int64          `json:"cache_miss_tokens,omitempty"`
-	ContextCompactions    int            `json:"context_compactions,omitempty"`
-	ToolOutputTruncations int            `json:"tool_output_truncations,omitempty"`
-	ToolOutputRefs        int            `json:"tool_output_refs,omitempty"`
-	EvaluatorTimeMS       int64          `json:"evaluator_time_ms,omitempty"`
-	EvaluatorCommand      []string       `json:"evaluator_command,omitempty"`
-	EvaluatorOutput       string         `json:"evaluator_output,omitempty"`
-	Error                 string         `json:"error,omitempty"`
+	RunID                  string         `json:"run_id"`
+	TaskID                 string         `json:"task_id"`
+	TaskSuite              string         `json:"task_suite"`
+	Model                  string         `json:"model"`
+	Harness                string         `json:"harness"`
+	PromptHash             string         `json:"prompt_hash"`
+	Workspace              string         `json:"workspace,omitempty"`
+	Tags                   []string       `json:"tags,omitempty"`
+	Outcome                string         `json:"outcome"`
+	WallTimeMS             int64          `json:"wall_time_ms"`
+	Turns                  int            `json:"turns,omitempty"`
+	Steps                  int            `json:"steps,omitempty"`
+	StepErrors             int            `json:"step_errors,omitempty"`
+	ParallelBatches        int            `json:"parallel_batches,omitempty"`
+	FirstDeltaMS           int64          `json:"first_delta_ms,omitempty"`
+	ModelLatencyMS         int64          `json:"model_latency_ms,omitempty"`
+	ToolLatencyMS          int64          `json:"tool_latency_ms,omitempty"`
+	ParallelBatchLatencyMS int64          `json:"parallel_batch_latency_ms,omitempty"`
+	ModelCalls             int            `json:"model_calls"`
+	ToolCalls              int            `json:"tool_calls"`
+	ToolCallsByName        map[string]int `json:"tool_calls_by_name,omitempty"`
+	ToolErrors             int            `json:"tool_errors"`
+	InputTokens            int64          `json:"input_tokens,omitempty"`
+	OutputTokens           int64          `json:"output_tokens,omitempty"`
+	CacheHitTokens         int64          `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens        int64          `json:"cache_miss_tokens,omitempty"`
+	ContextCompactions     int            `json:"context_compactions,omitempty"`
+	ToolOutputTruncations  int            `json:"tool_output_truncations,omitempty"`
+	ToolOutputRefs         int            `json:"tool_output_refs,omitempty"`
+	EvaluatorTimeMS        int64          `json:"evaluator_time_ms,omitempty"`
+	EvaluatorCommand       []string       `json:"evaluator_command,omitempty"`
+	EvaluatorOutput        string         `json:"evaluator_output,omitempty"`
+	Error                  string         `json:"error,omitempty"`
 }
 
 type Summary struct {
-	Total                 int     `json:"total"`
-	Passed                int     `json:"passed"`
-	Failed                int     `json:"failed"`
-	Timeouts              int     `json:"timeouts"`
-	Crashes               int     `json:"crashes"`
-	PassRate              float64 `json:"pass_rate"`
-	WallTimeMS            int64   `json:"wall_time_ms"`
-	Turns                 int     `json:"turns,omitempty"`
-	Steps                 int     `json:"steps,omitempty"`
-	StepErrors            int     `json:"step_errors,omitempty"`
-	ParallelBatches       int     `json:"parallel_batches,omitempty"`
-	ModelCalls            int     `json:"model_calls"`
-	ToolCalls             int     `json:"tool_calls"`
-	InputTokens           int64   `json:"input_tokens,omitempty"`
-	OutputTokens          int64   `json:"output_tokens,omitempty"`
-	CacheHitTokens        int64   `json:"cache_hit_tokens,omitempty"`
-	CacheMissTokens       int64   `json:"cache_miss_tokens,omitempty"`
-	ContextCompactions    int     `json:"context_compactions,omitempty"`
-	ToolOutputTruncations int     `json:"tool_output_truncations,omitempty"`
-	ToolOutputRefs        int     `json:"tool_output_refs,omitempty"`
-	ManifestJSON          string  `json:"manifest_json,omitempty"`
-	ResultsJSONL          string  `json:"results_jsonl"`
-	EventsJSONL           string  `json:"events_jsonl"`
-	PayloadsDir           string  `json:"payloads_dir,omitempty"`
-	ReplayVerified        bool    `json:"replay_verified,omitempty"`
+	Total                  int     `json:"total"`
+	Passed                 int     `json:"passed"`
+	Failed                 int     `json:"failed"`
+	Timeouts               int     `json:"timeouts"`
+	Crashes                int     `json:"crashes"`
+	PassRate               float64 `json:"pass_rate"`
+	WallTimeMS             int64   `json:"wall_time_ms"`
+	Turns                  int     `json:"turns,omitempty"`
+	Steps                  int     `json:"steps,omitempty"`
+	StepErrors             int     `json:"step_errors,omitempty"`
+	ParallelBatches        int     `json:"parallel_batches,omitempty"`
+	AvgFirstDeltaMS        int64   `json:"avg_first_delta_ms,omitempty"`
+	ModelLatencyMS         int64   `json:"model_latency_ms,omitempty"`
+	ToolLatencyMS          int64   `json:"tool_latency_ms,omitempty"`
+	ParallelBatchLatencyMS int64   `json:"parallel_batch_latency_ms,omitempty"`
+	ModelCalls             int     `json:"model_calls"`
+	ToolCalls              int     `json:"tool_calls"`
+	InputTokens            int64   `json:"input_tokens,omitempty"`
+	OutputTokens           int64   `json:"output_tokens,omitempty"`
+	CacheHitTokens         int64   `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens        int64   `json:"cache_miss_tokens,omitempty"`
+	ContextCompactions     int     `json:"context_compactions,omitempty"`
+	ToolOutputTruncations  int     `json:"tool_output_truncations,omitempty"`
+	ToolOutputRefs         int     `json:"tool_output_refs,omitempty"`
+	ManifestJSON           string  `json:"manifest_json,omitempty"`
+	ResultsJSONL           string  `json:"results_jsonl"`
+	EventsJSONL            string  `json:"events_jsonl"`
+	PayloadsDir            string  `json:"payloads_dir,omitempty"`
+	ReplayVerified         bool    `json:"replay_verified,omitempty"`
 }
 
 func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) {
@@ -162,6 +170,7 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 	}
 	startAll := time.Now()
 	results := make([]Result, 0, len(tasks))
+	firstDeltaSamples := 0
 	for _, task := range tasks {
 		result := runTask(ctx, cfg, rc, runID, task, eventWriter)
 		results = append(results, result)
@@ -173,6 +182,13 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 		summary.Steps += result.Steps
 		summary.StepErrors += result.StepErrors
 		summary.ParallelBatches += result.ParallelBatches
+		if result.FirstDeltaMS > 0 {
+			firstDeltaSamples++
+			summary.AvgFirstDeltaMS += result.FirstDeltaMS
+		}
+		summary.ModelLatencyMS += result.ModelLatencyMS
+		summary.ToolLatencyMS += result.ToolLatencyMS
+		summary.ParallelBatchLatencyMS += result.ParallelBatchLatencyMS
 		summary.ToolCalls += result.ToolCalls
 		summary.InputTokens += result.InputTokens
 		summary.OutputTokens += result.OutputTokens
@@ -195,6 +211,9 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 	summary.WallTimeMS = time.Since(startAll).Milliseconds()
 	if summary.Total > 0 {
 		summary.PassRate = float64(summary.Passed) / float64(summary.Total)
+	}
+	if firstDeltaSamples > 0 {
+		summary.AvgFirstDeltaMS /= int64(firstDeltaSamples)
 	}
 	if replay, err := trace.ReplayEvents(eventsPath); err == nil && replay.Records > 0 {
 		if err := verifyReplayAgainstResults(replay, results); err != nil {
@@ -221,17 +240,20 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 }
 
 type replayExpectations struct {
-	ModelCalls         int
-	Turns              int
-	Steps              int
-	StepErrors         int
-	ParallelBatches    int
-	ToolCalls          int
-	ContextCompactions int
-	InputTokens        int64
-	OutputTokens       int64
-	CacheHitTokens     int64
-	CacheMissTokens    int64
+	ModelCalls             int
+	Turns                  int
+	Steps                  int
+	StepErrors             int
+	ParallelBatches        int
+	ModelLatencyMS         int64
+	ToolLatencyMS          int64
+	ParallelBatchLatencyMS int64
+	ToolCalls              int
+	ContextCompactions     int
+	InputTokens            int64
+	OutputTokens           int64
+	CacheHitTokens         int64
+	CacheMissTokens        int64
 }
 
 func verifyReplayAgainstResults(replay trace.ReplaySummary, results []Result) error {
@@ -266,6 +288,9 @@ func verifyReplayAgainstResults(replay trace.ReplaySummary, results []Result) er
 		{"output_tokens", replay.OutputTokens, expected.OutputTokens},
 		{"cache_hit_tokens", replay.CacheHitTokens, expected.CacheHitTokens},
 		{"cache_miss_tokens", replay.CacheMissTokens, expected.CacheMissTokens},
+		{"model_latency_ms", replay.ModelLatencyMS, expected.ModelLatencyMS},
+		{"tool_latency_ms", replay.ToolLatencyMS, expected.ToolLatencyMS},
+		{"parallel_batch_latency_ms", replay.ParallelBatchLatencyMS, expected.ParallelBatchLatencyMS},
 	}
 	for _, check := range int64Checks {
 		if check.got != check.want {
@@ -283,6 +308,9 @@ func replayExpectationsFromResults(results []Result) replayExpectations {
 		expected.Steps += result.Steps
 		expected.StepErrors += result.StepErrors
 		expected.ParallelBatches += result.ParallelBatches
+		expected.ModelLatencyMS += result.ModelLatencyMS
+		expected.ToolLatencyMS += result.ToolLatencyMS
+		expected.ParallelBatchLatencyMS += result.ParallelBatchLatencyMS
 		expected.ToolCalls += result.ToolCalls
 		expected.ContextCompactions += result.ContextCompactions
 		expected.InputTokens += result.InputTokens
@@ -473,8 +501,21 @@ func observe(result *Result, event protocol.Event) {
 		}
 	case protocol.EventStepCompleted:
 		step, ok := decodeStepEvent(event.Data)
-		if ok && step.Status == protocol.StepStatusFailed {
-			result.StepErrors++
+		if ok {
+			switch step.Kind {
+			case protocol.StepKindModelCall:
+				result.ModelLatencyMS += step.DurationMS
+				if result.FirstDeltaMS == 0 {
+					result.FirstDeltaMS = metadataInt64(step.Metadata, "first_delta_ms")
+				}
+			case protocol.StepKindToolCall:
+				result.ToolLatencyMS += step.DurationMS
+			case protocol.StepKindToolBatch:
+				result.ParallelBatchLatencyMS += step.DurationMS
+			}
+			if step.Status == protocol.StepStatusFailed {
+				result.StepErrors++
+			}
 		}
 	case protocol.EventContextCompacted:
 		result.ContextCompactions++
@@ -561,6 +602,24 @@ func decodeStepEvent(value any) (protocol.StepEvent, bool) {
 		return protocol.StepEvent{}, false
 	}
 	return step, step.StepID != "" && step.Kind != ""
+}
+
+func metadataInt64(metadata map[string]any, key string) int64 {
+	if metadata == nil {
+		return 0
+	}
+	switch value := metadata[key].(type) {
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	case float64:
+		return int64(value)
+	case json.Number:
+		parsed, _ := value.Int64()
+		return parsed
+	}
+	return 0
 }
 
 type scriptedLoopProvider struct {

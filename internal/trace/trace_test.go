@@ -109,11 +109,11 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 			"cache_miss_tokens": 20,
 		}},
 		{Type: protocol.EventContextCompacted},
-		{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:model-call-001", Round: 1, Kind: protocol.StepKindModelCall, Status: protocol.StepStatusCompleted}},
+		{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:model-call-001", Round: 1, Kind: protocol.StepKindModelCall, Status: protocol.StepStatusCompleted, DurationMS: 11, Metadata: map[string]any{"first_delta_ms": 4}}},
 		{Type: protocol.EventStepStarted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:tool-batch-001", Round: 1, Kind: protocol.StepKindToolBatch, Status: protocol.StepStatusStarted, Parallel: true, BatchSize: 2}},
 		{Type: protocol.EventToolCallStarted, Data: "time_now"},
 		{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{Name: "time_now", Content: "ok"}},
-		{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:tool-batch-001", Round: 1, Kind: protocol.StepKindToolBatch, Status: protocol.StepStatusCompleted, Parallel: true, BatchSize: 2}},
+		{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:tool-batch-001", Round: 1, Kind: protocol.StepKindToolBatch, Status: protocol.StepStatusCompleted, Parallel: true, BatchSize: 2, DurationMS: 7}},
 		{Type: protocol.EventModelCallFinished},
 		{Type: protocol.EventTurnCompleted, Data: protocol.TurnEvent{TurnID: "turn-001", Round: 1, Status: protocol.TurnStatusCompleted, StopReason: protocol.TurnStopToolResults}},
 		{Type: protocol.EventRunCompleted},
@@ -140,6 +140,9 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 		summary.ToolCallsStarted != 1 || summary.ToolCallsFinished != 1 ||
 		summary.ContextCompactions != 1 {
 		t.Fatalf("event counters = %#v", summary)
+	}
+	if summary.FirstDeltaSamples != 1 || summary.FirstDeltaTotalMS != 4 || summary.ModelLatencyMS != 11 || summary.ParallelBatchLatencyMS != 7 {
+		t.Fatalf("latency counters = %#v", summary)
 	}
 	if summary.InputTokens != 100 || summary.OutputTokens != 7 ||
 		summary.CacheHitTokens != 80 || summary.CacheMissTokens != 20 {

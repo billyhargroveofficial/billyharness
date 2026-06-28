@@ -71,7 +71,7 @@ func TestRunMessagesEmitsTypedTurnAndModelStepEvents(t *testing.T) {
 		t.Fatalf("model step started = %#v ok=%v", modelStarted, ok)
 	}
 	modelCompleted, ok := firstStepEvent(events, protocol.EventStepCompleted, protocol.StepKindModelCall)
-	if !ok || modelCompleted.StepID != modelStarted.StepID || modelCompleted.Status != protocol.StepStatusCompleted || modelCompleted.Metadata["tool_call_count"] == nil {
+	if _, hasFirstDelta := modelCompleted.Metadata["first_delta_ms"]; !ok || modelCompleted.StepID != modelStarted.StepID || modelCompleted.Status != protocol.StepStatusCompleted || modelCompleted.Metadata["tool_call_count"] == nil || !hasFirstDelta {
 		t.Fatalf("model step completed = %#v ok=%v", modelCompleted, ok)
 	}
 }

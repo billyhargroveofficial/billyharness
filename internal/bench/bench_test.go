@@ -349,7 +349,9 @@ func TestObserveCountsUsageToolErrorsAndNames(t *testing.T) {
 	result := Result{ToolCallsByName: map[string]int{}}
 	observe(&result, protocol.Event{Type: protocol.EventTurnStarted, Data: protocol.TurnEvent{TurnID: "turn-001", Round: 1, Status: protocol.TurnStatusStarted}})
 	observe(&result, protocol.Event{Type: protocol.EventStepStarted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:tool-batch-001", Kind: protocol.StepKindToolBatch, Status: protocol.StepStatusStarted, Parallel: true}})
-	observe(&result, protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:tool-batch-001", Kind: protocol.StepKindToolBatch, Status: protocol.StepStatusFailed}})
+	observe(&result, protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:model-call-001", Kind: protocol.StepKindModelCall, Status: protocol.StepStatusCompleted, DurationMS: 12, Metadata: map[string]any{"first_delta_ms": 5}}})
+	observe(&result, protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:tool-call-001", Kind: protocol.StepKindToolCall, Status: protocol.StepStatusCompleted, DurationMS: 3}})
+	observe(&result, protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:tool-batch-001", Kind: protocol.StepKindToolBatch, Status: protocol.StepStatusFailed, DurationMS: 8}})
 	observe(&result, protocol.Event{Type: protocol.EventModelCallStarted})
 	observe(&result, protocol.Event{Type: protocol.EventToolCallStarted, Data: "fs_read_file"})
 	observe(&result, protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
@@ -369,6 +371,9 @@ func TestObserveCountsUsageToolErrorsAndNames(t *testing.T) {
 	}
 	if result.Turns != 1 || result.Steps != 1 || result.StepErrors != 1 || result.ParallelBatches != 1 {
 		t.Fatalf("turn/step counts = %#v", result)
+	}
+	if result.FirstDeltaMS != 5 || result.ModelLatencyMS != 12 || result.ToolLatencyMS != 3 || result.ParallelBatchLatencyMS != 8 {
+		t.Fatalf("latency counts = %#v", result)
 	}
 	if result.InputTokens != 10 || result.OutputTokens != 3 || result.CacheHitTokens != 7 || result.CacheMissTokens != 3 {
 		t.Fatalf("usage = %#v", result)

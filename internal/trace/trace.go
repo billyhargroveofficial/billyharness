@@ -194,33 +194,38 @@ func WriteManifest(path string, manifest Manifest) error {
 }
 
 type ReplaySummary struct {
-	RunID              string         `json:"run_id"`
-	Records            int            `json:"records"`
-	FirstSeq           int64          `json:"first_seq,omitempty"`
-	LastSeq            int64          `json:"last_seq,omitempty"`
-	PayloadRefs        int            `json:"payload_refs,omitempty"`
-	PayloadBytes       int64          `json:"payload_bytes,omitempty"`
-	EventTypes         map[string]int `json:"event_types"`
-	Tasks              map[string]int `json:"tasks"`
-	RunStarted         int            `json:"run_started,omitempty"`
-	RunCompleted       int            `json:"run_completed,omitempty"`
-	RunFailed          int            `json:"run_failed,omitempty"`
-	TurnsStarted       int            `json:"turns_started,omitempty"`
-	TurnsCompleted     int            `json:"turns_completed,omitempty"`
-	TurnsFailed        int            `json:"turns_failed,omitempty"`
-	StepsStarted       int            `json:"steps_started,omitempty"`
-	StepsCompleted     int            `json:"steps_completed,omitempty"`
-	StepsFailed        int            `json:"steps_failed,omitempty"`
-	ParallelBatches    int            `json:"parallel_batches,omitempty"`
-	ModelCallsStarted  int            `json:"model_calls_started,omitempty"`
-	ModelCallsFinished int            `json:"model_calls_finished,omitempty"`
-	ToolCallsStarted   int            `json:"tool_calls_started,omitempty"`
-	ToolCallsFinished  int            `json:"tool_calls_finished,omitempty"`
-	ContextCompactions int            `json:"context_compactions,omitempty"`
-	InputTokens        int64          `json:"input_tokens,omitempty"`
-	OutputTokens       int64          `json:"output_tokens,omitempty"`
-	CacheHitTokens     int64          `json:"cache_hit_tokens,omitempty"`
-	CacheMissTokens    int64          `json:"cache_miss_tokens,omitempty"`
+	RunID                  string         `json:"run_id"`
+	Records                int            `json:"records"`
+	FirstSeq               int64          `json:"first_seq,omitempty"`
+	LastSeq                int64          `json:"last_seq,omitempty"`
+	PayloadRefs            int            `json:"payload_refs,omitempty"`
+	PayloadBytes           int64          `json:"payload_bytes,omitempty"`
+	EventTypes             map[string]int `json:"event_types"`
+	Tasks                  map[string]int `json:"tasks"`
+	RunStarted             int            `json:"run_started,omitempty"`
+	RunCompleted           int            `json:"run_completed,omitempty"`
+	RunFailed              int            `json:"run_failed,omitempty"`
+	TurnsStarted           int            `json:"turns_started,omitempty"`
+	TurnsCompleted         int            `json:"turns_completed,omitempty"`
+	TurnsFailed            int            `json:"turns_failed,omitempty"`
+	StepsStarted           int            `json:"steps_started,omitempty"`
+	StepsCompleted         int            `json:"steps_completed,omitempty"`
+	StepsFailed            int            `json:"steps_failed,omitempty"`
+	ParallelBatches        int            `json:"parallel_batches,omitempty"`
+	FirstDeltaSamples      int            `json:"first_delta_samples,omitempty"`
+	FirstDeltaTotalMS      int64          `json:"first_delta_total_ms,omitempty"`
+	ModelLatencyMS         int64          `json:"model_latency_ms,omitempty"`
+	ToolLatencyMS          int64          `json:"tool_latency_ms,omitempty"`
+	ParallelBatchLatencyMS int64          `json:"parallel_batch_latency_ms,omitempty"`
+	ModelCallsStarted      int            `json:"model_calls_started,omitempty"`
+	ModelCallsFinished     int            `json:"model_calls_finished,omitempty"`
+	ToolCallsStarted       int            `json:"tool_calls_started,omitempty"`
+	ToolCallsFinished      int            `json:"tool_calls_finished,omitempty"`
+	ContextCompactions     int            `json:"context_compactions,omitempty"`
+	InputTokens            int64          `json:"input_tokens,omitempty"`
+	OutputTokens           int64          `json:"output_tokens,omitempty"`
+	CacheHitTokens         int64          `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens        int64          `json:"cache_miss_tokens,omitempty"`
 }
 
 func ReplayEvents(path string) (ReplaySummary, error) {
@@ -350,6 +355,18 @@ func (s *ReplaySummary) observe(record EventRecord) error {
 			return err
 		}
 		s.StepsCompleted++
+		switch step.Kind {
+		case protocol.StepKindModelCall:
+			s.ModelLatencyMS += step.DurationMS
+			if firstDelta := metadataInt64(step.Metadata, "first_delta_ms"); firstDelta > 0 {
+				s.FirstDeltaSamples++
+				s.FirstDeltaTotalMS += firstDelta
+			}
+		case protocol.StepKindToolCall:
+			s.ToolLatencyMS += step.DurationMS
+		case protocol.StepKindToolBatch:
+			s.ParallelBatchLatencyMS += step.DurationMS
+		}
 		if step.Status == protocol.StepStatusFailed {
 			s.StepsFailed++
 		}
@@ -424,6 +441,24 @@ func stepFromEvent(value any) (protocol.StepEvent, error) {
 		return protocol.StepEvent{}, fmt.Errorf("invalid step event data: %w", err)
 	}
 	return step, nil
+}
+
+func metadataInt64(metadata map[string]any, key string) int64 {
+	if metadata == nil {
+		return 0
+	}
+	switch value := metadata[key].(type) {
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	case float64:
+		return int64(value)
+	case json.Number:
+		parsed, _ := value.Int64()
+		return parsed
+	}
+	return 0
 }
 
 type replayUsage struct {
