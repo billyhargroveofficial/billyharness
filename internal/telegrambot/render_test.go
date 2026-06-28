@@ -91,10 +91,39 @@ func TestRendererContextShowsLastModelCallNotCumulativeSpend(t *testing.T) {
 	}})
 
 	footer := r.footerLine()
-	for _, want := range []string{"📥 2.3k 📤 300", "🪟 ctx 1.5k/10.0k 15%"} {
+	for _, want := range []string{"📥 spent 2.3k 📤 300", "🪟 ctx 1.5k/10.0k 15%"} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("footer missing %q: %q", want, footer)
 		}
+	}
+}
+
+func TestStreamPlainTextShowsContextAboveProgress(t *testing.T) {
+	renderer := NewRendererWithContextWindow(10_000)
+	renderer.Apply(protocol.Event{Type: protocol.EventRunStarted})
+	renderer.Apply(protocol.Event{Type: protocol.EventModelCallStarted})
+	renderer.Apply(protocol.Event{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
+		"input_tokens":      5700,
+		"output_tokens":     300,
+		"cache_hit_tokens":  5000,
+		"cache_miss_tokens": 700,
+	}})
+	progress := NewToolProgress()
+	_ = progress.Add(RenderEvent{Kind: "tool", Title: "Tool", Body: "🔨 mcp call read_history", Key: "read"})
+
+	text := renderer.StreamPlainText("deepseek-v4-pro", "max", progress)
+	for _, want := range []string{"🪟 ctx 6.0k/10.0k 60%", "Tools running", "📥 spent 5.7k 📤 300"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("stream text missing %q:\n%s", want, text)
+		}
+	}
+	ctxPos := strings.Index(text, "🪟 ctx")
+	toolsPos := strings.Index(text, "Tools running")
+	if ctxPos < 0 || toolsPos < 0 || ctxPos > toolsPos {
+		t.Fatalf("context should appear above tool progress:\n%s", text)
+	}
+	if strings.Count(text, "🪟 ctx") != 1 {
+		t.Fatalf("running stream should show context once:\n%s", text)
 	}
 }
 

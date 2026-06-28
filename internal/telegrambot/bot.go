@@ -691,9 +691,12 @@ func (r *Renderer) StreamPlainText(model, reasoning string, tools *ToolProgress)
 		content = "Working..."
 	}
 	elapsed := time.Since(r.Started).Round(time.Second)
-	header := "⚡ Billyharness · Running\n" +
-		"🧬 " + model + " · 🧠 " + reasoning + " · ⏱ " + elapsed.String() + "\n\n"
-	footer := r.footerLine()
+	meta := "🧬 " + model + " · 🧠 " + reasoning + " · ⏱ " + elapsed.String()
+	if context := r.contextLine(); context != "" {
+		meta += "\n" + context
+	}
+	header := "⚡ Billyharness · Running\n" + meta + "\n\n"
+	footer := r.footerLineWithoutContext()
 	toolBudget := telegramLimit - telegramUTF16Len(header) - telegramUTF16Len(footer) - 900
 	if toolBudget < 800 {
 		toolBudget = telegramLimit - telegramUTF16Len(header) - telegramUTF16Len(footer) - 128

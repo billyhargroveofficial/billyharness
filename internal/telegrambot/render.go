@@ -192,6 +192,14 @@ func (r *Renderer) richHeaderInline(model, reasoning string, elapsed time.Durati
 }
 
 func (r *Renderer) footerLine() string {
+	return r.footerLineWithContext(true)
+}
+
+func (r *Renderer) footerLineWithoutContext() string {
+	return r.footerLineWithContext(false)
+}
+
+func (r *Renderer) footerLineWithContext(includeContext bool) string {
 	var parts []string
 	if r.ModelCalls > 0 {
 		parts = append(parts, fmt.Sprintf("🤖 LLM %d", r.ModelCalls))
@@ -200,9 +208,9 @@ func (r *Renderer) footerLine() string {
 		parts = append(parts, fmt.Sprintf("🛠 tools %d", r.ToolCalls))
 	}
 	if r.InputTokens+r.OutputTokens > 0 {
-		parts = append(parts, fmt.Sprintf("📥 %s 📤 %s", compactInt(r.InputTokens), compactInt(r.OutputTokens)))
+		parts = append(parts, fmt.Sprintf("📥 spent %s 📤 %s", compactInt(r.InputTokens), compactInt(r.OutputTokens)))
 	}
-	if context := r.contextLine(); context != "" {
+	if context := r.contextLine(); includeContext && context != "" {
 		parts = append(parts, context)
 	}
 	if r.CacheHit+r.CacheMiss > 0 {
