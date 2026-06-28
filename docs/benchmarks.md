@@ -121,4 +121,9 @@ Add Codex/OpenAI OAuth to the target set:
   -live
 ```
 
-The report tracks quality outcome, elapsed time, tool correctness, token/context growth, cost or subscription marker, replay bundle paths, and failure modes. Keep live DeepSeek Flash, DeepSeek Pro, and Codex OAuth runs in separate output directories when comparing historical runs.
+The command prints the full JSON report and also writes two top-level artifacts under `-out`:
+
+- `provider-comparison-report.json`: machine-readable targets, scores, replay bundle paths, cost/context counters, and the selected coding/chat recommendation.
+- `provider-decision.md`: human-readable decision table for choosing a coding model versus a normal-chat model.
+
+The report tracks quality outcome, elapsed time, tool correctness, token/context growth, cost or subscription marker, replay bundle paths, failure modes, `coding_score`, and `chat_score`. Coding score prioritizes pass rate, tool correctness, replay verification, and fewer timeouts/crashes. Chat score prioritizes pass rate, latency, and cheap/subscription-backed cost markers. Keep live DeepSeek Flash, DeepSeek Pro, and Codex OAuth runs in separate output directories when comparing historical runs.

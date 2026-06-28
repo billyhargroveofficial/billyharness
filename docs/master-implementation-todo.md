@@ -581,7 +581,7 @@ Acceptance:
   - [x] duration
   - [x] truncation/ref indicator
 - [x] Group context-gathering tools when possible.
-- [ ] Expand/collapse:
+- [x] Expand/collapse:
   - [x] by selected cell
   - [x] all tools
   - [x] current turn tools
@@ -891,7 +891,7 @@ Acceptance:
 
 Acceptance:
 
-- [ ] User can decide which model to use for coding versus normal chat.
+- [x] User can decide which model to use for coding versus normal chat.
 
 ### 9.3 Performance Hotspots
 

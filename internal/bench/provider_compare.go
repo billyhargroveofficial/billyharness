@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,6 +42,8 @@ type ProviderComparisonReport struct {
 	Mode           string                     `json:"mode"`
 	Targets        []ProviderComparisonResult `json:"targets"`
 	Recommendation ProviderRecommendation     `json:"recommendation,omitempty"`
+	ReportJSON     string                     `json:"report_json,omitempty"`
+	DecisionMD     string                     `json:"decision_md,omitempty"`
 }
 
 type ProviderComparisonResult struct {
@@ -71,12 +74,24 @@ type ProviderComparisonResult struct {
 	ResultsJSONL          string   `json:"results_jsonl,omitempty"`
 	EventsJSONL           string   `json:"events_jsonl,omitempty"`
 	FailureModes          []string `json:"failure_modes,omitempty"`
+	CodingScore           float64  `json:"coding_score"`
+	ChatScore             float64  `json:"chat_score"`
+	DecisionSummary       string   `json:"decision_summary,omitempty"`
 }
 
 type ProviderRecommendation struct {
-	CodingModel string `json:"coding_model,omitempty"`
-	ChatModel   string `json:"chat_model,omitempty"`
-	Reason      string `json:"reason,omitempty"`
+	CodingProvider  string   `json:"coding_provider,omitempty"`
+	CodingModel     string   `json:"coding_model,omitempty"`
+	CodingReasoning string   `json:"coding_reasoning,omitempty"`
+	CodingScore     float64  `json:"coding_score,omitempty"`
+	CodingReason    string   `json:"coding_reason,omitempty"`
+	ChatProvider    string   `json:"chat_provider,omitempty"`
+	ChatModel       string   `json:"chat_model,omitempty"`
+	ChatReasoning   string   `json:"chat_reasoning,omitempty"`
+	ChatScore       float64  `json:"chat_score,omitempty"`
+	ChatReason      string   `json:"chat_reason,omitempty"`
+	Summary         string   `json:"summary,omitempty"`
+	Notes           []string `json:"notes,omitempty"`
 }
 
 func CompareProviders(ctx context.Context, cfg config.Config, opts ProviderComparisonOptions) (ProviderComparisonReport, error) {
@@ -138,6 +153,9 @@ func CompareProviders(ctx context.Context, cfg config.Config, opts ProviderCompa
 		report.Targets = append(report.Targets, comparisonResult(targetCfg, summary, results))
 	}
 	report.Recommendation = recommendProvider(report.Targets)
+	if err := writeProviderComparisonArtifacts(&report); err != nil {
+		return report, err
+	}
 	return report, nil
 }
 
@@ -223,6 +241,9 @@ func comparisonResult(cfg config.Config, summary Summary, results []Result) Prov
 		EventsJSONL:           summary.EventsJSONL,
 		FailureModes:          failureModes(results),
 	}
+	out.CodingScore = roundScore(comparisonScore(out))
+	out.ChatScore = roundScore(chatScore(out))
+	out.DecisionSummary = providerDecisionSummary(out)
 	return out
 }
 
@@ -300,9 +321,22 @@ func recommendProvider(results []ProviderComparisonResult) ProviderRecommendatio
 		}
 	}
 	return ProviderRecommendation{
-		CodingModel: bestCoding.Model,
-		ChatModel:   bestChat.Model,
-		Reason:      "coding favors pass rate and tool correctness; chat favors pass rate, latency, and cost marker",
+		CodingProvider:  bestCoding.Provider,
+		CodingModel:     bestCoding.Model,
+		CodingReasoning: bestCoding.Reasoning,
+		CodingScore:     roundScore(comparisonScore(bestCoding)),
+		CodingReason:    codingRecommendationReason(bestCoding),
+		ChatProvider:    bestChat.Provider,
+		ChatModel:       bestChat.Model,
+		ChatReasoning:   bestChat.Reasoning,
+		ChatScore:       roundScore(chatScore(bestChat)),
+		ChatReason:      chatRecommendationReason(bestChat),
+		Summary:         fmt.Sprintf("Use %s for coding and %s for normal chat based on this benchmark set.", bestCoding.Model, bestChat.Model),
+		Notes: []string{
+			"Coding score prioritizes pass rate, tool correctness, replay verification, and fewer timeouts/crashes.",
+			"Chat score prioritizes pass rate, latency, and cheap/subscription-backed cost markers.",
+			"Treat mock runs as report plumbing checks; use live runs for real provider decisions.",
+		},
 	}
 }
 
@@ -330,4 +364,135 @@ func chatScore(result ProviderComparisonResult) float64 {
 		score -= float64(result.ElapsedMS) / 5_000
 	}
 	return score
+}
+
+func roundScore(score float64) float64 {
+	return math.Round(score*10) / 10
+}
+
+func providerDecisionSummary(result ProviderComparisonResult) string {
+	parts := []string{
+		fmt.Sprintf("%.0f%% pass", result.PassRate*100),
+		result.ToolCorrectness + " tools",
+	}
+	if result.ElapsedMS > 0 {
+		parts = append(parts, fmt.Sprintf("%.1fs elapsed", float64(result.ElapsedMS)/1000))
+	}
+	if result.CostMarker != "" {
+		parts = append(parts, result.CostMarker+" cost")
+	}
+	if result.ReplayVerified {
+		parts = append(parts, "replay verified")
+	}
+	if len(result.FailureModes) > 0 {
+		parts = append(parts, fmt.Sprintf("%d failure modes", len(result.FailureModes)))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func codingRecommendationReason(result ProviderComparisonResult) string {
+	return fmt.Sprintf("%s: %s, coding score %.1f.", result.Model, providerDecisionSummary(result), roundScore(comparisonScore(result)))
+}
+
+func chatRecommendationReason(result ProviderComparisonResult) string {
+	return fmt.Sprintf("%s: %s, chat score %.1f.", result.Model, providerDecisionSummary(result), roundScore(chatScore(result)))
+}
+
+func writeProviderComparisonArtifacts(report *ProviderComparisonReport) error {
+	if report == nil || strings.TrimSpace(report.OutDir) == "" {
+		return nil
+	}
+	if err := os.MkdirAll(report.OutDir, 0o755); err != nil {
+		return err
+	}
+	report.ReportJSON = filepath.Join(report.OutDir, "provider-comparison-report.json")
+	report.DecisionMD = filepath.Join(report.OutDir, "provider-decision.md")
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(report.ReportJSON, append(data, '\n'), 0o644); err != nil {
+		return err
+	}
+	return os.WriteFile(report.DecisionMD, []byte(providerDecisionMarkdown(*report)), 0o644)
+}
+
+func providerDecisionMarkdown(report ProviderComparisonReport) string {
+	var b strings.Builder
+	b.WriteString("# Provider Decision\n\n")
+	b.WriteString(fmt.Sprintf("Created: %s\n\n", report.CreatedAt.Format(time.RFC3339)))
+	b.WriteString(fmt.Sprintf("Mode: `%s`\n\n", report.Mode))
+	b.WriteString(fmt.Sprintf("Tasks: `%s`\n\n", report.TasksPath))
+	rec := report.Recommendation
+	if rec.CodingModel != "" || rec.ChatModel != "" {
+		b.WriteString("## Recommendation\n\n")
+		if rec.CodingModel != "" {
+			b.WriteString(fmt.Sprintf("- Coding default: `%s`", rec.CodingModel))
+			if rec.CodingReasoning != "" {
+				b.WriteString(fmt.Sprintf(" reasoning `%s`", rec.CodingReasoning))
+			}
+			b.WriteString(fmt.Sprintf(" (score %.1f). %s\n", rec.CodingScore, rec.CodingReason))
+		}
+		if rec.ChatModel != "" {
+			b.WriteString(fmt.Sprintf("- Normal chat default: `%s`", rec.ChatModel))
+			if rec.ChatReasoning != "" {
+				b.WriteString(fmt.Sprintf(" reasoning `%s`", rec.ChatReasoning))
+			}
+			b.WriteString(fmt.Sprintf(" (score %.1f). %s\n", rec.ChatScore, rec.ChatReason))
+		}
+		if rec.Summary != "" {
+			b.WriteString("\n")
+			b.WriteString(rec.Summary)
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n## Targets\n\n")
+	b.WriteString("| Model | Provider | Quality | Tools | Pass | Elapsed | Context | Cost | Coding | Chat | Replay | Notes |\n")
+	b.WriteString("| --- | --- | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | --- | --- |\n")
+	for _, target := range report.Targets {
+		notes := target.DecisionSummary
+		if len(target.FailureModes) > 0 {
+			notes = strings.Join(target.FailureModes, "; ")
+		}
+		b.WriteString(fmt.Sprintf(
+			"| `%s` | `%s` | %s | %s | %.0f%% | %.1fs | %s | %s | %.1f | %.1f | %t | %s |\n",
+			target.Model,
+			target.Provider,
+			target.QualityOutcome,
+			target.ToolCorrectness,
+			target.PassRate*100,
+			float64(target.ElapsedMS)/1000,
+			formatTokenCount(target.ContextMaxTokens),
+			target.CostMarker,
+			target.CodingScore,
+			target.ChatScore,
+			target.ReplayVerified,
+			escapeMarkdownTableCell(notes),
+		))
+	}
+	if len(rec.Notes) > 0 {
+		b.WriteString("\n## Scoring Notes\n\n")
+		for _, note := range rec.Notes {
+			b.WriteString("- ")
+			b.WriteString(note)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+func formatTokenCount(tokens int64) string {
+	if tokens <= 0 {
+		return ""
+	}
+	if tokens >= 1000 {
+		return fmt.Sprintf("%.1fk", float64(tokens)/1000)
+	}
+	return fmt.Sprintf("%d", tokens)
+}
+
+func escapeMarkdownTableCell(value string) string {
+	value = strings.ReplaceAll(value, "\n", " ")
+	value = strings.ReplaceAll(value, "|", "\\|")
+	return strings.TrimSpace(value)
 }
