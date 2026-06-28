@@ -38,6 +38,32 @@ Do not pull in the full enterprise platform:
 - Remote environments, cloud tasks, realtime/audio, app-store surfaces.
 - Full SQLite thread-store before JSONL replay is mature.
 
+## Claude Code / Codex / OpenCode Comparison
+
+This pass looked at `/root/claude-code`, `/root/research/openai-codex`, and `/root/agent-research/opencode-current` at the architecture level only. Do not copy or quote proprietary/leaked implementation details; use the findings as design pressure.
+
+Claude Code appears strongest in terminal UX depth: rich renderer-level components, compact tool presentation, command/action surfaces, settings layers, tasks, hooks, and a broad tool contract. Its risk is product accretion: very large cross-cutting UI/runtime files, many hooks/utilities, and a huge tool/config surface that would make billyharness slower to evolve if copied directly.
+
+Codex is strongest at runtime boundaries: `Submission` queue, cancellable session tasks, typed protocol events, provider/auth layering, MCP policy, compaction, sandbox/permission orchestration, and replay/trace discipline. The useful lesson is the boundary `runtime protocol -> session task -> turn loop -> typed events`, not the full app-server/cloud/plugin stack.
+
+OpenCode is strongest as an extensible platform: durable session events, provider/auth separation, typed message/tool parts, SDK/server boundaries, and multi-client UX. Its risk for this project is weight: Effect layers, SQLite/projectors, catalog/plugin complexity, and multi-location abstractions are too much for a fast solo Go harness.
+
+The ideal billyharness shape is a small Go core with the best 20 percent of each:
+
+- Codex-style session runtime and typed event stream.
+- OpenCode-style replayable session events and provider/auth separation.
+- Claude-style compact terminal UX, command/action registry, and rich tool rendering.
+- Billy-specific speed defaults: lazy MCP, bounded tool output, external web summaries, JSONL-first persistence, and permissive solo workflows.
+
+Highest ROI gaps found by the agents:
+
+- add a real `ToolOrchestrator` layer for permission, attempt, retry, cancellation, audit, and telemetry;
+- promote `Session -> Run -> Turn -> Step -> Event` from event names into internal runtime state;
+- add `ResolvedConfig` with provenance and diagnostics across defaults, home config, project config, env, CLI, and gateway overrides;
+- introduce typed transcript cells with `call_id`-based tool lifecycle so TUI/Telegram update the exact tool block, especially for parallel batches;
+- add a shared renderer/reducer model for TUI and Telegram rather than letting each UI interpret raw events differently;
+- keep plugin/skills/hooks local and minimal before considering a marketplace or remote sync.
+
 ## 12-Agent Deep Dive Plan
 
 When a full research pass is needed, split it like this:
@@ -93,6 +119,9 @@ Completed:
 P0 runtime correctness and speed:
 
 - Promote typed `Turn` and `Step` events into an internal runtime model: input queue, cancellation, step storage, and replayable state transitions.
+- Add a `ToolOrchestrator` boundary around tool execution: prepare, permission decision, attempt, finalize, retry/cancel, and structured audit events.
+- Add stable ids to all runtime events at the envelope level: `submission_id`, `run_id`, `turn_id`, `step_id`, `call_id`, `attempt_id`, and `parent_step_id` where applicable.
+- Snapshot per-turn tool/provider/config state before each model request so the exposed tool set and model settings cannot drift mid-turn.
 - Extend replay/bench timing metrics into distributions: p50/p95 first-delta, model latency, tool latency, compaction timing, and per-provider retry timing.
 - Surface parallel policy metadata in TUI/Telegram/bench reports and add cancellation timing checks for in-flight batches.
 - Add real long-loop benchmark runs: Terminal-Bench import/export smoke, local 50-100 turn loop, DeepSeek Flash/Pro comparison, Codex subscription comparison when available.
@@ -106,6 +135,10 @@ P1 context and web economy:
 P1 UI and operator UX:
 
 - Move TUI closer to typed transcript cells: assistant, user, reasoning, tool, audit, compaction, status, run summary.
+- Make tool UI lifecycle keyed by `call_id`; a finished tool must update its own cell instead of appending to whichever block is currently last.
+- Split live markdown streaming into raw source, stable committed region, mutable tail, table/fence holdback, and final canonical render.
+- Add semantic copy actions: last assistant, selected cell, raw tool output, full transcript, and code block.
+- Replace slash-command-only plumbing with an action registry that can back slash popup, command palette, keybindings, and Telegram commands.
 - Add a richer resume picker and session inspector backed by gateway JSONL, not only local TUI session JSON.
 - Surface MCP lifecycle changes as live transcript/status events instead of only `/mcp` snapshots.
 - Make Telegram and TUI share the same compact run-summary renderer where possible.
@@ -114,6 +147,16 @@ P2 provider/auth:
 
 - Keep DeepSeek and Codex OAuth behind the same provider/auth contracts, but add request-body reuse and explicit retry telemetry.
 - Add provider capability metadata tests: parallel tool calls, reasoning modes, cache usage fields, token accounting fields.
+- Add `ResolvedConfig` with provenance/diagnostics and a `config inspect` command plus gateway status endpoint.
+- Add profile config next to `SOUL.md`: provider, model, reasoning, context, tools, MCP, and instruction fragments.
+- Add a small provider catalog and auth manager: provider capabilities, auth source, refresh status, timeout/retry policy, and redaction.
+- Implement or explicitly reject remote HTTP MCP at config validation time; bearer remote first, OAuth later.
+
+P2 extension surface:
+
+- Add hooks v0: `session_start`, `before_tool`, `after_tool`, `mcp_status_change`, `provider_retry`, and `session_done`.
+- Add skills v0 from `$BILLYHARNESS_HOME/skills` and project `.billyharness/skills`, loaded on demand rather than injected into every prompt.
+- Add local plugin manifest v0 only after hooks/skills/tool contracts are stable.
 
 P2 storage:
 
