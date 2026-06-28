@@ -1248,14 +1248,24 @@ func compactCrawlResult(pages []crawlPage, opts webFetchOptions) (compactCrawlOu
 }
 
 func crawlMetadata(out compactCrawlOutput) map[string]any {
+	savedTokens := maxInt(0, out.OriginalTextTokens-out.EstimatedTextTokens)
 	return map[string]any{
-		"pages":                 len(out.Pages),
-		"original_text_chars":   out.OriginalTextChars,
-		"original_text_tokens":  out.OriginalTextTokens,
-		"returned_text_chars":   out.ReturnedTextChars,
-		"estimated_text_tokens": out.EstimatedTextTokens,
-		"output_text_truncated": out.OutputTextTruncated,
-		"output_ref":            out.OutputRef,
+		"pages":                            len(out.Pages),
+		"original_text_chars":              out.OriginalTextChars,
+		"original_text_tokens":             out.OriginalTextTokens,
+		"returned_text_chars":              out.ReturnedTextChars,
+		"estimated_text_tokens":            out.EstimatedTextTokens,
+		"output_text_truncated":            out.OutputTextTruncated,
+		"output_ref":                       out.OutputRef,
+		"tool_summary_kind":                "extractive",
+		"tool_summary_input_tokens":        out.OriginalTextTokens,
+		"tool_summary_output_tokens":       out.EstimatedTextTokens,
+		"tool_summary_saved_tokens":        savedTokens,
+		"tool_summary_api_input_tokens":    0,
+		"tool_summary_api_output_tokens":   0,
+		"tool_summary_api_total_tokens":    0,
+		"tool_summary_estimated_cost_usd":  0,
+		"tool_summary_external_model_used": false,
 	}
 }
 
@@ -1606,16 +1616,26 @@ func webCompactNote(truncated, includeText, fullText bool) string {
 }
 
 func webPageMetadata(page compactPage) map[string]any {
+	savedTokens := maxInt(0, page.OriginalTextTokens-page.EstimatedTextTokens)
 	return map[string]any{
-		"original_text_chars":     page.OriginalTextChars,
-		"original_text_tokens":    page.OriginalTextTokens,
-		"returned_text_chars":     page.ReturnedTextChars,
-		"estimated_text_tokens":   page.EstimatedTextTokens,
-		"budget_text_chars":       page.BudgetTextChars,
-		"budget_text_tokens":      page.BudgetTextTokens,
-		"output_text_truncated":   page.OutputTextTruncated,
-		"response_body_truncated": page.Truncated,
-		"output_ref":              page.OutputRef,
+		"original_text_chars":              page.OriginalTextChars,
+		"original_text_tokens":             page.OriginalTextTokens,
+		"returned_text_chars":              page.ReturnedTextChars,
+		"estimated_text_tokens":            page.EstimatedTextTokens,
+		"budget_text_chars":                page.BudgetTextChars,
+		"budget_text_tokens":               page.BudgetTextTokens,
+		"output_text_truncated":            page.OutputTextTruncated,
+		"response_body_truncated":          page.Truncated,
+		"output_ref":                       page.OutputRef,
+		"tool_summary_kind":                "extractive",
+		"tool_summary_input_tokens":        page.OriginalTextTokens,
+		"tool_summary_output_tokens":       page.EstimatedTextTokens,
+		"tool_summary_saved_tokens":        savedTokens,
+		"tool_summary_api_input_tokens":    0,
+		"tool_summary_api_output_tokens":   0,
+		"tool_summary_api_total_tokens":    0,
+		"tool_summary_estimated_cost_usd":  0,
+		"tool_summary_external_model_used": false,
 	}
 }
 
@@ -2082,6 +2102,13 @@ func truncate(s string, n int) string {
 
 func min(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
 		return a
 	}
 	return b

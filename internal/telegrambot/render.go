@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -26,6 +27,9 @@ type Renderer struct {
 	CacheHit        int64
 	CacheMiss       int64
 	Reasoning       int64
+	ToolSummaryIn   int64
+	ToolSummaryOut  int64
+	ToolSummaryAPI  int64
 	usageAccounting usageAccumulator
 	Started         time.Time
 	LastError       string
@@ -64,6 +68,7 @@ func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
 		}
 		return []RenderEvent{{Kind: "tool", Title: "Tool", Body: "⏳ " + summary, Key: key}}
 	case protocol.EventToolCallFinished:
+		r.observeToolSummary(event.Data)
 		key, summary := r.toolResultSummary(event.Data)
 		if summary == "" {
 			return nil
@@ -184,6 +189,10 @@ func (r *Renderer) footerLine() string {
 	}
 	if r.Reasoning > 0 {
 		parts = append(parts, fmt.Sprintf("🧠 %s", compactInt(r.Reasoning)))
+	}
+	if r.ToolSummaryIn+r.ToolSummaryOut > 0 {
+		parts = append(parts, fmt.Sprintf("🧩 websum %s→%s", compactInt(r.ToolSummaryIn), compactInt(r.ToolSummaryOut)))
+		parts = append(parts, fmt.Sprintf("sumapi %s", compactInt(r.ToolSummaryAPI)))
 	}
 	if r.ThinkingChars > 0 {
 		parts = append(parts, fmt.Sprintf("💭 %s hidden", compactInt(int64(r.ThinkingChars))))
@@ -312,6 +321,56 @@ func (r *Renderer) toolResultSummary(data any) (string, string) {
 		return "", ""
 	}
 	return toolrender.ResultKeyAndLine(data, r.toolSummaries[key], toolrender.StyleTelegram)
+}
+
+func (r *Renderer) observeToolSummary(data any) {
+	inTok, outTok, apiTok := toolSummaryTokens(data)
+	if inTok <= 0 && outTok <= 0 && apiTok <= 0 {
+		return
+	}
+	r.ToolSummaryIn += inTok
+	r.ToolSummaryOut += outTok
+	r.ToolSummaryAPI += apiTok
+}
+
+func toolSummaryTokens(data any) (inputTokens, outputTokens, apiTokens int64) {
+	bytes, _ := json.Marshal(data)
+	var result protocol.ToolResult
+	if err := json.Unmarshal(bytes, &result); err != nil || result.Metadata == nil {
+		return 0, 0, 0
+	}
+	inputTokens = metadataInt64(result.Metadata, "tool_summary_input_tokens")
+	outputTokens = metadataInt64(result.Metadata, "tool_summary_output_tokens")
+	apiTokens = metadataInt64(result.Metadata, "tool_summary_api_total_tokens")
+	if apiTokens == 0 {
+		apiTokens = metadataInt64(result.Metadata, "tool_summary_api_input_tokens") + metadataInt64(result.Metadata, "tool_summary_api_output_tokens")
+	}
+	return inputTokens, outputTokens, apiTokens
+}
+
+func metadataInt64(metadata map[string]any, key string) int64 {
+	if metadata == nil {
+		return 0
+	}
+	switch value := metadata[key].(type) {
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	case int32:
+		return int64(value)
+	case float64:
+		if value > 0 {
+			return int64(value)
+		}
+	case json.Number:
+		parsed, _ := value.Int64()
+		return parsed
+	case string:
+		parsed, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		return parsed
+	}
+	return 0
 }
 
 func splitTelegramPlain(text string, limit int) []string {

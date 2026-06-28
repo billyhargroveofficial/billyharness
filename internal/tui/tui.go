@@ -124,6 +124,9 @@ type Model struct {
 	lastOutputTok     int64
 	lastCacheHitTok   int64
 	lastCacheMissTok  int64
+	toolSummaryInTok  int64
+	toolSummaryOutTok int64
+	toolSummaryAPITok int64
 	usageAccounting   usageAccumulator
 	slashIndex        int
 	slashDismissed    string
@@ -1165,11 +1168,20 @@ func (m Model) inlineStatusView() string {
 		{"miss " + compactNumber(m.cacheMissTok), styles.statusUsage},
 		{"reasoning " + compactNumber(m.reasoningTok), styles.statusReasoning},
 		{compactNumber(m.usedTokens()) + " used", styles.statusUsage},
-		{"tools " + strconv.Itoa(m.toolCalls), styles.statusDim},
-		{"v" + m.version, styles.statusDim},
-		{"theme " + m.theme, styles.statusDim},
-		{"Main [" + shortID(m.localChatID) + "]", styles.statusDim},
 	}
+	if m.toolSummaryInTok > 0 || m.toolSummaryOutTok > 0 {
+		bottom = append(bottom, statusSegment{
+			"websum " + compactNumber(m.toolSummaryInTok) + "→" + compactNumber(m.toolSummaryOutTok),
+			styles.statusUsage,
+		})
+		bottom = append(bottom, statusSegment{"sumapi " + compactNumber(m.toolSummaryAPITok), styles.statusDim})
+	}
+	bottom = append(bottom,
+		statusSegment{"tools " + strconv.Itoa(m.toolCalls), styles.statusDim},
+		statusSegment{"v" + m.version, styles.statusDim},
+		statusSegment{"theme " + m.theme, styles.statusDim},
+		statusSegment{"Main [" + shortID(m.localChatID) + "]", styles.statusDim},
+	)
 	width := max(1, m.statusContentWidth(styles))
 	return renderStatusSegments(width, top, styles.statusSeparator) + "\n" +
 		renderStatusSegments(width, bottom, styles.statusSeparator)
@@ -1964,6 +1976,9 @@ func (m *Model) setProfile(value string) tea.Cmd {
 	m.lastOutputTok = 0
 	m.lastCacheHitTok = 0
 	m.lastCacheMissTok = 0
+	m.toolSummaryInTok = 0
+	m.toolSummaryOutTok = 0
+	m.toolSummaryAPITok = 0
 	m.sessionID = ""
 	m.followOutput = true
 	m.status = "profile " + m.currentProfile() + "; new chat"
@@ -2128,6 +2143,9 @@ func (m *Model) newChat() tea.Cmd {
 	m.lastOutputTok = 0
 	m.lastCacheHitTok = 0
 	m.lastCacheMissTok = 0
+	m.toolSummaryInTok = 0
+	m.toolSummaryOutTok = 0
+	m.toolSummaryAPITok = 0
 	m.usageAccounting.Reset()
 	m.status = "new chat " + shortID(m.localChatID)
 	m.followOutput = true
@@ -2233,6 +2251,9 @@ func (m *Model) applyChatSession(session chatSession) {
 	m.lastOutputTok = 0
 	m.lastCacheHitTok = 0
 	m.lastCacheMissTok = 0
+	m.toolSummaryInTok = 0
+	m.toolSummaryOutTok = 0
+	m.toolSummaryAPITok = 0
 	m.usageAccounting.Reset()
 	m.toolCalls = session.ToolCalls
 	m.modelCalls = session.ModelCalls
@@ -2501,6 +2522,7 @@ func (m *Model) applyEvent(event protocol.Event) {
 		m.status = "running tool " + toolName(event.Data)
 		m.addEventBlock(event.Type, toolTitle(event.Data), toolBody(event.Data))
 	case protocol.EventToolCallFinished:
+		m.observeToolSummary(event.Data)
 		m.appendToolResult(toolResultText(event.Data))
 		m.collapseLastToolBlockIfLarge()
 	case protocol.EventContextCompacted:
@@ -2539,6 +2561,56 @@ func toolResultText(value any) string {
 		return fmt.Sprint(value)
 	}
 	return fmt.Sprint(value)
+}
+
+func (m *Model) observeToolSummary(value any) {
+	inTok, outTok, apiTok := toolSummaryTokens(value)
+	if inTok <= 0 && outTok <= 0 && apiTok <= 0 {
+		return
+	}
+	m.toolSummaryInTok += inTok
+	m.toolSummaryOutTok += outTok
+	m.toolSummaryAPITok += apiTok
+}
+
+func toolSummaryTokens(value any) (inputTokens, outputTokens, apiTokens int64) {
+	bytes, _ := json.Marshal(value)
+	var result protocol.ToolResult
+	if err := json.Unmarshal(bytes, &result); err != nil || result.Metadata == nil {
+		return 0, 0, 0
+	}
+	inputTokens = metadataInt64(result.Metadata, "tool_summary_input_tokens")
+	outputTokens = metadataInt64(result.Metadata, "tool_summary_output_tokens")
+	apiTokens = metadataInt64(result.Metadata, "tool_summary_api_total_tokens")
+	if apiTokens == 0 {
+		apiTokens = metadataInt64(result.Metadata, "tool_summary_api_input_tokens") + metadataInt64(result.Metadata, "tool_summary_api_output_tokens")
+	}
+	return inputTokens, outputTokens, apiTokens
+}
+
+func metadataInt64(metadata map[string]any, key string) int64 {
+	if metadata == nil {
+		return 0
+	}
+	switch value := metadata[key].(type) {
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	case int32:
+		return int64(value)
+	case float64:
+		if value > 0 {
+			return int64(value)
+		}
+	case json.Number:
+		parsed, _ := value.Int64()
+		return parsed
+	case string:
+		parsed, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		return parsed
+	}
+	return 0
 }
 
 func (m *Model) appendToOpenBlock(kind, title, text string, eventType protocol.EventType) {

@@ -815,6 +815,9 @@ func TestInlineStatusShowsModelAccessCacheCostAndSession(t *testing.T) {
 	m.cacheMissTok = 300
 	m.lastInputTok = 1000
 	m.lastOutputTok = 500
+	m.toolSummaryInTok = 20000
+	m.toolSummaryOutTok = 900
+	m.toolSummaryAPITok = 0
 
 	status := m.inlineStatusView()
 	for _, want := range []string{
@@ -824,6 +827,9 @@ func TestInlineStatusShowsModelAccessCacheCostAndSession(t *testing.T) {
 		"Context",
 		"cost $",
 		"cached",
+		"websum",
+		"20k→900",
+		"sumapi 0",
 		"v0.1.0",
 		"theme dark",
 		"Main [",

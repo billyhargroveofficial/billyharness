@@ -70,6 +70,27 @@ func TestRendererProviderUsageDeduplicatesCumulativeSnapshots(t *testing.T) {
 	}
 }
 
+func TestRendererFooterShowsToolSummaryTokens(t *testing.T) {
+	r := NewRenderer()
+	r.Apply(protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
+		Name:    "web_fetch",
+		Content: `{"summary":"compact"}`,
+		Metadata: map[string]any{
+			"tool_summary_input_tokens":        int64(20000),
+			"tool_summary_output_tokens":       int64(900),
+			"tool_summary_api_total_tokens":    int64(0),
+			"tool_summary_external_model_used": false,
+		},
+	}})
+
+	footer := r.footerLine()
+	for _, want := range []string{"🧩 websum 20.0k→900", "sumapi 0"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("footer missing %q: %q", want, footer)
+		}
+	}
+}
+
 func TestRendererFinalRichMarkdownPreservesRichMarkdown(t *testing.T) {
 	r := NewRenderer()
 	r.Apply(protocol.Event{Type: protocol.EventAssistantDelta, Data: `## Погода

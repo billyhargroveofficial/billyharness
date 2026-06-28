@@ -525,6 +525,16 @@ func TestWebCompactionStoresFullTextOutOfBand(t *testing.T) {
 	if compact.Text != "" || compact.OutputRef == "" {
 		t.Fatalf("compact page should omit raw text and include output ref: %#v", compact)
 	}
+	meta := webPageMetadata(compact)
+	if meta["tool_summary_kind"] != "extractive" ||
+		meta["tool_summary_api_total_tokens"] != 0 ||
+		meta["tool_summary_external_model_used"] != false {
+		t.Fatalf("summary metadata missing extractive zero-cost fields: %#v", meta)
+	}
+	if meta["tool_summary_input_tokens"].(int) <= meta["tool_summary_output_tokens"].(int) ||
+		meta["tool_summary_saved_tokens"].(int) <= 0 {
+		t.Fatalf("summary token metadata should show compression: %#v", meta)
+	}
 	bytes, err := os.ReadFile(ref)
 	if err != nil {
 		t.Fatal(err)
