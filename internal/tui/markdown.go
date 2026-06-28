@@ -29,12 +29,21 @@ func renderTerminalMarkdown(text string, width int, styles themeStyles) string {
 	lines := strings.Split(text, "\n")
 	out := make([]string, 0, len(lines))
 	inFence := false
+	fenceMarker := ""
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
 		trimmed := strings.TrimSpace(line)
-		if isFenceLine(trimmed) {
-			inFence = !inFence
-			continue
+		if marker, ok := markdownFenceMarker(trimmed); ok {
+			if !inFence {
+				inFence = true
+				fenceMarker = marker
+				continue
+			}
+			if marker == fenceMarker {
+				inFence = false
+				fenceMarker = ""
+				continue
+			}
 		}
 		if inFence {
 			out = append(out, styles.markdown.codeBlock.Width(max(1, width)).Render(line))
@@ -48,6 +57,94 @@ func renderTerminalMarkdown(text string, width int, styles themeStyles) string {
 		out = append(out, renderMarkdownLine(line, width, styles.markdown))
 	}
 	return strings.TrimRight(strings.Join(out, "\n"), "\n")
+}
+
+func liveMarkdownStablePrefixLen(text string) int {
+	if text == "" {
+		return 0
+	}
+	newline := strings.LastIndexByte(text, '\n')
+	if newline < 0 {
+		return 0
+	}
+	cut := newline + 1
+	prefix := text[:cut]
+	if start, ok := liveOpenFenceStart(prefix); ok {
+		return start
+	}
+	if start, ok := liveUnboundedTableStart(prefix); ok {
+		return start
+	}
+	return cut
+}
+
+type markdownLineSpan struct {
+	text  string
+	start int
+}
+
+func markdownLineSpans(text string) []markdownLineSpan {
+	spans := make([]markdownLineSpan, 0, strings.Count(text, "\n")+1)
+	for start := 0; start < len(text); {
+		rel := strings.IndexByte(text[start:], '\n')
+		if rel < 0 {
+			spans = append(spans, markdownLineSpan{text: text[start:], start: start})
+			break
+		}
+		newline := start + rel
+		lineEnd := newline
+		if lineEnd > start && text[lineEnd-1] == '\r' {
+			lineEnd--
+		}
+		spans = append(spans, markdownLineSpan{text: text[start:lineEnd], start: start})
+		start = newline + 1
+	}
+	return spans
+}
+
+func liveOpenFenceStart(text string) (int, bool) {
+	inFence := false
+	fenceStart := 0
+	fenceMarker := ""
+	for _, span := range markdownLineSpans(text) {
+		marker, ok := markdownFenceMarker(strings.TrimSpace(span.text))
+		if !ok {
+			continue
+		}
+		if !inFence {
+			inFence = true
+			fenceStart = span.start
+			fenceMarker = marker
+			continue
+		}
+		if marker == fenceMarker {
+			inFence = false
+			fenceMarker = ""
+		}
+	}
+	return fenceStart, inFence
+}
+
+func liveUnboundedTableStart(text string) (int, bool) {
+	spans := markdownLineSpans(text)
+	if len(spans) == 0 || strings.TrimSpace(spans[len(spans)-1].text) == "" {
+		return 0, false
+	}
+	start := len(spans)
+	for start > 0 {
+		trimmed := strings.TrimSpace(spans[start-1].text)
+		if trimmed == "" || isFenceLine(trimmed) {
+			break
+		}
+		if _, ok := parseMarkdownTableRow(spans[start-1].text); !ok {
+			break
+		}
+		start--
+	}
+	if start == len(spans) {
+		return 0, false
+	}
+	return spans[start].start, true
 }
 
 type markdownTable struct {
@@ -353,7 +450,19 @@ func renderInlineMarkdown(text string, styles terminalMarkdownStyles) string {
 }
 
 func isFenceLine(trimmed string) bool {
-	return strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~")
+	_, ok := markdownFenceMarker(trimmed)
+	return ok
+}
+
+func markdownFenceMarker(trimmed string) (string, bool) {
+	switch {
+	case strings.HasPrefix(trimmed, "```"):
+		return "```", true
+	case strings.HasPrefix(trimmed, "~~~"):
+		return "~~~", true
+	default:
+		return "", false
+	}
 }
 
 func isHorizontalRule(trimmed string) bool {

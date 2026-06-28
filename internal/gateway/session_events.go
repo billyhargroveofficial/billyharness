@@ -156,7 +156,9 @@ func (s *Session) beginRunStatus(req RunRequest) {
 	hub := s.events
 	s.mu.Unlock()
 	status.Running = s.Thread != nil && s.Thread.Running()
-	hub.Publish(protocol.Event{Type: protocol.EventSessionStatus, Data: status})
+	event := protocol.Event{Type: protocol.EventSessionStatus, Data: status}
+	hub.Publish(event)
+	s.recordEvent(event)
 }
 
 func (s *Session) observeRunEvent(event protocol.Event) {
@@ -196,8 +198,10 @@ func (s *Session) observeRunEvent(event protocol.Event) {
 	hub := s.events
 	s.mu.Unlock()
 	hub.Publish(event)
+	s.recordEvent(event)
 	if statusEvent != nil {
 		hub.Publish(*statusEvent)
+		s.recordEvent(*statusEvent)
 	}
 }
 
@@ -207,4 +211,12 @@ func (s *Session) publish(event protocol.Event) {
 	hub := s.events
 	s.mu.Unlock()
 	hub.Publish(event)
+	s.recordEvent(event)
+}
+
+func (s *Session) recordEvent(event protocol.Event) {
+	if s == nil || s.eventRecorder == nil {
+		return
+	}
+	s.eventRecorder(event)
 }

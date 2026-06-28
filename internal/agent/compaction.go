@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
@@ -13,49 +12,122 @@ import (
 
 const compactionMarker = "Conversation summary (auto-compact)"
 
-func compactMessages(messages []protocol.Message, cfg config.Config, observedPromptTokens int64) ([]protocol.Message, bool) {
-	threshold := int64(cfg.ContextCompactTokens)
-	if threshold <= 0 || len(messages) < 4 {
-		return messages, false
+const (
+	defaultContextCompactKeep     = 32
+	defaultContextCompactMaxChars = 120_000
+)
+
+type compactionPolicy struct {
+	ThresholdTokens int64
+	KeepMessages    int
+	MaxSummaryChars int
+}
+
+type compactionReport struct {
+	CompactionID             string                          `json:"compaction_id"`
+	Reason                   string                          `json:"reason"`
+	TriggerSource            string                          `json:"trigger_source"`
+	TriggerPromptTokens      int64                           `json:"trigger_prompt_tokens"`
+	ThresholdTokens          int64                           `json:"threshold_tokens"`
+	KeepMessages             int                             `json:"keep_messages"`
+	MaxSummaryChars          int                             `json:"max_summary_chars"`
+	ProtectedPrefix          compactionProtectedPrefixReport `json:"protected_prefix"`
+	ProtectedPrefixMessages  int                             `json:"protected_prefix_messages"`
+	ProtectedPrefixChars     int                             `json:"protected_prefix_chars"`
+	ProtectedPrefixTokens    int64                           `json:"protected_prefix_estimated_tokens"`
+	CompactedMessages        int                             `json:"compacted_messages"`
+	CompactedChars           int                             `json:"compacted_chars"`
+	CompactedEstimatedTokens int64                           `json:"compacted_estimated_tokens"`
+	ActiveMessages           int                             `json:"active_messages"`
+	ActiveChars              int                             `json:"active_chars"`
+	ActiveEstimatedTokens    int64                           `json:"active_estimated_tokens"`
+	SummaryChars             int                             `json:"summary_chars"`
+	SummaryEstimatedTokens   int64                           `json:"summary_estimated_tokens"`
+}
+
+type compactionProtectedPrefixReport struct {
+	EndIndex        int                             `json:"end_index"`
+	Messages        int                             `json:"messages"`
+	Chars           int                             `json:"chars"`
+	EstimatedTokens int64                           `json:"estimated_tokens"`
+	Reasons         map[string]int                  `json:"reasons,omitempty"`
+	Entries         []compactionProtectedPrefixItem `json:"entries,omitempty"`
+}
+
+type compactionProtectedPrefixItem struct {
+	Index           int    `json:"index"`
+	Role            string `json:"role"`
+	Reason          string `json:"reason"`
+	Chars           int    `json:"chars"`
+	EstimatedTokens int64  `json:"estimated_tokens"`
+}
+
+func compactMessages(messages []protocol.Message, cfg config.Config, observedPromptTokens int64) ([]protocol.Message, *compactionReport, bool) {
+	policy := effectiveCompactionPolicy(cfg)
+	if policy.ThresholdTokens <= 0 || len(messages) < 4 {
+		return messages, nil, false
 	}
 	triggerTokens := observedPromptTokens
+	triggerSource := "provider_usage"
 	if triggerTokens <= 0 {
 		triggerTokens = estimateMessagesTokens(messages)
+		triggerSource = "estimated_messages"
 	}
-	if triggerTokens < threshold {
-		return messages, false
+	if triggerTokens < policy.ThresholdTokens {
+		return messages, nil, false
 	}
-	prefixEnd := 0
-	prefixEnd = protectedPrefixEnd(messages)
+	protected := protectedPrefix(messages)
+	cut := compactCutIndex(messages, protected.EndIndex, policy.KeepMessages)
+	if cut <= protected.EndIndex || cut >= len(messages) {
+		return messages, nil, false
+	}
+	compacted := messages[protected.EndIndex:cut]
+	id := compactionID(compacted, triggerTokens, policy.ThresholdTokens)
+	summary := buildCompactionSummary(compacted, policy.MaxSummaryChars, id)
+	out := make([]protocol.Message, 0, protected.EndIndex+1+len(messages)-cut)
+	out = append(out, messages[:protected.EndIndex]...)
+	out = append(out, summary)
+	out = append(out, messages[cut:]...)
+	report := newCompactionReport(id, policy, triggerTokens, triggerSource, protected, compacted, summary, out)
+	return out, report, true
+}
+
+func effectiveCompactionPolicy(cfg config.Config) compactionPolicy {
 	keep := cfg.ContextCompactKeep
 	if keep <= 0 {
-		keep = 32
-	}
-	cut := compactCutIndex(messages, prefixEnd, keep)
-	if cut <= prefixEnd || cut >= len(messages) {
-		return messages, false
+		keep = defaultContextCompactKeep
 	}
 	maxChars := cfg.ContextCompactMaxChars
 	if maxChars <= 0 {
-		maxChars = 120_000
+		maxChars = defaultContextCompactMaxChars
 	}
-	summary := buildCompactionSummary(messages[prefixEnd:cut], maxChars, triggerTokens, threshold)
-	out := make([]protocol.Message, 0, prefixEnd+1+len(messages)-cut)
-	out = append(out, messages[:prefixEnd]...)
-	out = append(out, summary)
-	out = append(out, messages[cut:]...)
-	return out, true
+	return compactionPolicy{
+		ThresholdTokens: int64(cfg.ContextCompactTokens),
+		KeepMessages:    keep,
+		MaxSummaryChars: maxChars,
+	}
 }
 
 func protectedPrefixEnd(messages []protocol.Message) int {
+	return protectedPrefix(messages).EndIndex
+}
+
+func protectedPrefix(messages []protocol.Message) compactionProtectedPrefixReport {
+	report := compactionProtectedPrefixReport{Reasons: map[string]int{}}
 	end := 0
 	for end < len(messages) && messages[end].Role == protocol.RoleSystem && !isCompactionSummary(messages[end]) {
+		report.add(end, messages[end], protectedSystemReason(end, messages[end]))
 		end++
 	}
 	for end < len(messages) && isContextInstructionMessage(messages[end]) {
+		report.add(end, messages[end], protectedContextInstructionReason(messages[end]))
 		end++
 	}
-	return end
+	report.EndIndex = end
+	if len(report.Reasons) == 0 {
+		report.Reasons = nil
+	}
+	return report
 }
 
 func isCompactionSummary(msg protocol.Message) bool {
@@ -63,12 +135,52 @@ func isCompactionSummary(msg protocol.Message) bool {
 }
 
 func isContextInstructionMessage(msg protocol.Message) bool {
+	return protectedContextInstructionReason(msg) != ""
+}
+
+func protectedSystemReason(index int, msg protocol.Message) string {
+	content := strings.TrimSpace(msg.Content)
+	if strings.HasPrefix(content, "# Billyharness profile:") || strings.Contains(content, "<SOUL>") {
+		return "profile_soul"
+	}
+	if index == 0 {
+		return "system_prompt"
+	}
+	return "system_context"
+}
+
+func protectedContextInstructionReason(msg protocol.Message) string {
 	if msg.Role != protocol.RoleUser {
-		return false
+		return ""
 	}
 	content := strings.TrimSpace(msg.Content)
-	return strings.HasPrefix(content, "# AGENTS.md instructions") ||
-		strings.HasPrefix(content, "# MCP server instructions")
+	switch {
+	case strings.HasPrefix(content, "# AGENTS.md instructions"):
+		return "agents_instructions"
+	case strings.HasPrefix(content, "# MCP server instructions"):
+		return "mcp_instructions"
+	default:
+		return ""
+	}
+}
+
+func (r *compactionProtectedPrefixReport) add(index int, msg protocol.Message, reason string) {
+	if reason == "" {
+		reason = "protected_prefix"
+	}
+	chars := messageCompactionChars(msg)
+	tokens := estimateMessagesTokens([]protocol.Message{msg})
+	r.Messages++
+	r.Chars += chars
+	r.EstimatedTokens += tokens
+	r.Reasons[reason]++
+	r.Entries = append(r.Entries, compactionProtectedPrefixItem{
+		Index:           index,
+		Role:            string(msg.Role),
+		Reason:          reason,
+		Chars:           chars,
+		EstimatedTokens: tokens,
+	})
 }
 
 func compactCutIndex(messages []protocol.Message, prefixEnd, keep int) int {
@@ -85,12 +197,11 @@ func compactCutIndex(messages []protocol.Message, prefixEnd, keep int) int {
 	return cut
 }
 
-func buildCompactionSummary(messages []protocol.Message, maxChars int, triggerTokens, threshold int64) protocol.Message {
+func buildCompactionSummary(messages []protocol.Message, maxChars int, id string) protocol.Message {
 	var b strings.Builder
-	id := compactionID(messages, triggerTokens, threshold)
 	fmt.Fprintf(&b, "%s\n", compactionMarker)
 	fmt.Fprintf(&b, "Earlier conversation context was compacted before the next model call.\n")
-	fmt.Fprintf(&b, "Compaction id: %s; trigger prompt tokens: %d; threshold: %d; compacted messages: %d.\n", id, triggerTokens, threshold, len(messages))
+	fmt.Fprintf(&b, "Compaction id: %s; compacted messages: %d.\n", id, len(messages))
 	b.WriteString("Do not treat omitted assistant reasoning as missing user intent. Continue from the preserved recent messages.\n\n")
 	b.WriteString("Compacted transcript:\n")
 	for i, msg := range messages {
@@ -159,10 +270,7 @@ func truncateForCompaction(text string, maxChars int) string {
 func estimateMessagesTokens(messages []protocol.Message) int64 {
 	var chars int64
 	for _, msg := range messages {
-		chars += int64(len(msg.Content) + len(msg.Name) + len(msg.ToolCallID) + len(string(msg.Role)))
-		for _, call := range msg.ToolCalls {
-			chars += int64(len(call.ID) + len(call.Name) + len(call.Arguments))
-		}
+		chars += int64(messageCompactionChars(msg))
 	}
 	if chars == 0 {
 		return 0
@@ -170,51 +278,51 @@ func estimateMessagesTokens(messages []protocol.Message) int64 {
 	return (chars + 3) / 4
 }
 
-func compactionEventData(messages []protocol.Message) map[string]any {
-	data := map[string]any{"active_messages": len(messages)}
-	for _, msg := range messages {
-		if msg.Role == protocol.RoleSystem && strings.HasPrefix(msg.Content, compactionMarker) {
-			data["summary_chars"] = len(msg.Content)
-			for _, line := range strings.Split(msg.Content, "\n") {
-				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "Compaction id:") || strings.HasPrefix(line, "Trigger prompt tokens:") {
-					data["detail"] = line
-					parseCompactionDetail(data, line)
-					break
-				}
-			}
-			return data
-		}
+func messageCompactionChars(msg protocol.Message) int {
+	chars := len(msg.Content) + len(msg.Name) + len(msg.ToolCallID) + len(string(msg.Role))
+	for _, call := range msg.ToolCalls {
+		chars += len(call.ID) + len(call.Name) + len(call.Arguments)
 	}
-	return data
+	return chars
 }
 
-func parseCompactionDetail(data map[string]any, line string) {
-	line = strings.TrimSuffix(strings.TrimSpace(line), ".")
-	for _, part := range strings.Split(line, ";") {
-		key, value, ok := strings.Cut(strings.TrimSpace(part), ":")
-		if !ok {
-			continue
-		}
-		key = strings.ToLower(strings.TrimSpace(key))
-		value = strings.TrimSpace(value)
-		switch key {
-		case "compaction id":
-			if value != "" {
-				data["compaction_id"] = value
-			}
-		case "trigger prompt tokens":
-			if n, err := strconv.ParseInt(value, 10, 64); err == nil {
-				data["trigger_prompt_tokens"] = n
-			}
-		case "threshold":
-			if n, err := strconv.ParseInt(value, 10, 64); err == nil {
-				data["threshold_tokens"] = n
-			}
-		case "compacted messages":
-			if n, err := strconv.Atoi(value); err == nil {
-				data["compacted_messages"] = n
-			}
-		}
+func messagesCompactionChars(messages []protocol.Message) int {
+	var chars int
+	for _, msg := range messages {
+		chars += messageCompactionChars(msg)
+	}
+	return chars
+}
+
+func newCompactionReport(
+	id string,
+	policy compactionPolicy,
+	triggerTokens int64,
+	triggerSource string,
+	protected compactionProtectedPrefixReport,
+	compacted []protocol.Message,
+	summary protocol.Message,
+	active []protocol.Message,
+) *compactionReport {
+	return &compactionReport{
+		CompactionID:             id,
+		Reason:                   "prompt_tokens_at_or_above_threshold",
+		TriggerSource:            triggerSource,
+		TriggerPromptTokens:      triggerTokens,
+		ThresholdTokens:          policy.ThresholdTokens,
+		KeepMessages:             policy.KeepMessages,
+		MaxSummaryChars:          policy.MaxSummaryChars,
+		ProtectedPrefix:          protected,
+		ProtectedPrefixMessages:  protected.Messages,
+		ProtectedPrefixChars:     protected.Chars,
+		ProtectedPrefixTokens:    protected.EstimatedTokens,
+		CompactedMessages:        len(compacted),
+		CompactedChars:           messagesCompactionChars(compacted),
+		CompactedEstimatedTokens: estimateMessagesTokens(compacted),
+		ActiveMessages:           len(active),
+		ActiveChars:              messagesCompactionChars(active),
+		ActiveEstimatedTokens:    estimateMessagesTokens(active),
+		SummaryChars:             len(summary.Content),
+		SummaryEstimatedTokens:   estimateMessagesTokens([]protocol.Message{summary}),
 	}
 }

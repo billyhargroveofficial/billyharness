@@ -57,10 +57,11 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 	var lastPromptTokens int64
 	for round := 0; round < a.cfg.MaxToolRounds; round++ {
 		var compacted bool
-		messages, compacted = compactMessages(messages, a.cfg, lastPromptTokens)
+		var compaction *compactionReport
+		messages, compaction, compacted = compactMessages(messages, a.cfg, lastPromptTokens)
 		if compacted {
 			lastPromptTokens = 0
-			emit(protocol.Event{Type: protocol.EventContextCompacted, Data: compactionEventData(messages)})
+			emit(protocol.Event{Type: protocol.EventContextCompacted, Data: compaction})
 		}
 		emit(protocol.Event{Type: protocol.EventModelCallStarted, Data: map[string]any{"round": round + 1}})
 		events, errs := a.provider.Stream(ctx, provider.Request{

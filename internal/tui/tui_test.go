@@ -459,6 +459,89 @@ func TestLiveAssistantMarkdownKeepsUnstableTailRawUntilCompleted(t *testing.T) {
 	}
 }
 
+func TestAssistantDeltasUpdateSingleLiveBlock(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: "Intro\n"})
+	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: "This is **bo"})
+	live := stripANSITest(m.renderBlock(0, m.blocks[0]))
+	if !strings.Contains(live, "Intro") || !strings.Contains(live, "This is **bo") {
+		t.Fatalf("incomplete bold line should stay raw while live: %q", live)
+	}
+
+	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: "ld**\n"})
+	if len(m.blocks) != 1 {
+		t.Fatalf("assistant deltas should update one block, got %#v", m.blocks)
+	}
+	if !m.blocks[0].live {
+		t.Fatalf("assistant block should remain live")
+	}
+	if got := m.blocks[0].content; got != "Intro\nThis is **bold**\n" {
+		t.Fatalf("assistant content = %q", got)
+	}
+	rendered := stripANSITest(m.renderBlock(0, m.blocks[0]))
+	if strings.Contains(rendered, "**") || !strings.Contains(rendered, "bold") {
+		t.Fatalf("completed bold line should render as markdown while live: %q", rendered)
+	}
+}
+
+func TestLiveAssistantMarkdownWaitsForCodeFenceBoundary(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: strings.Join([]string{
+		"Before",
+		"",
+		"```go",
+		"fmt.Println(1)",
+		"```",
+	}, "\n")})
+
+	live := stripANSITest(m.renderBlock(0, m.blocks[0]))
+	if !strings.Contains(live, "Before") {
+		t.Fatalf("stable prefix should render before open fence tail: %q", live)
+	}
+	if !strings.Contains(live, "```go") || !strings.Contains(live, "fmt.Println(1)") {
+		t.Fatalf("fence without newline boundary should stay raw while live: %q", live)
+	}
+
+	m.applyEvent(protocol.Event{Type: protocol.EventRunCompleted})
+	final := stripANSITest(m.renderBlock(0, m.blocks[0]))
+	if strings.Contains(final, "```") || !strings.Contains(final, "fmt.Println(1)") {
+		t.Fatalf("final code fence should render without markdown fences: %q", final)
+	}
+}
+
+func TestLiveAssistantMarkdownWaitsForTableBoundary(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: strings.Join([]string{
+		"Scores",
+		"",
+		"| Name | Score |",
+		"| --- | ---: |",
+		"| **Billy** | `10` |",
+	}, "\n") + "\n"})
+
+	live := stripANSITest(m.renderBlock(0, m.blocks[0]))
+	if !strings.Contains(live, "Scores") {
+		t.Fatalf("stable prefix should render before table tail: %q", live)
+	}
+	if !strings.Contains(live, "| **Billy** | `10` |") || strings.Contains(live, "┌") {
+		t.Fatalf("table without boundary should stay raw while live: %q", live)
+	}
+
+	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: "\nDone\n"})
+	live = stripANSITest(m.renderBlock(0, m.blocks[0]))
+	if !strings.Contains(live, "┌") || !strings.Contains(live, "Billy") || !strings.Contains(live, "10") || !strings.Contains(live, "Done") {
+		t.Fatalf("table should render after explicit boundary: %q", live)
+	}
+	for _, leak := range []string{"**", "`10`"} {
+		if strings.Contains(live, leak) {
+			t.Fatalf("rendered table syntax %q leaked: %q", leak, live)
+		}
+	}
+}
+
 func TestToolAuditRendersCompactBlock(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 100
@@ -845,17 +928,40 @@ func TestInlineStatusShowsModelAccessCacheCostAndSession(t *testing.T) {
 
 func TestCompactEventTextShowsStructuredCompactionFields(t *testing.T) {
 	text := compactEventText(map[string]any{
-		"compaction_id":         "abc123",
-		"trigger_prompt_tokens": 610000,
-		"threshold_tokens":      600000,
-		"compacted_messages":    42,
-		"active_messages":       35,
-		"summary_chars":         12000,
+		"compaction_id":              "abc123",
+		"reason":                     "prompt_tokens_at_or_above_threshold",
+		"trigger_source":             "provider_usage",
+		"trigger_prompt_tokens":      610000,
+		"threshold_tokens":           600000,
+		"keep_messages":              32,
+		"max_summary_chars":          120000,
+		"compacted_messages":         42,
+		"compacted_chars":            240000,
+		"compacted_estimated_tokens": 60000,
+		"protected_prefix": map[string]any{
+			"messages":         3,
+			"chars":            9000,
+			"estimated_tokens": 2250,
+			"reasons": map[string]any{
+				"system_prompt":       1,
+				"profile_soul":        1,
+				"agents_instructions": 1,
+			},
+		},
+		"active_messages": 35,
+		"summary_chars":   12000,
 	})
 	for _, want := range []string{
 		"id: abc123",
+		"reason: prompt_tokens_at_or_above_threshold (provider_usage)",
 		"trigger: 610000 / threshold 600000 tokens",
+		"policy: keep 32 messages / summary cap 120000 chars",
 		"compacted messages: 42",
+		"compacted budget: 240000 chars / ~60000 tokens",
+		"protected prefix: 3 messages, 9000 chars, ~2250 tokens",
+		"agents_instructions=1",
+		"profile_soul=1",
+		"system_prompt=1",
 		"active messages: 35",
 		"summary chars: 12000",
 	} {

@@ -449,10 +449,22 @@ func mcp(args []string) error {
 }
 
 func benchCmd(args []string) error {
-	if len(args) == 0 || args[0] != "run" {
-		fmt.Println("usage: fast-agent-harness bench run -tasks tasks.jsonl -out runs")
+	if len(args) == 0 {
+		benchUsage()
 		return nil
 	}
+	switch args[0] {
+	case "run":
+		return benchRunCmd(args[1:])
+	case "terminal-bench", "tb":
+		return benchTerminalBenchCmd(args[1:])
+	default:
+		benchUsage()
+		return fmt.Errorf("unknown bench command %q", args[0])
+	}
+}
+
+func benchRunCmd(args []string) error {
 	fs := flag.NewFlagSet("bench run", flag.ExitOnError)
 	tasksPath := fs.String("tasks", "", "JSONL task file")
 	outDir := fs.String("out", "bench-runs", "output directory for JSONL traces")
@@ -466,7 +478,7 @@ func benchCmd(args []string) error {
 	contextCompactTokens := fs.Int("context-compact-tokens", 0, "override context compaction trigger tokens")
 	contextCompactKeep := fs.Int("context-compact-keep", 0, "override context compaction keep count")
 	contextCompactMaxChars := fs.Int("context-compact-max-chars", 0, "override context compaction summary max chars")
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *tasksPath == "" {
@@ -500,6 +512,93 @@ func benchCmd(args []string) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(summary)
+}
+
+func benchTerminalBenchCmd(args []string) error {
+	if len(args) == 0 {
+		benchTerminalBenchUsage()
+		return nil
+	}
+	switch args[0] {
+	case "export":
+		return benchTerminalBenchExportCmd(args[1:])
+	case "import":
+		return benchTerminalBenchImportCmd(args[1:])
+	default:
+		benchTerminalBenchUsage()
+		return fmt.Errorf("unknown bench terminal-bench command %q", args[0])
+	}
+}
+
+func benchTerminalBenchExportCmd(args []string) error {
+	fs := flag.NewFlagSet("bench terminal-bench export", flag.ExitOnError)
+	tasksPath := fs.String("tasks", "", "billyharness JSONL task file")
+	outDir := fs.String("out", "benchmarks/terminal-bench-export", "Terminal-Bench dataset output directory")
+	force := fs.Bool("force", false, "replace an existing Terminal-Bench dataset output directory")
+	authorName := fs.String("author-name", "billyharness", "Terminal-Bench author_name")
+	authorEmail := fs.String("author-email", "unknown", "Terminal-Bench author_email")
+	difficulty := fs.String("difficulty", "unknown", "Terminal-Bench difficulty: easy, medium, hard, or unknown")
+	category := fs.String("category", "software_engineering", "Terminal-Bench category")
+	maxTestTimeoutSec := fs.Int("max-test-timeout-sec", 60, "Terminal-Bench max_test_timeout_sec")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *tasksPath == "" {
+		return fmt.Errorf("-tasks required")
+	}
+	summary, err := bench.ExportTerminalBenchDataset(bench.TerminalBenchExportOptions{
+		TasksPath:             *tasksPath,
+		OutDir:                *outDir,
+		Force:                 *force,
+		AuthorName:            *authorName,
+		AuthorEmail:           *authorEmail,
+		Difficulty:            *difficulty,
+		Category:              *category,
+		MaxTestTimeoutSeconds: *maxTestTimeoutSec,
+	})
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(summary)
+}
+
+func benchTerminalBenchImportCmd(args []string) error {
+	fs := flag.NewFlagSet("bench terminal-bench import", flag.ExitOnError)
+	datasetDir := fs.String("dataset", "", "Terminal-Bench dataset directory")
+	outPath := fs.String("out", "", "billyharness JSONL task output; stdout when omitted")
+	suite := fs.String("suite", bench.TerminalBenchSuite, "suite for generic Terminal-Bench imports")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *datasetDir == "" {
+		return fmt.Errorf("-dataset required")
+	}
+	tasks, err := bench.ImportTerminalBenchDataset(bench.TerminalBenchImportOptions{
+		DatasetDir: *datasetDir,
+		Suite:      *suite,
+	})
+	if err != nil {
+		return err
+	}
+	if *outPath == "" {
+		return bench.EncodeTasksJSONL(os.Stdout, tasks)
+	}
+	return bench.WriteTasksJSONL(*outPath, tasks)
+}
+
+func benchUsage() {
+	fmt.Println("usage:")
+	fmt.Println("  fast-agent-harness bench run -tasks tasks.jsonl -out runs")
+	fmt.Println("  fast-agent-harness bench terminal-bench export -tasks tasks.jsonl -out tb-dataset")
+	fmt.Println("  fast-agent-harness bench terminal-bench import -dataset tb-dataset [-out tasks.jsonl]")
+}
+
+func benchTerminalBenchUsage() {
+	fmt.Println("usage:")
+	fmt.Println("  fast-agent-harness bench terminal-bench export -tasks tasks.jsonl -out tb-dataset")
+	fmt.Println("  fast-agent-harness bench terminal-bench import -dataset tb-dataset [-out tasks.jsonl]")
 }
 
 func chatGateway(baseURL string, noReasoning bool, model, profile string, mock bool) error {
@@ -652,5 +751,7 @@ func usage() {
 	fmt.Println("  serve|gateway [-mock] [-addr 127.0.0.1:8765]")
 	fmt.Println("  mcp")
 	fmt.Println("  bench run -tasks tasks.jsonl -out runs [-model deepseek-v4-flash] [-max-rounds 100]")
+	fmt.Println("  bench terminal-bench export -tasks tasks.jsonl -out tb-dataset")
+	fmt.Println("  bench terminal-bench import -dataset tb-dataset [-out tasks.jsonl]")
 	fmt.Println("  tools")
 }

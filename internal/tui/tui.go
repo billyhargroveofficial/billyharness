@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -2742,6 +2743,9 @@ func (m Model) renderBlock(i int, b block) string {
 		style = styles.statusBlock
 	}
 	body := strings.TrimRight(b.content, "\n")
+	if b.kind == "assistant" && b.live {
+		body = b.content
+	}
 	switch {
 	case b.kind == "tool" && m.toolCollapsed(i):
 		body = ""
@@ -2833,24 +2837,8 @@ func renderAssistantBody(body string, width int, styles themeStyles, live bool) 
 }
 
 func splitLiveMarkdown(body string) (stable, tail string) {
-	if body == "" || markdownFenceOpen(body) {
-		return "", body
-	}
-	idx := strings.LastIndex(body, "\n")
-	if idx < 0 {
-		return "", body
-	}
-	return body[:idx+1], body[idx+1:]
-}
-
-func markdownFenceOpen(body string) bool {
-	open := false
-	for _, line := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "```") {
-			open = !open
-		}
-	}
-	return open
+	cut := liveMarkdownStablePrefixLen(body)
+	return body[:cut], body[cut:]
 }
 
 func renderActivityBlock(b block, body string, width int, styles themeStyles) string {
@@ -3303,27 +3291,60 @@ func helpText() string {
 
 func compactEventText(value any) string {
 	bytes, _ := json.Marshal(value)
+	type protectedPrefixData struct {
+		Messages        int            `json:"messages"`
+		Chars           int            `json:"chars"`
+		EstimatedTokens int64          `json:"estimated_tokens"`
+		Reasons         map[string]int `json:"reasons"`
+	}
 	var data struct {
-		ActiveMessages    int    `json:"active_messages"`
-		SummaryChars      int    `json:"summary_chars"`
-		Detail            string `json:"detail"`
-		CompactionID      string `json:"compaction_id"`
-		TriggerPromptToks int64  `json:"trigger_prompt_tokens"`
-		ThresholdTokens   int64  `json:"threshold_tokens"`
-		CompactedMessages int    `json:"compacted_messages"`
+		ActiveMessages           int                 `json:"active_messages"`
+		SummaryChars             int                 `json:"summary_chars"`
+		Detail                   string              `json:"detail"`
+		CompactionID             string              `json:"compaction_id"`
+		Reason                   string              `json:"reason"`
+		TriggerSource            string              `json:"trigger_source"`
+		TriggerPromptToks        int64               `json:"trigger_prompt_tokens"`
+		ThresholdTokens          int64               `json:"threshold_tokens"`
+		KeepMessages             int                 `json:"keep_messages"`
+		MaxSummaryChars          int                 `json:"max_summary_chars"`
+		CompactedMessages        int                 `json:"compacted_messages"`
+		CompactedChars           int                 `json:"compacted_chars"`
+		CompactedEstimatedTokens int64               `json:"compacted_estimated_tokens"`
+		ProtectedPrefix          protectedPrefixData `json:"protected_prefix"`
 	}
 	_ = json.Unmarshal(bytes, &data)
 	var lines []string
 	if data.CompactionID != "" {
 		lines = append(lines, "id: "+data.CompactionID)
 	}
+	if data.Reason != "" {
+		line := "reason: " + data.Reason
+		if data.TriggerSource != "" {
+			line += " (" + data.TriggerSource + ")"
+		}
+		lines = append(lines, line)
+	}
 	if data.TriggerPromptToks > 0 || data.ThresholdTokens > 0 {
 		lines = append(lines, fmt.Sprintf("trigger: %d / threshold %d tokens", data.TriggerPromptToks, data.ThresholdTokens))
 	} else if data.Detail != "" {
 		lines = append(lines, data.Detail)
 	}
+	if data.KeepMessages > 0 || data.MaxSummaryChars > 0 {
+		lines = append(lines, fmt.Sprintf("policy: keep %d messages / summary cap %d chars", data.KeepMessages, data.MaxSummaryChars))
+	}
 	if data.CompactedMessages > 0 {
 		lines = append(lines, fmt.Sprintf("compacted messages: %d", data.CompactedMessages))
+	}
+	if data.CompactedChars > 0 || data.CompactedEstimatedTokens > 0 {
+		lines = append(lines, fmt.Sprintf("compacted budget: %d chars / ~%d tokens", data.CompactedChars, data.CompactedEstimatedTokens))
+	}
+	if data.ProtectedPrefix.Messages > 0 {
+		line := fmt.Sprintf("protected prefix: %d messages, %d chars, ~%d tokens", data.ProtectedPrefix.Messages, data.ProtectedPrefix.Chars, data.ProtectedPrefix.EstimatedTokens)
+		if reasonText := compactReasonCounts(data.ProtectedPrefix.Reasons); reasonText != "" {
+			line += " (" + reasonText + ")"
+		}
+		lines = append(lines, line)
 	}
 	if data.ActiveMessages > 0 {
 		lines = append(lines, fmt.Sprintf("active messages: %d", data.ActiveMessages))
@@ -3335,6 +3356,24 @@ func compactEventText(value any) string {
 		return "context compacted"
 	}
 	return strings.Join(lines, "\n")
+}
+
+func compactReasonCounts(reasons map[string]int) string {
+	if len(reasons) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(reasons))
+	for key, count := range reasons {
+		if key != "" && count > 0 {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", key, reasons[key]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (m Model) mouseInViewport(x, y int) bool {

@@ -144,8 +144,16 @@ func TestRunMessagesCompactsBeforeProviderCall(t *testing.T) {
 	if compactEvent["compaction_id"] == "" ||
 		compactEvent["trigger_prompt_tokens"] == nil ||
 		compactEvent["threshold_tokens"] == nil ||
-		compactEvent["compacted_messages"] == nil {
+		compactEvent["compacted_messages"] == nil ||
+		compactEvent["keep_messages"] == nil ||
+		compactEvent["max_summary_chars"] == nil ||
+		compactEvent["protected_prefix"] == nil ||
+		compactEvent["compacted_chars"] == nil ||
+		compactEvent["compacted_estimated_tokens"] == nil {
 		t.Fatalf("compaction event missing structured fields: %#v", compactEvent)
+	}
+	if compactEvent["reason"] != "prompt_tokens_at_or_above_threshold" || compactEvent["trigger_source"] != "estimated_messages" {
+		t.Fatalf("compaction event missing reason/source: %#v", compactEvent)
 	}
 	if len(capture.messages) < 3 {
 		t.Fatalf("provider messages were not compacted: %#v", capture.messages)
@@ -187,7 +195,7 @@ func TestCompactMessagesPreservesAgentsContextPrefix(t *testing.T) {
 		{Role: protocol.RoleAssistant, Content: "old answer"},
 		{Role: protocol.RoleUser, Content: "latest"},
 	}
-	compacted, ok := compactMessages(messages, cfg, 100)
+	compacted, _, ok := compactMessages(messages, cfg, 100)
 	if !ok {
 		t.Fatal("expected compaction")
 	}
@@ -212,7 +220,7 @@ func TestCompactMessagesPreservesProfileSystemPrefix(t *testing.T) {
 		{Role: protocol.RoleAssistant, Content: "old answer"},
 		{Role: protocol.RoleUser, Content: "latest"},
 	}
-	compacted, ok := compactMessages(messages, cfg, 100)
+	compacted, _, ok := compactMessages(messages, cfg, 100)
 	if !ok {
 		t.Fatal("expected compaction")
 	}
@@ -224,6 +232,64 @@ func TestCompactMessagesPreservesProfileSystemPrefix(t *testing.T) {
 	}
 	if !strings.HasPrefix(compacted[3].Content, compactionMarker) {
 		t.Fatalf("summary should be after protected prefix: %#v", compacted)
+	}
+}
+
+func TestCompactMessagesReportsProtectedPrefixPolicyAndCompactedBudget(t *testing.T) {
+	cfg := config.Default()
+	cfg.ContextCompactTokens = 50
+	cfg.ContextCompactKeep = 1
+	cfg.ContextCompactMaxChars = 1500
+	messages := []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "base system"},
+		{Role: protocol.RoleSystem, Content: "# Billyharness profile: billy\n\n<SOUL>\nprofile rules\n</SOUL>"},
+		{Role: protocol.RoleUser, Content: "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nproject rules\n</INSTRUCTIONS>"},
+		{Role: protocol.RoleUser, Content: "# MCP server instructions\n\nUse external tools sparingly."},
+		{Role: protocol.RoleUser, Content: strings.Repeat("old user ", 80)},
+		{Role: protocol.RoleAssistant, Content: "old answer"},
+		{Role: protocol.RoleUser, Content: "latest"},
+	}
+	compacted, report, ok := compactMessages(messages, cfg, 1234)
+	if !ok {
+		t.Fatal("expected compaction")
+	}
+	if report == nil {
+		t.Fatal("expected compaction report")
+	}
+	if report.Reason != "prompt_tokens_at_or_above_threshold" ||
+		report.TriggerSource != "provider_usage" ||
+		report.TriggerPromptTokens != 1234 ||
+		report.ThresholdTokens != 50 ||
+		report.KeepMessages != 1 ||
+		report.MaxSummaryChars != 1500 {
+		t.Fatalf("policy fields = %#v", report)
+	}
+	if report.ProtectedPrefix.EndIndex != 4 ||
+		report.ProtectedPrefixMessages != 4 ||
+		report.ProtectedPrefix.Reasons["system_prompt"] != 1 ||
+		report.ProtectedPrefix.Reasons["profile_soul"] != 1 ||
+		report.ProtectedPrefix.Reasons["agents_instructions"] != 1 ||
+		report.ProtectedPrefix.Reasons["mcp_instructions"] != 1 {
+		t.Fatalf("protected prefix report = %#v", report.ProtectedPrefix)
+	}
+	if len(report.ProtectedPrefix.Entries) != 4 || report.ProtectedPrefix.Entries[3].Reason != "mcp_instructions" {
+		t.Fatalf("protected prefix entries = %#v", report.ProtectedPrefix.Entries)
+	}
+	if report.CompactedMessages != 2 ||
+		report.CompactedChars <= 0 ||
+		report.CompactedEstimatedTokens <= 0 ||
+		report.ActiveMessages != len(compacted) ||
+		report.ActiveChars <= 0 ||
+		report.ActiveEstimatedTokens <= 0 ||
+		report.SummaryChars <= 0 ||
+		report.SummaryEstimatedTokens <= 0 {
+		t.Fatalf("budget fields = %#v", report)
+	}
+	if !strings.HasPrefix(compacted[4].Content, compactionMarker) {
+		t.Fatalf("summary should follow protected prefix: %#v", compacted)
+	}
+	if strings.Contains(compacted[4].Content, "threshold:") || strings.Contains(compacted[4].Content, "trigger prompt tokens") {
+		t.Fatalf("summary should not carry audit policy details: %s", compacted[4].Content)
 	}
 }
 
@@ -243,7 +309,7 @@ func TestCompactMessagesPreservesToolAdjacency(t *testing.T) {
 		{Role: protocol.RoleTool, ToolCallID: "call_1", Name: "fs_read", Content: "readme"},
 		{Role: protocol.RoleUser, Content: "continue"},
 	}
-	compacted, ok := compactMessages(messages, cfg, 10)
+	compacted, _, ok := compactMessages(messages, cfg, 10)
 	if !ok {
 		t.Fatalf("expected compaction")
 	}
@@ -531,6 +597,16 @@ func TestRunMessagesExecutesMCPToolAndContinuesLoop(t *testing.T) {
 	}
 	if !hasMCPInstructions(next) {
 		t.Fatalf("MCP instructions not preserved in messages: %#v", next)
+	}
+	injected := a.withMCPInstructions([]protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleSystem, Content: compactionMarker + "\nold summary"},
+		{Role: protocol.RoleUser, Content: "continue"},
+	})
+	if len(injected) != 4 ||
+		!strings.HasPrefix(injected[1].Content, "# MCP server instructions") ||
+		!strings.HasPrefix(injected[2].Content, compactionMarker) {
+		t.Fatalf("MCP instructions should be inserted into protected prefix before prior summary: %#v", injected)
 	}
 }
 

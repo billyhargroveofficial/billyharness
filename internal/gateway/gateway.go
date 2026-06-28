@@ -43,12 +43,13 @@ type ServerOptions struct {
 }
 
 type Session struct {
-	ID      string              `json:"id"`
-	Created time.Time           `json:"created"`
-	Thread  *sessionpkg.Session `json:"-"`
-	events  *eventHub
-	mu      sync.Mutex
-	status  SessionStatus
+	ID            string              `json:"id"`
+	Created       time.Time           `json:"created"`
+	Thread        *sessionpkg.Session `json:"-"`
+	events        *eventHub
+	eventRecorder func(protocol.Event)
+	mu            sync.Mutex
+	status        SessionStatus
 }
 
 type RunRequest struct {
@@ -94,6 +95,7 @@ func NewServerWithOptions(cfg config.Config, prov provider.Provider, registry *t
 			log.Printf("gateway session store load failed: %v", err)
 		}
 		for _, session := range loaded {
+			s.attachSessionStore(session)
 			s.sessions[session.ID] = session
 		}
 	}
@@ -269,6 +271,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "session save failed: "+err.Error())
 		return
 	}
+	s.attachSessionStore(session)
 	s.mu.Lock()
 	s.sessions[session.ID] = session
 	s.mu.Unlock()
@@ -418,6 +421,17 @@ func (s *Server) saveSession(session *Session) error {
 		return nil
 	}
 	return s.store.Save(session)
+}
+
+func (s *Server) attachSessionStore(session *Session) {
+	if s.store == nil || session == nil {
+		return
+	}
+	session.eventRecorder = func(event protocol.Event) {
+		if err := s.store.AppendEvent(session, event); err != nil {
+			log.Printf("gateway session event save failed id=%s type=%s: %v", session.ID, event.Type, err)
+		}
+	}
 }
 
 func (s *Server) agentFor(req RunRequest) (*agent.Agent, error) {

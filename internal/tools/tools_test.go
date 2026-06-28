@@ -796,6 +796,7 @@ func TestMCPGatewayListsServerStatusesAndValidatesStdioCalls(t *testing.T) {
 		`"servers"`,
 		`"name": "fake"`,
 		`"connected": true`,
+		`"state": "connected"`,
 		`"tool_count": 1`,
 		`"mcp__fake__echo"`,
 		`"input_schema"`,
@@ -834,10 +835,78 @@ func TestMCPGatewayListsServerStatusesAndValidatesStdioCalls(t *testing.T) {
 	}
 }
 
+func TestMCPGatewayReconnectsCrashedStdioServer(t *testing.T) {
+	root := t.TempDir()
+	phaseFile := filepath.Join(root, "tools-reconnect.phase")
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.MCPEnabled = true
+	cfg.MCPServers = []config.MCPServer{{
+		Name:           "fake",
+		Command:        os.Args[0],
+		Args:           []string{"-test.run=TestToolsFakeStdioMCPServer"},
+		Env:            map[string]string{"BILLYHARNESS_TOOLS_MCP_HELPER": "1", "BILLYHARNESS_TOOLS_MCP_MODE": "close_once_then_echo", "BILLYHARNESS_TOOLS_MCP_PHASE_FILE": phaseFile},
+		CWD:            root,
+		Enabled:        true,
+		Required:       true,
+		StartupTimeout: 2 * time.Second,
+		ToolTimeout:    2 * time.Second,
+	}}
+	registry, err := NewRegistryWithMCP(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+
+	first, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_call",
+		Arguments: rawArgs(map[string]any{
+			"name":      "mcp__fake__echo",
+			"arguments": map[string]any{"text": "first"},
+		}),
+	})
+	if err == nil || !strings.Contains(err.Error(), "transport") {
+		t.Fatalf("first mcp_call result=%#v err=%v", first, err)
+	}
+
+	second, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_call",
+		Arguments: rawArgs(map[string]any{
+			"name":      "mcp__fake__echo",
+			"arguments": map[string]any{"text": "second"},
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Content != "second" {
+		t.Fatalf("second mcp_call content = %q", second.Content)
+	}
+
+	list, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "mcp_list_tools",
+		Arguments: rawArgs(map[string]any{"server": "fake"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"state": "reconnected"`,
+		`"retry_count": 1`,
+		`"restart_count": 1`,
+		`"connected": true`,
+	} {
+		if !strings.Contains(list.Content, want) {
+			t.Fatalf("mcp_list_tools missing %q in:\n%s", want, list.Content)
+		}
+	}
+}
+
 func TestToolsFakeStdioMCPServer(t *testing.T) {
 	if os.Getenv("BILLYHARNESS_TOOLS_MCP_HELPER") != "1" {
 		return
 	}
+	mode := os.Getenv("BILLYHARNESS_TOOLS_MCP_MODE")
 	scanner := bufio.NewScanner(os.Stdin)
 	enc := json.NewEncoder(os.Stdout)
 	for scanner.Scan() {
@@ -876,6 +945,10 @@ func TestToolsFakeStdioMCPServer(t *testing.T) {
 				_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{"code": -32602, "message": "unknown tool"}})
 				continue
 			}
+			if mode == "close_once_then_echo" && !toolsMCPPhaseExists() {
+				writeToolsMCPPhase()
+				os.Exit(0)
+			}
 			_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{
 				"content": []map[string]any{{"type": "text", "text": fmt.Sprint(call.Arguments["text"])}},
 				"isError": false,
@@ -885,6 +958,22 @@ func TestToolsFakeStdioMCPServer(t *testing.T) {
 		}
 	}
 	os.Exit(0)
+}
+
+func toolsMCPPhaseExists() bool {
+	path := os.Getenv("BILLYHARNESS_TOOLS_MCP_PHASE_FILE")
+	if path == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func writeToolsMCPPhase() {
+	path := os.Getenv("BILLYHARNESS_TOOLS_MCP_PHASE_FILE")
+	if path != "" {
+		_ = os.WriteFile(path, []byte("closed"), 0o600)
+	}
 }
 
 func hasSpec(specs []protocol.ToolSpec, name string) bool {

@@ -69,6 +69,19 @@ func TestMCPAllowedServersEnvOverridesDefault(t *testing.T) {
 	}
 }
 
+func TestContextCompactionEnvOverridesPolicyControls(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	t.Setenv("FAST_AGENT_CONTEXT_COMPACT_TOKENS", "12345")
+	t.Setenv("FAST_AGENT_CONTEXT_COMPACT_KEEP", "17")
+	t.Setenv("FAST_AGENT_CONTEXT_COMPACT_MAX_CHARS", "54321")
+	cfg := Default()
+	if cfg.ContextCompactTokens != 12345 ||
+		cfg.ContextCompactKeep != 17 ||
+		cfg.ContextCompactMaxChars != 54321 {
+		t.Fatalf("context compaction policy = tokens:%d keep:%d max_chars:%d", cfg.ContextCompactTokens, cfg.ContextCompactKeep, cfg.ContextCompactMaxChars)
+	}
+}
+
 func TestDefaultReadsBillySettingsModelWhenEnvIsUnset(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", root)

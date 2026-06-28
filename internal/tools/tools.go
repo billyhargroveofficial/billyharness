@@ -815,7 +815,7 @@ func (r *Registry) addMCPGateway() {
 			Parameters:  raw(`{"type":"object","properties":{"server":{"type":"string","description":"Optional MCP server filter: telegram, telegram-parilka, github, or context7. telegram_parilka and парилка are also accepted."},"query":{"type":"string","description":"Optional case-insensitive name/description filter."},"limit":{"type":"integer","default":40},"include_schema":{"type":"boolean","default":false,"description":"Include a matching tool input schema only when needed to call it."}},"additionalProperties":false}`),
 			Risk:        protocol.RiskReadOnly,
 		},
-		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
+		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in struct {
 				Server        string `json:"server"`
 				Query         string `json:"query"`
@@ -835,13 +835,22 @@ func (r *Registry) addMCPGateway() {
 				InputSchema json.RawMessage `json:"input_schema,omitempty"`
 			}
 			type serverItem struct {
-				Name      string `json:"name"`
-				Transport string `json:"transport,omitempty"`
-				Enabled   bool   `json:"enabled"`
-				Required  bool   `json:"required"`
-				Connected bool   `json:"connected"`
-				ToolCount int    `json:"tool_count,omitempty"`
-				Error     string `json:"error,omitempty"`
+				Name           string     `json:"name"`
+				Transport      string     `json:"transport,omitempty"`
+				Enabled        bool       `json:"enabled"`
+				Required       bool       `json:"required"`
+				Connected      bool       `json:"connected"`
+				State          string     `json:"state,omitempty"`
+				ToolCount      int        `json:"tool_count,omitempty"`
+				LastError      string     `json:"last_error,omitempty"`
+				RetryCount     int        `json:"retry_count,omitempty"`
+				RestartCount   int        `json:"restart_count,omitempty"`
+				RetryBackoffMS int64      `json:"retry_backoff_ms,omitempty"`
+				NextRetryAt    *time.Time `json:"next_retry_at,omitempty"`
+				Error          string     `json:"error,omitempty"`
+			}
+			if r.manager != nil {
+				r.manager.Refresh(ctx)
 			}
 			serverFilter := normalizeMCPServerFilter(in.Server)
 			query := strings.ToLower(strings.TrimSpace(in.Query))
@@ -888,13 +897,19 @@ func (r *Registry) addMCPGateway() {
 					continue
 				}
 				servers = append(servers, serverItem{
-					Name:      displayMCPServerName(normalized),
-					Transport: status.Transport,
-					Enabled:   status.Enabled,
-					Required:  status.Required,
-					Connected: status.Connected,
-					ToolCount: status.ToolCount,
-					Error:     status.Error,
+					Name:           displayMCPServerName(normalized),
+					Transport:      status.Transport,
+					Enabled:        status.Enabled,
+					Required:       status.Required,
+					Connected:      status.Connected,
+					State:          status.State,
+					ToolCount:      status.ToolCount,
+					LastError:      status.LastError,
+					RetryCount:     status.RetryCount,
+					RestartCount:   status.RestartCount,
+					RetryBackoffMS: status.RetryBackoffMS,
+					NextRetryAt:    status.NextRetryAt,
+					Error:          status.Error,
 				})
 			}
 			out, _ := json.MarshalIndent(map[string]any{

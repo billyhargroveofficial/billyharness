@@ -273,6 +273,68 @@ func TestGatewaySessionStoreRestoresSessionAfterRestart(t *testing.T) {
 		t.Fatalf("run status = %d body=%s", run.Code, run.Body.String())
 	}
 
+	sessionDir := filepath.Join(storeDir, created.ID)
+	manifestPath := filepath.Join(sessionDir, sessionManifestName)
+	historyPath := filepath.Join(sessionDir, sessionHistoryJSONLName)
+	eventsPath := filepath.Join(sessionDir, sessionEventsJSONLName)
+	assertPerm(t, storeDir, 0o700)
+	assertPerm(t, sessionDir, 0o700)
+	assertPerm(t, manifestPath, 0o600)
+	assertPerm(t, historyPath, 0o600)
+	assertPerm(t, eventsPath, 0o600)
+	assertPerm(t, filepath.Join(storeDir, created.ID+".json"), 0o600)
+
+	var manifest sessionManifest
+	manifestBytes, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.SessionID != created.ID || manifest.HistoryJSONL != sessionHistoryJSONLName || manifest.EventsJSONL != sessionEventsJSONLName {
+		t.Fatalf("manifest = %#v", manifest)
+	}
+	if manifest.HistorySeq < 2 || manifest.EventSeq == 0 || manifest.MessageCount < 3 || manifest.HistorySHA256 == "" {
+		t.Fatalf("manifest missing replay metadata: %#v", manifest)
+	}
+
+	history := readSessionHistoryRecords(t, historyPath)
+	if len(history) != int(manifest.HistorySeq) || len(history) < 2 {
+		t.Fatalf("history len = %d manifest seq = %d", len(history), manifest.HistorySeq)
+	}
+	if history[0].Kind != sessionHistoryCreated || history[len(history)-1].Kind != sessionHistorySnapshot {
+		t.Fatalf("history kinds = first %q last %q", history[0].Kind, history[len(history)-1].Kind)
+	}
+	lastMessages := history[len(history)-1].Messages
+	if len(lastMessages) == 0 || lastMessages[len(lastMessages)-1].Content != "mock: persist me" {
+		t.Fatalf("history did not capture latest messages: %#v", lastMessages)
+	}
+
+	events := readSessionEventRecords(t, eventsPath)
+	if len(events) != int(manifest.EventSeq) {
+		t.Fatalf("events len = %d manifest seq = %d", len(events), manifest.EventSeq)
+	}
+	for i, event := range events {
+		if event.Seq != int64(i+1) {
+			t.Fatalf("event seq[%d] = %d", i, event.Seq)
+		}
+	}
+	for _, typ := range []protocol.EventType{protocol.EventSessionStatus, protocol.EventRunStarted, protocol.EventAssistantDelta, protocol.EventRunCompleted} {
+		if !sawSessionEvent(events, typ) {
+			t.Fatalf("events missing %s: %#v", typ, events)
+		}
+	}
+
+	if err := writeLegacySnapshot(filepath.Join(storeDir, created.ID+".json"), storedSession{
+		ID:       created.ID,
+		Created:  time.Now().UTC(),
+		Updated:  time.Now().UTC(),
+		Messages: []protocol.Message{{Role: protocol.RoleSystem, Content: "stale legacy snapshot"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	restarted := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
 	get := httptest.NewRecorder()
 	restarted.Handler().ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID, nil))
@@ -288,8 +350,40 @@ func TestGatewaySessionStoreRestoresSessionAfterRestart(t *testing.T) {
 	if len(got.Messages) == 0 || got.Messages[len(got.Messages)-1].Content != "mock: persist me" {
 		t.Fatalf("restored messages = %#v", got.Messages)
 	}
-	assertPerm(t, storeDir, 0o700)
-	assertPerm(t, filepath.Join(storeDir, created.ID+".json"), 0o600)
+}
+
+func TestGatewaySessionStoreLoadsLegacySnapshot(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	if err := writeLegacySnapshot(filepath.Join(storeDir, "legacy-session.json"), storedSession{
+		ID:      "legacy-session",
+		Created: time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC),
+		Updated: time.Date(2026, 6, 28, 12, 1, 0, 0, time.UTC),
+		Messages: []protocol.Message{
+			{Role: protocol.RoleSystem, Content: "system"},
+			{Role: protocol.RoleUser, Content: "old prompt"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+	get := httptest.NewRecorder()
+	server.Handler().ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/v1/sessions/legacy-session", nil))
+	if get.Code != http.StatusOK {
+		t.Fatalf("get status = %d body=%s", get.Code, get.Body.String())
+	}
+	var got struct {
+		Messages []protocol.Message `json:"messages"`
+	}
+	if err := json.Unmarshal(get.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 2 || got.Messages[1].Content != "old prompt" {
+		t.Fatalf("legacy messages = %#v", got.Messages)
+	}
 }
 
 func TestGatewaySessionCancelEndpointCancelsActiveThread(t *testing.T) {
@@ -631,7 +725,11 @@ func TestGatewayToolsExposeMCPRegistry(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"name":"fake"`) || !strings.Contains(rec.Body.String(), `"connected":true`) {
+	if !strings.Contains(rec.Body.String(), `"name":"fake"`) ||
+		!strings.Contains(rec.Body.String(), `"connected":true`) ||
+		!strings.Contains(rec.Body.String(), `"state":"connected"`) ||
+		!strings.Contains(rec.Body.String(), `"retry_count":0`) ||
+		!strings.Contains(rec.Body.String(), `"restart_count":0`) {
 		t.Fatalf("mcp body missing connected server status: %s", rec.Body.String())
 	}
 }
@@ -682,6 +780,61 @@ func assertPerm(t *testing.T, path string, want os.FileMode) {
 	if got := info.Mode().Perm(); got != want {
 		t.Fatalf("%s mode = %o, want %o", path, got, want)
 	}
+}
+
+func readSessionHistoryRecords(t *testing.T, path string) []sessionHistoryRecord {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	var records []sessionHistoryRecord
+	decoder := json.NewDecoder(file)
+	for {
+		var record sessionHistoryRecord
+		err := decoder.Decode(&record)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		records = append(records, record)
+	}
+	return records
+}
+
+func readSessionEventRecords(t *testing.T, path string) []sessionEventRecord {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	var records []sessionEventRecord
+	decoder := json.NewDecoder(file)
+	for {
+		var record sessionEventRecord
+		err := decoder.Decode(&record)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		records = append(records, record)
+	}
+	return records
+}
+
+func sawSessionEvent(events []sessionEventRecord, typ protocol.EventType) bool {
+	for _, event := range events {
+		if event.EventType == string(typ) {
+			return true
+		}
+	}
+	return false
 }
 
 func decodeProtocolEvents(r io.Reader) <-chan protocol.Event {

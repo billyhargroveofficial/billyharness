@@ -32,6 +32,17 @@ const (
 	mcpCallResponseOverheadBytes = 64 * 1024
 	minMCPCallResponseBytes      = 256 * 1024
 	maxMCPControlResponseBytes   = 4 * 1024 * 1024
+	maxMCPReconnectBackoff       = 5 * time.Second
+)
+
+const (
+	mcpStateDisabled     = "disabled"
+	mcpStateConnected    = "connected"
+	mcpStateFailed       = "failed"
+	mcpStateCrashed      = "crashed"
+	mcpStateRestarting   = "restarting"
+	mcpStateReconnected  = "reconnected"
+	mcpStateDisconnected = "disconnected"
 )
 
 type ExternalTool struct {
@@ -40,27 +51,32 @@ type ExternalTool struct {
 }
 
 type ServerStatus struct {
-	Name        string     `json:"name"`
-	Transport   string     `json:"transport"`
-	Enabled     bool       `json:"enabled"`
-	Required    bool       `json:"required"`
-	Connected   bool       `json:"connected"`
-	ToolCount   int        `json:"tool_count"`
-	PID         int        `json:"pid,omitempty"`
-	StartedAt   *time.Time `json:"started_at,omitempty"`
-	LastError   string     `json:"last_error,omitempty"`
-	LastErrorAt *time.Time `json:"last_error_at,omitempty"`
-	StderrTail  string     `json:"stderr_tail,omitempty"`
-	Error       string     `json:"error,omitempty"`
+	Name            string     `json:"name"`
+	Transport       string     `json:"transport"`
+	Enabled         bool       `json:"enabled"`
+	Required        bool       `json:"required"`
+	Connected       bool       `json:"connected"`
+	State           string     `json:"state"`
+	ToolCount       int        `json:"tool_count"`
+	PID             int        `json:"pid,omitempty"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
+	LastConnectedAt *time.Time `json:"last_connected_at,omitempty"`
+	LastEventAt     *time.Time `json:"last_event_at,omitempty"`
+	LastError       string     `json:"last_error,omitempty"`
+	LastErrorAt     *time.Time `json:"last_error_at,omitempty"`
+	StderrTail      string     `json:"stderr_tail,omitempty"`
+	Error           string     `json:"error,omitempty"`
+	RetryCount      int        `json:"retry_count"`
+	RestartCount    int        `json:"restart_count"`
+	RetryBackoffMS  int64      `json:"retry_backoff_ms,omitempty"`
+	NextRetryAt     *time.Time `json:"next_retry_at,omitempty"`
 }
 
 type Manager struct {
-	tools         []ExternalTool
-	instructions  []string
-	mu            sync.RWMutex
-	clients       []*stdioClient
-	statusClients []*stdioClient
-	statuses      []ServerStatus
+	tools        []ExternalTool
+	instructions []string
+	mu           sync.RWMutex
+	servers      []*managedServer
 }
 
 func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
@@ -68,20 +84,15 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 	var errs []string
 	seenTools := map[string]string{}
 	for _, server := range cfg.MCPServers {
-		status := ServerStatus{
-			Name:      server.Name,
-			Transport: mcpTransport(server),
-			Enabled:   server.Enabled,
-			Required:  server.Required,
-		}
+		runtime := newManagedServer(cfg, server)
 		if !server.Enabled {
-			manager.addStatus(status, nil)
+			manager.addServer(runtime)
 			continue
 		}
 		if server.URL != "" {
 			err := fmt.Errorf("MCP server %s uses streamable HTTP; billyharness currently supports stdio MCP only", server.Name)
-			status.Error = err.Error()
-			manager.addStatus(status, nil)
+			runtime.recordStaticError(err)
+			manager.addServer(runtime)
 			if server.Required {
 				errs = append(errs, err.Error())
 			}
@@ -89,26 +100,21 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		}
 		if strings.TrimSpace(server.Command) == "" {
 			err := fmt.Errorf("MCP server %s has no command", server.Name)
-			status.Error = err.Error()
-			manager.addStatus(status, nil)
+			runtime.recordStaticError(err)
+			manager.addServer(runtime)
 			if server.Required {
 				errs = append(errs, err.Error())
 			}
 			continue
 		}
-		client, specs, serverInstructions, err := startStdio(ctx, cfg, server)
+		specs, serverInstructions, err := runtime.start(ctx, false)
+		manager.addServer(runtime)
 		if err != nil {
-			status.Error = err.Error()
-			manager.addStatus(status, nil)
 			if server.Required {
 				errs = append(errs, err.Error())
 			}
 			continue
 		}
-		status.Connected = true
-		status.ToolCount = len(specs)
-		manager.addStatus(status, client)
-		manager.clients = append(manager.clients, client)
 		if strings.TrimSpace(serverInstructions) != "" {
 			manager.instructions = append(manager.instructions, fmt.Sprintf("%s: %s", server.Name, truncateText(serverInstructions, 512)))
 		}
@@ -135,7 +141,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 				Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
 					callCtx, cancel := context.WithTimeout(ctx, toolTimeout)
 					defer cancel()
-					return client.callTool(callCtx, originalName, args)
+					return runtime.callTool(callCtx, originalName, args)
 				},
 			})
 		}
@@ -162,31 +168,27 @@ func (m *Manager) Statuses() []ServerStatus {
 		return nil
 	}
 	m.mu.RLock()
-	statuses := append([]ServerStatus(nil), m.statuses...)
-	clients := append([]*stdioClient(nil), m.statusClients...)
+	servers := append([]*managedServer(nil), m.servers...)
 	m.mu.RUnlock()
-	for i, client := range clients {
-		if client != nil && i < len(statuses) {
-			statuses[i].Connected = client.connected.Load()
-			statuses[i].PID = client.pid()
-			if !client.startedAt.IsZero() {
-				startedAt := client.startedAt
-				statuses[i].StartedAt = &startedAt
-			}
-			lastErr, lastErrAt := client.lastError()
-			statuses[i].LastError = lastErr
-			if !lastErrAt.IsZero() {
-				statuses[i].LastErrorAt = &lastErrAt
-			}
-			if !statuses[i].Connected {
-				if statuses[i].Error == "" {
-					statuses[i].Error = statuses[i].LastError
-				}
-				statuses[i].StderrTail = client.stderrTail()
-			}
-		}
+	statuses := make([]ServerStatus, 0, len(servers))
+	for _, server := range servers {
+		statuses = append(statuses, server.snapshot())
 	}
 	return statuses
+}
+
+func (m *Manager) Refresh(ctx context.Context) {
+	if m == nil {
+		return
+	}
+	m.mu.RLock()
+	servers := append([]*managedServer(nil), m.servers...)
+	m.mu.RUnlock()
+	for _, server := range servers {
+		if server != nil {
+			_, _ = server.ensureConnected(ctx)
+		}
+	}
 }
 
 func (m *Manager) Instructions() []string {
@@ -201,23 +203,17 @@ func (m *Manager) Close() {
 		return
 	}
 	m.mu.Lock()
-	clients := append([]*stdioClient(nil), m.clients...)
-	m.clients = nil
-	for i, client := range m.statusClients {
-		if client != nil && i < len(m.statuses) {
-			client.connected.Store(false)
-			m.statuses[i].Connected = false
-		}
-	}
+	servers := append([]*managedServer(nil), m.servers...)
 	m.mu.Unlock()
-	for _, client := range clients {
-		client.close()
+	for _, server := range servers {
+		if server != nil {
+			server.close()
+		}
 	}
 }
 
-func (m *Manager) addStatus(status ServerStatus, client *stdioClient) {
-	m.statuses = append(m.statuses, status)
-	m.statusClients = append(m.statusClients, client)
+func (m *Manager) addServer(server *managedServer) {
+	m.servers = append(m.servers, server)
 }
 
 func mcpTransport(server config.MCPServer) string {
@@ -227,6 +223,290 @@ func mcpTransport(server config.MCPServer) string {
 	return "stdio"
 }
 
+type managedServer struct {
+	cfg           config.Config
+	server        config.MCPServer
+	reconnectable bool
+	mu            sync.Mutex
+	client        *stdioClient
+	status        ServerStatus
+	closed        bool
+	starting      bool
+}
+
+func newManagedServer(cfg config.Config, server config.MCPServer) *managedServer {
+	state := mcpStateDisconnected
+	if !server.Enabled {
+		state = mcpStateDisabled
+	}
+	return &managedServer{
+		cfg:           cfg,
+		server:        server,
+		reconnectable: server.Enabled && server.URL == "" && strings.TrimSpace(server.Command) != "",
+		status: ServerStatus{
+			Name:      server.Name,
+			Transport: mcpTransport(server),
+			Enabled:   server.Enabled,
+			Required:  server.Required,
+			State:     state,
+		},
+	}
+}
+
+func (s *managedServer) start(ctx context.Context, reconnect bool) ([]protocol.ToolSpec, string, error) {
+	s.mu.Lock()
+	if !s.reconnectable {
+		err := fmt.Errorf("MCP %s cannot reconnect with transport %s", s.server.Name, mcpTransport(s.server))
+		s.recordFailureLocked(mcpStateFailed, err, false)
+		s.mu.Unlock()
+		return nil, "", err
+	}
+	if s.closed {
+		err := fmt.Errorf("MCP %s manager is closed", s.server.Name)
+		s.recordFailureLocked(mcpStateDisconnected, err, false)
+		s.mu.Unlock()
+		return nil, "", err
+	}
+	return s.startLocked(ctx, reconnect)
+}
+
+func (s *managedServer) ensureConnected(ctx context.Context) (*stdioClient, error) {
+	s.mu.Lock()
+	s.absorbClientLocked()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("MCP %s manager is closed", s.server.Name)
+	}
+	if !s.status.Enabled {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("MCP %s is disabled", s.server.Name)
+	}
+	if !s.reconnectable {
+		if s.status.Error != "" {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("MCP %s unavailable: %s", s.server.Name, s.status.Error)
+		}
+		s.mu.Unlock()
+		return nil, fmt.Errorf("MCP %s unavailable", s.server.Name)
+	}
+	if s.client != nil && s.client.connected.Load() {
+		client := s.client
+		s.mu.Unlock()
+		return client, nil
+	}
+	if s.starting {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("MCP %s reconnect already in progress", s.server.Name)
+	}
+	now := time.Now().UTC()
+	if s.status.NextRetryAt != nil && now.Before(*s.status.NextRetryAt) {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("MCP %s reconnect backoff active until %s after last error: %s", s.server.Name, s.status.NextRetryAt.Format(time.RFC3339Nano), s.status.LastError)
+	}
+	_, _, err := s.startLocked(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	return s.client, nil
+}
+
+func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]protocol.ToolSpec, string, error) {
+	if s.starting {
+		s.mu.Unlock()
+		return nil, "", fmt.Errorf("MCP %s reconnect already in progress", s.server.Name)
+	}
+	oldClient := s.client
+	s.client = nil
+	s.starting = true
+	now := time.Now().UTC()
+	s.status.Connected = false
+	s.status.State = mcpStateRestarting
+	s.status.LastEventAt = timePtr(now)
+	s.status.Error = ""
+	s.status.StderrTail = ""
+	s.status.PID = 0
+	s.status.NextRetryAt = nil
+	s.status.RetryBackoffMS = 0
+	if reconnect {
+		s.status.RetryCount++
+	}
+	s.mu.Unlock()
+
+	if oldClient != nil {
+		oldClient.close()
+	}
+	client, specs, instructions, err := startStdio(ctx, s.cfg, s.server)
+	s.mu.Lock()
+	s.starting = false
+	if s.closed {
+		closedErr := fmt.Errorf("MCP %s manager is closed", s.server.Name)
+		s.recordFailureLocked(mcpStateDisconnected, closedErr, false)
+		s.mu.Unlock()
+		if client != nil {
+			client.close()
+		}
+		return nil, "", closedErr
+	}
+	if err != nil {
+		s.recordFailureLocked(mcpStateFailed, err, reconnect)
+		s.mu.Unlock()
+		return nil, "", err
+	}
+	s.client = client
+	now = time.Now().UTC()
+	state := mcpStateConnected
+	if reconnect {
+		state = mcpStateReconnected
+		s.status.RestartCount++
+	}
+	s.status.Connected = true
+	s.status.State = state
+	s.status.ToolCount = len(specs)
+	s.status.PID = client.pid()
+	if !client.startedAt.IsZero() {
+		startedAt := client.startedAt
+		s.status.StartedAt = &startedAt
+	}
+	s.status.LastConnectedAt = timePtr(now)
+	s.status.LastEventAt = timePtr(now)
+	s.status.Error = ""
+	s.status.StderrTail = ""
+	s.status.NextRetryAt = nil
+	s.status.RetryBackoffMS = 0
+	s.mu.Unlock()
+	return specs, instructions, nil
+}
+
+func (s *managedServer) callTool(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	client, err := s.ensureConnected(ctx)
+	if err != nil {
+		return "", err
+	}
+	text, err := client.callTool(ctx, name, args)
+	if err != nil && !client.connected.Load() {
+		s.mu.Lock()
+		s.absorbClientLocked()
+		s.mu.Unlock()
+	}
+	return text, err
+}
+
+func (s *managedServer) snapshot() ServerStatus {
+	if s == nil {
+		return ServerStatus{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.absorbClientLocked()
+	return s.status
+}
+
+func (s *managedServer) close() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	client := s.client
+	s.client = nil
+	now := time.Now().UTC()
+	s.status.Connected = false
+	s.status.State = mcpStateDisconnected
+	s.status.LastEventAt = timePtr(now)
+	s.status.Error = ""
+	s.status.NextRetryAt = nil
+	s.status.RetryBackoffMS = 0
+	s.mu.Unlock()
+	if client != nil {
+		client.close()
+	}
+}
+
+func (s *managedServer) recordStaticError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recordFailureLocked(mcpStateFailed, err, false)
+}
+
+func (s *managedServer) recordFailureLocked(state string, err error, retryable bool) {
+	now := time.Now().UTC()
+	message := redactServerError(s.server, err)
+	s.status.Connected = false
+	s.status.State = state
+	s.status.Error = message
+	s.status.LastError = message
+	s.status.LastErrorAt = timePtr(now)
+	s.status.LastEventAt = timePtr(now)
+	s.status.StderrTail = ""
+	if s.client != nil {
+		s.status.StderrTail = s.client.stderrTail()
+	}
+	if retryable {
+		backoff := mcpReconnectBackoff(s.status.RetryCount)
+		next := now.Add(backoff)
+		s.status.RetryBackoffMS = backoff.Milliseconds()
+		s.status.NextRetryAt = &next
+	}
+}
+
+func (s *managedServer) absorbClientLocked() {
+	if s.client == nil {
+		return
+	}
+	client := s.client
+	if client.connected.Load() {
+		s.status.Connected = true
+		s.status.PID = client.pid()
+		if !client.startedAt.IsZero() {
+			startedAt := client.startedAt
+			s.status.StartedAt = &startedAt
+		}
+		return
+	}
+	state, lastErr, lastErrAt := client.lifecycleState()
+	if state == "" {
+		state = mcpStateCrashed
+	}
+	s.status.Connected = false
+	s.status.State = state
+	if lastErr != "" {
+		s.status.LastError = lastErr
+		s.status.Error = lastErr
+	}
+	if !lastErrAt.IsZero() {
+		s.status.LastErrorAt = &lastErrAt
+		s.status.LastEventAt = &lastErrAt
+	}
+	s.status.PID = client.pid()
+	s.status.StderrTail = client.stderrTail()
+}
+
+func mcpReconnectBackoff(retryCount int) time.Duration {
+	if retryCount <= 1 {
+		return time.Second
+	}
+	backoff := time.Second
+	for i := 1; i < retryCount; i++ {
+		backoff *= 2
+		if backoff >= maxMCPReconnectBackoff {
+			return maxMCPReconnectBackoff
+		}
+	}
+	return backoff
+}
+
+func redactServerError(server config.MCPServer, err error) string {
+	if err == nil {
+		return ""
+	}
+	return secrets.Redact(err.Error(), serverSecrets(server)...)
+}
+
+func timePtr(t time.Time) *time.Time {
+	return &t
+}
+
 type stdioClient struct {
 	server      config.MCPServer
 	cmd         *exec.Cmd
@@ -234,12 +514,15 @@ type stdioClient struct {
 	out         *bufio.Reader
 	mu          sync.Mutex
 	closeOnce   sync.Once
+	closing     atomic.Bool
+	waitCh      chan error
 	nextID      int64
 	stderr      *limitedBuffer
 	connected   atomic.Bool
 	outputLimit int
 	startedAt   time.Time
 	statusMu    sync.RWMutex
+	state       string
 	lastErr     string
 	lastErrAt   time.Time
 }
@@ -329,10 +612,13 @@ func startStdio(parent context.Context, cfg config.Config, server config.MCPServ
 		stdin:       stdin,
 		out:         bufio.NewReaderSize(stdout, mcpReadBufferBytes),
 		stderr:      stderrBuf,
+		waitCh:      make(chan error, 1),
 		outputLimit: mcpToolOutputLimit(cfg.MaxToolOutputBytes),
 		startedAt:   time.Now().UTC(),
 	}
 	client.connected.Store(true)
+	client.markLifecycle(mcpStateConnected, nil)
+	go client.watchProcess()
 	initResult, err := client.request(ctx, "initialize", map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities":    map[string]any{},
@@ -476,13 +762,13 @@ func (c *stdioClient) write(ctx context.Context, value any) error {
 	select {
 	case <-ctx.Done():
 		err := c.withStderr(ctx.Err())
-		c.markError(err)
+		c.markLifecycle(mcpStateFailed, err)
 		c.close()
 		return err
 	case err := <-done:
 		if err != nil {
 			err = fmt.Errorf("MCP %s write: %w", c.server.Name, err)
-			c.markError(err)
+			c.markLifecycle(mcpStateCrashed, err)
 			c.close()
 			return err
 		}
@@ -503,20 +789,25 @@ func (c *stdioClient) read(ctx context.Context, limit int) (rpcResponse, error) 
 	select {
 	case <-ctx.Done():
 		err := c.withStderr(ctx.Err())
-		c.markError(err)
+		c.markLifecycle(mcpStateFailed, err)
 		c.close()
 		return rpcResponse{}, err
 	case result := <-done:
 		if result.err != nil {
 			err := c.withStderr(result.err)
-			c.markError(err)
+			state := mcpStateCrashed
+			var tooLarge responseTooLargeError
+			if errors.As(result.err, &tooLarge) {
+				state = mcpStateFailed
+			}
+			c.markLifecycle(state, err)
 			c.close()
 			return rpcResponse{}, err
 		}
 		var resp rpcResponse
 		if err := json.Unmarshal(bytes.TrimSpace(result.line), &resp); err != nil {
 			err = fmt.Errorf("MCP %s sent invalid JSON-RPC: %w", c.server.Name, err)
-			c.markError(err)
+			c.markLifecycle(mcpStateFailed, err)
 			c.close()
 			return rpcResponse{}, err
 		}
@@ -552,6 +843,7 @@ func (c *stdioClient) callTool(ctx context.Context, name string, args json.RawMe
 
 func (c *stdioClient) close() {
 	c.connected.Store(false)
+	c.closing.Store(true)
 	c.closeOnce.Do(func() {
 		if c.stdin != nil {
 			_ = c.stdin.Close()
@@ -559,28 +851,70 @@ func (c *stdioClient) close() {
 		if c.cmd != nil && c.cmd.Process != nil {
 			_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
 			_ = c.cmd.Process.Kill()
-			_, _ = c.cmd.Process.Wait()
+		}
+		if c.waitCh != nil {
+			select {
+			case <-c.waitCh:
+			case <-time.After(2 * time.Second):
+			}
 		}
 	})
 }
 
-func (c *stdioClient) markError(err error) {
-	if c == nil || err == nil {
+func (c *stdioClient) watchProcess() {
+	err := c.cmd.Wait()
+	c.connected.Store(false)
+	if !c.closing.Load() {
+		if err != nil {
+			c.markLifecycle(mcpStateCrashed, fmt.Errorf("MCP %s process exited: %w", c.server.Name, err))
+		} else {
+			c.markLifecycle(mcpStateCrashed, fmt.Errorf("MCP %s process exited", c.server.Name))
+		}
+	}
+	c.waitCh <- err
+}
+
+func (c *stdioClient) markLifecycle(state string, err error) {
+	if c == nil {
 		return
 	}
 	c.statusMu.Lock()
-	c.lastErr = err.Error()
-	c.lastErrAt = time.Now().UTC()
+	if state != "" {
+		c.state = state
+	}
+	if err != nil {
+		message := redactServerError(c.server, err)
+		if c.lastErr == "" || preferLifecycleError(c.lastErr, message) {
+			c.lastErr = message
+			c.lastErrAt = time.Now().UTC()
+		}
+	}
 	c.statusMu.Unlock()
 }
 
-func (c *stdioClient) lastError() (string, time.Time) {
+func preferLifecycleError(existing, next string) bool {
+	if next == "" {
+		return false
+	}
+	if strings.Contains(next, "transport") && strings.Contains(existing, "process exited") {
+		return true
+	}
+	if strings.Contains(next, "deadline exceeded") && !strings.Contains(existing, "deadline exceeded") {
+		return true
+	}
+	if strings.Contains(next, "response exceeded") && !strings.Contains(existing, "response exceeded") {
+		return true
+	}
+	return false
+}
+
+func (c *stdioClient) lifecycleState() (string, string, time.Time) {
 	if c == nil {
-		return "", time.Time{}
+		return "", "", time.Time{}
 	}
 	c.statusMu.RLock()
 	defer c.statusMu.RUnlock()
-	return c.lastErr, c.lastErrAt
+	return c.state, c.lastErr, c.lastErrAt
 }
 
 func (c *stdioClient) pid() int {

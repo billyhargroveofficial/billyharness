@@ -8,7 +8,8 @@ This directory contains local smoke tasks plus notes for wiring external agent b
    - Repo: https://github.com/harbor-framework/terminal-bench
    - Good fit: real terminal tasks, Docker sandbox, English instructions, test scripts, oracle solutions.
    - Quickstart from README: `uv tool install terminal-bench` or `pip install terminal-bench`, then `tb run --help`.
-   - Immediate strategy: create a Terminal-Bench adapter that maps each task instruction to a `bench` task and uses the official `tb` grader as evaluator.
+   - Current adapter: `fast-agent-harness bench terminal-bench export` writes a local Terminal-Bench dataset from Billyharness JSONL tasks, including `task.yaml`, Docker files, workspace copy, and a pytest-compatible evaluator bridge. `fast-agent-harness bench terminal-bench import` converts Terminal-Bench task directories back to Billyharness JSONL tasks.
+   - Immediate strategy: use the adapter for local `tb run --dataset-path ...` workflows first, then add direct Harbor/Terminal-Bench 2.0 result ingestion once the upstream format stabilizes.
 
 2. SWE-bench / mini-swe-agent style
    - mini-swe-agent repo: https://github.com/SWE-agent/mini-swe-agent
@@ -86,6 +87,48 @@ Fast deterministic 75-round agent loop and compaction stress, no API spend:
 ```
 
 This uses a scripted mock provider that emits real tool calls through the normal agent loop, writes normal events/results JSONL, and forces context compaction with a low task-local threshold.
+
+## Terminal-Bench Adapter
+
+Export Billyharness tasks to a Terminal-Bench-compatible local dataset:
+
+```bash
+./bin/fast-agent-harness bench terminal-bench export \
+  -tasks benchmarks/local-code-smoke/tasks.jsonl \
+  -out benchmarks/terminal-bench-export \
+  -force
+```
+
+The export creates one task directory per JSONL task:
+
+- `task.yaml` with Terminal-Bench metadata and the Billyharness prompt as `instruction`
+- `workspace/` copied from `workspace_template` or `workspace`
+- `run-tests.sh` plus `tests/billyharness_evaluator.py`, which runs the original Billyharness `evaluator` argv and emits pytest-like summary lines for Terminal-Bench's default parser
+- `Dockerfile` and `docker-compose.yaml` using the standard Terminal-Bench client-container shape
+- `.billyharness-task.json` metadata for loss-aware round-trip import
+
+Run the exported dataset with an installed `tb` CLI:
+
+```bash
+tb run \
+  --dataset-path benchmarks/terminal-bench-export \
+  --agent nop \
+  --output-path tb-runs/billyharness \
+  --no-upload-results \
+  --no-livestream
+```
+
+Import a Terminal-Bench dataset back to Billyharness JSONL:
+
+```bash
+./bin/fast-agent-harness bench terminal-bench import \
+  -dataset benchmarks/terminal-bench-export \
+  -out /tmp/billyharness-from-tb.jsonl
+```
+
+Generic imports map `task.yaml` `instruction` to `prompt`, task directory name to `id`, `max_agent_timeout_sec` to `timeout_seconds`, and `run-tests.sh` to an evaluator command with `TEST_DIR` and `APP_DIR` set. Exports from this adapter round-trip the original `evaluator` argv and use the exported `workspace/` as `workspace_template`.
+
+This first slice intentionally does not vendor or install Terminal-Bench in Go tests. It validates the filesystem format and evaluator bridge locally; full Docker execution remains an external smoke test.
 
 ## Local Checks Performed
 

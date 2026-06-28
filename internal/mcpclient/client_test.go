@@ -304,6 +304,177 @@ func TestStdioCallTimeoutAndTransportCloseDisconnectStatus(t *testing.T) {
 	})
 }
 
+func TestStdioCrashReconnectStatusLifecycle(t *testing.T) {
+	root := t.TempDir()
+	pidFile := filepath.Join(root, "reconnect.pid")
+	phaseFile := filepath.Join(root, "reconnect.phase")
+	manager, err := NewManager(context.Background(), config.Config{
+		WorkspaceRoots:     []string{root},
+		MaxToolOutputBytes: 64 * 1024,
+		MCPServers: []config.MCPServer{{
+			Name:           "fake",
+			Command:        os.Args[0],
+			Args:           []string{"-test.run=TestFakeStdioMCPServer"},
+			Env:            helperEnv("close_once_then_echo", map[string]string{"BILLYHARNESS_MCP_PID_FILE": pidFile, "BILLYHARNESS_MCP_PHASE_FILE": phaseFile}),
+			CWD:            root,
+			Enabled:        true,
+			StartupTimeout: 2 * time.Second,
+			ToolTimeout:    2 * time.Second,
+			EnabledTools:   []string{"echo"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	pidOne := readPID(t, pidFile)
+	echo := findTool(t, manager, "mcp__fake__echo")
+
+	_, err = echo.Handler(context.Background(), json.RawMessage(`{"text":"first"}`))
+	if err == nil || !strings.Contains(err.Error(), "transport") {
+		t.Fatalf("first call err = %v", err)
+	}
+	statuses := manager.Statuses()
+	if len(statuses) != 1 || statuses[0].Connected || statuses[0].State != mcpStateCrashed || statuses[0].LastError == "" {
+		t.Fatalf("crashed status = %#v", statuses)
+	}
+	waitProcessGone(t, pidOne)
+
+	text, err := echo.Handler(context.Background(), json.RawMessage(`{"text":"second"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "second" {
+		t.Fatalf("reconnected echo = %q", text)
+	}
+	pidTwo := readPIDChanged(t, pidFile, pidOne)
+	statuses = manager.Statuses()
+	if len(statuses) != 1 || !statuses[0].Connected || statuses[0].State != mcpStateReconnected || statuses[0].RestartCount != 1 || statuses[0].RetryCount != 1 || statuses[0].ToolCount != 1 || statuses[0].Error != "" {
+		t.Fatalf("reconnected status = %#v", statuses)
+	}
+	if statuses[0].LastError == "" || strings.Contains(statuses[0].LastError, "sk-test-secret") {
+		t.Fatalf("last error = %q", statuses[0].LastError)
+	}
+	manager.Close()
+	waitProcessGone(t, pidTwo)
+}
+
+func TestStdioReconnectFailureBackoffIsDeterministic(t *testing.T) {
+	root := t.TempDir()
+	pidFile := filepath.Join(root, "reconnect-fail.pid")
+	phaseFile := filepath.Join(root, "reconnect-fail.phase")
+	manager, err := NewManager(context.Background(), config.Config{
+		WorkspaceRoots:     []string{root},
+		MaxToolOutputBytes: 64 * 1024,
+		MCPServers: []config.MCPServer{{
+			Name:           "fake",
+			Command:        os.Args[0],
+			Args:           []string{"-test.run=TestFakeStdioMCPServer"},
+			Env:            helperEnv("close_then_bad_reconnect", map[string]string{"BILLYHARNESS_MCP_PID_FILE": pidFile, "BILLYHARNESS_MCP_PHASE_FILE": phaseFile}),
+			CWD:            root,
+			Enabled:        true,
+			StartupTimeout: 2 * time.Second,
+			ToolTimeout:    2 * time.Second,
+			EnabledTools:   []string{"echo"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	pidOne := readPID(t, pidFile)
+	echo := findTool(t, manager, "mcp__fake__echo")
+
+	_, err = echo.Handler(context.Background(), json.RawMessage(`{"text":"first"}`))
+	if err == nil || !strings.Contains(err.Error(), "transport") {
+		t.Fatalf("first call err = %v", err)
+	}
+	waitProcessGone(t, pidOne)
+
+	_, err = echo.Handler(context.Background(), json.RawMessage(`{"text":"second"}`))
+	if err == nil || !strings.Contains(err.Error(), "invalid JSON-RPC") {
+		t.Fatalf("reconnect err = %v", err)
+	}
+	pidTwo := readPIDChanged(t, pidFile, pidOne)
+	waitProcessGone(t, pidTwo)
+	statuses := manager.Statuses()
+	if len(statuses) != 1 || statuses[0].Connected || statuses[0].State != mcpStateFailed || statuses[0].RetryCount != 1 || statuses[0].RetryBackoffMS <= 0 || statuses[0].NextRetryAt == nil || statuses[0].Error == "" {
+		t.Fatalf("failed reconnect status = %#v", statuses)
+	}
+
+	_, err = echo.Handler(context.Background(), json.RawMessage(`{"text":"third"}`))
+	if err == nil || !strings.Contains(err.Error(), "reconnect backoff active") {
+		t.Fatalf("backoff err = %v", err)
+	}
+	if got := readPID(t, pidFile); got != pidTwo {
+		t.Fatalf("backoff call started a new process: got pid %d, want %d", got, pidTwo)
+	}
+}
+
+func TestStdioReconnectReportsRestartingWhileStartupInFlight(t *testing.T) {
+	root := t.TempDir()
+	pidFile := filepath.Join(root, "restarting.pid")
+	phaseFile := filepath.Join(root, "restarting.phase")
+	manager, err := NewManager(context.Background(), config.Config{
+		WorkspaceRoots:     []string{root},
+		MaxToolOutputBytes: 64 * 1024,
+		MCPServers: []config.MCPServer{{
+			Name:           "fake",
+			Command:        os.Args[0],
+			Args:           []string{"-test.run=TestFakeStdioMCPServer"},
+			Env:            helperEnv("close_then_slow_reconnect", map[string]string{"BILLYHARNESS_MCP_PID_FILE": pidFile, "BILLYHARNESS_MCP_PHASE_FILE": phaseFile}),
+			CWD:            root,
+			Enabled:        true,
+			StartupTimeout: 2 * time.Second,
+			ToolTimeout:    2 * time.Second,
+			EnabledTools:   []string{"echo"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	pidOne := readPID(t, pidFile)
+	echo := findTool(t, manager, "mcp__fake__echo")
+
+	_, err = echo.Handler(context.Background(), json.RawMessage(`{"text":"first"}`))
+	if err == nil || !strings.Contains(err.Error(), "transport") {
+		t.Fatalf("first call err = %v", err)
+	}
+	waitProcessGone(t, pidOne)
+
+	done := make(chan struct {
+		text string
+		err  error
+	}, 1)
+	go func() {
+		text, err := echo.Handler(context.Background(), json.RawMessage(`{"text":"second"}`))
+		done <- struct {
+			text string
+			err  error
+		}{text: text, err: err}
+	}()
+
+	status := waitMCPStatus(t, manager, func(status ServerStatus) bool {
+		return status.State == mcpStateRestarting && !status.Connected && status.RetryCount == 1
+	})
+	if status.LastEventAt == nil || status.LastEventAt.IsZero() {
+		t.Fatalf("restarting status missing event time: %#v", status)
+	}
+
+	select {
+	case result := <-done:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if result.text != "second" {
+			t.Fatalf("reconnected echo = %q", result.text)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for reconnect call")
+	}
+}
+
 func TestStdioToolOutputIsCappedBeforeReturning(t *testing.T) {
 	root := t.TempDir()
 	manager, err := NewManager(context.Background(), config.Config{
@@ -426,6 +597,38 @@ func readPID(t *testing.T, path string) int {
 	return 0
 }
 
+func readPIDChanged(t *testing.T, path string, old int) int {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		body, err := os.ReadFile(path)
+		if err == nil {
+			pid, err := strconv.Atoi(strings.TrimSpace(string(body)))
+			if err == nil && pid > 0 && pid != old {
+				return pid
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("pid file %s did not change from %d", path, old)
+	return 0
+}
+
+func waitMCPStatus(t *testing.T, manager *Manager, match func(ServerStatus) bool) ServerStatus {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []ServerStatus
+	for time.Now().Before(deadline) {
+		last = manager.Statuses()
+		if len(last) == 1 && match(last[0]) {
+			return last[0]
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for status, last=%#v", last)
+	return ServerStatus{}
+}
+
 func waitProcessGone(t *testing.T, pid int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -482,9 +685,12 @@ func runFakeMCPServer() {
 				"instructions":    "Use echo for smoke tests.",
 			}))
 		case "tools/list":
-			if mode == "bad_list" {
+			if mode == "bad_list" || (mode == "close_then_bad_reconnect" && phaseExists()) {
 				_, _ = os.Stdout.Write([]byte("{not json\n"))
 				sleepForever()
+			}
+			if mode == "close_then_slow_reconnect" && phaseExists() {
+				time.Sleep(250 * time.Millisecond)
 			}
 			_ = enc.Encode(response(req.ID, map[string]any{"tools": fakeToolsForMode(mode)}))
 		case "tools/call":
@@ -495,6 +701,10 @@ func runFakeMCPServer() {
 			_ = json.Unmarshal(req.Params, &call)
 			switch call.Name {
 			case "echo":
+				if (mode == "close_once_then_echo" || mode == "close_then_bad_reconnect" || mode == "close_then_slow_reconnect") && !phaseExists() {
+					writePhase()
+					os.Exit(0)
+				}
 				_ = enc.Encode(response(req.ID, toolResult(fmt.Sprint(call.Arguments["text"]), false)))
 			case "env":
 				body, _ := json.Marshal(map[string]string{
@@ -525,6 +735,22 @@ func runFakeMCPServer() {
 func sleepForever() {
 	for {
 		time.Sleep(time.Hour)
+	}
+}
+
+func phaseExists() bool {
+	path := os.Getenv("BILLYHARNESS_MCP_PHASE_FILE")
+	if path == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func writePhase() {
+	path := os.Getenv("BILLYHARNESS_MCP_PHASE_FILE")
+	if path != "" {
+		_ = os.WriteFile(path, []byte("closed"), 0o600)
 	}
 }
 
