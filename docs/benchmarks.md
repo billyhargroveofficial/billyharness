@@ -84,6 +84,16 @@ Every successful benchmark run attempts to replay-check its own event bundle. Th
 
 If `replay_verified` is false or missing, treat the bundle as incomplete and inspect the error from the failed command before comparing performance numbers.
 
+## Local UI Performance
+
+TUI long-transcript rendering has focused benchmarks for cached transcript reflow and ordinary printable-key input:
+
+```sh
+/root/.local/go/bin/go test ./internal/tui -run '^$' -bench 'BenchmarkTUI(ReflowLongTranscriptCached|PrintableKeyLongTranscript)$' -benchmem
+```
+
+Use these before and after renderer changes. Printable keypresses should stay far cheaper than cached full reflow on the same long transcript.
+
 ## Provider Comparison
 
 Generate a local-loop task file without running it:

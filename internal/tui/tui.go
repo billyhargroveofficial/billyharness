@@ -709,20 +709,29 @@ func (m Model) applyTerminalMode(v *tea.View) {
 
 func (m *Model) resize(gotoBottom bool) {
 	styles := m.styles()
+	oldViewportWidth := m.viewport.Width()
+	needsTranscriptReflow := oldViewportWidth != m.width || (m.viewportContent == "" && len(m.blocks) > 0)
 	m.viewport.SetWidth(m.width)
 	m.viewport.HighlightStyle = styles.selection
 	m.viewport.SelectedHighlightStyle = styles.selection
-	m.textarea.SetWidth(m.inputContentWidth(styles))
-	m.textarea.SetHeight(m.inputHeight(m.inputContentWidth(styles)))
+	inputContentW := m.inputContentWidth(styles)
+	m.textarea.SetWidth(inputContentW)
+	m.textarea.SetHeight(m.inputHeight(inputContentW))
 	ta := m.textarea
 	ta.SetStyles(styles.textarea)
-	inputH := lipgloss.Height(styles.input.Width(m.inputContentWidth(styles)).Render(ta.View()))
+	inputH := lipgloss.Height(styles.input.Width(inputContentW).Render(ta.View()))
 	runStatusH := lipgloss.Height(m.runStatusView())
 	statusH := lipgloss.Height(styles.status.Width(m.statusContentWidth(styles)).Render(m.inlineStatusView()))
 	popupH := m.slashPopupHeight()
 	vh := max(4, m.height-inputH-runStatusH-statusH-popupH)
 	m.viewport.SetHeight(vh)
-	m.reflow(gotoBottom)
+	if needsTranscriptReflow {
+		m.reflow(gotoBottom)
+		return
+	}
+	if gotoBottom {
+		m.viewport.GotoBottom()
+	}
 }
 
 func (m Model) inputHeight(contentWidth int) int {

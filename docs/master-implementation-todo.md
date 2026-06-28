@@ -895,7 +895,7 @@ Acceptance:
 
 ### 9.3 Performance Hotspots
 
-- [ ] Profile TUI render on long transcript.
+- [x] Profile TUI render on long transcript.
 - [ ] Profile Telegram edit throttling.
 - [ ] Profile web fetch/extract.
 - [ ] Profile JSONL append/replay.

@@ -926,6 +926,27 @@ func TestTranscriptCellsCarryRichTerminalTextCache(t *testing.T) {
 	}
 }
 
+func TestResizeWithoutWidthChangeDoesNotReflowTranscript(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.height = 32
+	m.resize(true)
+	m.addBlock("assistant", "ASSISTANT", "A cached answer")
+	m.reflow(true)
+	original := m.viewportContent
+	if original == "" {
+		t.Fatal("expected initial viewport content")
+	}
+
+	m.blocks[0].richTerminalText = "bad cached render"
+	m.textarea.SetValue("typing should only resize input")
+	m.resize(false)
+
+	if m.viewportContent != original {
+		t.Fatalf("resize without width change should not rebuild transcript: %q", m.viewportContent)
+	}
+}
+
 func TestRunSummaryCellUpdatesByRunLifecycle(t *testing.T) {
 	m := newTestModel(t)
 	m.runStartedAt = time.Now().Add(-2 * time.Second)
@@ -2310,10 +2331,61 @@ func TestChatCommands(t *testing.T) {
 	}
 }
 
-func newTestModel(t *testing.T) Model {
+type testModelHelper interface {
+	Helper()
+	Setenv(string, string)
+	TempDir() string
+}
+
+func newTestModel(t testModelHelper) Model {
 	t.Helper()
 	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
 	return NewModel(config.Default(), Options{})
+}
+
+func BenchmarkTUIReflowLongTranscriptCached(b *testing.B) {
+	m := newBenchmarkLongTranscript(b, 1200)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.reflow(false)
+	}
+}
+
+func BenchmarkTUIPrintableKeyLongTranscript(b *testing.B) {
+	m := newBenchmarkLongTranscript(b, 1200)
+	msg := tea.KeyPressMsg{Code: 'a', Text: "a"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if i%64 == 0 {
+			m.textarea.SetValue("")
+		}
+		next, _ := m.Update(msg)
+		m = next.(Model)
+	}
+}
+
+func newBenchmarkLongTranscript(b *testing.B, blocks int) Model {
+	b.Helper()
+	m := newTestModel(b)
+	m.width = 120
+	m.height = 40
+	m.resize(true)
+	for i := 0; i < blocks; i++ {
+		switch i % 4 {
+		case 0:
+			m.addBlock("user", "USER", fmt.Sprintf("benchmark prompt %04d", i))
+		case 1:
+			m.addBlock("assistant", "ASSISTANT", fmt.Sprintf("benchmark answer %04d with **markdown** and `code`.\n\n| key | value |\n| --- | --- |\n| item | %04d |", i, i))
+		case 2:
+			m.addBlock("tool", fmt.Sprintf("Done Read file-%04d.go", i), "compact tool payload that should be cached")
+		default:
+			m.addBlock("reasoning", "THINKING", "short hidden or visible reasoning block")
+		}
+	}
+	m.reflow(true)
+	return m
 }
 
 func stripANSITest(text string) string {
