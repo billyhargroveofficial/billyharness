@@ -181,6 +181,7 @@ func chat(args []string) error {
 }
 
 func tuiCmd(args []string) error {
+	cfg := config.Default()
 	fs := flag.NewFlagSet("tui", flag.ExitOnError)
 	gatewayURL := fs.String("gateway", "", "gateway base URL override; auto-discovered when omitted")
 	model := fs.String("model", "", "initial model: deepseek-v4-flash or deepseek-v4-pro")
@@ -190,20 +191,28 @@ func tuiCmd(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	gatewayNotice := ""
 	if strings.TrimSpace(*gatewayURL) == "" {
-		if discovered, ok := discoverGatewayURL(context.Background(), config.Default()); ok {
+		if discovered, ok := discoverGatewayURL(context.Background(), cfg); ok {
 			*gatewayURL = discovered
+		} else {
+			target := normalizeGatewayURL(cfg.GatewayAddr)
+			if candidates := gatewayURLCandidates(cfg); len(candidates) > 0 {
+				target = candidates[0]
+			}
+			gatewayNotice = gateway.UnavailableHint(target) + "; local mode active"
 		}
 	} else {
 		*gatewayURL = normalizeGatewayURL(*gatewayURL)
 	}
 	return tui.Run(tui.Options{
-		GatewayURL: *gatewayURL,
-		Model:      *model,
-		Dangerous:  *dangerous,
-		MaxRounds:  *maxRounds,
-		Plain:      *plain,
-		Version:    version,
+		GatewayURL:    *gatewayURL,
+		GatewayNotice: gatewayNotice,
+		Model:         *model,
+		Dangerous:     *dangerous,
+		MaxRounds:     *maxRounds,
+		Plain:         *plain,
+		Version:       version,
 	})
 }
 

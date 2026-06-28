@@ -28,6 +28,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/agent"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
+	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpstatus"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
@@ -37,12 +38,13 @@ import (
 )
 
 type Options struct {
-	GatewayURL string
-	Model      string
-	Dangerous  bool
-	MaxRounds  int
-	Plain      bool
-	Version    string
+	GatewayURL    string
+	GatewayNotice string
+	Model         string
+	Dangerous     bool
+	MaxRounds     int
+	Plain         bool
+	Version       string
 }
 
 type thinkingMode struct {
@@ -305,6 +307,9 @@ func NewModel(cfg config.Config, opts Options) Model {
 		thinkView = "expanded"
 	}
 	status := "ready"
+	if notice := strings.TrimSpace(opts.GatewayNotice); notice != "" {
+		status = notice
+	}
 	if settingsErr != nil {
 		status = "settings error: " + settingsErr.Error()
 	}
@@ -1433,12 +1438,7 @@ func (m Model) createSessionCmd() tea.Cmd {
 		if err != nil {
 			return errMsg{err: err}
 		}
-		req, err := http.NewRequest(http.MethodPost, m.gatewayURL+"/v1/sessions", bytes.NewReader(body))
-		if err != nil {
-			return errMsg{err: err}
-		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := m.gatewayRequest(context.Background(), http.DefaultClient, http.MethodPost, "/v1/sessions", body)
 		if err != nil {
 			return errMsg{err: err}
 		}
@@ -1492,14 +1492,8 @@ func (m Model) runGateway(prompt string) {
 		"reasoning_effort": m.currentThinking().effort,
 		"max_tool_rounds":  m.maxRounds,
 	})
-	path := fmt.Sprintf("%s/v1/sessions/%s/run", m.gatewayURL, m.sessionID)
-	req, err := http.NewRequest(http.MethodPost, path, bytes.NewReader(body))
-	if err != nil {
-		m.events <- runDoneMsg{err: err}
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	path := fmt.Sprintf("/v1/sessions/%s/run", m.sessionID)
+	resp, err := m.gatewayRequest(context.Background(), http.DefaultClient, http.MethodPost, path, body)
 	if err != nil {
 		m.events <- runDoneMsg{err: err}
 		return
@@ -1541,12 +1535,8 @@ func (m Model) runGateway(prompt string) {
 }
 
 func (m Model) fetchGatewayMessages() ([]protocol.Message, error) {
-	path := fmt.Sprintf("%s/v1/sessions/%s", m.gatewayURL, m.sessionID)
-	req, err := http.NewRequest(http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
+	path := fmt.Sprintf("/v1/sessions/%s", m.sessionID)
+	resp, err := m.gatewayRequest(context.Background(), http.DefaultClient, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1632,13 +1622,8 @@ func (m Model) loadMCPStatus() (string, error) {
 }
 
 func (m Model) fetchGatewayMCPStatus() (mcpStatusResponse, error) {
-	path := fmt.Sprintf("%s/v1/mcp", m.gatewayURL)
-	req, err := http.NewRequest(http.MethodGet, path, nil)
-	if err != nil {
-		return mcpStatusResponse{}, err
-	}
 	client := http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := m.gatewayRequest(context.Background(), &client, http.MethodGet, "/v1/mcp", nil)
 	if err != nil {
 		return mcpStatusResponse{}, err
 	}
@@ -1765,15 +1750,8 @@ func (m Model) loadAuthStatus() (authStatusResponse, error) {
 }
 
 func (m Model) gatewayJSON(method, path string, body []byte, out any) error {
-	req, err := http.NewRequest(method, m.gatewayURL+path, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
 	client := http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := m.gatewayRequest(context.Background(), &client, method, path, body)
 	if err != nil {
 		return err
 	}
@@ -1786,6 +1764,31 @@ func (m Model) gatewayJSON(method, path string, body []byte, out any) error {
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func (m Model) gatewayRequest(ctx context.Context, client *http.Client, method, path string, body []byte) (*http.Response, error) {
+	baseURL := gateway.NormalizeBaseURL(m.gatewayURL)
+	if baseURL == "" {
+		return nil, fmt.Errorf("gateway URL is empty")
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return gateway.DoWithReadyRetry(ctx, client, baseURL, func() (*http.Request, error) {
+		var reader io.Reader
+		if body != nil {
+			reader = bytes.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, baseURL+path, reader)
+		if err != nil {
+			return nil, err
+		}
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		gateway.SetAuthHeaderFromEnv(req)
+		return req, nil
+	})
 }
 
 func formatAuthStatus(status credentials.Status) string {

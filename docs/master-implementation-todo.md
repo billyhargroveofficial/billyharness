@@ -740,17 +740,17 @@ Purpose: make gateway the stable control plane for TUI, Telegram, tests, and fut
 
 ### 7.1 Gateway Autodiscovery
 
-- [ ] TUI should auto-discover gateway by default.
+- [x] TUI should auto-discover gateway by default.
 - [ ] If gateway is not running:
   - [ ] auto-start when safe; or
-  - [ ] show precise command/service status.
-- [ ] Remove need to pass `-gateway http://127.0.0.1:8765` in normal use.
-- [ ] Add port/config fallback.
+  - [x] show precise command/service status.
+- [x] Remove need to pass `-gateway http://127.0.0.1:8765` in normal use.
+- [x] Add port/config fallback.
 
 Acceptance:
 
-- [ ] `./bin/fast-agent-harness tui` works in normal setup.
-- [ ] Connection refused errors explain exactly what to do.
+- [x] `./bin/fast-agent-harness tui` works in normal setup.
+- [x] Connection refused errors explain exactly what to do.
 
 ### 7.2 API Surface
 

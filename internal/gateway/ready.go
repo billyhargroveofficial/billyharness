@@ -5,9 +5,44 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"syscall"
 	"time"
 )
+
+type UnavailableError struct {
+	BaseURL string
+	Err     error
+}
+
+func (e *UnavailableError) Error() string {
+	hint := UnavailableHint(e.BaseURL)
+	if e.Err == nil {
+		return hint
+	}
+	return hint + ": " + e.Err.Error()
+}
+
+func (e *UnavailableError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func UnavailableHint(baseURL string) string {
+	baseURL = NormalizeBaseURL(baseURL)
+	if baseURL == "" {
+		baseURL = "configured gateway"
+	}
+	parts := []string{
+		"gateway " + baseURL + " is not reachable",
+		"start it with ./bin/fast-agent-harness gateway",
+		"or run systemctl restart billyharness-gateway.service",
+		"inspect with systemctl --no-pager --full status billyharness-gateway.service",
+	}
+	return strings.Join(parts, "; ")
+}
 
 func WaitForReady(ctx context.Context, baseURL string, timeout time.Duration) bool {
 	baseURL = NormalizeBaseURL(baseURL)
@@ -45,8 +80,11 @@ func DoWithReadyRetry(ctx context.Context, client *http.Client, baseURL string, 
 	if err == nil {
 		return resp, nil
 	}
-	if !isConnectionRefused(err) || !WaitForReady(ctx, baseURL, 2*time.Second) {
+	if !isConnectionRefused(err) {
 		return nil, err
+	}
+	if !WaitForReady(ctx, baseURL, 2*time.Second) {
+		return nil, &UnavailableError{BaseURL: baseURL, Err: err}
 	}
 	req, reqErr := makeRequest()
 	if reqErr != nil {

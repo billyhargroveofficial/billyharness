@@ -39,6 +39,14 @@ func TestDefaultsToDarkTheme(t *testing.T) {
 	}
 }
 
+func TestGatewayNoticeSetsInitialStatus(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	m := NewModel(config.Default(), Options{GatewayNotice: "gateway http://127.0.0.1:8765 is not reachable; local mode active"})
+	if !strings.Contains(m.status, "local mode active") {
+		t.Fatalf("status = %q", m.status)
+	}
+}
+
 func TestSlashCommands(t *testing.T) {
 	m := newTestModel(t)
 
