@@ -6,6 +6,13 @@ Fast Go agent harness with a gateway API, TUI chat, native tools, MCP server, an
 
 - [Master implementation TODO](docs/master-implementation-todo.md) is the live execution plan.
 - [Codex research roadmap](docs/codex-research-roadmap.md) records the architecture research and rationale.
+- [Setup](docs/setup.md) covers build, gateway, TUI, Telegram, systemd, logs, and failure checks.
+- [Auth](docs/auth.md) covers DeepSeek keys, Codex OAuth import, config inspect, and redaction.
+- [TUI](docs/tui.md) covers commands, themes, model/reasoning, tool/thinking views, copy, and sessions.
+- [Telegram](docs/telegram.md) covers bot setup, allowlist, commands, per-user sessions, throttling, and tool view.
+- [MCP](docs/mcp.md) covers billyharness-owned MCP config, built-ins, discovery, and troubleshooting.
+- [Profiles](docs/profiles.md) covers `profile.toml`, `SOUL.md`, switching, and inspection.
+- [Benchmarks](docs/benchmarks.md) covers local loops, Terminal-Bench adapter, replay verification, and provider comparisons.
 
 Work protocol for runtime changes:
 

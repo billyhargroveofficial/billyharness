@@ -42,7 +42,7 @@ The goal is complete only when all of these are true:
 - [ ] Tool lifecycle is keyed by stable ids and replayable from JSONL.
 - [ ] MCP servers are configured by billyharness config, not inherited by accident.
 - [x] Bench runs create replayable bundles and at least one 50-100 turn local loop can be executed.
-- [ ] Documentation explains startup, dangerous permissions, Telegram setup, provider auth, MCP config, profiles, and benchmark commands.
+- [x] Documentation explains startup, dangerous permissions, Telegram setup, provider auth, MCP config, profiles, and benchmark commands.
 
 ## Current Baseline To Preserve
 
@@ -911,32 +911,32 @@ Acceptance:
 
 Purpose: make the project usable after sleep, reboot, or a week away.
 
-- [ ] Root `README.md` quickstart.
-- [ ] `docs/setup.md`:
+- [x] Root `README.md` quickstart.
+- [x] `docs/setup.md`:
   - [x] build
   - [x] run gateway
   - [x] run TUI
   - [x] run Telegram
   - [x] systemd
-- [ ] `docs/auth.md`:
-  - [ ] DeepSeek key
-  - [ ] Codex OAuth
-  - [ ] config inspect
-  - [ ] redaction
-- [ ] `docs/mcp.md`:
-  - [ ] config format
-  - [ ] allowed servers
-  - [ ] Telegram Parilka
-  - [ ] GitHub
-  - [ ] Context7
-  - [ ] troubleshooting
-- [ ] `docs/tui.md`:
-  - [ ] commands
-  - [ ] themes
-  - [ ] model/reasoning
-  - [ ] tool/thinking views
-  - [ ] copy/selection
-- [ ] `docs/telegram.md`:
+- [x] `docs/auth.md`:
+  - [x] DeepSeek key
+  - [x] Codex OAuth
+  - [x] config inspect
+  - [x] redaction
+- [x] `docs/mcp.md`:
+  - [x] config format
+  - [x] allowed servers
+  - [x] Telegram Parilka
+  - [x] GitHub
+  - [x] Context7
+  - [x] troubleshooting
+- [x] `docs/tui.md`:
+  - [x] commands
+  - [x] themes
+  - [x] model/reasoning
+  - [x] tool/thinking views
+  - [x] copy/selection
+- [x] `docs/telegram.md`:
   - [x] bot token setup
   - [x] allowed users
   - [x] commands
@@ -950,7 +950,7 @@ Purpose: make the project usable after sleep, reboot, or a week away.
 
 Acceptance:
 
-- [ ] A new shell on the server can start and test the system using docs only.
+- [x] A new shell on the server can start and test the system using docs only.
 
 ## Phase 11: Final Hardening
 

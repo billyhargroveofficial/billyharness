@@ -66,6 +66,35 @@ BILLYHARNESS_TELEGRAM_ALLOWED_USER_IDS=342262559,8226987886
 BILLYHARNESS_TELEGRAM_SEND_ENABLED=true
 ```
 
+## Dangerous Local Tools
+
+Billyharness is tuned for solo local use. The normal TUI command enables local write and shell tools:
+
+```sh
+./bin/fast-agent-harness tui
+```
+
+Equivalent explicit form:
+
+```sh
+./bin/fast-agent-harness tui -dangerous=true
+```
+
+To disable write/shell auto-approval for a safer session:
+
+```sh
+FAST_AGENT_AUTO_APPROVE_DANGEROUS=false ./bin/fast-agent-harness tui -dangerous=false
+```
+
+Audit status is visible through:
+
+```sh
+./bin/fast-agent-harness config inspect
+./bin/fast-agent-harness doctor
+```
+
+Dangerous local operations still emit tool permission/audit events into the replayable JSONL event stream.
+
 ## Systemd
 
 Installed units on this server:
