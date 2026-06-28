@@ -20,6 +20,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpserver"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/telegrambot"
@@ -374,17 +375,7 @@ func parseChatIDs(raw string) (map[int64]bool, error) {
 }
 
 func modelAliasForTelegram(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	switch value {
-	case "flash":
-		return "deepseek-v4-flash"
-	case "pro":
-		return "deepseek-v4-pro"
-	case "gpt":
-		return "gpt-5.5"
-	default:
-		return value
-	}
+	return modelinfo.NormalizeAlias(value)
 }
 
 func serve(args []string) error {

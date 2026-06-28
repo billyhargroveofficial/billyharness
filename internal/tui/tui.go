@@ -26,6 +26,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/toolrender"
@@ -1221,7 +1222,7 @@ func (m Model) contextText() string {
 }
 
 func (m Model) costText() string {
-	if isCodexModel(m.currentModel()) {
+	if modelinfo.Lookup(m.currentModel()).Subscription {
 		return "cost subscription"
 	}
 	hitPrice, missPrice, outputPrice := m.prices()
@@ -1249,14 +1250,10 @@ func (m Model) prices() (hit, miss, output float64) {
 		}
 		return hit, miss, output
 	}
-	switch m.currentModel() {
-	case "deepseek-v4-flash":
-		return 0.0028, 0.14, 0.28
-	case "deepseek-v4-pro":
-		return 0.003625, 0.435, 0.87
-	default:
-		return 0, m.settings.InputPricePer1MTokens, m.settings.OutputPricePer1MTokens
+	if pricing := modelinfo.Lookup(m.currentModel()).Pricing; pricing.CacheHitPer1M > 0 || pricing.CacheMissPer1M > 0 || pricing.OutputPer1M > 0 {
+		return pricing.CacheHitPer1M, pricing.CacheMissPer1M, pricing.OutputPer1M
 	}
+	return 0, m.settings.InputPricePer1MTokens, m.settings.OutputPricePer1MTokens
 }
 
 func (m Model) contextTokens() int64 {
@@ -1788,17 +1785,7 @@ func (m Model) currentModel() string {
 }
 
 func (m Model) currentProvider() string {
-	model := strings.ToLower(strings.TrimSpace(m.currentModel()))
-	if isCodexModel(model) {
-		return "openai-codex"
-	}
-	if strings.HasPrefix(model, "deepseek-") {
-		return "deepseek"
-	}
-	if strings.TrimSpace(m.cfg.Provider) != "" {
-		return m.cfg.Provider
-	}
-	return "deepseek"
+	return modelinfo.ProviderForModel(m.currentModel(), m.cfg.Provider)
 }
 
 func (m Model) currentProfile() string {
@@ -1899,19 +1886,8 @@ func (m *Model) setModel(value string) bool {
 	case "", "toggle", "next":
 		m.cycleModel()
 		return true
-	case "flash", "v4 flash", "v4-flash", "deepseek flash", "deepseek-v4-flash":
-		value = "deepseek-v4-flash"
-	case "pro", "v4 pro", "v4-pro", "deepseek pro", "deepseek-v4-pro":
-		value = "deepseek-v4-pro"
-	case "gpt", "codex", "chatgpt", "gpt max", "gpt-5.5":
-		value = "gpt-5.5"
-	case "gpt fast", "gpt mini", "gpt-5.4-mini":
-		value = "gpt-5.4-mini"
-	case "spark", "codex spark", "gpt-5.3-codex-spark":
-		value = "gpt-5.3-codex-spark"
-	case "gpt-5.4":
-		value = "gpt-5.4"
 	default:
+		value = modelinfo.NormalizeAlias(value)
 		if !strings.Contains(value, "/") && !strings.Contains(value, " ") {
 			// Keep the TUI open to custom compatible model ids without another release.
 			m.models = appendIfMissing(m.models, value)
@@ -2883,11 +2859,7 @@ func shortModel(model string) string {
 }
 
 func isCodexModel(model string) bool {
-	model = strings.ToLower(strings.TrimSpace(model))
-	return strings.HasPrefix(model, "gpt-") ||
-		strings.HasPrefix(model, "o1") ||
-		strings.HasPrefix(model, "o3") ||
-		strings.HasPrefix(model, "o4")
+	return modelinfo.IsCodexModel(model)
 }
 
 func padRight(text string, width int) string {

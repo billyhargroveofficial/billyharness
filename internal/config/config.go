@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 )
 
 type Config struct {
@@ -120,20 +121,8 @@ func (c Config) APIKey() string {
 }
 
 func (c *Config) ApplyModelProviderDefaults() {
-	model := strings.ToLower(strings.TrimSpace(c.Model))
-	provider := strings.ToLower(strings.TrimSpace(c.Provider))
-	if strings.HasPrefix(model, "gpt-") ||
-		strings.HasPrefix(model, "o1") ||
-		strings.HasPrefix(model, "o3") ||
-		strings.HasPrefix(model, "o4") {
-		if provider == "" || provider == "deepseek" {
-			c.Provider = "openai-codex"
-		}
-		return
-	}
-	if strings.HasPrefix(model, "deepseek-") && (provider == "" || strings.Contains(provider, "codex") || provider == "chatgpt") {
-		c.Provider = "deepseek"
-	}
+	c.Model = modelinfo.NormalizeAlias(c.Model)
+	c.Provider = modelinfo.ProviderForModel(c.Model, c.Provider)
 }
 
 func (c *Config) ApplyBillySettingsDefaults() {

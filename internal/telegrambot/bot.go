@@ -13,6 +13,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -692,17 +693,7 @@ func (r *Renderer) StreamPlainText(model, reasoning string) string {
 }
 
 func modelAlias(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	switch value {
-	case "flash":
-		return "deepseek-v4-flash"
-	case "pro":
-		return "deepseek-v4-pro"
-	case "gpt":
-		return "gpt-5.5"
-	default:
-		return value
-	}
+	return modelinfo.NormalizeAlias(value)
 }
 
 func fallback(value, fallback string) string {

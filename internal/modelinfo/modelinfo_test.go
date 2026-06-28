@@ -1,0 +1,41 @@
+package modelinfo
+
+import "testing"
+
+func TestNormalizeAlias(t *testing.T) {
+	tests := map[string]string{
+		"flash":       "deepseek-v4-flash",
+		"v4 pro":      "deepseek-v4-pro",
+		"gpt":         "gpt-5.5",
+		"gpt mini":    "gpt-5.4-mini",
+		"codex spark": "gpt-5.3-codex-spark",
+	}
+	for input, want := range tests {
+		if got := NormalizeAlias(input); got != want {
+			t.Fatalf("NormalizeAlias(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestProviderForModelFollowsKnownFamilies(t *testing.T) {
+	if got := ProviderForModel("gpt-5.5", "deepseek"); got != ProviderOpenAICodex {
+		t.Fatalf("provider = %q", got)
+	}
+	if got := ProviderForModel("deepseek-v4-flash", "openai-codex"); got != ProviderDeepSeek {
+		t.Fatalf("provider = %q", got)
+	}
+	if got := ProviderForModel("custom-model", "mock"); got != ProviderMock {
+		t.Fatalf("provider = %q", got)
+	}
+}
+
+func TestLookupIncludesBillingHints(t *testing.T) {
+	flash := Lookup("deepseek-v4-flash")
+	if flash.Provider != ProviderDeepSeek || flash.Pricing.CacheMissPer1M <= 0 || flash.Subscription {
+		t.Fatalf("flash = %#v", flash)
+	}
+	gpt := Lookup("gpt-5.5")
+	if gpt.Provider != ProviderOpenAICodex || !gpt.Subscription || gpt.Pricing.OutputPer1M != 0 {
+		t.Fatalf("gpt = %#v", gpt)
+	}
+}

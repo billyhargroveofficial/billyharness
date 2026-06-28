@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/secrets"
 )
@@ -105,21 +106,7 @@ func New(cfg config.Config) (Provider, error) {
 }
 
 func isCodexProvider(cfg config.Config) bool {
-	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
-	switch provider {
-	case "openai-codex", "codex", "chatgpt-codex", "chatgpt":
-		return true
-	}
-	model := strings.ToLower(strings.TrimSpace(cfg.Model))
-	return provider == "deepseek" && isCodexModelFamily(model)
-}
-
-func isCodexModelFamily(model string) bool {
-	model = strings.ToLower(strings.TrimSpace(model))
-	return strings.HasPrefix(model, "gpt-") ||
-		strings.HasPrefix(model, "o1") ||
-		strings.HasPrefix(model, "o3") ||
-		strings.HasPrefix(model, "o4")
+	return modelinfo.ProviderForModel(cfg.Model, cfg.Provider) == modelinfo.ProviderOpenAICodex
 }
 
 type Mock struct{}
