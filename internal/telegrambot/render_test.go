@@ -83,20 +83,27 @@ func TestRendererContextShowsLastModelCallNotCumulativeSpend(t *testing.T) {
 	r.Apply(protocol.Event{Type: protocol.EventRunStarted})
 	r.Apply(protocol.Event{Type: protocol.EventModelCallStarted})
 	r.Apply(protocol.Event{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
-		"input_tokens":  1000,
-		"output_tokens": 100,
+		"input_tokens":      1000,
+		"output_tokens":     100,
+		"cache_hit_tokens":  900,
+		"cache_miss_tokens": 100,
 	}})
 	r.Apply(protocol.Event{Type: protocol.EventModelCallStarted})
 	r.Apply(protocol.Event{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
-		"input_tokens":  1300,
-		"output_tokens": 200,
+		"input_tokens":      1300,
+		"output_tokens":     200,
+		"cache_hit_tokens":  1100,
+		"cache_miss_tokens": 200,
 	}})
 
 	footer := r.footerLine()
-	for _, want := range []string{"🪟 ctx 1.5k/10.0k 15%"} {
+	for _, want := range []string{"🪟 ctx 1.5k/10.0k 15%", "💾 hit 1.1k miss 200"} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("footer missing %q: %q", want, footer)
 		}
+	}
+	if strings.Contains(footer, "hit 2.0k") || strings.Contains(footer, "miss 300") {
+		t.Fatalf("footer should not show cumulative cache totals: %q", footer)
 	}
 	if strings.Contains(footer, "📥") || strings.Contains(footer, "📤") {
 		t.Fatalf("footer should not show cumulative token spend: %q", footer)

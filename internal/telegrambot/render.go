@@ -29,6 +29,8 @@ type Renderer struct {
 	LastOutputTokens int64
 	CacheHit         int64
 	CacheMiss        int64
+	LastCacheHit     int64
+	LastCacheMiss    int64
 	Reasoning        int64
 	ToolSummaryIn    int64
 	ToolSummaryOut   int64
@@ -98,6 +100,8 @@ func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
 		r.LastOutputTokens = current.OutputTokens
 		r.CacheHit += delta.CacheHitTokens
 		r.CacheMiss += delta.CacheMissTokens
+		r.LastCacheHit = current.CacheHitTokens
+		r.LastCacheMiss = current.CacheMissTokens
 		r.Reasoning += delta.ReasoningTokens
 	case protocol.EventRunCompleted:
 		r.Done = true
@@ -210,8 +214,8 @@ func (r *Renderer) footerLineWithContext(includeContext bool) string {
 	if context := r.contextLine(); includeContext && context != "" {
 		parts = append(parts, context)
 	}
-	if r.CacheHit+r.CacheMiss > 0 {
-		parts = append(parts, fmt.Sprintf("💾 hit %s miss %s", compactInt(r.CacheHit), compactInt(r.CacheMiss)))
+	if r.LastCacheHit+r.LastCacheMiss > 0 {
+		parts = append(parts, fmt.Sprintf("💾 hit %s miss %s", compactInt(r.LastCacheHit), compactInt(r.LastCacheMiss)))
 	}
 	if r.ToolSummaryIn+r.ToolSummaryOut > 0 {
 		parts = append(parts, fmt.Sprintf("🧩 websum %s→%s", compactInt(r.ToolSummaryIn), compactInt(r.ToolSummaryOut)))
