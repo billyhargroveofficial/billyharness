@@ -686,6 +686,62 @@ func TestGatewaySessionCancelEndpointCancelsActiveThread(t *testing.T) {
 	}
 }
 
+func TestGatewayShutdownAbortRecordsActiveSessionFailure(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+	session := newGatewaySession("test-session", time.Now().UTC(), []protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	server.attachSessionStore(session)
+	server.mu.Lock()
+	server.sessions[session.ID] = session
+	server.mu.Unlock()
+	if err := server.saveSession(session); err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Thread.Run(context.Background(), sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, _ func(protocol.Event)) ([]protocol.Message, error) {
+			close(started)
+			<-ctx.Done()
+			return messages, ctx.Err()
+		}), "wait", nil)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("thread did not start")
+	}
+
+	if aborted := server.abortActiveSessions("gateway shutdown"); aborted != 1 {
+		t.Fatalf("aborted = %d, want 1", aborted)
+	}
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("thread error = %v, want context.Canceled", err)
+	}
+	status := session.Status()
+	if status.Running || status.LastError != "gateway shutdown" {
+		t.Fatalf("status after abort = %#v", status)
+	}
+	records := readSessionEventRecords(t, filepath.Join(storeDir, session.ID, sessionEventsJSONLName))
+	if len(records) == 0 {
+		t.Fatal("no event records written")
+	}
+	foundFailed := false
+	for _, record := range records {
+		if record.Event.Type == protocol.EventRunFailed && fmt.Sprint(record.Event.Data) == "gateway shutdown" {
+			foundFailed = true
+			break
+		}
+	}
+	if !foundFailed {
+		t.Fatalf("events = %#v, want shutdown run.failed", records)
+	}
+}
+
 func TestGatewayRunAcceptsModelOverrides(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"

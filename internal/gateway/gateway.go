@@ -228,6 +228,9 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	}()
 	select {
 	case <-ctx.Done():
+		if aborted := s.abortActiveSessions("gateway shutdown"); aborted > 0 {
+			log.Printf("gateway shutdown aborted %d active session(s)", aborted)
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
@@ -644,6 +647,19 @@ func (s *Server) allSessions() []*Session {
 		out = append(out, session)
 	}
 	return out
+}
+
+func (s *Server) abortActiveSessions(reason string) int {
+	count := 0
+	for _, session := range s.allSessions() {
+		if session.abortActiveRun(reason) {
+			count++
+			if err := s.saveSession(session); err != nil {
+				log.Printf("gateway session save failed id=%s after abort: %v", session.ID, err)
+			}
+		}
+	}
+	return count
 }
 
 func sessionResponse(session *Session, includeMessages bool) SessionResponse {

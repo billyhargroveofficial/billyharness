@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -130,6 +131,18 @@ func (s *Session) Subscribe() (<-chan protocol.Event, func()) {
 	hub := s.events
 	s.mu.Unlock()
 	return hub.Subscribe()
+}
+
+func (s *Session) abortActiveRun(reason string) bool {
+	if s == nil || s.Thread == nil || !s.Thread.Running() {
+		return false
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "gateway session aborted"
+	}
+	s.observeRunEvent(protocol.Event{Type: protocol.EventRunFailed, Data: reason})
+	s.Thread.Cancel()
+	return true
 }
 
 func (s *Session) beginRunStatus(req RunRequest) {

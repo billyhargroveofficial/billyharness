@@ -776,15 +776,15 @@ Acceptance:
 
 ### 7.3 Service Management
 
-- [ ] Ensure systemd units are documented.
-- [ ] Ensure graceful shutdown drains active sessions or records aborts.
-- [ ] Add service health command.
-- [ ] Add log locations and useful journal commands to docs.
+- [x] Ensure systemd units are documented.
+- [x] Ensure graceful shutdown drains active sessions or records aborts.
+- [x] Add service health command.
+- [x] Add log locations and useful journal commands to docs.
 
 Acceptance:
 
-- [ ] Restart does not leave orphan gateway/Telegram processes.
-- [ ] User can debug service failures without guessing.
+- [x] Restart does not leave orphan gateway/Telegram processes.
+- [x] User can debug service failures without guessing.
 
 ## Phase 8: Storage, Replay, Trace
 
@@ -913,11 +913,11 @@ Purpose: make the project usable after sleep, reboot, or a week away.
 
 - [ ] Root `README.md` quickstart.
 - [ ] `docs/setup.md`:
-  - [ ] build
-  - [ ] run gateway
-  - [ ] run TUI
-  - [ ] run Telegram
-  - [ ] systemd
+  - [x] build
+  - [x] run gateway
+  - [x] run TUI
+  - [x] run Telegram
+  - [x] systemd
 - [ ] `docs/auth.md`:
   - [ ] DeepSeek key
   - [ ] Codex OAuth
