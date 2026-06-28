@@ -1008,6 +1008,79 @@ func TestToolSearchFindsNativeAndMCPTools(t *testing.T) {
 	}
 }
 
+func TestSkillsListAndReadAreOnDemandBoundedAndCompatOptional(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	writeSkill(t, filepath.Join(home, "skills", "teacher", "SKILL.md"), "# Teacher\nHome skill body")
+	writeSkill(t, filepath.Join(project, ".billyharness", "skills", "review", "SKILL.md"), "# Review\nProject skill body with more text")
+	writeSkill(t, filepath.Join(project, ".claude", "skills", "legacy", "SKILL.md"), "# Legacy\nClaude compat body")
+
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{project}
+	registry := NewRegistry(cfg)
+	if !hasSpec(registry.Specs(), "skill_list") || !hasSpec(registry.Specs(), "skill_read") {
+		t.Fatalf("skill tools missing from specs: %#v", registry.Specs())
+	}
+
+	list, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "skill_list",
+		Arguments: rawArgs(map[string]any{"limit": 10}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"name": "teacher"`, `"source": "home"`, `"name": "review"`, `"source": "project"`, `"content_injected": false`} {
+		if !strings.Contains(list.Content, want) {
+			t.Fatalf("skill_list missing %q in:\n%s", want, list.Content)
+		}
+	}
+	if strings.Contains(list.Content, `"name": "legacy"`) {
+		t.Fatalf("compat skill leaked without include_compat:\n%s", list.Content)
+	}
+
+	compat, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "skill_list",
+		Arguments: rawArgs(map[string]any{"include_compat": true, "query": "legacy"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(compat.Content, `"name": "legacy"`) || !strings.Contains(compat.Content, `"source": "claude_compat"`) {
+		t.Fatalf("compat skill missing:\n%s", compat.Content)
+	}
+
+	read, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "skill_read",
+		Arguments: rawArgs(map[string]any{
+			"name":      "review",
+			"source":    "project",
+			"max_chars": 8,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !read.Truncated || read.Metadata["skill_name"] != "review" || read.Metadata["skill_source"] != "project" ||
+		!strings.Contains(read.Content, `...[truncated]`) {
+		t.Fatalf("bounded skill_read result=%#v content=\n%s", read, read.Content)
+	}
+
+	legacy, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "skill_read",
+		Arguments: rawArgs(map[string]any{
+			"name":           "legacy",
+			"include_compat": true,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(legacy.Content, "Claude compat body") {
+		t.Fatalf("legacy skill read = %s", legacy.Content)
+	}
+}
+
 func TestMCPGatewayListsServerStatusesAndValidatesStdioCalls(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Default()
@@ -1235,6 +1308,16 @@ func hasSpec(specs []protocol.ToolSpec, name string) bool {
 		}
 	}
 	return false
+}
+
+func writeSkill(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func rawArgs(value any) json.RawMessage {

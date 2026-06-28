@@ -397,18 +397,18 @@ Acceptance:
 
 ### 3.5 Skills v0
 
-- [ ] Add skill directories:
-  - [ ] `$BILLYHARNESS_HOME/skills`
-  - [ ] project `.billyharness/skills`
-- [ ] Add `skill_list`.
-- [ ] Add `skill_read`.
-- [ ] Do not inject all skills into every prompt.
-- [ ] Add optional compatibility reader for `.claude/skills` only as input, not as copied code.
+- [x] Add skill directories:
+  - [x] `$BILLYHARNESS_HOME/skills`
+  - [x] project `.billyharness/skills`
+- [x] Add `skill_list`.
+- [x] Add `skill_read`.
+- [x] Do not inject all skills into every prompt.
+- [x] Add optional compatibility reader for `.claude/skills` only as input, not as copied code.
 
 Acceptance:
 
-- [ ] Skills are loaded on demand.
-- [ ] Skill content is bounded and audited.
+- [x] Skills are loaded on demand.
+- [x] Skill content is bounded and audited.
 
 ## Phase 4: Context, Web Economy, Summaries
 

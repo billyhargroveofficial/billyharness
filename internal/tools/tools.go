@@ -48,6 +48,8 @@ const (
 	maxExecOutput            = 512 * 1024
 	defaultToolSchemaTokens  = 1200
 	maxToolSchemaTokens      = 4000
+	defaultSkillReadChars    = 12 * 1024
+	maxSkillReadChars        = 60 * 1024
 )
 
 var newWebSummaryProvider = provider.New
@@ -105,6 +107,7 @@ func NewRegistry(cfg config.Config) *Registry {
 	r.addWebCrawl()
 	r.addWebExtract()
 	r.addToolSearch()
+	r.addSkills()
 	return r
 }
 
@@ -292,7 +295,7 @@ func normalizeParallelMetadata(name string, risk protocol.Risk, meta ParallelMet
 
 func defaultParallelMetadata(name string, risk protocol.Risk) ParallelMetadata {
 	switch name {
-	case "time_now", "fs_read_file", "fs_list", "fs_search", "tool_search":
+	case "time_now", "fs_read_file", "fs_list", "fs_search", "tool_search", "skill_list", "skill_read":
 		return ParallelMetadata{Policy: ParallelPolicyReadOnly, Idempotent: true, Cancellable: true}
 	case "web_search", "web_fetch", "web_extract", "web_crawl":
 		return ParallelMetadata{Policy: ParallelPolicyNetworkRateLimited, Idempotent: true, RateLimitKey: "web", Cancellable: true, MaxConcurrency: 3}
@@ -1039,6 +1042,249 @@ func toolNamespaceMatches(item toolSearchItem, filter string) bool {
 		return true
 	}
 	return strings.TrimPrefix(namespace, "mcp.") == filter
+}
+
+func (r *Registry) addSkills() {
+	r.add(Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "skill_list",
+			Description: "List available billyharness skills without injecting their contents into the prompt. Reads $BILLYHARNESS_HOME/skills and project .billyharness/skills; .claude/skills requires include_compat=true.",
+			Parameters:  raw(`{"type":"object","properties":{"query":{"type":"string","description":"Optional case-insensitive name/summary/source filter."},"source":{"type":"string","description":"Optional source filter: home, project, or claude_compat."},"include_compat":{"type":"boolean","default":false,"description":"Also list project .claude/skills as compatibility input."},"limit":{"type":"integer","default":40}},"additionalProperties":false}`),
+			Risk:        protocol.RiskReadOnly,
+		},
+		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
+			var in struct {
+				Query         string `json:"query"`
+				Source        string `json:"source"`
+				IncludeCompat bool   `json:"include_compat"`
+				Limit         int    `json:"limit"`
+			}
+			if err := json.Unmarshal(args, &in); err != nil {
+				return Result{}, err
+			}
+			if in.Limit <= 0 || in.Limit > 200 {
+				in.Limit = 40
+			}
+			skills := r.discoverSkills(in.IncludeCompat)
+			query := strings.ToLower(strings.TrimSpace(in.Query))
+			source := normalizeSkillSource(in.Source)
+			var items []skillListItem
+			truncated := false
+			for _, skill := range skills {
+				if source != "" && skill.Source != source {
+					continue
+				}
+				haystack := strings.ToLower(skill.Name + " " + skill.Source + " " + skill.Summary)
+				if query != "" && !toolSearchMatches(haystack, query) {
+					continue
+				}
+				if len(items) >= in.Limit {
+					truncated = true
+					break
+				}
+				items = append(items, skillListItem{
+					Name:    skill.Name,
+					Source:  skill.Source,
+					Path:    skill.Path,
+					Summary: skill.Summary,
+				})
+			}
+			out, _ := json.MarshalIndent(map[string]any{
+				"skills":    items,
+				"truncated": truncated,
+				"metrics": map[string]any{
+					"discovered":       len(skills),
+					"returned":         len(items),
+					"include_compat":   in.IncludeCompat,
+					"content_injected": false,
+				},
+			}, "", "  ")
+			return Result{Content: string(out), Metadata: map[string]any{
+				"skills_discovered": len(skills),
+				"skills_returned":   len(items),
+				"truncated":         truncated,
+				"include_compat":    in.IncludeCompat,
+			}}, nil
+		},
+	})
+	r.add(Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "skill_read",
+			Description: "Read one skill's SKILL.md on demand with a hard output cap. Use skill_list first when the exact name is unknown.",
+			Parameters:  raw(`{"type":"object","properties":{"name":{"type":"string","description":"Skill directory name, for example imagegen or code-review."},"source":{"type":"string","description":"Optional source filter: home, project, or claude_compat."},"include_compat":{"type":"boolean","default":false,"description":"Allow reading project .claude/skills compatibility input."},"max_chars":{"type":"integer","default":12288}},"required":["name"],"additionalProperties":false}`),
+			Risk:        protocol.RiskReadOnly,
+		},
+		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
+			var in struct {
+				Name          string `json:"name"`
+				Source        string `json:"source"`
+				IncludeCompat bool   `json:"include_compat"`
+				MaxChars      int    `json:"max_chars"`
+			}
+			if err := json.Unmarshal(args, &in); err != nil {
+				return Result{}, err
+			}
+			name := normalizeSkillName(in.Name)
+			if name == "" {
+				return Result{}, fmt.Errorf("name required")
+			}
+			maxChars := normalizedSkillReadChars(in.MaxChars)
+			source := normalizeSkillSource(in.Source)
+			for _, skill := range r.discoverSkills(in.IncludeCompat) {
+				if skill.Name != name {
+					continue
+				}
+				if source != "" && skill.Source != source {
+					continue
+				}
+				body, err := os.ReadFile(skill.Path)
+				if err != nil {
+					return Result{}, err
+				}
+				content, truncated := truncateRunesWithSimpleMarker(string(body), maxChars)
+				out, _ := json.MarshalIndent(map[string]any{
+					"name":           skill.Name,
+					"source":         skill.Source,
+					"path":           skill.Path,
+					"content":        content,
+					"truncated":      truncated,
+					"content_bytes":  len(body),
+					"returned_chars": len([]rune(content)),
+				}, "", "  ")
+				return Result{Content: string(out), Metadata: map[string]any{
+					"skill_name":     skill.Name,
+					"skill_source":   skill.Source,
+					"skill_path":     skill.Path,
+					"content_bytes":  len(body),
+					"returned_chars": len([]rune(content)),
+					"truncated":      truncated,
+				}, Truncated: truncated}, nil
+			}
+			return Result{}, fmt.Errorf("skill %q not found", in.Name)
+		},
+	})
+}
+
+type skillRecord struct {
+	Name    string
+	Source  string
+	Path    string
+	Summary string
+}
+
+type skillListItem struct {
+	Name    string `json:"name"`
+	Source  string `json:"source"`
+	Path    string `json:"path"`
+	Summary string `json:"summary,omitempty"`
+}
+
+func (r *Registry) discoverSkills(includeCompat bool) []skillRecord {
+	var dirs []skillSearchDir
+	dirs = append(dirs, skillSearchDir{Source: "home", Path: filepath.Join(config.BillyHomeDir(), "skills")})
+	for _, root := range r.cfg.WorkspaceRoots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		dirs = append(dirs, skillSearchDir{Source: "project", Path: filepath.Join(root, ".billyharness", "skills")})
+		if includeCompat {
+			dirs = append(dirs, skillSearchDir{Source: "claude_compat", Path: filepath.Join(root, ".claude", "skills")})
+		}
+	}
+	var out []skillRecord
+	seen := map[string]bool{}
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir.Path)
+		if err != nil {
+			continue
+		}
+		sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			name := normalizeSkillName(entry.Name())
+			if name == "" {
+				continue
+			}
+			path := filepath.Join(dir.Path, entry.Name(), "SKILL.md")
+			info, err := os.Stat(path)
+			if err != nil || info.IsDir() {
+				continue
+			}
+			key := dir.Source + "/" + name
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, skillRecord{
+				Name:    name,
+				Source:  dir.Source,
+				Path:    path,
+				Summary: skillSummary(path),
+			})
+		}
+	}
+	return out
+}
+
+type skillSearchDir struct {
+	Source string
+	Path   string
+}
+
+func skillSummary(path string) string {
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(bytes), "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(line, "#"))
+		if line != "" && !strings.HasPrefix(line, "---") {
+			return truncate(oneLine(line), 200)
+		}
+	}
+	return ""
+}
+
+func normalizeSkillName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, " ", "-")
+	value = strings.ReplaceAll(value, "_", "-")
+	return strings.Trim(value, ".-")
+}
+
+func normalizeSkillSource(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "-", "_")
+	switch value {
+	case "compat", "claude", "claude_skills":
+		return "claude_compat"
+	default:
+		return value
+	}
+}
+
+func normalizedSkillReadChars(value int) int {
+	if value <= 0 {
+		return defaultSkillReadChars
+	}
+	if value > maxSkillReadChars {
+		return maxSkillReadChars
+	}
+	return value
+}
+
+func truncateRunesWithSimpleMarker(text string, maxRunes int) (string, bool) {
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text, false
+	}
+	if maxRunes < 32 {
+		maxRunes = 32
+	}
+	return string(runes[:maxRunes]) + "\n...[truncated]", true
 }
 
 func toolSearchMatches(haystack, query string) bool {

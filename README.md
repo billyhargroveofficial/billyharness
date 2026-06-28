@@ -128,6 +128,11 @@ Local command hooks can be configured in `$BILLYHARNESS_HOME/hooks.config.toml`.
 They are no-op by default and emit replayable `hook.started`, `hook.finished`, and `hook.failed` events.
 See [docs/hooks.md](docs/hooks.md) for the config format and supported events.
 
+## Skills
+
+Skills live under `$BILLYHARNESS_HOME/skills/<name>/SKILL.md` or project `.billyharness/skills/<name>/SKILL.md`.
+They are loaded on demand with `skill_list` and `skill_read`; `.claude/skills` compatibility input requires `include_compat=true`.
+
 ## Codex / GPT subscription mode
 
 `/model gpt`, `/model gpt-5.5`, `/model gpt-5.4`, `/model gpt-5.4-mini`, and `/model spark`
