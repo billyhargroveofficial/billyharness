@@ -361,22 +361,22 @@ Acceptance:
 
 ### 3.3 Tool Search And MCP Discovery
 
-- [ ] Keep lazy MCP discovery.
-- [ ] Do not expose hundreds of MCP tools directly in the first model prompt.
-- [ ] Make `tool_search` return native tools plus discovered MCP tools.
-- [ ] Add filters:
-  - [ ] server
-  - [ ] namespace
-  - [ ] risk
-  - [ ] query
-  - [ ] include schema
-- [ ] Add output budgets for tool schemas.
-- [ ] Add metrics for discovery calls and schema tokens.
+- [x] Keep lazy MCP discovery.
+- [x] Do not expose hundreds of MCP tools directly in the first model prompt.
+- [x] Make `tool_search` return native tools plus discovered MCP tools.
+- [x] Add filters:
+  - [x] server
+  - [x] namespace
+  - [x] risk
+  - [x] query
+  - [x] include schema
+- [x] Add output budgets for tool schemas.
+- [x] Add metrics for discovery calls and schema tokens.
 
 Acceptance:
 
-- [ ] Large MCP inventories do not bloat context by default.
-- [ ] The model can still discover and call a specific MCP tool.
+- [x] Large MCP inventories do not bloat context by default.
+- [x] The model can still discover and call a specific MCP tool.
 
 ### 3.4 Hooks v0
 

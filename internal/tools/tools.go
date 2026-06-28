@@ -46,6 +46,8 @@ const (
 	webMaxLinks              = 20
 	maxWriteBytes            = 2 * 1024 * 1024
 	maxExecOutput            = 512 * 1024
+	defaultToolSchemaTokens  = 1200
+	maxToolSchemaTokens      = 4000
 )
 
 var newWebSummaryProvider = provider.New
@@ -751,15 +753,18 @@ func (r *Registry) addToolSearch() {
 		Spec: protocol.ToolSpec{
 			Name:        "tool_search",
 			Description: "Search native and connected MCP tools by name or description without listing every external tool in the model prompt. Returns compact call hints.",
-			Parameters:  raw(`{"type":"object","properties":{"query":{"type":"string","description":"Tool capability, name, or description text to search for. Empty returns the first matching tools."},"server":{"type":"string","description":"Optional MCP server filter: telegram, telegram-parilka, github, or context7."},"limit":{"type":"integer","default":20},"include_schema":{"type":"boolean","default":false,"description":"Include input schema for matching tools when exact arguments are needed."}},"additionalProperties":false}`),
+			Parameters:  raw(`{"type":"object","properties":{"query":{"type":"string","description":"Tool capability, name, or description text to search for. Empty returns the first matching tools."},"server":{"type":"string","description":"Optional MCP server filter: telegram, telegram-parilka, github, or context7."},"namespace":{"type":"string","description":"Optional namespace filter such as fs, web, shell, mcp, mcp.github, or telegram-parilka."},"risk":{"type":"string","description":"Optional risk filter: read_only, network, write, execute, or external."},"limit":{"type":"integer","default":20},"include_schema":{"type":"boolean","default":false,"description":"Include input schemas for matching tools when exact arguments are needed, capped by max_schema_tokens."},"max_schema_tokens":{"type":"integer","default":1200,"description":"Maximum estimated schema tokens to include across all returned tools."}},"additionalProperties":false}`),
 			Risk:        protocol.RiskReadOnly,
 		},
 		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
 			var in struct {
-				Query         string `json:"query"`
-				Server        string `json:"server"`
-				Limit         int    `json:"limit"`
-				IncludeSchema bool   `json:"include_schema"`
+				Query           string `json:"query"`
+				Server          string `json:"server"`
+				Namespace       string `json:"namespace"`
+				Risk            string `json:"risk"`
+				Limit           int    `json:"limit"`
+				IncludeSchema   bool   `json:"include_schema"`
+				MaxSchemaTokens int    `json:"max_schema_tokens"`
 			}
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
@@ -767,12 +772,13 @@ func (r *Registry) addToolSearch() {
 			if in.Limit <= 0 || in.Limit > 80 {
 				in.Limit = 20
 			}
-			results := r.searchTools(in.Query, in.Server, in.Limit, in.IncludeSchema)
+			results := r.searchTools(in.Query, in.Server, in.Namespace, in.Risk, in.Limit, in.IncludeSchema, in.MaxSchemaTokens)
 			out, _ := json.MarshalIndent(map[string]any{
 				"tools":     results.Items,
 				"truncated": results.Truncated,
+				"metrics":   results.Metrics,
 			}, "", "  ")
-			return Result{Content: string(out), Metadata: map[string]any{"matches": len(results.Items), "truncated": results.Truncated}}, nil
+			return Result{Content: string(out), Metadata: results.Metrics.Metadata()}, nil
 		},
 	})
 }
@@ -780,20 +786,60 @@ func (r *Registry) addToolSearch() {
 type toolSearchResults struct {
 	Items     []toolSearchItem
 	Truncated bool
+	Metrics   toolDiscoveryMetrics
 }
 
 type toolSearchItem struct {
-	Name        string          `json:"name"`
-	Source      string          `json:"source"`
-	Server      string          `json:"server,omitempty"`
-	CallTool    string          `json:"call_tool"`
-	CallName    string          `json:"call_name,omitempty"`
-	Risk        protocol.Risk   `json:"risk,omitempty"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema,omitempty"`
+	Name                string          `json:"name"`
+	Source              string          `json:"source"`
+	Namespace           string          `json:"namespace,omitempty"`
+	Server              string          `json:"server,omitempty"`
+	CallTool            string          `json:"call_tool"`
+	CallName            string          `json:"call_name,omitempty"`
+	Risk                protocol.Risk   `json:"risk,omitempty"`
+	Description         string          `json:"description,omitempty"`
+	InputSchema         json.RawMessage `json:"input_schema,omitempty"`
+	SchemaOmittedReason string          `json:"schema_omitted,omitempty"`
 }
 
-func (r *Registry) searchTools(query, server string, limit int, includeSchema bool) toolSearchResults {
+type toolDiscoveryMetrics struct {
+	DiscoveryCalls     int                  `json:"discovery_calls"`
+	ScannedNative      int                  `json:"scanned_native"`
+	ScannedMCP         int                  `json:"scanned_mcp"`
+	Matched            int                  `json:"matched"`
+	Returned           int                  `json:"returned"`
+	SchemaIncluded     int                  `json:"schema_included"`
+	SchemaOmitted      int                  `json:"schema_omitted"`
+	SchemaTokens       int                  `json:"schema_tokens"`
+	SchemaBudgetTokens int                  `json:"schema_budget_tokens,omitempty"`
+	SchemaTruncated    bool                 `json:"schema_truncated,omitempty"`
+	Filters            toolDiscoveryFilters `json:"filters"`
+}
+
+type toolDiscoveryFilters struct {
+	Query     string `json:"query,omitempty"`
+	Server    string `json:"server,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	Risk      string `json:"risk,omitempty"`
+}
+
+func (m toolDiscoveryMetrics) Metadata() map[string]any {
+	return map[string]any{
+		"discovery_calls":      m.DiscoveryCalls,
+		"matches":              m.Returned,
+		"matched":              m.Matched,
+		"truncated":            m.Returned < m.Matched || m.SchemaTruncated,
+		"scanned_native":       m.ScannedNative,
+		"scanned_mcp":          m.ScannedMCP,
+		"schema_included":      m.SchemaIncluded,
+		"schema_omitted":       m.SchemaOmitted,
+		"schema_tokens":        m.SchemaTokens,
+		"schema_budget_tokens": m.SchemaBudgetTokens,
+		"schema_truncated":     m.SchemaTruncated,
+	}
+}
+
+func (r *Registry) searchTools(query, server, namespace, risk string, limit int, includeSchema bool, maxSchemaTokens int) toolSearchResults {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -803,13 +849,36 @@ func (r *Registry) searchTools(query, server string, limit int, includeSchema bo
 		serverFilter = "telegram_parilka"
 		query = ""
 	}
+	namespaceFilter := normalizeToolNamespaceFilter(namespace)
+	riskFilter := normalizeRiskFilter(risk)
+	schemaBudget := 0
+	if includeSchema {
+		schemaBudget = normalizedToolSchemaBudget(maxSchemaTokens)
+	}
+	metrics := toolDiscoveryMetrics{
+		DiscoveryCalls:     1,
+		SchemaBudgetTokens: schemaBudget,
+		Filters: toolDiscoveryFilters{
+			Query:     query,
+			Server:    displayMCPServerName(serverFilter),
+			Namespace: namespaceFilter,
+			Risk:      string(riskFilter),
+		},
+	}
 	var items []toolSearchItem
 	truncated := false
 	add := func(item toolSearchItem, spec protocol.ToolSpec) bool {
-		haystack := strings.ToLower(spec.Name + " " + spec.Description + " " + item.Server + " " + item.Source)
+		if namespaceFilter != "" && !toolNamespaceMatches(item, namespaceFilter) {
+			return false
+		}
+		if riskFilter != "" && spec.Risk != riskFilter {
+			return false
+		}
+		haystack := strings.ToLower(spec.Name + " " + spec.Description + " " + item.Server + " " + item.Namespace + " " + string(spec.Risk) + " " + item.Source)
 		if !toolSearchMatches(haystack, query) {
 			return false
 		}
+		metrics.Matched++
 		if len(items) >= limit {
 			truncated = true
 			return true
@@ -817,9 +886,10 @@ func (r *Registry) searchTools(query, server string, limit int, includeSchema bo
 		item.Description = truncate(oneLine(spec.Description), 240)
 		item.Risk = spec.Risk
 		if includeSchema {
-			item.InputSchema = spec.Parameters
+			addSchemaWithinBudget(&item, spec.Parameters, &metrics)
 		}
 		items = append(items, item)
+		metrics.Returned = len(items)
 		return false
 	}
 
@@ -833,12 +903,14 @@ func (r *Registry) searchTools(query, server string, limit int, includeSchema bo
 			continue
 		}
 		tool := r.tools[name]
+		metrics.ScannedNative++
 		if stop := add(toolSearchItem{
-			Name:     tool.Spec.Name,
-			Source:   "native",
-			CallTool: tool.Spec.Name,
+			Name:      tool.Spec.Name,
+			Source:    "native",
+			Namespace: nativeToolNamespace(tool.Spec.Name),
+			CallTool:  tool.Spec.Name,
 		}, tool.Spec); stop {
-			return toolSearchResults{Items: items, Truncated: truncated}
+			return toolSearchResults{Items: items, Truncated: truncated || metrics.SchemaTruncated, Metrics: metrics}
 		}
 	}
 
@@ -853,17 +925,120 @@ func (r *Registry) searchTools(query, server string, limit int, includeSchema bo
 		if serverFilter != "" && serverName != serverFilter {
 			continue
 		}
+		metrics.ScannedMCP++
 		if stop := add(toolSearchItem{
-			Name:     tool.Spec.Name,
-			Source:   "mcp",
-			Server:   displayMCPServerName(serverName),
-			CallTool: "mcp_call",
-			CallName: tool.Spec.Name,
+			Name:      tool.Spec.Name,
+			Source:    "mcp",
+			Namespace: mcpToolNamespace(serverName),
+			Server:    displayMCPServerName(serverName),
+			CallTool:  "mcp_call",
+			CallName:  tool.Spec.Name,
 		}, tool.Spec); stop {
-			return toolSearchResults{Items: items, Truncated: truncated}
+			return toolSearchResults{Items: items, Truncated: truncated || metrics.SchemaTruncated, Metrics: metrics}
 		}
 	}
-	return toolSearchResults{Items: items, Truncated: truncated}
+	return toolSearchResults{Items: items, Truncated: truncated || metrics.SchemaTruncated, Metrics: metrics}
+}
+
+func addSchemaWithinBudget(item *toolSearchItem, schema json.RawMessage, metrics *toolDiscoveryMetrics) {
+	if len(schema) == 0 {
+		return
+	}
+	tokens := estimateTokens(string(schema))
+	remaining := metrics.SchemaBudgetTokens - metrics.SchemaTokens
+	if metrics.SchemaBudgetTokens <= 0 || tokens > remaining {
+		item.SchemaOmittedReason = fmt.Sprintf("schema budget exceeded: need %d tokens, remaining %d", tokens, maxInt(0, remaining))
+		metrics.SchemaOmitted++
+		metrics.SchemaTruncated = true
+		return
+	}
+	item.InputSchema = schema
+	metrics.SchemaIncluded++
+	metrics.SchemaTokens += tokens
+}
+
+func normalizedToolSchemaBudget(tokens int) int {
+	if tokens <= 0 {
+		return defaultToolSchemaTokens
+	}
+	if tokens > maxToolSchemaTokens {
+		return maxToolSchemaTokens
+	}
+	return tokens
+}
+
+func normalizeRiskFilter(value string) protocol.Risk {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "-", "_")
+	switch value {
+	case "", "any", "all":
+		return ""
+	case "read", "readonly", "read_only":
+		return protocol.RiskReadOnly
+	case "network":
+		return protocol.RiskNetwork
+	case "write":
+		return protocol.RiskWrite
+	case "exec", "execute":
+		return protocol.RiskExecute
+	case "external", "mcp":
+		return protocol.RiskExternal
+	default:
+		return protocol.Risk(value)
+	}
+}
+
+func normalizeToolNamespaceFilter(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "_", "-")
+	value = strings.Trim(value, ".- ")
+	if isParilkaAlias(value) {
+		return "telegram-parilka"
+	}
+	return value
+}
+
+func nativeToolNamespace(name string) string {
+	switch {
+	case strings.HasPrefix(name, "fs_"):
+		return "fs"
+	case strings.HasPrefix(name, "web_"):
+		return "web"
+	case strings.HasPrefix(name, "shell_"):
+		return "shell"
+	case strings.HasPrefix(name, "mcp_"):
+		return "mcp-gateway"
+	case strings.HasPrefix(name, "tool_"):
+		return "tool"
+	}
+	prefix, _, ok := strings.Cut(name, "_")
+	if ok {
+		return prefix
+	}
+	return name
+}
+
+func mcpToolNamespace(server string) string {
+	server = displayMCPServerName(server)
+	if server == "" {
+		return "mcp"
+	}
+	return "mcp." + server
+}
+
+func toolNamespaceMatches(item toolSearchItem, filter string) bool {
+	namespace := normalizeToolNamespaceFilter(item.Namespace)
+	server := normalizeToolNamespaceFilter(item.Server)
+	if filter == "native" {
+		return item.Source == "native"
+	}
+	if filter == "mcp" {
+		return item.Source == "mcp" || strings.HasPrefix(namespace, "mcp")
+	}
+	if namespace == filter || server == filter {
+		return true
+	}
+	return strings.TrimPrefix(namespace, "mcp.") == filter
 }
 
 func toolSearchMatches(haystack, query string) bool {
@@ -887,15 +1062,18 @@ func (r *Registry) addMCPGateway() {
 		Spec: protocol.ToolSpec{
 			Name:        "mcp_list_tools",
 			Description: "List connected MCP tools compactly. Use before mcp_call when Telegram, Telegram Parilka, GitHub, or Context7 tools are needed. For Russian парилка/Parilka chat requests, use server telegram-parilka.",
-			Parameters:  raw(`{"type":"object","properties":{"server":{"type":"string","description":"Optional MCP server filter: telegram, telegram-parilka, github, or context7. telegram_parilka and парилка are also accepted."},"query":{"type":"string","description":"Optional case-insensitive name/description filter."},"limit":{"type":"integer","default":40},"include_schema":{"type":"boolean","default":false,"description":"Include a matching tool input schema only when needed to call it."}},"additionalProperties":false}`),
+			Parameters:  raw(`{"type":"object","properties":{"server":{"type":"string","description":"Optional MCP server filter: telegram, telegram-parilka, github, or context7. telegram_parilka and парилка are also accepted."},"query":{"type":"string","description":"Optional case-insensitive name/description filter."},"namespace":{"type":"string","description":"Optional namespace filter such as mcp, mcp.github, github, or telegram-parilka."},"risk":{"type":"string","description":"Optional risk filter: read_only, network, write, execute, or external."},"limit":{"type":"integer","default":40},"include_schema":{"type":"boolean","default":false,"description":"Include matching tool input schemas only when needed to call them, capped by max_schema_tokens."},"max_schema_tokens":{"type":"integer","default":1200,"description":"Maximum estimated schema tokens to include across returned tools."}},"additionalProperties":false}`),
 			Risk:        protocol.RiskReadOnly,
 		},
 		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in struct {
-				Server        string `json:"server"`
-				Query         string `json:"query"`
-				Limit         int    `json:"limit"`
-				IncludeSchema bool   `json:"include_schema"`
+				Server          string `json:"server"`
+				Query           string `json:"query"`
+				Namespace       string `json:"namespace"`
+				Risk            string `json:"risk"`
+				Limit           int    `json:"limit"`
+				IncludeSchema   bool   `json:"include_schema"`
+				MaxSchemaTokens int    `json:"max_schema_tokens"`
 			}
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
@@ -904,10 +1082,13 @@ func (r *Registry) addMCPGateway() {
 				in.Limit = 40
 			}
 			type item struct {
-				Name        string          `json:"name"`
-				Server      string          `json:"server,omitempty"`
-				Description string          `json:"description,omitempty"`
-				InputSchema json.RawMessage `json:"input_schema,omitempty"`
+				Name                string          `json:"name"`
+				Server              string          `json:"server,omitempty"`
+				Namespace           string          `json:"namespace,omitempty"`
+				Risk                protocol.Risk   `json:"risk,omitempty"`
+				Description         string          `json:"description,omitempty"`
+				InputSchema         json.RawMessage `json:"input_schema,omitempty"`
+				SchemaOmittedReason string          `json:"schema_omitted,omitempty"`
 			}
 			type serverItem struct {
 				Name              string     `json:"name"`
@@ -934,6 +1115,22 @@ func (r *Registry) addMCPGateway() {
 				serverFilter = "telegram_parilka"
 				query = ""
 			}
+			namespaceFilter := normalizeToolNamespaceFilter(in.Namespace)
+			riskFilter := normalizeRiskFilter(in.Risk)
+			schemaBudget := 0
+			if in.IncludeSchema {
+				schemaBudget = normalizedToolSchemaBudget(in.MaxSchemaTokens)
+			}
+			metrics := toolDiscoveryMetrics{
+				DiscoveryCalls:     1,
+				SchemaBudgetTokens: schemaBudget,
+				Filters: toolDiscoveryFilters{
+					Query:     query,
+					Server:    displayMCPServerName(serverFilter),
+					Namespace: namespaceFilter,
+					Risk:      string(riskFilter),
+				},
+			}
 			names := make([]string, 0, len(r.mcpTools))
 			for name := range r.mcpTools {
 				names = append(names, name)
@@ -947,10 +1144,19 @@ func (r *Registry) addMCPGateway() {
 				if serverFilter != "" && server != serverFilter {
 					continue
 				}
+				metrics.ScannedMCP++
+				namespace := mcpToolNamespace(server)
+				if namespaceFilter != "" && !toolNamespaceMatches(toolSearchItem{Source: "mcp", Namespace: namespace, Server: displayMCPServerName(server)}, namespaceFilter) {
+					continue
+				}
+				if riskFilter != "" && tool.Spec.Risk != riskFilter {
+					continue
+				}
 				haystack := strings.ToLower(name + " " + tool.Spec.Description)
 				if query != "" && !strings.Contains(haystack, query) {
 					continue
 				}
+				metrics.Matched++
 				if len(tools) >= in.Limit {
 					truncated = true
 					break
@@ -958,12 +1164,18 @@ func (r *Registry) addMCPGateway() {
 				out := item{
 					Name:        name,
 					Server:      displayMCPServerName(server),
+					Namespace:   namespace,
+					Risk:        tool.Spec.Risk,
 					Description: truncate(oneLine(tool.Spec.Description), 240),
 				}
 				if in.IncludeSchema {
-					out.InputSchema = tool.Spec.Parameters
+					searchItem := toolSearchItem{}
+					addSchemaWithinBudget(&searchItem, tool.Spec.Parameters, &metrics)
+					out.InputSchema = searchItem.InputSchema
+					out.SchemaOmittedReason = searchItem.SchemaOmittedReason
 				}
 				tools = append(tools, out)
+				metrics.Returned = len(tools)
 			}
 			statuses := r.MCPStatuses()
 			servers := make([]serverItem, 0, len(statuses))
@@ -992,9 +1204,10 @@ func (r *Registry) addMCPGateway() {
 			out, _ := json.MarshalIndent(map[string]any{
 				"tools":     tools,
 				"servers":   servers,
-				"truncated": truncated,
+				"truncated": truncated || metrics.SchemaTruncated,
+				"metrics":   metrics,
 			}, "", "  ")
-			return Result{Content: string(out)}, nil
+			return Result{Content: string(out), Metadata: metrics.Metadata()}, nil
 		},
 	})
 	r.add(Tool{

@@ -885,31 +885,96 @@ func TestToolSearchFindsNativeAndMCPTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var nativeResp struct {
+		Tools []struct {
+			Name      string `json:"name"`
+			Source    string `json:"source"`
+			Namespace string `json:"namespace"`
+			Risk      string `json:"risk"`
+			CallTool  string `json:"call_tool"`
+		} `json:"tools"`
+		Metrics struct {
+			DiscoveryCalls int `json:"discovery_calls"`
+			Returned       int `json:"returned"`
+			ScannedNative  int `json:"scanned_native"`
+		} `json:"metrics"`
+	}
+	if err := json.Unmarshal([]byte(native.Content), &nativeResp); err != nil {
+		t.Fatalf("native tool_search json = %v\n%s", err, native.Content)
+	}
 	for _, want := range []string{
 		`"name": "fs_read_file"`,
 		`"source": "native"`,
+		`"namespace": "fs"`,
+		`"risk": "read_only"`,
 		`"call_tool": "fs_read_file"`,
+		`"metrics"`,
 	} {
 		if !strings.Contains(native.Content, want) {
 			t.Fatalf("native tool_search missing %q in:\n%s", want, native.Content)
 		}
 	}
+	if nativeResp.Metrics.DiscoveryCalls != 1 || nativeResp.Metrics.Returned == 0 || nativeResp.Metrics.ScannedNative == 0 {
+		t.Fatalf("native metrics = %#v", nativeResp.Metrics)
+	}
 
-	mcp, err := registry.Call(context.Background(), protocol.ToolCall{
+	filteredNative, err := registry.Call(context.Background(), protocol.ToolCall{
 		Name: "tool_search",
 		Arguments: rawArgs(map[string]any{
-			"query":          "repositories",
-			"server":         "github",
-			"include_schema": true,
+			"query":     "file",
+			"namespace": "fs",
+			"risk":      "read_only",
+			"limit":     10,
 		}),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(filteredNative.Content, `"name": "fs_read_file"`) ||
+		strings.Contains(filteredNative.Content, `"name": "web_fetch"`) {
+		t.Fatalf("native namespace/risk filter failed:\n%s", filteredNative.Content)
+	}
+
+	mcp, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "tool_search",
+		Arguments: rawArgs(map[string]any{
+			"query":             "repositories",
+			"server":            "github",
+			"namespace":         "mcp.github",
+			"risk":              "external",
+			"include_schema":    true,
+			"max_schema_tokens": 200,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mcpResp struct {
+		Tools []struct {
+			Name        string          `json:"name"`
+			Source      string          `json:"source"`
+			Namespace   string          `json:"namespace"`
+			Server      string          `json:"server"`
+			Risk        string          `json:"risk"`
+			InputSchema json.RawMessage `json:"input_schema"`
+		} `json:"tools"`
+		Metrics struct {
+			DiscoveryCalls     int `json:"discovery_calls"`
+			Returned           int `json:"returned"`
+			SchemaIncluded     int `json:"schema_included"`
+			SchemaTokens       int `json:"schema_tokens"`
+			SchemaBudgetTokens int `json:"schema_budget_tokens"`
+		} `json:"metrics"`
+	}
+	if err := json.Unmarshal([]byte(mcp.Content), &mcpResp); err != nil {
+		t.Fatalf("mcp tool_search json = %v\n%s", err, mcp.Content)
+	}
 	for _, want := range []string{
 		`"name": "mcp__github__search_repositories"`,
 		`"source": "mcp"`,
+		`"namespace": "mcp.github"`,
 		`"server": "github"`,
+		`"risk": "external"`,
 		`"call_tool": "mcp_call"`,
 		`"call_name": "mcp__github__search_repositories"`,
 		`"input_schema"`,
@@ -917,6 +982,29 @@ func TestToolSearchFindsNativeAndMCPTools(t *testing.T) {
 		if !strings.Contains(mcp.Content, want) {
 			t.Fatalf("mcp tool_search missing %q in:\n%s", want, mcp.Content)
 		}
+	}
+	if mcpResp.Metrics.DiscoveryCalls != 1 || mcpResp.Metrics.Returned != 1 ||
+		mcpResp.Metrics.SchemaIncluded != 1 || mcpResp.Metrics.SchemaTokens == 0 ||
+		mcpResp.Metrics.SchemaBudgetTokens != 200 {
+		t.Fatalf("mcp metrics = %#v", mcpResp.Metrics)
+	}
+
+	overBudget, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "tool_search",
+		Arguments: rawArgs(map[string]any{
+			"query":             "repositories",
+			"server":            "github",
+			"include_schema":    true,
+			"max_schema_tokens": 1,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(overBudget.Content, `"schema_omitted"`) ||
+		!strings.Contains(overBudget.Content, `"schema_truncated": true`) ||
+		!strings.Contains(overBudget.Content, `"truncated": true`) {
+		t.Fatalf("schema budget omission missing:\n%s", overBudget.Content)
 	}
 }
 
@@ -959,7 +1047,11 @@ func TestMCPGatewayListsServerStatusesAndValidatesStdioCalls(t *testing.T) {
 		`"state": "connected"`,
 		`"tool_count": 1`,
 		`"mcp__fake__echo"`,
+		`"namespace": "mcp.fake"`,
+		`"risk": "external"`,
 		`"input_schema"`,
+		`"metrics"`,
+		`"schema_included": 1`,
 	} {
 		if !strings.Contains(list.Content, want) {
 			t.Fatalf("mcp_list_tools missing %q in:\n%s", want, list.Content)

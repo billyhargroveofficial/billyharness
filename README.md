@@ -120,6 +120,7 @@ Default allowed servers are `telegram`, `telegram-parilka`, `github`, and `conte
 
 MCP tools are exposed lazily through `mcp_list_tools` and `mcp_call`, so large external tool inventories do
 not inflate every model request.
+Use `tool_search` with `query`, `server`, `namespace`, `risk`, and capped `include_schema` when the model needs a specific native or MCP tool.
 
 ## Codex / GPT subscription mode
 

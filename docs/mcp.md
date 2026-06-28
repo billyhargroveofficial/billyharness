@@ -57,6 +57,18 @@ Status shows config files, allowlist, native tools, server state, transport, com
 
 States include `connected`, `reconnected`, `failed`, `crashed`, `restarting`, `disabled`, `disconnected`, and `unsupported`.
 
+## Tool Discovery
+
+MCP tools are discovered lazily. The model sees `tool_search`, `mcp_list_tools`, and `mcp_call`, not every connected MCP tool.
+
+Use `tool_search` to find native and MCP tools with compact call hints:
+
+```json
+{"query":"repositories","server":"github","namespace":"mcp.github","risk":"external","include_schema":true,"max_schema_tokens":1200}
+```
+
+Filters include `server`, `namespace`, `risk`, `query`, and `include_schema`. Schema output is capped by `max_schema_tokens`; over-budget schemas are omitted with `schema_omitted` instead of returning broken partial JSON. Responses include discovery metrics such as scanned native/MCP tools, returned matches, included schema count, omitted schema count, and estimated schema tokens.
+
 ## Remote MCP
 
 Stdio MCP is supported today. Streamable HTTP MCP config is parsed and surfaced as `unsupported` instead of silently failing.
