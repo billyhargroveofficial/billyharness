@@ -364,7 +364,7 @@ func TestToolBlocksAreOneLineByDefault(t *testing.T) {
 	}
 }
 
-func TestToolResultsUpdateMatchingBlockByCallID(t *testing.T) {
+func TestToolResultsUpdateMatchingBlockByCallIDOutOfOrder(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 120
 	m.toolView = "expanded"
@@ -385,8 +385,8 @@ func TestToolResultsUpdateMatchingBlockByCallID(t *testing.T) {
 		},
 	})
 
-	m.applyEvent(protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{CallID: "call-a", Name: "fs_read_file", Content: "alpha"}})
 	m.applyEvent(protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{CallID: "call-b", Name: "fs_read_file", Content: "beta"}})
+	m.applyEvent(protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{CallID: "call-a", Name: "fs_read_file", Content: "alpha"}})
 
 	if len(m.blocks) != 2 {
 		t.Fatalf("blocks = %d, want 2", len(m.blocks))

@@ -164,7 +164,7 @@ Purpose: centralize permission, attempt, retry, cancellation, audit, output refs
   - [x] output token estimate
   - [x] truncation status
   - [x] output ref id/path/hash when applicable
-- [ ] Ensure parallel batches update each call by `call_id`.
+- [x] Ensure parallel batches update each call by `call_id`.
 - [x] Ensure cancellation stops in-flight local operations where possible and records abort events.
 
 Acceptance:

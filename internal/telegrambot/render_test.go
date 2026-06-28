@@ -394,6 +394,34 @@ func TestToolProgressUpdatesToolLineOnFinish(t *testing.T) {
 	}
 }
 
+func TestToolProgressUpdatesOutOfOrderByCallID(t *testing.T) {
+	progress := NewToolProgress()
+	renderer := NewRenderer()
+	for _, call := range []protocol.ToolCall{
+		{ID: "call-a", Name: "fs_read_file", Arguments: []byte(`{"path":"a.txt"}`)},
+		{ID: "call-b", Name: "fs_read_file", Arguments: []byte(`{"path":"b.txt"}`)},
+	} {
+		for _, event := range renderer.Apply(protocol.Event{Type: protocol.EventToolCallRequested, Data: call}) {
+			progress.Add(event)
+		}
+	}
+	for _, result := range []protocol.ToolResult{
+		{CallID: "call-b", Name: "fs_read_file", Content: "beta"},
+		{CallID: "call-a", Name: "fs_read_file", Content: "alpha"},
+	} {
+		for _, event := range renderer.Apply(protocol.Event{Type: protocol.EventToolCallFinished, Data: result}) {
+			progress.Add(event)
+		}
+	}
+	html := progress.HTML()
+	if strings.Count(html, "•") != 2 || strings.Count(html, "✅") != 2 || strings.Contains(html, "⏳") {
+		t.Fatalf("tool lines should update in place, html=%q", html)
+	}
+	if !strings.Contains(html, "a.txt") || !strings.Contains(html, "b.txt") {
+		t.Fatalf("tool lines lost call summaries: %q", html)
+	}
+}
+
 func TestToolResultsDoNotRenderFullPayload(t *testing.T) {
 	rendered := NewRenderer().Apply(protocol.Event{
 		Type: protocol.EventToolCallFinished,

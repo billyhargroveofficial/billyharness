@@ -695,6 +695,83 @@ func TestRunMessagesExecutesParallelSafeToolsConcurrentlyAndPreservesOrder(t *te
 	}
 }
 
+func TestRunMessagesParallelBatchCompletesOutOfOrderWithCallIDs(t *testing.T) {
+	cfg := config.Default()
+	cfg.MaxToolRounds = 3
+	cfg.MaxParallelTools = 2
+	registry := tools.NewRegistry(cfg)
+	if err := registry.Register(tools.Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "slow_first",
+			Description: "Slow read-only test tool.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+			Risk:        protocol.RiskReadOnly,
+		},
+		Handler: func(context.Context, json.RawMessage) (tools.Result, error) {
+			time.Sleep(50 * time.Millisecond)
+			return tools.Result{Content: "alpha"}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(tools.Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "fast_second",
+			Description: "Fast read-only test tool.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+			Risk:        protocol.RiskReadOnly,
+		},
+		Handler: func(context.Context, json.RawMessage) (tools.Result, error) {
+			return tools.Result{Content: "beta"}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call-a", ToolName: "slow_first", ArgsDelta: `{}`},
+			{Kind: provider.EventToolCallDelta, ToolIndex: 1, ToolID: "call-b", ToolName: "fast_second", ArgsDelta: `{}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "finished"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	a := New(cfg, prov, registry)
+	var events []protocol.Event
+	next, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "run tools"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var completed []string
+	for _, event := range events {
+		step, ok := stepEvent(event, protocol.EventStepCompleted)
+		if ok && step.Kind == protocol.StepKindToolCall {
+			completed = append(completed, step.ToolCallID)
+		}
+	}
+	if len(completed) != 2 || completed[0] != "call-b" || completed[1] != "call-a" {
+		t.Fatalf("tool completion call_id order = %#v; events=%#v", completed, events)
+	}
+	var toolMessages []protocol.Message
+	for _, msg := range next {
+		if msg.Role == protocol.RoleTool && (msg.ToolCallID == "call-a" || msg.ToolCallID == "call-b") {
+			toolMessages = append(toolMessages, msg)
+		}
+	}
+	if len(toolMessages) != 2 ||
+		toolMessages[0].ToolCallID != "call-a" || toolMessages[0].Content != "alpha" ||
+		toolMessages[1].ToolCallID != "call-b" || toolMessages[1].Content != "beta" {
+		t.Fatalf("tool message order/content = %#v", toolMessages)
+	}
+}
+
 func TestRunMessagesExclusiveToolBreaksParallelBatches(t *testing.T) {
 	cfg := config.Default()
 	cfg.MaxToolRounds = 3
