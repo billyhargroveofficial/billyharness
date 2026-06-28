@@ -26,6 +26,7 @@ type Options struct {
 	Profile          string
 	ReasoningEffort  string
 	MaxToolRounds    int
+	ContextWindow    int64
 	PollTimeoutSec   int
 	EditInterval     time.Duration
 	AllowedChatIDs   map[int64]bool
@@ -176,7 +177,7 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 		log.Printf("telegram initial send: %v", err)
 		return
 	}
-	renderer := NewRenderer()
+	renderer := NewRendererWithContextWindow(b.opts.ContextWindow)
 	tools := NewToolProgress()
 	var renderMu sync.Mutex
 	answerDirty := true
@@ -257,7 +258,7 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 			state.UpdatedAt = time.Now().UTC()
 			b.setChatState(key, state)
 			renderMu.Lock()
-			renderer = NewRenderer()
+			renderer = NewRendererWithContextWindow(b.opts.ContextWindow)
 			tools = NewToolProgress()
 			answerDirty = true
 			renderMu.Unlock()
@@ -678,6 +679,7 @@ func StatusHTML(state ChatState, opts Options) string {
 		"model: <code>" + esc(fallback(state.Model, opts.Model)) + "</code>\n" +
 		"profile: <code>" + esc(fallback(state.Profile, opts.Profile)) + "</code>\n" +
 		"reasoning: <code>" + esc(fallback(state.ReasoningEffort, opts.ReasoningEffort)) + "</code>\n" +
+		"context window: <code>" + esc(compactInt(opts.ContextWindow)) + "</code>\n" +
 		"send: <code>" + esc(fmt.Sprint(opts.SendEnabled && !opts.DryRunDefault)) + "</code>\n" +
 		"allowed chats: <code>" + esc(strings.Join(allowedChats, ",")) + "</code>\n" +
 		"allowed users: <code>" + esc(strings.Join(allowedUsers, ",")) + "</code>"

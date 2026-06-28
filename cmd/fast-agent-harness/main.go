@@ -261,6 +261,7 @@ func telegramCmd(args []string) error {
 		Profile:          config.NormalizeProfileName(*profile),
 		ReasoningEffort:  strings.ToLower(strings.TrimSpace(*reasoning)),
 		MaxToolRounds:    *maxRounds,
+		ContextWindow:    cfg.ContextWindowTokens,
 		PollTimeoutSec:   *pollTimeout,
 		EditInterval:     time.Duration(*editIntervalMS) * time.Millisecond,
 		AllowedChatIDs:   allowed,

@@ -31,6 +31,7 @@ type Config struct {
 	MaxToolRounds          int
 	MaxParallelTools       int
 	ProviderMaxRetries     int
+	ContextWindowTokens    int64
 	ContextCompactTokens   int
 	ContextCompactKeep     int
 	ContextCompactMaxChars int
@@ -89,6 +90,7 @@ func Default() Config {
 		MaxToolRounds:          envInt("FAST_AGENT_MAX_TOOL_ROUNDS", 100),
 		MaxParallelTools:       envInt("FAST_AGENT_MAX_PARALLEL_TOOLS", 4),
 		ProviderMaxRetries:     envInt("FAST_AGENT_PROVIDER_MAX_RETRIES", 2),
+		ContextWindowTokens:    int64(envInt("FAST_AGENT_CONTEXT_WINDOW_TOKENS", 1_000_000)),
 		ContextCompactTokens:   envInt("FAST_AGENT_CONTEXT_COMPACT_TOKENS", 600_000),
 		ContextCompactKeep:     envInt("FAST_AGENT_CONTEXT_COMPACT_KEEP", 32),
 		ContextCompactMaxChars: envInt("FAST_AGENT_CONTEXT_COMPACT_MAX_CHARS", 120_000),
@@ -136,9 +138,13 @@ func (c *Config) ApplyBillySettingsDefaults() {
 		LastReasoningKind   string `json:"last_reasoning_kind"`
 		LastReasoningEffort string `json:"last_reasoning_effort"`
 		LastProfile         string `json:"last_profile"`
+		ContextWindowTokens int64  `json:"context_window_tokens"`
 	}
 	if err := json.Unmarshal(body, &settings); err != nil {
 		return
+	}
+	if os.Getenv("FAST_AGENT_CONTEXT_WINDOW_TOKENS") == "" && settings.ContextWindowTokens > 0 {
+		c.ContextWindowTokens = settings.ContextWindowTokens
 	}
 	if os.Getenv("FAST_AGENT_MODEL") == "" && strings.TrimSpace(settings.LastSelectedModel) != "" {
 		c.Model = strings.TrimSpace(settings.LastSelectedModel)

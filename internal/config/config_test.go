@@ -41,6 +41,9 @@ func TestDefaultRuntimeLimits(t *testing.T) {
 	if cfg.ContextCompactTokens != 600_000 {
 		t.Fatalf("ContextCompactTokens = %d, want 600000", cfg.ContextCompactTokens)
 	}
+	if cfg.ContextWindowTokens != 1_000_000 {
+		t.Fatalf("ContextWindowTokens = %d, want 1000000", cfg.ContextWindowTokens)
+	}
 	if cfg.ContextCompactKeep != 32 {
 		t.Fatalf("ContextCompactKeep = %d, want 32", cfg.ContextCompactKeep)
 	}
@@ -70,16 +73,21 @@ func TestDefaultReadsBillySettingsModelWhenEnvIsUnset(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", root)
 	t.Setenv("FAST_AGENT_MODEL", "")
+	t.Setenv("FAST_AGENT_CONTEXT_WINDOW_TOKENS", "")
 	if err := os.WriteFile(filepath.Join(root, "settings.json"), []byte(`{
   "last_selected_model": "gpt-5.5",
   "last_reasoning_kind": "enabled",
-  "last_reasoning_effort": "xhigh"
+  "last_reasoning_effort": "xhigh",
+  "context_window_tokens": 777000
 }`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := Default()
 	if cfg.Model != "gpt-5.5" || cfg.Provider != "openai-codex" || cfg.ReasoningEffort != "xhigh" {
 		t.Fatalf("cfg = %#v", cfg)
+	}
+	if cfg.ContextWindowTokens != 777000 {
+		t.Fatalf("ContextWindowTokens = %d, want 777000", cfg.ContextWindowTokens)
 	}
 }
 

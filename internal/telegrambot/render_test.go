@@ -39,7 +39,7 @@ func TestRendererFinalChunksAreTelegramSizedAndEscaped(t *testing.T) {
 }
 
 func TestRendererProviderUsageDeduplicatesCumulativeSnapshots(t *testing.T) {
-	r := NewRenderer()
+	r := NewRendererWithContextWindow(1000)
 	r.Apply(protocol.Event{Type: protocol.EventRunStarted})
 	r.Apply(protocol.Event{Type: protocol.EventModelCallStarted})
 	r.Apply(protocol.Event{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
@@ -67,6 +67,34 @@ func TestRendererProviderUsageDeduplicatesCumulativeSnapshots(t *testing.T) {
 	if r.InputTokens != 230 || r.OutputTokens != 45 || r.CacheHit != 160 || r.CacheMiss != 70 || r.Reasoning != 9 {
 		t.Fatalf("usage totals = in:%d out:%d hit:%d miss:%d reasoning:%d",
 			r.InputTokens, r.OutputTokens, r.CacheHit, r.CacheMiss, r.Reasoning)
+	}
+	if r.LastInputTokens != 230 || r.LastOutputTokens != 45 {
+		t.Fatalf("last context usage = in:%d out:%d", r.LastInputTokens, r.LastOutputTokens)
+	}
+	if footer := r.footerLine(); !strings.Contains(footer, "🪟 ctx 275/1.0k 28%") {
+		t.Fatalf("footer missing context usage: %q", footer)
+	}
+}
+
+func TestRendererContextShowsLastModelCallNotCumulativeSpend(t *testing.T) {
+	r := NewRendererWithContextWindow(10_000)
+	r.Apply(protocol.Event{Type: protocol.EventRunStarted})
+	r.Apply(protocol.Event{Type: protocol.EventModelCallStarted})
+	r.Apply(protocol.Event{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
+		"input_tokens":  1000,
+		"output_tokens": 100,
+	}})
+	r.Apply(protocol.Event{Type: protocol.EventModelCallStarted})
+	r.Apply(protocol.Event{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
+		"input_tokens":  1300,
+		"output_tokens": 200,
+	}})
+
+	footer := r.footerLine()
+	for _, want := range []string{"📥 2.3k 📤 300", "🪟 ctx 1.5k/10.0k 15%"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("footer missing %q: %q", want, footer)
+		}
 	}
 }
 

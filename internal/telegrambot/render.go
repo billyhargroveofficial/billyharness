@@ -16,25 +16,29 @@ import (
 
 const telegramLimit = 4096
 const telegramRichLimit = 32768
+const defaultContextWindowTokens = 1_000_000
 
 type Renderer struct {
-	Content         strings.Builder
-	ThinkingChars   int
-	ModelCalls      int
-	ToolCalls       int
-	InputTokens     int64
-	OutputTokens    int64
-	CacheHit        int64
-	CacheMiss       int64
-	Reasoning       int64
-	ToolSummaryIn   int64
-	ToolSummaryOut  int64
-	ToolSummaryAPI  int64
-	usageAccounting usageAccumulator
-	Started         time.Time
-	LastError       string
-	Done            bool
-	toolSummaries   map[string]string
+	Content          strings.Builder
+	ThinkingChars    int
+	ModelCalls       int
+	ToolCalls        int
+	InputTokens      int64
+	OutputTokens     int64
+	LastInputTokens  int64
+	LastOutputTokens int64
+	CacheHit         int64
+	CacheMiss        int64
+	Reasoning        int64
+	ToolSummaryIn    int64
+	ToolSummaryOut   int64
+	ToolSummaryAPI   int64
+	ContextWindow    int64
+	usageAccounting  usageAccumulator
+	Started          time.Time
+	LastError        string
+	Done             bool
+	toolSummaries    map[string]string
 }
 
 type RenderEvent struct {
@@ -45,7 +49,18 @@ type RenderEvent struct {
 }
 
 func NewRenderer() *Renderer {
-	return &Renderer{Started: time.Now(), toolSummaries: map[string]string{}}
+	return NewRendererWithContextWindow(defaultContextWindowTokens)
+}
+
+func NewRendererWithContextWindow(contextWindow int64) *Renderer {
+	if contextWindow <= 0 {
+		contextWindow = defaultContextWindowTokens
+	}
+	return &Renderer{
+		Started:       time.Now(),
+		ContextWindow: contextWindow,
+		toolSummaries: map[string]string{},
+	}
 }
 
 func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
@@ -76,8 +91,11 @@ func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
 		return []RenderEvent{{Kind: "tool", Title: "Tool", Body: summary, Key: key}}
 	case protocol.EventProviderUsageUpdate:
 		delta := r.usageAccounting.Apply(usage(event.Data))
+		current := r.usageAccounting.Current()
 		r.InputTokens += delta.InputTokens
 		r.OutputTokens += delta.OutputTokens
+		r.LastInputTokens = current.InputTokens
+		r.LastOutputTokens = current.OutputTokens
 		r.CacheHit += delta.CacheHitTokens
 		r.CacheMiss += delta.CacheMissTokens
 		r.Reasoning += delta.ReasoningTokens
@@ -184,6 +202,9 @@ func (r *Renderer) footerLine() string {
 	if r.InputTokens+r.OutputTokens > 0 {
 		parts = append(parts, fmt.Sprintf("📥 %s 📤 %s", compactInt(r.InputTokens), compactInt(r.OutputTokens)))
 	}
+	if context := r.contextLine(); context != "" {
+		parts = append(parts, context)
+	}
 	if r.CacheHit+r.CacheMiss > 0 {
 		parts = append(parts, fmt.Sprintf("💾 hit %s miss %s", compactInt(r.CacheHit), compactInt(r.CacheMiss)))
 	}
@@ -201,6 +222,17 @@ func (r *Renderer) footerLine() string {
 		return "⚡ streaming"
 	}
 	return strings.Join(parts, " · ")
+}
+
+func (r *Renderer) contextLine() string {
+	used := r.LastInputTokens + r.LastOutputTokens
+	if used <= 0 {
+		return ""
+	}
+	if r.ContextWindow <= 0 {
+		return "🪟 ctx " + compactInt(used)
+	}
+	return fmt.Sprintf("🪟 ctx %s/%s %s", compactInt(used), compactInt(r.ContextWindow), percentText(used, r.ContextWindow))
 }
 
 func ToolMessageHTML(event RenderEvent) string {
@@ -896,6 +928,13 @@ func (a *usageAccumulator) Apply(update tokenUsage) tokenUsage {
 	return update
 }
 
+func (a usageAccumulator) Current() tokenUsage {
+	if !a.hasLast {
+		return tokenUsage{}
+	}
+	return a.last
+}
+
 func (u tokenUsage) zero() bool {
 	return u == tokenUsage{}
 }
@@ -933,6 +972,17 @@ func compactInt(value int64) string {
 		return fmt.Sprintf("%.1fk", float64(value)/1000)
 	}
 	return fmt.Sprint(value)
+}
+
+func percentText(used, window int64) string {
+	if window <= 0 {
+		return "0%"
+	}
+	percent := float64(used) / float64(window) * 100
+	if percent < 10 {
+		return fmt.Sprintf("%.1f%%", percent)
+	}
+	return fmt.Sprintf("%.0f%%", percent)
 }
 
 func statusEmoji(state string) string {
