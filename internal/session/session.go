@@ -10,6 +10,24 @@ import (
 
 var ErrBusy = errors.New("session run already active")
 
+type InputPolicy string
+
+const (
+	InputPolicyRejectWhileActive InputPolicy = "reject_while_active"
+)
+
+type Options struct {
+	InputPolicy InputPolicy
+}
+
+type InputDecision struct {
+	Policy   InputPolicy
+	Accepted bool
+	Queued   bool
+	Running  bool
+	Reason   string
+}
+
 type Runner interface {
 	RunMessages(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error)
 }
@@ -21,14 +39,23 @@ func (f RunnerFunc) RunMessages(ctx context.Context, messages []protocol.Message
 }
 
 type Session struct {
-	mu       sync.Mutex
-	messages []protocol.Message
-	cancel   context.CancelFunc
-	running  bool
+	mu          sync.Mutex
+	messages    []protocol.Message
+	cancel      context.CancelFunc
+	running     bool
+	inputPolicy InputPolicy
 }
 
 func New(messages []protocol.Message) *Session {
-	return &Session{messages: cloneMessages(messages)}
+	return NewWithOptions(messages, Options{})
+}
+
+func NewWithOptions(messages []protocol.Message, opts Options) *Session {
+	policy := opts.InputPolicy
+	if policy == "" {
+		policy = InputPolicyRejectWhileActive
+	}
+	return &Session{messages: cloneMessages(messages), inputPolicy: policy}
 }
 
 func (s *Session) Messages() []protocol.Message {
@@ -43,6 +70,12 @@ func (s *Session) Running() bool {
 	return s.running
 }
 
+func (s *Session) InputPolicy() InputPolicy {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inputPolicy
+}
+
 func (s *Session) Run(ctx context.Context, runner Runner, prompt string, emit func(protocol.Event)) error {
 	if runner == nil {
 		return errors.New("session runner is nil")
@@ -51,8 +84,8 @@ func (s *Session) Run(ctx context.Context, runner Runner, prompt string, emit fu
 		emit = func(protocol.Event) {}
 	}
 	runCtx, cancel := context.WithCancel(ctx)
-	base, ok := s.startRun(cancel)
-	if !ok {
+	base, decision := s.startRun(cancel)
+	if !decision.Accepted {
 		cancel()
 		return ErrBusy
 	}
@@ -73,15 +106,19 @@ func (s *Session) Cancel() bool {
 	return true
 }
 
-func (s *Session) startRun(cancel context.CancelFunc) ([]protocol.Message, bool) {
+func (s *Session) startRun(cancel context.CancelFunc) ([]protocol.Message, InputDecision) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	decision := InputDecision{Policy: s.inputPolicy, Running: s.running}
 	if s.running {
-		return nil, false
+		decision.Reason = "active_run"
+		return nil, decision
 	}
 	s.running = true
 	s.cancel = cancel
-	return cloneMessages(s.messages), true
+	decision.Accepted = true
+	decision.Reason = "idle"
+	return cloneMessages(s.messages), decision
 }
 
 func (s *Session) finishRun(next, fallback []protocol.Message) {

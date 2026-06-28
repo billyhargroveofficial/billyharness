@@ -118,9 +118,9 @@ Purpose: turn the current loop into a real, replayable runtime without losing sp
   - [x] profile/instruction hash
   - [x] dangerous permission mode
 - [ ] Add input queue semantics:
-  - [ ] immediate run if idle
-  - [ ] reject or queue while active, based on policy
-  - [ ] cancel active run
+  - [x] immediate run if idle
+  - [x] reject or queue while active, based on policy
+  - [x] cancel active run
   - [ ] steer/follow-up after current model step, later if needed
 
 Acceptance:

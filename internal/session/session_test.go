@@ -35,6 +35,9 @@ func TestRunPreservesHistoryAcrossPrompts(t *testing.T) {
 
 func TestRunReturnsBusyForConcurrentRun(t *testing.T) {
 	s := New([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	if s.InputPolicy() != InputPolicyRejectWhileActive {
+		t.Fatalf("input policy = %q", s.InputPolicy())
+	}
 	started := make(chan struct{})
 	release := make(chan struct{})
 	runner := RunnerFunc(func(ctx context.Context, messages []protocol.Message, _ func(protocol.Event)) ([]protocol.Message, error) {
@@ -61,10 +64,26 @@ func TestRunReturnsBusyForConcurrentRun(t *testing.T) {
 	if !errors.Is(err, ErrBusy) {
 		t.Fatalf("second run error = %v, want ErrBusy", err)
 	}
+	_, decision := s.startRun(func() {})
+	if decision.Accepted || decision.Queued || !decision.Running || decision.Policy != InputPolicyRejectWhileActive || decision.Reason != "active_run" {
+		t.Fatalf("busy decision = %#v", decision)
+	}
 	close(release)
 	if err := <-done; err != nil {
 		t.Fatalf("first run error = %v", err)
 	}
+}
+
+func TestNewWithOptionsSetsInputPolicy(t *testing.T) {
+	s := NewWithOptions(nil, Options{InputPolicy: InputPolicyRejectWhileActive})
+	if s.InputPolicy() != InputPolicyRejectWhileActive {
+		t.Fatalf("input policy = %q", s.InputPolicy())
+	}
+	base, decision := s.startRun(func() {})
+	if !decision.Accepted || decision.Queued || decision.Running || decision.Reason != "idle" || base != nil {
+		t.Fatalf("idle decision=%#v base=%#v", decision, base)
+	}
+	s.finishRun(nil, nil)
 }
 
 func TestCancelStopsActiveRun(t *testing.T) {
