@@ -46,6 +46,7 @@ func TestCodexStreamSendsResponsesHeadersAndParsesEvents(t *testing.T) {
 			t.Fatalf("prompt_cache_key = %#v", payload["prompt_cache_key"])
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("openai-request-id", "codex-req-1")
 		_, _ = w.Write([]byte(strings.Join([]string{
 			`data: {"type":"response.output_text.delta","delta":"ok"}`,
 			``,
@@ -79,7 +80,15 @@ func TestCodexStreamSendsResponsesHeadersAndParsesEvents(t *testing.T) {
 	if !sawRequest {
 		t.Fatal("server did not see request")
 	}
-	if len(got) != 3 || got[0].Kind != EventContent || got[0].Text != "ok" || got[1].Kind != EventUsage || got[2].Kind != EventDone {
+	if len(got) != 4 ||
+		got[0].Kind != EventRequestMetadata ||
+		got[0].Request.ProviderID != "openai-codex" ||
+		got[0].Request.ModelID != "gpt-5.5" ||
+		got[0].Request.ProviderRequestID != "codex-req-1" ||
+		got[1].Kind != EventContent ||
+		got[1].Text != "ok" ||
+		got[2].Kind != EventUsage ||
+		got[3].Kind != EventDone {
 		t.Fatalf("events = %#v", got)
 	}
 }
@@ -222,6 +231,7 @@ func TestCodexStreamRefreshesAfterUnauthorizedResponse(t *testing.T) {
 				return
 			}
 			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("openai-request-id", "codex-req-2")
 			_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n"))
 			_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{}}\n\n"))
 		default:
@@ -241,9 +251,13 @@ func TestCodexStreamRefreshesAfterUnauthorizedResponse(t *testing.T) {
 		},
 		Client: server.Client(),
 	}
-	events, errs := c.Stream(context.Background(), Request{Model: "gpt-5.5", Messages: []protocol.Message{{Role: protocol.RoleUser, Content: "ping"}}})
+	events, errs := c.Stream(context.Background(), Request{RequestID: "local-codex-request", Model: "gpt-5.5", Messages: []protocol.Message{{Role: protocol.RoleUser, Content: "ping"}}})
 	var content string
+	var meta RequestMetadata
 	for event := range events {
+		if event.Kind == EventRequestMetadata {
+			meta = event.Request
+		}
 		if event.Kind == EventContent {
 			content += event.Text
 		}
@@ -256,6 +270,10 @@ func TestCodexStreamRefreshesAfterUnauthorizedResponse(t *testing.T) {
 	}
 	if len(sawAuthorization) != 2 || sawAuthorization[0] == sawAuthorization[1] {
 		t.Fatalf("authorization headers = %#v", sawAuthorization)
+	}
+	if meta.RequestID != "local-codex-request" || meta.ProviderID != "openai-codex" || meta.ModelID != "gpt-5.5" ||
+		meta.ProviderRequestID != "codex-req-2" || meta.Attempts != 2 || meta.Retries != 1 || meta.StatusCode != http.StatusOK {
+		t.Fatalf("metadata = %#v", meta)
 	}
 }
 

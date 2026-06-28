@@ -18,6 +18,7 @@ import (
 )
 
 type Request struct {
+	RequestID   string
 	Model       string
 	Messages    []protocol.Message
 	Tools       []protocol.ToolSpec
@@ -32,6 +33,16 @@ type Usage struct {
 	ReasoningTokens int64 `json:"reasoning_tokens,omitempty"`
 }
 
+type RequestMetadata struct {
+	RequestID         string `json:"request_id,omitempty"`
+	ProviderID        string `json:"provider_id,omitempty"`
+	ModelID           string `json:"model_id,omitempty"`
+	ProviderRequestID string `json:"provider_request_id,omitempty"`
+	Attempts          int    `json:"attempts,omitempty"`
+	Retries           int    `json:"retries,omitempty"`
+	StatusCode        int    `json:"status_code,omitempty"`
+}
+
 type EventKind int
 
 const (
@@ -39,6 +50,7 @@ const (
 	EventReasoning
 	EventToolCallDelta
 	EventUsage
+	EventRequestMetadata
 	EventDone
 )
 
@@ -50,6 +62,7 @@ type Event struct {
 	ToolName  string
 	ArgsDelta string
 	Usage     Usage
+	Request   RequestMetadata
 }
 
 type Provider interface {
@@ -168,7 +181,8 @@ func (d *DeepSeek) stream(ctx context.Context, req Request, events chan<- Event)
 	}
 	var resp *http.Response
 	var respCancel context.CancelFunc
-	err = withProviderRetry(ctx, d.MaxRetries, func(int) error {
+	var meta RequestMetadata
+	err = withProviderRetry(ctx, d.MaxRetries, func(attempt int) error {
 		reqCtx, finishSetup, cancelReq := newRequestSetupContext(ctx, d.RequestTimeout)
 		attemptReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, d.BaseURL+"/chat/completions", bytes.NewReader(body))
 		if err != nil {
@@ -198,6 +212,15 @@ func (d *DeepSeek) stream(ctx context.Context, req Request, events chan<- Event)
 		}
 		resp = attemptResp
 		respCancel = cancelReq
+		meta = RequestMetadata{
+			RequestID:         req.RequestID,
+			ProviderID:        modelinfo.ProviderDeepSeek,
+			ModelID:           req.Model,
+			ProviderRequestID: firstHeader(attemptResp.Header, "x-request-id", "request-id", "openai-request-id"),
+			Attempts:          attempt + 1,
+			Retries:           attempt,
+			StatusCode:        attemptResp.StatusCode,
+		}
 		return nil
 	})
 	if err != nil {
@@ -207,6 +230,9 @@ func (d *DeepSeek) stream(ctx context.Context, req Request, events chan<- Event)
 		defer respCancel()
 	}
 	defer resp.Body.Close()
+	if err := sendEvent(ctx, events, Event{Kind: EventRequestMetadata, Request: meta}); err != nil {
+		return err
+	}
 	return parseSSE(ctx, resp.Body, d.StreamIdleTimeout, events)
 }
 

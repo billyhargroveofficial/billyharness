@@ -70,9 +70,30 @@ func TestRunMessagesEmitsTypedTurnAndModelStepEvents(t *testing.T) {
 	if !ok || modelStarted.StepID != "turn-001:model-call-001" || modelStarted.Status != protocol.StepStatusStarted || modelStarted.MessageCount != 2 {
 		t.Fatalf("model step started = %#v ok=%v", modelStarted, ok)
 	}
+	callStarted, ok := firstEventData(events, protocol.EventModelCallStarted)
+	if !ok || callStarted["request_id"] == "" || callStarted["provider_id"] != "mock" || callStarted["model_id"] != "mock" || callStarted["status"] != protocol.StepStatusStarted {
+		t.Fatalf("model call started = %#v ok=%v", callStarted, ok)
+	}
+	callFinished, ok := firstEventData(events, protocol.EventModelCallFinished)
+	if !ok ||
+		callFinished["request_id"] != callStarted["request_id"] ||
+		callFinished["provider_id"] != "mock" ||
+		callFinished["model_id"] != "mock" ||
+		callFinished["provider_request_id"] != "mock-request" ||
+		callFinished["status"] != protocol.StepStatusCompleted ||
+		callFinished["retries"] == nil ||
+		callFinished["first_delta_ms"] == nil ||
+		callFinished["total_latency_ms"] == nil ||
+		callFinished["input_tokens"] == nil ||
+		callFinished["output_tokens"] == nil {
+		t.Fatalf("model call finished = %#v ok=%v", callFinished, ok)
+	}
 	modelCompleted, ok := firstStepEvent(events, protocol.EventStepCompleted, protocol.StepKindModelCall)
 	if _, hasFirstDelta := modelCompleted.Metadata["first_delta_ms"]; !ok || modelCompleted.StepID != modelStarted.StepID || modelCompleted.Status != protocol.StepStatusCompleted || modelCompleted.Metadata["tool_call_count"] == nil || !hasFirstDelta {
 		t.Fatalf("model step completed = %#v ok=%v", modelCompleted, ok)
+	}
+	if modelCompleted.Metadata["request_id"] != callStarted["request_id"] || modelCompleted.Metadata["input_tokens"] == nil {
+		t.Fatalf("model step metadata missing request/usage: %#v", modelCompleted.Metadata)
 	}
 }
 
@@ -839,12 +860,22 @@ type captureProvider struct {
 
 func (p *captureProvider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, <-chan error) {
 	p.messages = append([]protocol.Message(nil), req.Messages...)
-	events := make(chan provider.Event, 2)
+	events := make(chan provider.Event, 4)
 	errs := make(chan error, 1)
 	go func() {
 		defer close(events)
 		defer close(errs)
+		events <- provider.Event{Kind: provider.EventRequestMetadata, Request: provider.RequestMetadata{
+			RequestID:         req.RequestID,
+			ProviderID:        "mock",
+			ModelID:           req.Model,
+			ProviderRequestID: "mock-request",
+			Attempts:          1,
+			Retries:           0,
+			StatusCode:        200,
+		}}
 		events <- provider.Event{Kind: provider.EventContent, Text: "done"}
+		events <- provider.Event{Kind: provider.EventUsage, Usage: provider.Usage{InputTokens: 12, OutputTokens: 3, CacheHitTokens: 7, CacheMissTokens: 5}}
 		events <- provider.Event{Kind: provider.EventDone}
 	}()
 	return events, errs
@@ -983,6 +1014,15 @@ func eventIndex(events []protocol.Event, typ protocol.EventType) int {
 		}
 	}
 	return -1
+}
+
+func firstEventData(events []protocol.Event, typ protocol.EventType) (map[string]any, bool) {
+	for _, event := range events {
+		if event.Type == typ {
+			return eventDataMap(event), true
+		}
+	}
+	return nil, false
 }
 
 func eventDataMap(event protocol.Event) map[string]any {

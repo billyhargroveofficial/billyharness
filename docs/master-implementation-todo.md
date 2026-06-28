@@ -284,14 +284,14 @@ Acceptance:
   - [x] default summary model
   - [x] pricing if known/configured
 - [x] Add provider capability tests.
-- [ ] Add provider request metadata events:
-  - [ ] request id
-  - [ ] provider id
-  - [ ] model id
-  - [ ] retries
-  - [ ] first delta latency
-  - [ ] total latency
-  - [ ] usage fields
+- [x] Add provider request metadata events:
+  - [x] request id
+  - [x] provider id
+  - [x] model id
+  - [x] retries
+  - [x] first delta latency
+  - [x] total latency
+  - [x] usage fields
 
 Acceptance:
 

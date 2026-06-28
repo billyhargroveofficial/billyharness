@@ -16,6 +16,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/instructions"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
@@ -79,6 +80,9 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 			MessageCount: len(messages),
 		}})
 		modelStepID := agentStepID(turnID, protocol.StepKindModelCall, 1)
+		requestID := agentRequestID(turnID, roundNum)
+		toolSpecs := a.tools.Specs()
+		modelCallBase := a.modelCallMetadata(requestID, roundNum, len(messages), len(toolSpecs))
 		modelStarted := time.Now()
 		emit(protocol.Event{Type: protocol.EventStepStarted, Data: protocol.StepEvent{
 			TurnID:       turnID,
@@ -88,21 +92,25 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 			Status:       protocol.StepStatusStarted,
 			Name:         a.cfg.Model,
 			MessageCount: len(messages),
+			Metadata:     copyMap(modelCallBase),
 		}})
 		emit(protocol.Event{
 			Type:   protocol.EventModelCallStarted,
 			TurnID: turnID,
 			StepID: modelStepID,
-			Data:   map[string]any{"round": roundNum},
+			Data:   modelCallEventData(modelCallBase, protocol.StepStatusStarted, -1, -1, provider.Usage{}, provider.RequestMetadata{}, ""),
 		})
 		events, errs := a.provider.Stream(ctx, provider.Request{
-			Model:    a.cfg.Model,
-			Messages: messages,
-			Tools:    a.tools.Specs(),
+			RequestID: requestID,
+			Model:     a.cfg.Model,
+			Messages:  messages,
+			Tools:     toolSpecs,
 		})
 		var content string
 		var reasoning string
 		var firstDeltaAt time.Time
+		var lastUsage provider.Usage
+		var requestMeta provider.RequestMetadata
 		var acc provider.ToolAccumulator
 		for event := range events {
 			switch event.Kind {
@@ -134,16 +142,25 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 				if event.Usage.InputTokens > 0 {
 					lastPromptTokens = event.Usage.InputTokens
 				}
+				lastUsage = event.Usage
 				emit(protocol.Event{
 					Type:   protocol.EventProviderUsageUpdate,
 					TurnID: turnID,
 					StepID: modelStepID,
 					Data:   event.Usage,
 				})
+			case provider.EventRequestMetadata:
+				requestMeta = event.Request
 			case provider.EventDone:
 			}
 		}
 		if err := <-errs; err != nil {
+			emit(protocol.Event{
+				Type:   protocol.EventModelCallFinished,
+				TurnID: turnID,
+				StepID: modelStepID,
+				Data:   modelCallEventData(modelCallBase, protocol.StepStatusFailed, durationMS(modelStarted), firstDeltaLatencyMS(modelStarted, firstDeltaAt), lastUsage, requestMeta, err.Error()),
+			})
 			emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
 				TurnID:     turnID,
 				StepID:     modelStepID,
@@ -170,7 +187,7 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 			Type:   protocol.EventModelCallFinished,
 			TurnID: turnID,
 			StepID: modelStepID,
-			Data:   map[string]any{"round": roundNum},
+			Data:   modelCallEventData(modelCallBase, protocol.StepStatusCompleted, durationMS(modelStarted), firstDeltaLatencyMS(modelStarted, firstDeltaAt), lastUsage, requestMeta, ""),
 		})
 		calls, err := acc.Finish()
 		if err != nil {
@@ -200,6 +217,9 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 			"content_chars":   len(content),
 			"reasoning_chars": len(reasoning),
 			"tool_call_count": len(calls),
+		}
+		for key, value := range modelCallEventData(modelCallBase, protocol.StepStatusCompleted, durationMS(modelStarted), firstDeltaLatencyMS(modelStarted, firstDeltaAt), lastUsage, requestMeta, "") {
+			modelMetadata[key] = value
 		}
 		if !firstDeltaAt.IsZero() {
 			modelMetadata["first_delta_ms"] = elapsedMS(modelStarted, firstDeltaAt)
@@ -734,8 +754,86 @@ func agentAttemptID(turnID string, index int) string {
 	return fmt.Sprintf("%s:attempt-001", agentStepID(turnID, protocol.StepKindToolCall, index+1))
 }
 
+func agentRequestID(turnID string, round int) string {
+	return fmt.Sprintf("%s:provider-request-%03d", turnID, round)
+}
+
 func newAgentRunID() string {
 	return fmt.Sprintf("run-%s-%d", time.Now().UTC().Format("20060102T150405.000000000Z"), os.Getpid())
+}
+
+func (a *Agent) modelCallMetadata(requestID string, round, messageCount, toolCount int) map[string]any {
+	providerID := modelinfo.ProviderForModel(a.cfg.Model, a.cfg.Provider)
+	return map[string]any{
+		"request_id":    requestID,
+		"provider_id":   providerID,
+		"model_id":      a.cfg.Model,
+		"round":         round,
+		"message_count": messageCount,
+		"tool_count":    toolCount,
+		"reasoning":     a.cfg.ReasoningEffort,
+	}
+}
+
+func modelCallEventData(base map[string]any, status string, totalLatencyMS, firstDeltaMS int64, usage provider.Usage, meta provider.RequestMetadata, errText string) map[string]any {
+	data := copyMap(base)
+	data["status"] = status
+	if meta.RequestID != "" {
+		data["request_id"] = meta.RequestID
+	}
+	if meta.ProviderID != "" {
+		data["provider_id"] = meta.ProviderID
+	}
+	if meta.ModelID != "" {
+		data["model_id"] = meta.ModelID
+	}
+	if meta.ProviderRequestID != "" {
+		data["provider_request_id"] = meta.ProviderRequestID
+	}
+	if meta.Attempts > 0 {
+		data["attempts"] = meta.Attempts
+	}
+	if meta.Retries > 0 {
+		data["retries"] = meta.Retries
+	} else {
+		data["retries"] = 0
+	}
+	if meta.StatusCode > 0 {
+		data["status_code"] = meta.StatusCode
+	}
+	if totalLatencyMS >= 0 {
+		data["total_latency_ms"] = totalLatencyMS
+	}
+	if firstDeltaMS >= 0 {
+		data["first_delta_ms"] = firstDeltaMS
+	}
+	if usage.InputTokens > 0 {
+		data["input_tokens"] = usage.InputTokens
+	}
+	if usage.OutputTokens > 0 {
+		data["output_tokens"] = usage.OutputTokens
+	}
+	if usage.CacheHitTokens > 0 {
+		data["cache_hit_tokens"] = usage.CacheHitTokens
+	}
+	if usage.CacheMissTokens > 0 {
+		data["cache_miss_tokens"] = usage.CacheMissTokens
+	}
+	if usage.ReasoningTokens > 0 {
+		data["reasoning_tokens"] = usage.ReasoningTokens
+	}
+	if errText != "" {
+		data["error"] = errText
+	}
+	return data
+}
+
+func copyMap(src map[string]any) map[string]any {
+	dst := make(map[string]any, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
 }
 
 func durationMS(started time.Time) int64 {
@@ -750,6 +848,13 @@ func elapsedMS(started, ended time.Time) int64 {
 		return 0
 	}
 	return ended.Sub(started).Milliseconds()
+}
+
+func firstDeltaLatencyMS(started, firstDeltaAt time.Time) int64 {
+	if firstDeltaAt.IsZero() {
+		return -1
+	}
+	return elapsedMS(started, firstDeltaAt)
 }
 
 func (a *Agent) compactToolResult(index int, call protocol.ToolCall, out *protocol.ToolResult) {

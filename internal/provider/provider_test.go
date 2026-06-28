@@ -211,6 +211,7 @@ func TestDeepSeekStreamRetriesRateLimitBeforeStreaming(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("x-request-id", "deepseek-req-2")
 		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
@@ -225,11 +226,16 @@ func TestDeepSeekStreamRetriesRateLimitBeforeStreaming(t *testing.T) {
 		Client:            server.Client(),
 	}
 	events, errs := d.Stream(context.Background(), Request{
-		Model:    "deepseek-v4-flash",
-		Messages: []protocol.Message{{Role: protocol.RoleUser, Content: "ping"}},
+		RequestID: "local-request",
+		Model:     "deepseek-v4-flash",
+		Messages:  []protocol.Message{{Role: protocol.RoleUser, Content: "ping"}},
 	})
 	var content string
+	var meta RequestMetadata
 	for event := range events {
+		if event.Kind == EventRequestMetadata {
+			meta = event.Request
+		}
 		if event.Kind == EventContent {
 			content += event.Text
 		}
@@ -239,6 +245,10 @@ func TestDeepSeekStreamRetriesRateLimitBeforeStreaming(t *testing.T) {
 	}
 	if calls != 2 || content != "ok" {
 		t.Fatalf("calls=%d content=%q", calls, content)
+	}
+	if meta.RequestID != "local-request" || meta.ProviderID != "deepseek" || meta.ModelID != "deepseek-v4-flash" ||
+		meta.ProviderRequestID != "deepseek-req-2" || meta.Attempts != 2 || meta.Retries != 1 || meta.StatusCode != http.StatusOK {
+		t.Fatalf("metadata = %#v", meta)
 	}
 }
 

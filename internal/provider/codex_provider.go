@@ -68,7 +68,11 @@ func (c *Codex) stream(ctx context.Context, req Request, events chan<- Event) er
 	if err := c.ensureFreshAuth(ctx); err != nil {
 		return err
 	}
-	resp, respCancel, err := c.doResponsesWithRetry(ctx, body)
+	resp, respCancel, meta, err := c.doResponsesWithRetry(ctx, body, RequestMetadata{
+		RequestID:  req.RequestID,
+		ProviderID: "openai-codex",
+		ModelID:    req.Model,
+	})
 	if err != nil {
 		return err
 	}
@@ -76,30 +80,42 @@ func (c *Codex) stream(ctx context.Context, req Request, events chan<- Event) er
 		defer respCancel()
 	}
 	defer resp.Body.Close()
+	if err := sendEvent(ctx, events, Event{Kind: EventRequestMetadata, Request: meta}); err != nil {
+		return err
+	}
 	return parseResponsesSSE(ctx, resp.Body, c.StreamIdleTimeout, events)
 }
 
-func (c *Codex) doResponsesWithRetry(ctx context.Context, body []byte) (*http.Response, context.CancelFunc, error) {
+func (c *Codex) doResponsesWithRetry(ctx context.Context, body []byte, meta RequestMetadata) (*http.Response, context.CancelFunc, RequestMetadata, error) {
 	retriesUsed := 0
 	refreshedUnauthorized := false
+	attempts := 0
 	for {
+		attempts++
 		resp, respCancel, err := c.doResponsesRequest(ctx, body)
 		if err == nil {
-			return resp, respCancel, nil
+			meta.Attempts = attempts
+			meta.Retries = attempts - 1
+			if meta.Retries < retriesUsed {
+				meta.Retries = retriesUsed
+			}
+			meta.StatusCode = resp.StatusCode
+			meta.ProviderRequestID = firstHeader(resp.Header, "x-request-id", "request-id", "openai-request-id")
+			return resp, respCancel, meta, nil
 		}
 		refreshed, refreshErr := c.refreshAfterUnauthorized(ctx, err, refreshedUnauthorized)
 		if refreshErr != nil {
-			return nil, nil, refreshErr
+			return nil, nil, meta, refreshErr
 		}
 		if refreshed {
 			refreshedUnauthorized = true
 			continue
 		}
 		if !retryableProviderError(err) || retriesUsed >= c.MaxRetries {
-			return nil, nil, err
+			return nil, nil, meta, err
 		}
 		if sleepErr := sleepProviderRetry(ctx, providerRetryDelay(err, retriesUsed)); sleepErr != nil {
-			return nil, nil, sleepErr
+			return nil, nil, meta, sleepErr
 		}
 		retriesUsed++
 	}
