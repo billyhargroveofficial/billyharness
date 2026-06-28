@@ -754,7 +754,7 @@ Acceptance:
 
 ### 7.2 API Surface
 
-- [ ] Stabilize endpoints:
+- [x] Stabilize endpoints:
   - [x] health
   - [x] sessions create/list/get
   - [x] run
@@ -765,7 +765,7 @@ Acceptance:
   - [x] auth status
   - [x] MCP status
   - [x] context status
-  - [ ] benchmarks
+  - [x] benchmarks
 - [x] Add typed response structs and tests.
 - [x] Add event replay cursor: `after_seq`.
 

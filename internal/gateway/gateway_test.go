@@ -23,6 +23,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
+	"github.com/billyhargroveofficial/billyharness/internal/trace"
 )
 
 func TestGatewaySessionRunStreamsEvents(t *testing.T) {
@@ -258,6 +259,66 @@ func TestGatewaySessionContextStatusEndpoint(t *testing.T) {
 	}
 	if len(got.TopContributors[0].Preview) > 120 {
 		t.Fatalf("preview too long: %q", got.TopContributors[0].Preview)
+	}
+}
+
+func TestGatewayBenchmarksEndpointListsManifestSummaries(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	runDir := filepath.Join(home, "bench-runs", "smoke")
+	payloadsDir := filepath.Join(runDir, "20260628T100000Z-payloads")
+	if err := os.MkdirAll(payloadsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resultsPath := filepath.Join(runDir, "20260628T100000Z-results.jsonl")
+	eventsPath := filepath.Join(runDir, "20260628T100000Z-events.jsonl")
+	if err := os.WriteFile(resultsPath, []byte(`{"task_id":"one","outcome":"pass"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(eventsPath, []byte(`{"seq":1,"run_id":"20260628T100000Z"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(runDir, "20260628T100000Z-manifest.json")
+	manifest := trace.Manifest{
+		SchemaVersion: trace.CurrentManifestVersion,
+		RunID:         "20260628T100000Z",
+		CreatedAt:     time.Date(2026, 6, 28, 10, 0, 0, 0, time.UTC),
+		Harness:       "fast-agent-harness-go",
+		ProfileHash:   "profile123",
+		TasksPath:     "tasks.jsonl",
+		TaskCount:     1,
+		ResultsJSONL:  resultsPath,
+		EventsJSONL:   eventsPath,
+		PayloadsDir:   payloadsDir,
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, manifestBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/benchmarks", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("benchmarks status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var got BenchmarkListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Dir != filepath.Join(home, "bench-runs") || len(got.Runs) != 1 {
+		t.Fatalf("benchmarks response = %#v", got)
+	}
+	run := got.Runs[0]
+	if run.RunID != manifest.RunID || run.TaskCount != 1 || run.ProfileHash != "profile123" ||
+		!run.ResultsPresent || !run.EventsPresent || !run.PayloadsPresent {
+		t.Fatalf("benchmark run summary = %#v", run)
 	}
 }
 
