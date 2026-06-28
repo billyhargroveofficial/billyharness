@@ -5,14 +5,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/agent"
@@ -275,8 +278,14 @@ func telegramCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	ctx, stop := processContext()
+	defer stop()
 	fmt.Fprintln(os.Stderr, "billyharness telegram gateway polling; gateway="+*gatewayURL)
-	return bot.Run(context.Background())
+	if err := bot.Run(ctx); errors.Is(err, context.Canceled) {
+		return nil
+	} else {
+		return err
+	}
 }
 
 func discoverGatewayURL(ctx context.Context, cfg config.Config) (string, bool) {
@@ -419,7 +428,9 @@ func serve(args []string) error {
 	if authRequired && *authToken == "" {
 		return fmt.Errorf("gateway auth token required for non-loopback listen address %q; set %s or use -addr 127.0.0.1:8765 for local-only access", *addr, gateway.GatewayAuthTokenEnv)
 	}
-	registry, err := tools.NewRegistryWithMCP(context.Background(), cfg)
+	ctx, stop := processContext()
+	defer stop()
+	registry, err := tools.NewRegistryWithMCP(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -434,7 +445,15 @@ func serve(args []string) error {
 		status += "; bearer auth required for non-loopback clients"
 	}
 	fmt.Fprintln(os.Stderr, status)
-	return server.Serve(context.Background(), listener)
+	if err := server.Serve(ctx, listener); errors.Is(err, context.Canceled) {
+		return nil
+	} else {
+		return err
+	}
+}
+
+func processContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
 func mcp(args []string) error {
