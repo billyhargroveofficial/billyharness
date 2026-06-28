@@ -14,6 +14,7 @@ type InputPolicy string
 
 const (
 	InputPolicyRejectWhileActive InputPolicy = "reject_while_active"
+	InputPolicyQueueWhileActive  InputPolicy = "queue_while_active"
 )
 
 type Options struct {
@@ -44,6 +45,7 @@ type Session struct {
 	cancel      context.CancelFunc
 	running     bool
 	inputPolicy InputPolicy
+	idle        chan struct{}
 }
 
 func New(messages []protocol.Message) *Session {
@@ -84,9 +86,12 @@ func (s *Session) Run(ctx context.Context, runner Runner, prompt string, emit fu
 		emit = func(protocol.Event) {}
 	}
 	runCtx, cancel := context.WithCancel(ctx)
-	base, decision := s.startRun(cancel)
-	if !decision.Accepted {
+	base, decision, err := s.waitStartRun(ctx, cancel)
+	if err != nil || !decision.Accepted {
 		cancel()
+		if err != nil {
+			return err
+		}
 		return ErrBusy
 	}
 	runMessages := append(base, protocol.Message{Role: protocol.RoleUser, Content: prompt})
@@ -116,14 +121,52 @@ func (s *Session) startRun(cancel context.CancelFunc) ([]protocol.Message, Input
 	}
 	s.running = true
 	s.cancel = cancel
+	s.idle = make(chan struct{})
 	decision.Accepted = true
 	decision.Reason = "idle"
 	return cloneMessages(s.messages), decision
 }
 
-func (s *Session) finishRun(next, fallback []protocol.Message) {
+func (s *Session) waitStartRun(ctx context.Context, cancel context.CancelFunc) ([]protocol.Message, InputDecision, error) {
+	queued := false
+	for {
+		base, decision := s.startRun(cancel)
+		if decision.Accepted {
+			decision.Queued = queued
+			if queued {
+				decision.Reason = "queued_after_active_run"
+			}
+			return base, decision, nil
+		}
+		if decision.Policy != InputPolicyQueueWhileActive {
+			return nil, decision, ErrBusy
+		}
+		queued = true
+		wait := s.activeWaitChannel()
+		if wait == nil {
+			continue
+		}
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			decision.Queued = true
+			decision.Reason = "queue_context_canceled"
+			return nil, decision, ctx.Err()
+		}
+	}
+}
+
+func (s *Session) activeWaitChannel() <-chan struct{} {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.running {
+		return nil
+	}
+	return s.idle
+}
+
+func (s *Session) finishRun(next, fallback []protocol.Message) {
+	s.mu.Lock()
 	if len(next) > 0 {
 		s.messages = cloneMessages(next)
 	} else if len(fallback) > 0 {
@@ -131,6 +174,12 @@ func (s *Session) finishRun(next, fallback []protocol.Message) {
 	}
 	s.running = false
 	s.cancel = nil
+	idle := s.idle
+	s.idle = nil
+	s.mu.Unlock()
+	if idle != nil {
+		close(idle)
+	}
 }
 
 func cloneMessages(messages []protocol.Message) []protocol.Message {

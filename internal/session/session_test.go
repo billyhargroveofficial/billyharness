@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -84,6 +85,71 @@ func TestNewWithOptionsSetsInputPolicy(t *testing.T) {
 		t.Fatalf("idle decision=%#v base=%#v", decision, base)
 	}
 	s.finishRun(nil, nil)
+}
+
+func TestRunQueuesFollowUpWhenPolicyAllows(t *testing.T) {
+	s := NewWithOptions([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}}, Options{InputPolicy: InputPolicyQueueWhileActive})
+	firstStarted := make(chan struct{})
+	secondStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var calls int32
+	runner := RunnerFunc(func(ctx context.Context, messages []protocol.Message, _ func(protocol.Event)) ([]protocol.Message, error) {
+		call := atomic.AddInt32(&calls, 1)
+		last := messages[len(messages)-1]
+		switch call {
+		case 1:
+			close(firstStarted)
+			select {
+			case <-releaseFirst:
+			case <-ctx.Done():
+				return messages, ctx.Err()
+			}
+		case 2:
+			close(secondStarted)
+		default:
+			t.Fatalf("unexpected call %d", call)
+		}
+		return append(messages, protocol.Message{Role: protocol.RoleAssistant, Content: "ok: " + last.Content}), nil
+	})
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- s.Run(context.Background(), runner, "one", nil)
+	}()
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first run did not start")
+	}
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- s.Run(context.Background(), runner, "two", nil)
+	}()
+	select {
+	case <-secondStarted:
+		t.Fatal("queued run started before active run finished")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first run error = %v", err)
+	}
+	select {
+	case <-secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("second run did not start after first finished")
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second run error = %v", err)
+	}
+	messages := s.Messages()
+	if len(messages) != 5 ||
+		messages[1].Content != "one" ||
+		messages[2].Content != "ok: one" ||
+		messages[3].Content != "two" ||
+		messages[4].Content != "ok: two" {
+		t.Fatalf("queued history = %#v", messages)
+	}
 }
 
 func TestCancelStopsActiveRun(t *testing.T) {

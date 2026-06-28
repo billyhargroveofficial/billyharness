@@ -117,17 +117,17 @@ Purpose: turn the current loop into a real, replayable runtime without losing sp
   - [x] MCP status snapshot
   - [x] profile/instruction hash
   - [x] dangerous permission mode
-- [ ] Add input queue semantics:
+- [x] Add input queue semantics:
   - [x] immediate run if idle
   - [x] reject or queue while active, based on policy
   - [x] cancel active run
-  - [ ] steer/follow-up after current model step, later if needed
+  - [x] steer/follow-up after current model step, later if needed
 
 Acceptance:
 
 - [ ] Existing sessions still run from TUI, Telegram, and gateway.
 - [ ] Replay can reconstruct run/turn/step order.
-- [ ] Concurrent run behavior is deterministic and tested.
+- [x] Concurrent run behavior is deterministic and tested.
 
 ### 1.2 ToolOrchestrator
 
