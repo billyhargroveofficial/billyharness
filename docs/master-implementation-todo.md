@@ -425,7 +425,7 @@ Purpose: stop web/tool output from exploding context and token use.
 - [x] Default web fetch/extract/crawl to cheap extractive summaries.
 - [x] Large raw pages must become output refs unless explicitly requested.
 - [x] Add max chars, max tokens, and max links per tool.
-- [ ] Add visible metrics:
+- [x] Add visible metrics:
   - [x] raw bytes fetched
   - [x] extracted chars
   - [x] summary chars
@@ -443,7 +443,7 @@ Acceptance:
 
 - [x] Keep free extractive summarizer as default.
 - [x] Add optional model summarizer configured by provider profile.
-- [ ] Recommended defaults:
+- [x] Recommended defaults:
   - [x] DeepSeek profile uses cheap DeepSeek model if available.
   - [x] OpenAI/Codex profile uses configured mini model, not expensive main model.
   - [x] Do not use Spark if the profile disables it.
