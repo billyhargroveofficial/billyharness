@@ -39,7 +39,7 @@ func TestEventWriterRecordsContiguousEventsAndPayloadRefs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Records != 2 || summary.FirstSeq != 1 || summary.LastSeq != 2 || summary.PayloadRefs != 1 {
+	if summary.Records != 2 || summary.FirstSeq != 1 || summary.LastSeq != 2 || summary.PayloadRefs != 1 || summary.PayloadBytes == 0 {
 		t.Fatalf("summary = %#v", summary)
 	}
 	if summary.RunStarted != 1 || summary.ToolCallsFinished != 1 {
@@ -56,6 +56,41 @@ func TestEventWriterRecordsContiguousEventsAndPayloadRefs(t *testing.T) {
 	}
 	if _, err := os.Stat(second.PayloadRefs[0].Path); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReplayEventsRejectsPayloadHashMismatch(t *testing.T) {
+	root := t.TempDir()
+	payloadPath := filepath.Join(root, "payload.json")
+	payload := []byte(`{"event":{"type":"tool.call_finished"}}`)
+	if err := os.WriteFile(payloadPath, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	record := EventRecord{
+		SchemaVersion: CurrentManifestVersion,
+		Seq:           1,
+		RunID:         "run-1",
+		EventType:     string(protocol.EventToolCallFinished),
+		Event:         protocol.Event{Type: protocol.EventToolCallFinished},
+		PayloadRefs: []PayloadRef{{
+			PayloadID: "payload:1",
+			Kind:      "protocol_event",
+			Path:      payloadPath,
+			SHA256:    "bad-sha",
+			Bytes:     int64(len(payload)),
+		}},
+	}
+	line, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventsPath := filepath.Join(root, "events.jsonl")
+	if err := os.WriteFile(eventsPath, append(line, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = ReplayEvents(eventsPath)
+	if err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Fatalf("expected sha256 mismatch, got %v", err)
 	}
 }
 

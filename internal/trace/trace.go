@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
@@ -198,6 +199,7 @@ type ReplaySummary struct {
 	FirstSeq           int64          `json:"first_seq,omitempty"`
 	LastSeq            int64          `json:"last_seq,omitempty"`
 	PayloadRefs        int            `json:"payload_refs,omitempty"`
+	PayloadBytes       int64          `json:"payload_bytes,omitempty"`
 	EventTypes         map[string]int `json:"event_types"`
 	Tasks              map[string]int `json:"tasks"`
 	RunStarted         int            `json:"run_started,omitempty"`
@@ -256,6 +258,11 @@ func ReplayEvents(path string) (ReplaySummary, error) {
 			summary.Tasks[record.TaskID]++
 		}
 		summary.PayloadRefs += len(record.PayloadRefs)
+		bytes, err := verifyPayloadRefs(path, record.PayloadRefs)
+		if err != nil {
+			return summary, fmt.Errorf("%s:%d %w", path, lineNo, err)
+		}
+		summary.PayloadBytes += bytes
 		if err := summary.observe(record); err != nil {
 			return summary, fmt.Errorf("%s:%d %w", path, lineNo, err)
 		}
@@ -265,6 +272,41 @@ func ReplayEvents(path string) (ReplaySummary, error) {
 		return summary, err
 	}
 	return summary, nil
+}
+
+func verifyPayloadRefs(eventsPath string, refs []PayloadRef) (int64, error) {
+	var total int64
+	for _, ref := range refs {
+		if strings.TrimSpace(ref.Path) == "" {
+			return total, fmt.Errorf("payload ref %q missing path", ref.PayloadID)
+		}
+		path := resolvePayloadPath(eventsPath, ref.Path)
+		bytes, err := os.ReadFile(path)
+		if err != nil {
+			return total, fmt.Errorf("payload ref %q unreadable: %w", ref.PayloadID, err)
+		}
+		if ref.Bytes > 0 && int64(len(bytes)) != ref.Bytes {
+			return total, fmt.Errorf("payload ref %q byte mismatch: got %d want %d", ref.PayloadID, len(bytes), ref.Bytes)
+		}
+		if ref.SHA256 != "" {
+			sum := sha256.Sum256(bytes)
+			if got := hex.EncodeToString(sum[:]); got != ref.SHA256 {
+				return total, fmt.Errorf("payload ref %q sha256 mismatch: got %s want %s", ref.PayloadID, got, ref.SHA256)
+			}
+		}
+		total += int64(len(bytes))
+	}
+	return total, nil
+}
+
+func resolvePayloadPath(eventsPath, payloadPath string) string {
+	if filepath.IsAbs(payloadPath) {
+		return payloadPath
+	}
+	if _, err := os.Stat(payloadPath); err == nil {
+		return payloadPath
+	}
+	return filepath.Join(filepath.Dir(eventsPath), payloadPath)
 }
 
 func (s *ReplaySummary) observe(record EventRecord) error {
