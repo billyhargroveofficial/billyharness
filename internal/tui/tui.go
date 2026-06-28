@@ -1605,8 +1605,23 @@ func formatMCPStatus(status mcpStatusResponse) string {
 		if server.Required {
 			line += " required"
 		}
+		if server.PID > 0 {
+			line += fmt.Sprintf(" pid:%d", server.PID)
+		}
+		if !server.StartedAt.IsZero() {
+			line += " started:" + server.StartedAt.Local().Format("15:04:05")
+		}
 		if server.Error != "" {
 			line += "\n  " + oneLinePreview(server.Error, 180)
+		}
+		if server.LastError != "" && server.LastError != server.Error {
+			line += "\n  last: " + oneLinePreview(server.LastError, 180)
+		}
+		if !server.LastErrorAt.IsZero() {
+			line += "\n  last_error_at: " + server.LastErrorAt.Local().Format("2006-01-02 15:04:05")
+		}
+		if server.StderrTail != "" {
+			line += "\n  stderr: " + oneLinePreview(server.StderrTail, 180)
 		}
 		lines = append(lines, line)
 	}

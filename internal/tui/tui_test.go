@@ -964,6 +964,17 @@ func TestFormatMCPStatusShowsOwnConfigAndNativeWebTools(t *testing.T) {
 			Enabled:   true,
 			Connected: true,
 			ToolCount: 7,
+			PID:       4242,
+			StartedAt: time.Date(2026, 6, 28, 8, 0, 0, 0, time.Local),
+		}, {
+			Name:        "context7",
+			Transport:   "stdio",
+			Enabled:     true,
+			Connected:   false,
+			Error:       "MCP context7 transport: EOF",
+			LastError:   "MCP context7 transport: EOF",
+			LastErrorAt: time.Date(2026, 6, 28, 8, 1, 0, 0, time.Local),
+			StderrTail:  "server closed",
 		}},
 	})
 	for _, want := range []string{
@@ -973,6 +984,12 @@ func TestFormatMCPStatusShowsOwnConfigAndNativeWebTools(t *testing.T) {
 		"github",
 		"connected",
 		"tools:7",
+		"pid:4242",
+		"context7",
+		"error",
+		"MCP context7 transport: EOF",
+		"last_error_at: 2026-06-28 08:01:00",
+		"stderr: server closed",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("mcp status missing %q: %q", want, text)

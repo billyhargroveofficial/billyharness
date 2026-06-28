@@ -40,13 +40,18 @@ type ExternalTool struct {
 }
 
 type ServerStatus struct {
-	Name      string `json:"name"`
-	Transport string `json:"transport"`
-	Enabled   bool   `json:"enabled"`
-	Required  bool   `json:"required"`
-	Connected bool   `json:"connected"`
-	ToolCount int    `json:"tool_count"`
-	Error     string `json:"error,omitempty"`
+	Name        string    `json:"name"`
+	Transport   string    `json:"transport"`
+	Enabled     bool      `json:"enabled"`
+	Required    bool      `json:"required"`
+	Connected   bool      `json:"connected"`
+	ToolCount   int       `json:"tool_count"`
+	PID         int       `json:"pid,omitempty"`
+	StartedAt   time.Time `json:"started_at,omitempty"`
+	LastError   string    `json:"last_error,omitempty"`
+	LastErrorAt time.Time `json:"last_error_at,omitempty"`
+	StderrTail  string    `json:"stderr_tail,omitempty"`
+	Error       string    `json:"error,omitempty"`
 }
 
 type Manager struct {
@@ -163,6 +168,15 @@ func (m *Manager) Statuses() []ServerStatus {
 	for i, client := range clients {
 		if client != nil && i < len(statuses) {
 			statuses[i].Connected = client.connected.Load()
+			statuses[i].PID = client.pid()
+			statuses[i].StartedAt = client.startedAt
+			statuses[i].LastError, statuses[i].LastErrorAt = client.lastError()
+			if !statuses[i].Connected {
+				if statuses[i].Error == "" {
+					statuses[i].Error = statuses[i].LastError
+				}
+				statuses[i].StderrTail = client.stderrTail()
+			}
 		}
 	}
 	return statuses
@@ -217,6 +231,10 @@ type stdioClient struct {
 	stderr      *limitedBuffer
 	connected   atomic.Bool
 	outputLimit int
+	startedAt   time.Time
+	statusMu    sync.RWMutex
+	lastErr     string
+	lastErrAt   time.Time
 }
 
 type rpcRequest struct {
@@ -305,6 +323,7 @@ func startStdio(parent context.Context, cfg config.Config, server config.MCPServ
 		out:         bufio.NewReaderSize(stdout, mcpReadBufferBytes),
 		stderr:      stderrBuf,
 		outputLimit: mcpToolOutputLimit(cfg.MaxToolOutputBytes),
+		startedAt:   time.Now().UTC(),
 	}
 	client.connected.Store(true)
 	initResult, err := client.request(ctx, "initialize", map[string]any{
@@ -449,12 +468,16 @@ func (c *stdioClient) write(ctx context.Context, value any) error {
 	}()
 	select {
 	case <-ctx.Done():
+		err := c.withStderr(ctx.Err())
+		c.markError(err)
 		c.close()
-		return c.withStderr(ctx.Err())
+		return err
 	case err := <-done:
 		if err != nil {
+			err = fmt.Errorf("MCP %s write: %w", c.server.Name, err)
+			c.markError(err)
 			c.close()
-			return fmt.Errorf("MCP %s write: %w", c.server.Name, err)
+			return err
 		}
 		return nil
 	}
@@ -472,17 +495,23 @@ func (c *stdioClient) read(ctx context.Context, limit int) (rpcResponse, error) 
 	}()
 	select {
 	case <-ctx.Done():
+		err := c.withStderr(ctx.Err())
+		c.markError(err)
 		c.close()
-		return rpcResponse{}, c.withStderr(ctx.Err())
+		return rpcResponse{}, err
 	case result := <-done:
 		if result.err != nil {
+			err := c.withStderr(result.err)
+			c.markError(err)
 			c.close()
-			return rpcResponse{}, c.withStderr(result.err)
+			return rpcResponse{}, err
 		}
 		var resp rpcResponse
 		if err := json.Unmarshal(bytes.TrimSpace(result.line), &resp); err != nil {
+			err = fmt.Errorf("MCP %s sent invalid JSON-RPC: %w", c.server.Name, err)
+			c.markError(err)
 			c.close()
-			return rpcResponse{}, fmt.Errorf("MCP %s sent invalid JSON-RPC: %w", c.server.Name, err)
+			return rpcResponse{}, err
 		}
 		return resp, nil
 	}
@@ -526,6 +555,39 @@ func (c *stdioClient) close() {
 			_, _ = c.cmd.Process.Wait()
 		}
 	})
+}
+
+func (c *stdioClient) markError(err error) {
+	if c == nil || err == nil {
+		return
+	}
+	c.statusMu.Lock()
+	c.lastErr = err.Error()
+	c.lastErrAt = time.Now().UTC()
+	c.statusMu.Unlock()
+}
+
+func (c *stdioClient) lastError() (string, time.Time) {
+	if c == nil {
+		return "", time.Time{}
+	}
+	c.statusMu.RLock()
+	defer c.statusMu.RUnlock()
+	return c.lastErr, c.lastErrAt
+}
+
+func (c *stdioClient) pid() int {
+	if c == nil || c.cmd == nil || c.cmd.Process == nil {
+		return 0
+	}
+	return c.cmd.Process.Pid
+}
+
+func (c *stdioClient) stderrTail() string {
+	if c == nil || c.stderr == nil {
+		return ""
+	}
+	return secrets.Redact(strings.TrimSpace(c.stderr.String()), serverSecrets(c.server)...)
 }
 
 func (c *stdioClient) responseLimit(method string) int {
