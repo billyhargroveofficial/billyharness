@@ -50,6 +50,8 @@ type savedBlock struct {
 	ParentStepID   string `json:"parent_step_id,omitempty"`
 	RawCopy        string `json:"raw_copy,omitempty"`
 	RenderCacheKey string `json:"render_cache_key,omitempty"`
+	Collapsed      bool   `json:"collapsed,omitempty"`
+	CollapseSet    bool   `json:"collapse_set,omitempty"`
 }
 
 func newChatID() string {

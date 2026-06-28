@@ -76,6 +76,8 @@ type block struct {
 	parentStepID   string
 	rawCopy        string
 	renderCacheKey string
+	collapsed      bool
+	collapseSet    bool
 	started        time.Time
 	updated        time.Time
 }
@@ -2421,6 +2423,8 @@ func encodeBlocks(blocks []block) []savedBlock {
 			ParentStepID:   b.parentStepID,
 			RawCopy:        b.rawCopy,
 			RenderCacheKey: b.renderCacheKey,
+			Collapsed:      b.collapseSet && b.collapsed,
+			CollapseSet:    b.collapseSet,
 		})
 	}
 	return out
@@ -2443,6 +2447,8 @@ func decodeBlocks(blocks []savedBlock) []block {
 			parentStepID:   b.ParentStepID,
 			rawCopy:        b.RawCopy,
 			renderCacheKey: b.RenderCacheKey,
+			collapsed:      b.Collapsed,
+			collapseSet:    b.CollapseSet,
 		})
 	}
 	return out
@@ -2585,6 +2591,8 @@ func transcriptRenderCacheKey(b block) string {
 		b.callID,
 		b.attemptID,
 		b.parentStepID,
+		strconv.FormatBool(b.collapsed),
+		strconv.FormatBool(b.collapseSet),
 	}, "\x00")))
 	return hex.EncodeToString(sum[:8])
 }
@@ -3126,7 +3134,7 @@ func (m *Model) collapseToolBlockIfLarge(callID string) {
 		return
 	}
 	if len(m.blocks[i].content) > 8000 || strings.Count(m.blocks[i].content, "\n") > 40 {
-		m.collapsed[i] = true
+		m.setBlockCollapsed(i, true)
 	}
 }
 
@@ -3139,7 +3147,7 @@ func (m *Model) collapseLastToolBlockIfLarge() {
 		return
 	}
 	if len(m.blocks[i].content) > 8000 || strings.Count(m.blocks[i].content, "\n") > 40 {
-		m.collapsed[i] = true
+		m.setBlockCollapsed(i, true)
 	}
 }
 
@@ -3294,11 +3302,11 @@ func (m Model) renderBlock(i int, b block) string {
 	switch {
 	case b.kind == "tool" && m.toolCollapsed(i):
 		body = ""
-	case b.kind == "tool" && m.toolView == "auto" && m.collapsed[i]:
+	case b.kind == "tool" && m.toolView == "auto" && m.blockCollapsed(i):
 		body = collapsedPreview(b.content, 8, 1000)
 	case b.kind == "reasoning" && m.thinkView == "collapsed":
 		body = collapsedSummary(b.content)
-	case m.collapsed[i]:
+	case m.blockCollapsed(i):
 		body = collapsedPreview(b.content, 8, 1000)
 	}
 	width := max(20, m.width-style.GetHorizontalFrameSize())
@@ -3317,11 +3325,10 @@ func (m Model) toolCollapsed(i int) bool {
 	}
 	switch m.toolView {
 	case "collapsed":
-		collapsed, ok := m.collapsed[i]
-		if !ok {
+		if !m.blocks[i].collapseSet {
 			return true
 		}
-		return collapsed
+		return m.blocks[i].collapsed
 	case "hidden":
 		return true
 	default:
@@ -3329,15 +3336,39 @@ func (m Model) toolCollapsed(i int) bool {
 	}
 }
 
+func (m Model) blockCollapsed(i int) bool {
+	if i < 0 || i >= len(m.blocks) {
+		return false
+	}
+	if m.blocks[i].collapseSet {
+		return m.blocks[i].collapsed
+	}
+	return m.collapsed[i]
+}
+
+func (m *Model) setBlockCollapsed(i int, collapsed bool) {
+	if i < 0 || i >= len(m.blocks) {
+		return
+	}
+	m.blocks[i].collapsed = collapsed
+	m.blocks[i].collapseSet = true
+	m.blocks[i].updated = time.Now().UTC()
+	m.refreshBlockDerivedFields(i)
+	if m.collapsed == nil {
+		m.collapsed = map[int]bool{}
+	}
+	m.collapsed[i] = collapsed
+}
+
 func (m *Model) toggleSelectedBlock() {
 	if m.selected < 0 || m.selected >= len(m.blocks) {
 		return
 	}
 	if m.blocks[m.selected].kind == "tool" && m.toolView == "collapsed" {
-		m.collapsed[m.selected] = !m.toolCollapsed(m.selected)
+		m.setBlockCollapsed(m.selected, !m.toolCollapsed(m.selected))
 		return
 	}
-	m.collapsed[m.selected] = !m.collapsed[m.selected]
+	m.setBlockCollapsed(m.selected, !m.blockCollapsed(m.selected))
 }
 
 func blockTitle(b block) string {

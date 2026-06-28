@@ -524,7 +524,7 @@ Purpose: make the terminal feel like a serious agent UI rather than a pile of st
 
 ### 5.1 Typed Transcript Cells
 
-- [ ] Introduce cell types:
+- [x] Introduce cell types:
   - [x] user
   - [x] assistant stream
   - [x] assistant final
@@ -543,7 +543,7 @@ Purpose: make the terminal feel like a serious agent UI rather than a pile of st
   - [x] call id if tool-related
   - [x] raw copy text
   - [ ] rich terminal text
-  - [ ] collapsed/expanded state
+  - [x] collapsed/expanded state
   - [x] render cache key
 - [x] Keep old rendering path while migrating if needed.
 

@@ -488,6 +488,33 @@ func TestToolBlocksAreOneLineByDefault(t *testing.T) {
 	if !strings.Contains(expanded, "result line") {
 		t.Fatalf("Ctrl+E toggle should expand selected collapsed tool block: %q", expanded)
 	}
+	if !m.blocks[0].collapseSet || m.blocks[0].collapsed {
+		t.Fatalf("toggle should persist expanded state on the tool cell: %#v", m.blocks[0])
+	}
+}
+
+func TestCollapsedStatePersistsWithSavedBlocks(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.addBlock("tool", "Called web_fetch", strings.Repeat("payload\n", 20))
+	m.selected = 0
+	m.setBlockCollapsed(0, true)
+
+	decoded := decodeBlocks(encodeBlocks(m.blocks))
+	if len(decoded) != 1 || !decoded[0].collapseSet || !decoded[0].collapsed {
+		t.Fatalf("decoded collapsed state = %#v", decoded)
+	}
+	m.blocks = decoded
+	m.collapsed = map[int]bool{}
+	m.toolView = "auto"
+	rendered := stripANSITest(m.renderBlock(0, m.blocks[0]))
+	if !strings.Contains(rendered, "[collapsed:") || strings.Count(rendered, "payload") >= 20 {
+		t.Fatalf("render should use persisted block collapsed state without map fallback: %q", rendered)
+	}
+	m.toggleSelectedBlock()
+	if !m.blocks[0].collapseSet || m.blocks[0].collapsed {
+		t.Fatalf("toggle should persist expanded state after decode: %#v", m.blocks[0])
+	}
 }
 
 func TestToolCollapsedLineUsesFinishedSummary(t *testing.T) {
