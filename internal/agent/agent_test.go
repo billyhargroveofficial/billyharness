@@ -507,6 +507,9 @@ func TestRunMessagesExecutesParallelSafeToolsConcurrentlyAndPreservesOrder(t *te
 	for _, event := range events {
 		step, ok := stepEvent(event, protocol.EventStepStarted)
 		if ok && step.Kind == protocol.StepKindToolCall && step.BatchID == batchStarted.BatchID && step.Parallel {
+			if step.Metadata["parallel_policy"] != "parallel_batch" || step.Metadata["parallel_safe"] != true || step.Metadata["risk"] != string(protocol.RiskReadOnly) {
+				t.Fatalf("parallel tool metadata = %#v", step.Metadata)
+			}
 			parallelToolStarts++
 		}
 	}

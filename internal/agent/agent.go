@@ -310,7 +310,7 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, turnID string, rou
 		ParallelLimit: limit,
 	}})
 	for i := start; i < end; i++ {
-		emitToolStepStarted(emit, turnID, round, i, calls[i], true, batchID, batchSize, limit)
+		emitToolStepStarted(emit, turnID, round, i, calls[i], true, batchID, batchSize, limit, a.toolStepMetadata(calls[i], true, batchSize))
 		emit(protocol.Event{Type: protocol.EventToolCallStarted, Data: calls[i].Name})
 	}
 	jobs := make(chan int)
@@ -354,7 +354,7 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, turnID string, rou
 }
 
 func (a *Agent) executeOneTool(ctx context.Context, turnID string, round, index int, call protocol.ToolCall, parallel bool, batchID string, batchSize, limit int, emit func(protocol.Event)) toolExecutionResult {
-	emitToolStepStarted(emit, turnID, round, index, call, parallel, batchID, batchSize, limit)
+	emitToolStepStarted(emit, turnID, round, index, call, parallel, batchID, batchSize, limit, a.toolStepMetadata(call, parallel, batchSize))
 	emit(protocol.Event{Type: protocol.EventToolCallStarted, Data: call.Name})
 	result := a.callTool(ctx, index, call)
 	emitToolStepCompleted(emit, turnID, round, result, parallel, batchID, batchSize, limit)
@@ -362,7 +362,7 @@ func (a *Agent) executeOneTool(ctx context.Context, turnID string, round, index 
 	return result
 }
 
-func emitToolStepStarted(emit func(protocol.Event), turnID string, round, index int, call protocol.ToolCall, parallel bool, batchID string, batchSize, limit int) {
+func emitToolStepStarted(emit func(protocol.Event), turnID string, round, index int, call protocol.ToolCall, parallel bool, batchID string, batchSize, limit int, metadata map[string]any) {
 	emit(protocol.Event{Type: protocol.EventStepStarted, Data: protocol.StepEvent{
 		TurnID:        turnID,
 		StepID:        agentStepID(turnID, protocol.StepKindToolCall, index+1),
@@ -376,7 +376,39 @@ func emitToolStepStarted(emit func(protocol.Event), turnID string, round, index 
 		BatchSize:     batchSize,
 		Parallel:      parallel,
 		ParallelLimit: limit,
+		Metadata:      metadata,
 	}})
+}
+
+func (a *Agent) toolStepMetadata(call protocol.ToolCall, parallel bool, batchSize int) map[string]any {
+	metadata := map[string]any{}
+	var risk protocol.Risk
+	var ok bool
+	if a != nil && a.tools != nil {
+		risk, ok = a.tools.Risk(call.Name)
+		if ok {
+			metadata["risk"] = risk
+		}
+	}
+	parallelSafe := risk == protocol.RiskReadOnly || risk == protocol.RiskNetwork
+	if ok {
+		metadata["parallel_safe"] = parallelSafe
+	}
+	switch {
+	case parallel:
+		metadata["parallel_policy"] = "parallel_batch"
+	case a == nil || a.cfg.MaxParallelTools <= 1:
+		metadata["parallel_policy"] = "parallel_disabled"
+	case !ok:
+		metadata["parallel_policy"] = "unknown_tool_serial"
+	case !parallelSafe:
+		metadata["parallel_policy"] = "serial_risk_" + string(risk)
+	case batchSize <= 1:
+		metadata["parallel_policy"] = "single_parallel_safe_tool"
+	default:
+		metadata["parallel_policy"] = "serial"
+	}
+	return metadata
 }
 
 func emitToolStepCompleted(emit func(protocol.Event), turnID string, round int, result toolExecutionResult, parallel bool, batchID string, batchSize, limit int) {

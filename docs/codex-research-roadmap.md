@@ -86,6 +86,7 @@ Completed:
 - Typed `turn.started`, `turn.completed`, `step.started`, and `step.completed` events over the current agent loop.
 - Replay and bench counters for turns, steps, step errors, and parallel tool batches.
 - Basic latency telemetry in step events and benchmarks: first streamed delta, model step duration, tool step duration, parallel batch duration.
+- Tool step metadata for parallel policy: risk, parallel safety, policy reason, batch ids, and limits.
 
 ## Active Backlog
 
@@ -93,7 +94,7 @@ P0 runtime correctness and speed:
 
 - Promote typed `Turn` and `Step` events into an internal runtime model: input queue, cancellation, step storage, and replayable state transitions.
 - Extend replay/bench timing metrics into distributions: p50/p95 first-delta, model latency, tool latency, compaction timing, and per-provider retry timing.
-- Harden parallel tools with clearer policy metadata: why a tool can or cannot run in parallel, batch ids, limits, cancellation behavior.
+- Surface parallel policy metadata in TUI/Telegram/bench reports and add cancellation timing checks for in-flight batches.
 - Add real long-loop benchmark runs: Terminal-Bench import/export smoke, local 50-100 turn loop, DeepSeek Flash/Pro comparison, Codex subscription comparison when available.
 
 P1 context and web economy:
