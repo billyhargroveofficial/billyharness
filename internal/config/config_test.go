@@ -59,6 +59,12 @@ func TestDefaultRuntimeLimits(t *testing.T) {
 	if cfg.Profile != "billy" {
 		t.Fatalf("Profile = %q, want billy", cfg.Profile)
 	}
+	if cfg.WebSummaryMode != "extractive" || cfg.WebSummaryModel != "deepseek-v4-flash" || cfg.WebSummaryProvider != "deepseek" {
+		t.Fatalf("web summary defaults = mode:%q provider:%q model:%q", cfg.WebSummaryMode, cfg.WebSummaryProvider, cfg.WebSummaryModel)
+	}
+	if cfg.WebSummaryMaxInputTokens != 12_000 || cfg.WebSummaryMaxOutputTokens != 700 || cfg.WebSummaryTimeout != time.Minute {
+		t.Fatalf("web summary budgets = in:%d out:%d timeout:%s", cfg.WebSummaryMaxInputTokens, cfg.WebSummaryMaxOutputTokens, cfg.WebSummaryTimeout)
+	}
 }
 
 func TestMCPAllowedServersEnvOverridesDefault(t *testing.T) {
@@ -183,6 +189,41 @@ func TestApplyModelProviderDefaultsSelectsProviderFromModel(t *testing.T) {
 	cfg.ApplyModelProviderDefaults()
 	if cfg.Provider != "deepseek" {
 		t.Fatalf("Provider = %q", cfg.Provider)
+	}
+}
+
+func TestWebSummaryModelDefaultsFollowProviderWithoutSpark(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	t.Setenv("FAST_AGENT_WEB_SUMMARY_MODE", "model")
+	t.Setenv("FAST_AGENT_MODEL", "gpt-5.5")
+	cfg := Default()
+	if cfg.WebSummaryMode != "model" || cfg.WebSummaryProvider != "openai-codex" || cfg.WebSummaryModel != "gpt-5.4-mini" {
+		t.Fatalf("codex web summary defaults = mode:%q provider:%q model:%q", cfg.WebSummaryMode, cfg.WebSummaryProvider, cfg.WebSummaryModel)
+	}
+	if strings.Contains(cfg.WebSummaryModel, "spark") {
+		t.Fatalf("web summary should not default to spark: %q", cfg.WebSummaryModel)
+	}
+
+	t.Setenv("FAST_AGENT_MODEL", "deepseek-v4-pro")
+	cfg = Default()
+	if cfg.WebSummaryMode != "model" || cfg.WebSummaryProvider != "deepseek" || cfg.WebSummaryModel != "deepseek-v4-flash" {
+		t.Fatalf("deepseek web summary defaults = mode:%q provider:%q model:%q", cfg.WebSummaryMode, cfg.WebSummaryProvider, cfg.WebSummaryModel)
+	}
+}
+
+func TestWebSummaryEnvOverridesDefaults(t *testing.T) {
+	t.Setenv("FAST_AGENT_WEB_SUMMARY_MODE", "llm")
+	t.Setenv("FAST_AGENT_WEB_SUMMARY_PROVIDER", "mock")
+	t.Setenv("FAST_AGENT_WEB_SUMMARY_MODEL", "custom-mini")
+	t.Setenv("FAST_AGENT_WEB_SUMMARY_MAX_INPUT_TOKENS", "333")
+	t.Setenv("FAST_AGENT_WEB_SUMMARY_MAX_OUTPUT_TOKENS", "44")
+	t.Setenv("FAST_AGENT_WEB_SUMMARY_TIMEOUT_SEC", "7")
+	cfg := Default()
+	if cfg.WebSummaryMode != "model" || cfg.WebSummaryProvider != "mock" || cfg.WebSummaryModel != "custom-mini" {
+		t.Fatalf("web summary env = mode:%q provider:%q model:%q", cfg.WebSummaryMode, cfg.WebSummaryProvider, cfg.WebSummaryModel)
+	}
+	if cfg.WebSummaryMaxInputTokens != 333 || cfg.WebSummaryMaxOutputTokens != 44 || cfg.WebSummaryTimeout != 7*time.Second {
+		t.Fatalf("web summary env budgets = in:%d out:%d timeout:%s", cfg.WebSummaryMaxInputTokens, cfg.WebSummaryMaxOutputTokens, cfg.WebSummaryTimeout)
 	}
 }
 

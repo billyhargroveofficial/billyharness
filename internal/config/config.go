@@ -14,40 +14,46 @@ import (
 )
 
 type Config struct {
-	Provider               string
-	Model                  string
-	Profile                string
-	BaseURL                string
-	APIKeyEnv              string
-	CodexBaseURL           string
-	CodexAuthFile          string
-	CodexRefreshURL        string
-	CodexAuthAPIBaseURL    string
-	CodexClientID          string
-	CodexOriginator        string
-	Thinking               string
-	ReasoningEffort        string
-	MaxTokens              int
-	MaxToolRounds          int
-	MaxParallelTools       int
-	ProviderMaxRetries     int
-	ContextWindowTokens    int64
-	ContextCompactTokens   int
-	ContextCompactKeep     int
-	ContextCompactMaxChars int
-	RequestTimeout         time.Duration
-	StreamIdleTimeout      time.Duration
-	WorkspaceRoots         []string
-	ProjectDocMaxBytes     int
-	ProjectDocFallbacks    []string
-	MaxToolOutputBytes     int
-	AutoApproveDangerous   bool
-	StoreReasoningContent  bool
-	GatewayAddr            string
-	MCPEnabled             bool
-	MCPConfigFiles         []string
-	MCPAllowedServers      []string
-	MCPServers             []MCPServer
+	Provider                  string
+	Model                     string
+	Profile                   string
+	BaseURL                   string
+	APIKeyEnv                 string
+	CodexBaseURL              string
+	CodexAuthFile             string
+	CodexRefreshURL           string
+	CodexAuthAPIBaseURL       string
+	CodexClientID             string
+	CodexOriginator           string
+	Thinking                  string
+	ReasoningEffort           string
+	MaxTokens                 int
+	MaxToolRounds             int
+	MaxParallelTools          int
+	ProviderMaxRetries        int
+	ContextWindowTokens       int64
+	ContextCompactTokens      int
+	ContextCompactKeep        int
+	ContextCompactMaxChars    int
+	WebSummaryMode            string
+	WebSummaryProvider        string
+	WebSummaryModel           string
+	WebSummaryMaxInputTokens  int
+	WebSummaryMaxOutputTokens int
+	WebSummaryTimeout         time.Duration
+	RequestTimeout            time.Duration
+	StreamIdleTimeout         time.Duration
+	WorkspaceRoots            []string
+	ProjectDocMaxBytes        int
+	ProjectDocFallbacks       []string
+	MaxToolOutputBytes        int
+	AutoApproveDangerous      bool
+	StoreReasoningContent     bool
+	GatewayAddr               string
+	MCPEnabled                bool
+	MCPConfigFiles            []string
+	MCPAllowedServers         []string
+	MCPServers                []MCPServer
 }
 
 type MCPServer struct {
@@ -73,42 +79,49 @@ type MCPServer struct {
 func Default() Config {
 	cwd, _ := os.Getwd()
 	cfg := Config{
-		Provider:               env("FAST_AGENT_PROVIDER", "deepseek"),
-		Model:                  env("FAST_AGENT_MODEL", "deepseek-v4-flash"),
-		Profile:                NormalizeProfileName(env("BILLYHARNESS_PROFILE", env("FAST_AGENT_PROFILE", DefaultProfileName))),
-		BaseURL:                env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-		APIKeyEnv:              env("DEEPSEEK_API_KEY_ENV", "DEEPSEEK_API_KEY"),
-		CodexBaseURL:           env("FAST_AGENT_CODEX_BASE_URL", "https://chatgpt.com/backend-api/codex"),
-		CodexAuthFile:          env("FAST_AGENT_CODEX_AUTH_FILE", DefaultCodexAuthFile()),
-		CodexRefreshURL:        env("FAST_AGENT_CODEX_REFRESH_URL", "https://auth.openai.com/oauth/token"),
-		CodexAuthAPIBaseURL:    env("CODEX_AUTHAPI_BASE_URL", "https://auth.openai.com/api/accounts"),
-		CodexClientID:          env("FAST_AGENT_CODEX_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann"),
-		CodexOriginator:        env("FAST_AGENT_CODEX_ORIGINATOR", "billyharness"),
-		Thinking:               env("DEEPSEEK_THINKING", "enabled"),
-		ReasoningEffort:        env("DEEPSEEK_REASONING_EFFORT", "high"),
-		MaxTokens:              envInt("FAST_AGENT_MAX_TOKENS", 8192),
-		MaxToolRounds:          envInt("FAST_AGENT_MAX_TOOL_ROUNDS", 100),
-		MaxParallelTools:       envInt("FAST_AGENT_MAX_PARALLEL_TOOLS", 4),
-		ProviderMaxRetries:     envInt("FAST_AGENT_PROVIDER_MAX_RETRIES", 2),
-		ContextWindowTokens:    int64(envInt("FAST_AGENT_CONTEXT_WINDOW_TOKENS", 1_000_000)),
-		ContextCompactTokens:   envInt("FAST_AGENT_CONTEXT_COMPACT_TOKENS", 600_000),
-		ContextCompactKeep:     envInt("FAST_AGENT_CONTEXT_COMPACT_KEEP", 32),
-		ContextCompactMaxChars: envInt("FAST_AGENT_CONTEXT_COMPACT_MAX_CHARS", 120_000),
-		RequestTimeout:         time.Duration(envInt("FAST_AGENT_REQUEST_TIMEOUT_SEC", 240)) * time.Second,
-		StreamIdleTimeout:      time.Duration(envInt("FAST_AGENT_STREAM_IDLE_TIMEOUT_SEC", 60)) * time.Second,
-		WorkspaceRoots:         []string{filepath.Clean(cwd)},
-		ProjectDocMaxBytes:     envInt("FAST_AGENT_PROJECT_DOC_MAX_BYTES", 32*1024),
-		ProjectDocFallbacks:    envList("FAST_AGENT_PROJECT_DOC_FALLBACK_FILENAMES"),
-		MaxToolOutputBytes:     envInt("FAST_AGENT_MAX_TOOL_OUTPUT_BYTES", 64*1024),
-		AutoApproveDangerous:   envBool("FAST_AGENT_AUTO_APPROVE_DANGEROUS", true),
-		StoreReasoningContent:  envBool("FAST_AGENT_STORE_REASONING", false),
-		GatewayAddr:            env("FAST_AGENT_GATEWAY_ADDR", "127.0.0.1:8765"),
-		MCPEnabled:             envBool("FAST_AGENT_MCP_ENABLED", true),
-		MCPConfigFiles:         envList("FAST_AGENT_MCP_CONFIG_FILES"),
-		MCPAllowedServers:      envListDefault("FAST_AGENT_MCP_ALLOWED_SERVERS", []string{"telegram", "telegram-parilka", "github", "context7"}),
+		Provider:                  env("FAST_AGENT_PROVIDER", "deepseek"),
+		Model:                     env("FAST_AGENT_MODEL", "deepseek-v4-flash"),
+		Profile:                   NormalizeProfileName(env("BILLYHARNESS_PROFILE", env("FAST_AGENT_PROFILE", DefaultProfileName))),
+		BaseURL:                   env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+		APIKeyEnv:                 env("DEEPSEEK_API_KEY_ENV", "DEEPSEEK_API_KEY"),
+		CodexBaseURL:              env("FAST_AGENT_CODEX_BASE_URL", "https://chatgpt.com/backend-api/codex"),
+		CodexAuthFile:             env("FAST_AGENT_CODEX_AUTH_FILE", DefaultCodexAuthFile()),
+		CodexRefreshURL:           env("FAST_AGENT_CODEX_REFRESH_URL", "https://auth.openai.com/oauth/token"),
+		CodexAuthAPIBaseURL:       env("CODEX_AUTHAPI_BASE_URL", "https://auth.openai.com/api/accounts"),
+		CodexClientID:             env("FAST_AGENT_CODEX_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann"),
+		CodexOriginator:           env("FAST_AGENT_CODEX_ORIGINATOR", "billyharness"),
+		Thinking:                  env("DEEPSEEK_THINKING", "enabled"),
+		ReasoningEffort:           env("DEEPSEEK_REASONING_EFFORT", "high"),
+		MaxTokens:                 envInt("FAST_AGENT_MAX_TOKENS", 8192),
+		MaxToolRounds:             envInt("FAST_AGENT_MAX_TOOL_ROUNDS", 100),
+		MaxParallelTools:          envInt("FAST_AGENT_MAX_PARALLEL_TOOLS", 4),
+		ProviderMaxRetries:        envInt("FAST_AGENT_PROVIDER_MAX_RETRIES", 2),
+		ContextWindowTokens:       int64(envInt("FAST_AGENT_CONTEXT_WINDOW_TOKENS", 1_000_000)),
+		ContextCompactTokens:      envInt("FAST_AGENT_CONTEXT_COMPACT_TOKENS", 600_000),
+		ContextCompactKeep:        envInt("FAST_AGENT_CONTEXT_COMPACT_KEEP", 32),
+		ContextCompactMaxChars:    envInt("FAST_AGENT_CONTEXT_COMPACT_MAX_CHARS", 120_000),
+		WebSummaryMode:            env("FAST_AGENT_WEB_SUMMARY_MODE", "extractive"),
+		WebSummaryProvider:        env("FAST_AGENT_WEB_SUMMARY_PROVIDER", ""),
+		WebSummaryModel:           env("FAST_AGENT_WEB_SUMMARY_MODEL", ""),
+		WebSummaryMaxInputTokens:  envInt("FAST_AGENT_WEB_SUMMARY_MAX_INPUT_TOKENS", 12_000),
+		WebSummaryMaxOutputTokens: envInt("FAST_AGENT_WEB_SUMMARY_MAX_OUTPUT_TOKENS", 700),
+		WebSummaryTimeout:         time.Duration(envInt("FAST_AGENT_WEB_SUMMARY_TIMEOUT_SEC", 60)) * time.Second,
+		RequestTimeout:            time.Duration(envInt("FAST_AGENT_REQUEST_TIMEOUT_SEC", 240)) * time.Second,
+		StreamIdleTimeout:         time.Duration(envInt("FAST_AGENT_STREAM_IDLE_TIMEOUT_SEC", 60)) * time.Second,
+		WorkspaceRoots:            []string{filepath.Clean(cwd)},
+		ProjectDocMaxBytes:        envInt("FAST_AGENT_PROJECT_DOC_MAX_BYTES", 32*1024),
+		ProjectDocFallbacks:       envList("FAST_AGENT_PROJECT_DOC_FALLBACK_FILENAMES"),
+		MaxToolOutputBytes:        envInt("FAST_AGENT_MAX_TOOL_OUTPUT_BYTES", 64*1024),
+		AutoApproveDangerous:      envBool("FAST_AGENT_AUTO_APPROVE_DANGEROUS", true),
+		StoreReasoningContent:     envBool("FAST_AGENT_STORE_REASONING", false),
+		GatewayAddr:               env("FAST_AGENT_GATEWAY_ADDR", "127.0.0.1:8765"),
+		MCPEnabled:                envBool("FAST_AGENT_MCP_ENABLED", true),
+		MCPConfigFiles:            envList("FAST_AGENT_MCP_CONFIG_FILES"),
+		MCPAllowedServers:         envListDefault("FAST_AGENT_MCP_ALLOWED_SERVERS", []string{"telegram", "telegram-parilka", "github", "context7"}),
 	}
 	cfg.ApplyBillySettingsDefaults()
 	cfg.ApplyModelProviderDefaults()
+	cfg.ApplyWebSummaryDefaults()
 	return cfg
 }
 
@@ -125,6 +138,40 @@ func (c Config) APIKey() string {
 func (c *Config) ApplyModelProviderDefaults() {
 	c.Model = modelinfo.NormalizeAlias(c.Model)
 	c.Provider = modelinfo.ProviderForModel(c.Model, c.Provider)
+}
+
+func (c *Config) ApplyWebSummaryDefaults() {
+	c.WebSummaryMode = NormalizeWebSummaryMode(c.WebSummaryMode)
+	c.WebSummaryModel = modelinfo.NormalizeAlias(c.WebSummaryModel)
+	c.WebSummaryProvider = modelinfo.NormalizeProvider(c.WebSummaryProvider)
+	if c.WebSummaryModel == "" {
+		if modelinfo.ProviderForModel(c.Model, c.Provider) == modelinfo.ProviderOpenAICodex {
+			c.WebSummaryModel = "gpt-5.4-mini"
+		} else {
+			c.WebSummaryModel = "deepseek-v4-flash"
+		}
+	}
+	if c.WebSummaryProvider == "" {
+		c.WebSummaryProvider = modelinfo.ProviderForModel(c.WebSummaryModel, c.Provider)
+	}
+	if c.WebSummaryMaxInputTokens <= 0 {
+		c.WebSummaryMaxInputTokens = 12_000
+	}
+	if c.WebSummaryMaxOutputTokens <= 0 {
+		c.WebSummaryMaxOutputTokens = 700
+	}
+	if c.WebSummaryTimeout <= 0 {
+		c.WebSummaryTimeout = 60 * time.Second
+	}
+}
+
+func NormalizeWebSummaryMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "model", "external", "llm", "provider":
+		return "model"
+	default:
+		return "extractive"
+	}
 }
 
 func (c *Config) ApplyBillySettingsDefaults() {

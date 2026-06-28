@@ -419,7 +419,7 @@ Purpose: stop web/tool output from exploding context and token use.
 - [x] Define output classes:
   - [ ] tiny direct answer
   - [x] extractive summary
-  - [ ] model summary
+  - [x] model summary
   - [x] raw excerpt
   - [x] output ref
 - [x] Default web fetch/extract/crawl to cheap extractive summaries.
@@ -441,24 +441,24 @@ Acceptance:
 
 ### 4.2 External Summarizer
 
-- [ ] Keep free extractive summarizer as default.
-- [ ] Add optional model summarizer configured by provider profile.
+- [x] Keep free extractive summarizer as default.
+- [x] Add optional model summarizer configured by provider profile.
 - [ ] Recommended defaults:
-  - [ ] DeepSeek profile uses cheap DeepSeek model if available.
-  - [ ] OpenAI/Codex profile uses configured mini model, not expensive main model.
+  - [x] DeepSeek profile uses cheap DeepSeek model if available.
+  - [x] OpenAI/Codex profile uses configured mini model, not expensive main model.
   - [ ] Do not use Spark if the profile disables it.
-- [ ] Summarizer calls must not enter the main conversation context as raw pages.
-- [ ] Add separate metrics:
-  - [ ] `websum_input_tokens`
-  - [ ] `websum_output_tokens`
-  - [ ] `websum_cost`
-  - [ ] `websum_cache_hit`
-  - [ ] `websum_model`
+- [x] Summarizer calls must not enter the main conversation context as raw pages.
+- [x] Add separate metrics:
+  - [x] `websum_input_tokens`
+  - [x] `websum_output_tokens`
+  - [x] `websum_cost`
+  - [x] `websum_cache_hit`
+  - [x] `websum_model`
 
 Acceptance:
 
-- [ ] Main loop context reflects summary, not raw fetched page.
-- [ ] Status footer can show web summary savings.
+- [x] Main loop context reflects summary, not raw fetched page.
+- [x] Status footer can show web summary savings.
 
 ### 4.3 Web Cache
 

@@ -50,6 +50,9 @@ type doctorConfigStatus struct {
 	ReasoningEffort       string `json:"reasoning_effort"`
 	ContextWindowTokens   int64  `json:"context_window_tokens"`
 	ContextCompactTokens  int    `json:"context_compact_tokens"`
+	WebSummaryMode        string `json:"web_summary_mode"`
+	WebSummaryProvider    string `json:"web_summary_provider"`
+	WebSummaryModel       string `json:"web_summary_model"`
 	MaxToolRounds         int    `json:"max_tool_rounds"`
 	MaxParallelTools      int    `json:"max_parallel_tools"`
 	GatewayAddr           string `json:"gateway_addr"`
@@ -142,6 +145,9 @@ func collectDoctorReport(ctx context.Context, cfg config.Config, opts doctorOpti
 			ReasoningEffort:       cfg.ReasoningEffort,
 			ContextWindowTokens:   cfg.ContextWindowTokens,
 			ContextCompactTokens:  cfg.ContextCompactTokens,
+			WebSummaryMode:        cfg.WebSummaryMode,
+			WebSummaryProvider:    cfg.WebSummaryProvider,
+			WebSummaryModel:       cfg.WebSummaryModel,
 			MaxToolRounds:         cfg.MaxToolRounds,
 			MaxParallelTools:      cfg.MaxParallelTools,
 			GatewayAddr:           cfg.GatewayAddr,
@@ -302,7 +308,7 @@ func printDoctorReport(w io.Writer, report doctorReport) {
 	fmt.Fprintf(w, "env: %s\n", report.EnvPath)
 	fmt.Fprintf(w, "mcp config: %s\n", report.MCPConfigPath)
 	fmt.Fprintf(w, "sessions: %s\n", report.GatewaySessionDir)
-	fmt.Fprintf(w, "config: provider=%s model=%s profile=%s reasoning=%s/%s context=%d compact_at=%d gateway=%s\n",
+	fmt.Fprintf(w, "config: provider=%s model=%s profile=%s reasoning=%s/%s context=%d compact_at=%d websum=%s/%s/%s gateway=%s\n",
 		report.Config.Provider,
 		report.Config.Model,
 		report.Config.Profile,
@@ -310,6 +316,9 @@ func printDoctorReport(w io.Writer, report doctorReport) {
 		report.Config.ReasoningEffort,
 		report.Config.ContextWindowTokens,
 		report.Config.ContextCompactTokens,
+		report.Config.WebSummaryMode,
+		report.Config.WebSummaryProvider,
+		report.Config.WebSummaryModel,
 		report.Config.GatewayAddr,
 	)
 	fmt.Fprintln(w, "checks:")

@@ -21,7 +21,9 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/provider"
 )
 
 const (
@@ -45,6 +47,8 @@ const (
 	maxWriteBytes            = 2 * 1024 * 1024
 	maxExecOutput            = 512 * 1024
 )
+
+var newWebSummaryProvider = provider.New
 
 type Result struct {
 	Content   string
@@ -542,7 +546,7 @@ func (r *Registry) addWebFetch() {
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
 			}
-			return fetchCompactPageResult(ctx, "web_fetch", in.URL, webFetchOptions{
+			return r.fetchCompactPageResult(ctx, "web_fetch", in.URL, webFetchOptions{
 				Query:       in.Query,
 				MaxBytes:    in.MaxBytes,
 				MaxChars:    in.MaxChars,
@@ -576,7 +580,7 @@ func (r *Registry) addWebExtract() {
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
 			}
-			return fetchCompactPageResult(ctx, "web_extract", in.URL, webFetchOptions{
+			return r.fetchCompactPageResult(ctx, "web_extract", in.URL, webFetchOptions{
 				Query:       in.Query,
 				MaxBytes:    in.MaxBytes,
 				MaxChars:    in.MaxChars,
@@ -653,7 +657,7 @@ func (r *Registry) addWebCrawl() {
 			if err != nil {
 				return Result{}, err
 			}
-			compact, ref, storeErr := compactCrawlResult(pages, webFetchOptions{
+			compact, ref, storeErr := r.compactCrawlResult(ctx, pages, webFetchOptions{
 				Query:          in.Query,
 				MaxChars:       in.MaxCharsPerPage,
 				MaxTokens:      in.MaxTokensPerPage,
@@ -1093,6 +1097,14 @@ type compactPage struct {
 	Title                string   `json:"title,omitempty"`
 	Summary              string   `json:"summary,omitempty"`
 	SummaryChars         int      `json:"summary_chars,omitempty"`
+	SummarizerProvider   string   `json:"summarizer_provider,omitempty"`
+	SummarizerModel      string   `json:"summarizer_model,omitempty"`
+	WebsumInputTokens    int64    `json:"websum_input_tokens,omitempty"`
+	WebsumOutputTokens   int64    `json:"websum_output_tokens,omitempty"`
+	WebsumCacheHit       int64    `json:"websum_cache_hit,omitempty"`
+	WebsumCost           float64  `json:"websum_cost,omitempty"`
+	WebsumModel          string   `json:"websum_model,omitempty"`
+	WebsumError          string   `json:"websum_error,omitempty"`
 	KeyPoints            []string `json:"key_points,omitempty"`
 	Extract              string   `json:"extract,omitempty"`
 	Text                 string   `json:"text,omitempty"`
@@ -1120,6 +1132,14 @@ type compactCrawlPage struct {
 	Title                string   `json:"title,omitempty"`
 	Summary              string   `json:"summary,omitempty"`
 	SummaryChars         int      `json:"summary_chars,omitempty"`
+	SummarizerProvider   string   `json:"summarizer_provider,omitempty"`
+	SummarizerModel      string   `json:"summarizer_model,omitempty"`
+	WebsumInputTokens    int64    `json:"websum_input_tokens,omitempty"`
+	WebsumOutputTokens   int64    `json:"websum_output_tokens,omitempty"`
+	WebsumCacheHit       int64    `json:"websum_cache_hit,omitempty"`
+	WebsumCost           float64  `json:"websum_cost,omitempty"`
+	WebsumModel          string   `json:"websum_model,omitempty"`
+	WebsumError          string   `json:"websum_error,omitempty"`
 	KeyPoints            []string `json:"key_points,omitempty"`
 	Extract              string   `json:"extract,omitempty"`
 	Text                 string   `json:"text,omitempty"`
@@ -1144,6 +1164,14 @@ type compactCrawlOutput struct {
 	OutputClass          string             `json:"output_class,omitempty"`
 	SummaryMode          string             `json:"summary_mode,omitempty"`
 	SummaryChars         int                `json:"summary_chars,omitempty"`
+	SummarizerProvider   string             `json:"summarizer_provider,omitempty"`
+	SummarizerModel      string             `json:"summarizer_model,omitempty"`
+	WebsumInputTokens    int64              `json:"websum_input_tokens,omitempty"`
+	WebsumOutputTokens   int64              `json:"websum_output_tokens,omitempty"`
+	WebsumCacheHit       int64              `json:"websum_cache_hit,omitempty"`
+	WebsumCost           float64            `json:"websum_cost,omitempty"`
+	WebsumModel          string             `json:"websum_model,omitempty"`
+	WebsumError          string             `json:"websum_error,omitempty"`
 	OutputRef            string             `json:"output_ref,omitempty"`
 	RawBytesFetched      int                `json:"raw_bytes_fetched,omitempty"`
 	MaxBytesPerPage      int                `json:"max_bytes_per_page,omitempty"`
@@ -1178,7 +1206,8 @@ func compactFetchedPage(page fetchedPage, opts webFetchOptions) compactPage {
 	points := keyPoints(page.Text, opts.Query, 5, webKeyPointChars)
 	extract := extractSnippets(page.Text, opts.Query, webExtractChars)
 	estimatedTokens := estimateTokens(compactInlineText(text, page.Title, page.Text, opts.Query))
-	estimatedSaved := maxInt(0, estimateTokens(page.Text)-estimatedTokens)
+	originalTokens := estimateTokens(page.Text)
+	estimatedSaved := maxInt(0, originalTokens-estimatedTokens)
 	return compactPage{
 		URL:                  page.URL,
 		Status:               page.Status,
@@ -1188,6 +1217,11 @@ func compactFetchedPage(page fetchedPage, opts webFetchOptions) compactPage {
 		Title:                page.Title,
 		Summary:              summary,
 		SummaryChars:         webSummaryChars(summary, points, extract),
+		SummarizerProvider:   "native",
+		SummarizerModel:      "extractive",
+		WebsumInputTokens:    int64(originalTokens),
+		WebsumOutputTokens:   int64(estimatedTokens),
+		WebsumModel:          "extractive",
 		KeyPoints:            points,
 		Extract:              extract,
 		Text:                 text,
@@ -1196,7 +1230,7 @@ func compactFetchedPage(page fetchedPage, opts webFetchOptions) compactPage {
 		RawBytesFetched:      page.RawBytesFetched,
 		MaxBytes:             page.MaxBytes,
 		OriginalTextChars:    len([]rune(page.Text)),
-		OriginalTextTokens:   estimateTokens(page.Text),
+		OriginalTextTokens:   originalTokens,
 		ReturnedTextChars:    len([]rune(text)),
 		EstimatedTextTokens:  estimatedTokens,
 		EstimatedTokensSaved: estimatedSaved,
@@ -1240,6 +1274,11 @@ func compactCrawlPages(pages []crawlPage, opts webFetchOptions) []compactCrawlPa
 			Title:                page.Title,
 			Summary:              summary,
 			SummaryChars:         webSummaryChars(summary, points, extract),
+			SummarizerProvider:   "native",
+			SummarizerModel:      "extractive",
+			WebsumInputTokens:    int64(originalTokens),
+			WebsumOutputTokens:   int64(estimatedTokens),
+			WebsumModel:          "extractive",
 			KeyPoints:            points,
 			Extract:              extract,
 			Text:                 text,
@@ -1261,12 +1300,13 @@ func compactCrawlPages(pages []crawlPage, opts webFetchOptions) []compactCrawlPa
 	return out
 }
 
-func fetchCompactPageResult(ctx context.Context, toolName, rawURL string, opts webFetchOptions) (Result, error) {
+func (r *Registry) fetchCompactPageResult(ctx context.Context, toolName, rawURL string, opts webFetchOptions) (Result, error) {
 	page, err := fetchPage(ctx, rawURL, boundedBytes(opts.MaxBytes))
 	if err != nil {
 		return Result{}, err
 	}
 	compact := compactFetchedPage(page, opts)
+	r.applyModelSummaryToPage(ctx, &compact, page, opts)
 	ref, err := storeWebOutput(toolName, page.URL, renderFetchedPageArtifact(page))
 	if err != nil {
 		compact.CompactNote = strings.TrimSpace(compact.CompactNote + " full extracted text save failed: " + err.Error())
@@ -1282,8 +1322,221 @@ func fetchCompactPageResult(ctx context.Context, toolName, rawURL string, opts w
 	}, nil
 }
 
-func compactCrawlResult(pages []crawlPage, opts webFetchOptions) (compactCrawlOutput, string, error) {
+type webSummarySource struct {
+	URL   string
+	Title string
+	Query string
+	Text  string
+}
+
+type webModelSummary struct {
+	Text         string
+	Provider     string
+	Model        string
+	InputTokens  int64
+	OutputTokens int64
+	CacheHit     int64
+	CostUSD      float64
+}
+
+func (r *Registry) applyModelSummaryToPage(ctx context.Context, compact *compactPage, page fetchedPage, opts webFetchOptions) {
+	if compact == nil || r == nil || config.NormalizeWebSummaryMode(r.cfg.WebSummaryMode) != "model" {
+		return
+	}
+	summary, err := r.modelWebSummary(ctx, webSummarySource{
+		URL:   page.URL,
+		Title: page.Title,
+		Query: opts.Query,
+		Text:  page.Text,
+	})
+	if err != nil {
+		compact.WebsumError = truncateRunes(oneLine(err.Error()), 240)
+		return
+	}
+	applyWebModelSummaryToPage(compact, summary)
+}
+
+func (r *Registry) applyModelSummaryToCrawlPage(ctx context.Context, compact *compactCrawlPage, page crawlPage, opts webFetchOptions) {
+	if compact == nil || r == nil || config.NormalizeWebSummaryMode(r.cfg.WebSummaryMode) != "model" {
+		return
+	}
+	summary, err := r.modelWebSummary(ctx, webSummarySource{
+		URL:   page.URL,
+		Title: page.Title,
+		Query: opts.Query,
+		Text:  page.Text,
+	})
+	if err != nil {
+		compact.WebsumError = truncateRunes(oneLine(err.Error()), 240)
+		return
+	}
+	applyWebModelSummaryToCrawlPage(compact, summary)
+}
+
+func (r *Registry) modelWebSummary(ctx context.Context, src webSummarySource) (webModelSummary, error) {
+	cfg := r.webSummaryProviderConfig()
+	input, inputTruncated := webSummaryInput(src.Text, cfg.WebSummaryMaxInputTokens)
+	prompt := webSummaryPrompt(src, input, inputTruncated)
+	estimatedInputTokens := int64(estimateTokens(prompt))
+	ctx, cancel := context.WithTimeout(ctx, cfg.WebSummaryTimeout)
+	defer cancel()
+	prov, err := newWebSummaryProvider(cfg)
+	if err != nil {
+		return webModelSummary{}, err
+	}
+	temp := 0.1
+	events, errs := prov.Stream(ctx, provider.Request{
+		Model: cfg.Model,
+		Messages: []protocol.Message{
+			{
+				Role:    protocol.RoleSystem,
+				Content: "You produce compact factual web-page summaries for another coding agent. Return only the summary text. Preserve concrete dates, numbers, names, and source-specific caveats. Do not include raw page dumps.",
+			},
+			{Role: protocol.RoleUser, Content: prompt},
+		},
+		Temperature: &temp,
+	})
+	var content strings.Builder
+	var usage provider.Usage
+	for event := range events {
+		switch event.Kind {
+		case provider.EventContent:
+			content.WriteString(event.Text)
+		case provider.EventUsage:
+			usage = event.Usage
+		}
+	}
+	if err := <-errs; err != nil {
+		return webModelSummary{}, err
+	}
+	text := normalizeWebSummaryOutput(content.String(), cfg.WebSummaryMaxOutputTokens)
+	if text == "" {
+		return webModelSummary{}, fmt.Errorf("web summarizer returned empty summary")
+	}
+	inputTokens := usage.InputTokens
+	if inputTokens == 0 {
+		inputTokens = estimatedInputTokens
+	}
+	outputTokens := usage.OutputTokens
+	if outputTokens == 0 {
+		outputTokens = int64(estimateTokens(text))
+	}
+	cacheHit := usage.CacheHitTokens
+	return webModelSummary{
+		Text:         text,
+		Provider:     cfg.Provider,
+		Model:        cfg.Model,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		CacheHit:     cacheHit,
+		CostUSD:      webSummaryCostUSD(cfg.Model, inputTokens, outputTokens, cacheHit, usage.CacheMissTokens),
+	}, nil
+}
+
+func (r *Registry) webSummaryProviderConfig() config.Config {
+	cfg := r.cfg
+	cfg.ApplyModelProviderDefaults()
+	cfg.ApplyWebSummaryDefaults()
+	cfg.Provider = cfg.WebSummaryProvider
+	cfg.Model = cfg.WebSummaryModel
+	cfg.ApplyModelProviderDefaults()
+	cfg.Thinking = "disabled"
+	cfg.ReasoningEffort = ""
+	cfg.MaxTokens = cfg.WebSummaryMaxOutputTokens
+	if cfg.WebSummaryTimeout > 0 {
+		cfg.RequestTimeout = cfg.WebSummaryTimeout
+		if cfg.StreamIdleTimeout <= 0 || cfg.StreamIdleTimeout > cfg.WebSummaryTimeout {
+			cfg.StreamIdleTimeout = cfg.WebSummaryTimeout
+		}
+	}
+	return cfg
+}
+
+func webSummaryInput(text string, maxTokens int) (string, bool) {
+	if maxTokens <= 0 {
+		maxTokens = 12_000
+	}
+	if maxTokens > 24_000 {
+		maxTokens = 24_000
+	}
+	return truncateRunesWithMarker(strings.TrimSpace(text), maxTokens*4)
+}
+
+func webSummaryPrompt(src webSummarySource, text string, truncated bool) string {
+	var b strings.Builder
+	b.WriteString("URL: " + strings.TrimSpace(src.URL) + "\n")
+	if strings.TrimSpace(src.Title) != "" {
+		b.WriteString("Title: " + strings.TrimSpace(src.Title) + "\n")
+	}
+	if strings.TrimSpace(src.Query) != "" {
+		b.WriteString("Focus query: " + strings.TrimSpace(src.Query) + "\n")
+	}
+	if truncated {
+		b.WriteString("Input note: extracted text was capped before summarization.\n")
+	}
+	b.WriteString("\nSummarize this extracted page text in 4-8 compact sentences. Avoid filler and do not invent facts.\n\n")
+	b.WriteString(text)
+	return b.String()
+}
+
+func normalizeWebSummaryOutput(text string, maxTokens int) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	if maxTokens <= 0 {
+		maxTokens = 700
+	}
+	maxChars := max(400, min(webDigestChars, maxTokens*4))
+	out, _ := truncateRunesWithMarker(text, maxChars)
+	return strings.TrimSpace(out)
+}
+
+func applyWebModelSummaryToPage(page *compactPage, summary webModelSummary) {
+	page.Summary = summary.Text
+	page.SummaryMode = "model"
+	page.SummarizerProvider = summary.Provider
+	page.SummarizerModel = summary.Model
+	page.WebsumInputTokens = summary.InputTokens
+	page.WebsumOutputTokens = summary.OutputTokens
+	page.WebsumCacheHit = summary.CacheHit
+	page.WebsumCost = summary.CostUSD
+	page.WebsumModel = summary.Model
+	page.WebsumError = ""
+	if strings.TrimSpace(page.Text) == "" {
+		page.OutputClass = "model_summary"
+	}
+	page.SummaryChars = webSummaryChars(page.Summary, page.KeyPoints, page.Extract)
+	page.EstimatedTextTokens = estimateTokens(compactPageInlineText(*page))
+	page.EstimatedTokensSaved = maxInt(0, page.OriginalTextTokens-page.EstimatedTextTokens)
+}
+
+func applyWebModelSummaryToCrawlPage(page *compactCrawlPage, summary webModelSummary) {
+	page.Summary = summary.Text
+	page.SummaryMode = "model"
+	page.SummarizerProvider = summary.Provider
+	page.SummarizerModel = summary.Model
+	page.WebsumInputTokens = summary.InputTokens
+	page.WebsumOutputTokens = summary.OutputTokens
+	page.WebsumCacheHit = summary.CacheHit
+	page.WebsumCost = summary.CostUSD
+	page.WebsumModel = summary.Model
+	page.WebsumError = ""
+	if strings.TrimSpace(page.Text) == "" {
+		page.OutputClass = "model_summary"
+	}
+	page.SummaryChars = webSummaryChars(page.Summary, page.KeyPoints, page.Extract)
+	page.EstimatedTextTokens = estimateTokens(compactCrawlPageInlineText(*page))
+	page.EstimatedTokensSaved = maxInt(0, page.OriginalTextTokens-page.EstimatedTextTokens)
+}
+
+func (r *Registry) compactCrawlResult(ctx context.Context, pages []crawlPage, opts webFetchOptions) (compactCrawlOutput, string, error) {
 	compactPages := compactCrawlPages(pages, opts)
+	for i := range compactPages {
+		if i < len(pages) && pages[i].Error == "" {
+			r.applyModelSummaryToCrawlPage(ctx, &compactPages[i], pages[i], opts)
+		}
+	}
 	artifact := renderCrawlArtifact(pages)
 	ref, err := storeWebOutput("web_crawl", firstCrawlURL(pages), artifact)
 	var out compactCrawlOutput
@@ -1301,6 +1554,26 @@ func compactCrawlResult(pages []crawlPage, opts webFetchOptions) (compactCrawlOu
 	for _, page := range out.Pages {
 		out.RawBytesFetched += page.RawBytesFetched
 		out.SummaryChars += page.SummaryChars
+		out.WebsumInputTokens += page.WebsumInputTokens
+		out.WebsumOutputTokens += page.WebsumOutputTokens
+		out.WebsumCacheHit += page.WebsumCacheHit
+		out.WebsumCost += page.WebsumCost
+		if out.SummarizerProvider == "" && page.SummarizerProvider != "" {
+			out.SummarizerProvider = page.SummarizerProvider
+		}
+		if out.SummarizerModel == "" && page.SummarizerModel != "" {
+			out.SummarizerModel = page.SummarizerModel
+			out.WebsumModel = page.WebsumModel
+		}
+		if out.WebsumError == "" && page.WebsumError != "" {
+			out.WebsumError = page.WebsumError
+		}
+		if page.SummaryMode == "model" {
+			out.SummaryMode = "model"
+			if !opts.IncludeText && !opts.FullText {
+				out.OutputClass = "model_summary"
+			}
+		}
 		if page.MaxBytes > out.MaxBytesPerPage {
 			out.MaxBytesPerPage = page.MaxBytes
 		}
@@ -1318,13 +1591,20 @@ func compactCrawlResult(pages []crawlPage, opts webFetchOptions) (compactCrawlOu
 }
 
 func crawlMetadata(out compactCrawlOutput) map[string]any {
-	savedTokens := maxInt(0, out.OriginalTextTokens-out.EstimatedTextTokens)
+	savedTokens := maxInt(0, int(out.WebsumInputTokens-out.WebsumOutputTokens))
+	apiInput, apiOutput, apiTotal := websumAPITokens(out.SummaryMode, out.WebsumInputTokens, out.WebsumOutputTokens)
 	return map[string]any{
 		"output_class":                     out.OutputClass,
 		"summary_mode":                     out.SummaryMode,
 		"summary_chars":                    out.SummaryChars,
-		"summarizer_provider":              "native",
-		"summarizer_model":                 "extractive",
+		"summarizer_provider":              out.SummarizerProvider,
+		"summarizer_model":                 out.SummarizerModel,
+		"websum_input_tokens":              out.WebsumInputTokens,
+		"websum_output_tokens":             out.WebsumOutputTokens,
+		"websum_cost":                      out.WebsumCost,
+		"websum_cache_hit":                 out.WebsumCacheHit,
+		"websum_model":                     out.WebsumModel,
+		"websum_error":                     out.WebsumError,
 		"pages":                            len(out.Pages),
 		"raw_bytes_fetched":                out.RawBytesFetched,
 		"max_bytes_per_page":               out.MaxBytesPerPage,
@@ -1335,15 +1615,15 @@ func crawlMetadata(out compactCrawlOutput) map[string]any {
 		"estimated_tokens_saved":           out.EstimatedTokensSaved,
 		"output_text_truncated":            out.OutputTextTruncated,
 		"output_ref":                       out.OutputRef,
-		"tool_summary_kind":                "extractive",
-		"tool_summary_input_tokens":        out.OriginalTextTokens,
-		"tool_summary_output_tokens":       out.EstimatedTextTokens,
+		"tool_summary_kind":                out.SummaryMode,
+		"tool_summary_input_tokens":        out.WebsumInputTokens,
+		"tool_summary_output_tokens":       out.WebsumOutputTokens,
 		"tool_summary_saved_tokens":        savedTokens,
-		"tool_summary_api_input_tokens":    0,
-		"tool_summary_api_output_tokens":   0,
-		"tool_summary_api_total_tokens":    0,
-		"tool_summary_estimated_cost_usd":  0,
-		"tool_summary_external_model_used": false,
+		"tool_summary_api_input_tokens":    apiInput,
+		"tool_summary_api_output_tokens":   apiOutput,
+		"tool_summary_api_total_tokens":    apiTotal,
+		"tool_summary_estimated_cost_usd":  out.WebsumCost,
+		"tool_summary_external_model_used": out.SummaryMode == "model",
 	}
 }
 
@@ -1704,14 +1984,55 @@ func webSummaryChars(summary string, keyPoints []string, extract string) int {
 	return len([]rune(strings.Join(nonEmptyStrings(summary, strings.Join(keyPoints, "\n"), extract), "\n")))
 }
 
+func compactPageInlineText(page compactPage) string {
+	return strings.Join(nonEmptyStrings(
+		page.Title,
+		page.Summary,
+		strings.Join(page.KeyPoints, "\n"),
+		page.Extract,
+		page.Text,
+	), "\n")
+}
+
+func compactCrawlPageInlineText(page compactCrawlPage) string {
+	return strings.Join(nonEmptyStrings(
+		page.Title,
+		page.Summary,
+		strings.Join(page.KeyPoints, "\n"),
+		page.Extract,
+		page.Text,
+	), "\n")
+}
+
+func webSummaryCostUSD(model string, inputTokens, outputTokens, cacheHitTokens, cacheMissTokens int64) float64 {
+	info := modelinfo.Lookup(model)
+	if info.Subscription {
+		return 0
+	}
+	pricing := info.Pricing
+	inputCost := float64(inputTokens) * pricing.InputPer1M / 1_000_000
+	if cacheHitTokens > 0 || cacheMissTokens > 0 {
+		inputCost = (float64(cacheHitTokens)*pricing.CacheHitPer1M + float64(cacheMissTokens)*pricing.CacheMissPer1M) / 1_000_000
+	}
+	outputCost := float64(outputTokens) * pricing.OutputPer1M / 1_000_000
+	return inputCost + outputCost
+}
+
 func webPageMetadata(page compactPage) map[string]any {
-	savedTokens := maxInt(0, page.OriginalTextTokens-page.EstimatedTextTokens)
+	savedTokens := maxInt(0, int(page.WebsumInputTokens-page.WebsumOutputTokens))
+	apiInput, apiOutput, apiTotal := websumAPITokens(page.SummaryMode, page.WebsumInputTokens, page.WebsumOutputTokens)
 	return map[string]any{
 		"output_class":                     page.OutputClass,
 		"summary_mode":                     page.SummaryMode,
 		"summary_chars":                    page.SummaryChars,
-		"summarizer_provider":              "native",
-		"summarizer_model":                 "extractive",
+		"summarizer_provider":              page.SummarizerProvider,
+		"summarizer_model":                 page.SummarizerModel,
+		"websum_input_tokens":              page.WebsumInputTokens,
+		"websum_output_tokens":             page.WebsumOutputTokens,
+		"websum_cost":                      page.WebsumCost,
+		"websum_cache_hit":                 page.WebsumCacheHit,
+		"websum_model":                     page.WebsumModel,
+		"websum_error":                     page.WebsumError,
 		"raw_bytes_fetched":                page.RawBytesFetched,
 		"max_bytes":                        page.MaxBytes,
 		"original_text_chars":              page.OriginalTextChars,
@@ -1724,16 +2045,23 @@ func webPageMetadata(page compactPage) map[string]any {
 		"output_text_truncated":            page.OutputTextTruncated,
 		"response_body_truncated":          page.Truncated,
 		"output_ref":                       page.OutputRef,
-		"tool_summary_kind":                "extractive",
-		"tool_summary_input_tokens":        page.OriginalTextTokens,
-		"tool_summary_output_tokens":       page.EstimatedTextTokens,
+		"tool_summary_kind":                page.SummaryMode,
+		"tool_summary_input_tokens":        page.WebsumInputTokens,
+		"tool_summary_output_tokens":       page.WebsumOutputTokens,
 		"tool_summary_saved_tokens":        savedTokens,
-		"tool_summary_api_input_tokens":    0,
-		"tool_summary_api_output_tokens":   0,
-		"tool_summary_api_total_tokens":    0,
-		"tool_summary_estimated_cost_usd":  0,
-		"tool_summary_external_model_used": false,
+		"tool_summary_api_input_tokens":    apiInput,
+		"tool_summary_api_output_tokens":   apiOutput,
+		"tool_summary_api_total_tokens":    apiTotal,
+		"tool_summary_estimated_cost_usd":  page.WebsumCost,
+		"tool_summary_external_model_used": page.SummaryMode == "model",
 	}
+}
+
+func websumAPITokens(mode string, inputTokens, outputTokens int64) (int64, int64, int64) {
+	if mode != "model" {
+		return 0, 0, 0
+	}
+	return inputTokens, outputTokens, inputTokens + outputTokens
 }
 
 func estimateTokens(text string) int {

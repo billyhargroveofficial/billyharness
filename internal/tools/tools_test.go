@@ -13,6 +13,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/provider"
 )
 
 func TestParseSearchResultsUnwrapsDuckDuckGoRedirects(t *testing.T) {
@@ -533,7 +534,7 @@ func TestWebCompactionStoresFullTextOutOfBand(t *testing.T) {
 	}
 	meta := webPageMetadata(compact)
 	if meta["tool_summary_kind"] != "extractive" ||
-		meta["tool_summary_api_total_tokens"] != 0 ||
+		anyInt64(meta["tool_summary_api_total_tokens"]) != 0 ||
 		meta["tool_summary_external_model_used"] != false {
 		t.Fatalf("summary metadata missing extractive zero-cost fields: %#v", meta)
 	}
@@ -544,8 +545,8 @@ func TestWebCompactionStoresFullTextOutOfBand(t *testing.T) {
 		meta["estimated_tokens_saved"].(int) <= 0 {
 		t.Fatalf("metadata missing web output contract metrics: %#v", meta)
 	}
-	if meta["tool_summary_input_tokens"].(int) <= meta["tool_summary_output_tokens"].(int) ||
-		meta["tool_summary_saved_tokens"].(int) <= 0 {
+	if anyInt64(meta["tool_summary_input_tokens"]) <= anyInt64(meta["tool_summary_output_tokens"]) ||
+		anyInt64(meta["tool_summary_saved_tokens"]) <= 0 {
 		t.Fatalf("summary token metadata should show compression: %#v", meta)
 	}
 	bytes, err := os.ReadFile(ref)
@@ -578,13 +579,97 @@ func TestWebIncludeTextMarksRawExcerptOutputClass(t *testing.T) {
 	}
 }
 
+func TestModelWebSummarizerRunsOutsideMainLoopAndRecordsMetrics(t *testing.T) {
+	oldProvider := newWebSummaryProvider
+	newWebSummaryProvider = func(cfg config.Config) (provider.Provider, error) {
+		if cfg.Provider != "mock" || cfg.Model != "mock-summarizer" || cfg.Thinking != "disabled" {
+			t.Fatalf("summary cfg = provider:%q model:%q thinking:%q", cfg.Provider, cfg.Model, cfg.Thinking)
+		}
+		return scriptedProvider{
+			content: "Model summary keeps the important facts and leaves the raw tail out.",
+			usage:   provider.Usage{InputTokens: 900, OutputTokens: 40, CacheHitTokens: 300, CacheMissTokens: 600},
+		}, nil
+	}
+	t.Cleanup(func() { newWebSummaryProvider = oldProvider })
+
+	cfg := config.Default()
+	cfg.WebSummaryMode = "model"
+	cfg.WebSummaryProvider = "mock"
+	cfg.WebSummaryModel = "mock-summarizer"
+	cfg.WebSummaryMaxInputTokens = 300
+	cfg.WebSummaryMaxOutputTokens = 80
+	registry := NewRegistry(cfg)
+	raw := strings.Repeat("Raw page evidence should stay outside context. ", 200) + "RAW_TAIL_ONLY_IN_REF"
+	page := fetchedPage{
+		URL:             "https://example.com/model",
+		Status:          200,
+		ContentType:     "text/html",
+		Title:           "Model Summary",
+		Text:            raw,
+		RawBytesFetched: len(raw),
+		MaxBytes:        65536,
+	}
+	compact := compactFetchedPage(page, webFetchOptions{})
+	registry.applyModelSummaryToPage(context.Background(), &compact, page, webFetchOptions{})
+	out, err := json.Marshal(compact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "RAW_TAIL_ONLY_IN_REF") {
+		t.Fatalf("model summary compact output leaked raw tail: %s", string(out))
+	}
+	if compact.OutputClass != "model_summary" || compact.SummaryMode != "model" ||
+		compact.SummarizerProvider != "mock" || compact.SummarizerModel != "mock-summarizer" ||
+		compact.WebsumInputTokens != 900 || compact.WebsumOutputTokens != 40 || compact.WebsumCacheHit != 300 ||
+		compact.WebsumModel != "mock-summarizer" || compact.WebsumError != "" {
+		t.Fatalf("model summary compact = %#v", compact)
+	}
+	meta := webPageMetadata(compact)
+	if meta["tool_summary_kind"] != "model" || meta["tool_summary_external_model_used"] != true ||
+		anyInt64(meta["tool_summary_api_input_tokens"]) != 900 ||
+		anyInt64(meta["tool_summary_api_output_tokens"]) != 40 ||
+		anyInt64(meta["tool_summary_api_total_tokens"]) != 940 ||
+		meta["websum_model"] != "mock-summarizer" {
+		t.Fatalf("model summary metadata = %#v", meta)
+	}
+}
+
+func TestModelWebSummarizerFallsBackToExtractiveOnProviderError(t *testing.T) {
+	oldProvider := newWebSummaryProvider
+	newWebSummaryProvider = func(config.Config) (provider.Provider, error) {
+		return failingProvider{}, nil
+	}
+	t.Cleanup(func() { newWebSummaryProvider = oldProvider })
+
+	cfg := config.Default()
+	cfg.WebSummaryMode = "model"
+	cfg.WebSummaryProvider = "mock"
+	cfg.WebSummaryModel = "mock-summarizer"
+	registry := NewRegistry(cfg)
+	page := fetchedPage{
+		URL:   "https://example.com/fallback",
+		Title: "Fallback",
+		Text:  strings.Repeat("Fallback page sentence with useful details. ", 100),
+	}
+	compact := compactFetchedPage(page, webFetchOptions{})
+	originalSummary := compact.Summary
+	registry.applyModelSummaryToPage(context.Background(), &compact, page, webFetchOptions{})
+	if compact.Summary != originalSummary || compact.SummaryMode != "extractive" || compact.OutputClass != "extractive_summary" {
+		t.Fatalf("fallback should keep extractive compact output: %#v", compact)
+	}
+	if !strings.Contains(compact.WebsumError, "summary failed") {
+		t.Fatalf("fallback missing error: %#v", compact)
+	}
+}
+
 func TestCompactCrawlResultReturnsSingleOutputRef(t *testing.T) {
 	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
 	pages := []crawlPage{
 		{URL: "https://example.com/a", Depth: 0, Title: "A", Text: strings.Repeat("A page sentence. ", 400), RawBytesFetched: 7000, MaxBytes: 65536},
 		{URL: "https://example.com/b", Depth: 1, Title: "B", Text: strings.Repeat("B page sentence. ", 400), RawBytesFetched: 8000, MaxBytes: 65536},
 	}
-	out, ref, err := compactCrawlResult(pages, webFetchOptions{})
+	registry := NewRegistry(config.Default())
+	out, ref, err := registry.compactCrawlResult(context.Background(), pages, webFetchOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1034,6 +1119,71 @@ func rawArgs(value any) json.RawMessage {
 		panic(err)
 	}
 	return bytes
+}
+
+type scriptedProvider struct {
+	content string
+	usage   provider.Usage
+}
+
+func (p scriptedProvider) Stream(ctx context.Context, _ provider.Request) (<-chan provider.Event, <-chan error) {
+	events := make(chan provider.Event, 3)
+	errs := make(chan error, 1)
+	go func() {
+		defer close(events)
+		defer close(errs)
+		select {
+		case events <- provider.Event{Kind: provider.EventContent, Text: p.content}:
+		case <-ctx.Done():
+			errs <- ctx.Err()
+			return
+		}
+		if p.usage.InputTokens > 0 || p.usage.OutputTokens > 0 {
+			select {
+			case events <- provider.Event{Kind: provider.EventUsage, Usage: p.usage}:
+			case <-ctx.Done():
+				errs <- ctx.Err()
+				return
+			}
+		}
+		select {
+		case events <- provider.Event{Kind: provider.EventDone}:
+		case <-ctx.Done():
+			errs <- ctx.Err()
+			return
+		}
+	}()
+	return events, errs
+}
+
+type failingProvider struct{}
+
+func (failingProvider) Stream(ctx context.Context, _ provider.Request) (<-chan provider.Event, <-chan error) {
+	events := make(chan provider.Event)
+	errs := make(chan error, 1)
+	go func() {
+		defer close(events)
+		defer close(errs)
+		select {
+		case errs <- fmt.Errorf("summary failed"):
+		case <-ctx.Done():
+			errs <- ctx.Err()
+		}
+	}()
+	return events, errs
+}
+
+func anyInt64(value any) int64 {
+	switch v := value.(type) {
+	case int:
+		return int64(v)
+	case int64:
+		return v
+	case float64:
+		return int64(v)
+	default:
+		return 0
+	}
 }
 
 func assertMode(t *testing.T, path string, want os.FileMode) {
