@@ -896,7 +896,7 @@ Acceptance:
 ### 9.3 Performance Hotspots
 
 - [x] Profile TUI render on long transcript.
-- [ ] Profile Telegram edit throttling.
+- [x] Profile Telegram edit throttling.
 - [x] Profile web fetch/extract.
 - [x] Profile JSONL append/replay.
 - [x] Profile provider streaming.
@@ -904,8 +904,8 @@ Acceptance:
 
 Acceptance:
 
-- [ ] Long runs do not degrade into unusable UI.
-- [ ] Streaming stays visibly alive.
+- [x] Long runs do not degrade into unusable UI.
+- [x] Streaming stays visibly alive.
 
 ## Phase 10: Documentation
 

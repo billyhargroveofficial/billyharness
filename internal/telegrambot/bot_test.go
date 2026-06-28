@@ -575,6 +575,82 @@ func TestTelegramRunUsesSingleProgressMessageWithInlineTools(t *testing.T) {
 	}
 }
 
+func TestTelegramRunThrottlesBurstProgressEdits(t *testing.T) {
+	var mu sync.Mutex
+	var editTexts []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		switch r.URL.Path {
+		case "/botbottoken/sendMessage":
+			writeTelegramResult(w, SentMessage{MessageID: 11, Chat: Chat{ID: 123}})
+		case "/botbottoken/editMessageText":
+			if text, ok := payload["text"].(string); ok {
+				mu.Lock()
+				editTexts = append(editTexts, text)
+				mu.Unlock()
+			}
+			writeTelegramResult(w, true)
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	events := []protocol.Event{{Type: protocol.EventRunStarted}}
+	for i := 0; i < 80; i++ {
+		events = append(events, protocol.Event{Type: protocol.EventAssistantDelta, Data: fmt.Sprintf("token-%02d ", i)})
+	}
+	client := NewClient(ClientOptions{
+		BaseURL:     server.URL,
+		Token:       "bottoken",
+		MinInterval: time.Nanosecond,
+	})
+	bot, err := New(Options{
+		BotToken:        "bottoken",
+		StatePath:       t.TempDir() + "/state.json",
+		Model:           "deepseek-v4-flash",
+		Profile:         "billy",
+		ReasoningEffort: "high",
+		EditInterval:    20 * time.Millisecond,
+		AllowedChatIDs:  map[int64]bool{123: true},
+		SendEnabled:     true,
+		DryRunDefault:   false,
+	}, client, scriptedHarness{
+		delay:  90 * time.Millisecond,
+		events: events,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "burst"})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(editTexts) == 0 {
+		t.Fatal("expected progress edits")
+	}
+	if len(editTexts) >= 12 {
+		t.Fatalf("burst should be coalesced into a small number of edits, got %d edits", len(editTexts))
+	}
+	var sawFreshTail bool
+	for _, text := range editTexts {
+		if strings.Contains(text, "token-79") {
+			sawFreshTail = true
+			break
+		}
+	}
+	if !sawFreshTail {
+		t.Fatalf("progress edits never showed freshest delta tail: %#v", editTexts)
+	}
+}
+
 func TestTelegramConfigCommandSendsSanitizedSummary(t *testing.T) {
 	var sentText string
 	var parseMode string
