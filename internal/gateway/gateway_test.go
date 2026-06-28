@@ -447,6 +447,9 @@ func TestGatewaySessionStoreRestoresSessionAfterRestart(t *testing.T) {
 	assertPerm(t, historyPath, 0o600)
 	assertPerm(t, eventsPath, 0o600)
 	assertPerm(t, filepath.Join(storeDir, created.ID+".json"), 0o600)
+	assertPerm(t, filepath.Join(sessionDir, sessionConfigSnapshotName), 0o600)
+	assertPerm(t, filepath.Join(sessionDir, sessionModelSnapshotName), 0o600)
+	assertPerm(t, filepath.Join(sessionDir, sessionMCPSnapshotName), 0o600)
 
 	var manifest sessionManifest
 	manifestBytes, err := os.ReadFile(manifestPath)
@@ -459,8 +462,25 @@ func TestGatewaySessionStoreRestoresSessionAfterRestart(t *testing.T) {
 	if manifest.SessionID != created.ID || manifest.HistoryJSONL != sessionHistoryJSONLName || manifest.EventsJSONL != sessionEventsJSONLName {
 		t.Fatalf("manifest = %#v", manifest)
 	}
+	if manifest.ConfigSnapshotJSON != sessionConfigSnapshotName ||
+		manifest.ModelProviderSnapshotJSON != sessionModelSnapshotName ||
+		manifest.MCPSnapshotJSON != sessionMCPSnapshotName {
+		t.Fatalf("manifest missing snapshots: %#v", manifest)
+	}
 	if manifest.HistorySeq < 2 || manifest.EventSeq == 0 || manifest.MessageCount < 3 || manifest.HistorySHA256 == "" {
 		t.Fatalf("manifest missing replay metadata: %#v", manifest)
+	}
+	for _, file := range []string{sessionConfigSnapshotName, sessionModelSnapshotName, sessionMCPSnapshotName} {
+		body, err := os.ReadFile(filepath.Join(sessionDir, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !json.Valid(body) {
+			t.Fatalf("%s is not JSON: %s", file, body)
+		}
+		if strings.Contains(string(body), "sk-") {
+			t.Fatalf("%s leaked token-like content: %s", file, body)
+		}
 	}
 
 	history := readSessionHistoryRecords(t, historyPath)
@@ -488,6 +508,28 @@ func TestGatewaySessionStoreRestoresSessionAfterRestart(t *testing.T) {
 		if !sawSessionEvent(events, typ) {
 			t.Fatalf("events missing %s: %#v", typ, events)
 		}
+	}
+	inspection, err := InspectStoredSession(storeDir, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inspection.OfflineReplayReady ||
+		inspection.MessageCount != manifest.MessageCount ||
+		inspection.Manifest.SchemaVersion != gatewaySessionSchemaVersion ||
+		inspection.Events.EventTypes[string(protocol.EventRunCompleted)] == 0 ||
+		!hasExistingFile(inspection.Files, "config_snapshot") ||
+		!hasExistingFile(inspection.Files, "model_provider_snapshot") ||
+		!hasExistingFile(inspection.Files, "mcp_snapshot") {
+		t.Fatalf("inspection = %#v", inspection)
+	}
+	listed, err := ListStoredSessions(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Sessions) != 1 ||
+		listed.Sessions[0].ID != created.ID ||
+		!listed.Sessions[0].OfflineReplayReady {
+		t.Fatalf("listed sessions = %#v warnings=%#v", listed.Sessions, listed.Warnings)
 	}
 
 	if err := writeLegacySnapshot(filepath.Join(storeDir, created.ID+".json"), storedSession{
@@ -643,6 +685,13 @@ func TestGatewaySessionStoreLoadsLegacySnapshot(t *testing.T) {
 	}
 	if len(got.Messages) != 2 || got.Messages[1].Content != "old prompt" {
 		t.Fatalf("legacy messages = %#v", got.Messages)
+	}
+	inspection, err := InspectStoredSession(storeDir, "legacy-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inspection.Legacy || !inspection.OfflineReplayReady || inspection.MessageCount != 2 {
+		t.Fatalf("legacy inspection = %#v", inspection)
 	}
 }
 

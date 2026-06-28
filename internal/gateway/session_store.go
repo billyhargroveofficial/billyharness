@@ -20,6 +20,9 @@ const (
 	sessionManifestName         = "manifest.json"
 	sessionHistoryJSONLName     = "history.jsonl"
 	sessionEventsJSONLName      = "events.jsonl"
+	sessionConfigSnapshotName   = "config.snapshot.json"
+	sessionModelSnapshotName    = "model_provider.snapshot.json"
+	sessionMCPSnapshotName      = "mcp.snapshot.json"
 	sessionHistoryCreated       = "session.created"
 	sessionHistorySnapshot      = "history.snapshot"
 )
@@ -38,17 +41,72 @@ type storedSession struct {
 }
 
 type sessionManifest struct {
-	SchemaVersion int       `json:"schema_version"`
-	SessionID     string    `json:"session_id"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	HistoryJSONL  string    `json:"history_jsonl"`
-	EventsJSONL   string    `json:"events_jsonl,omitempty"`
-	SnapshotJSON  string    `json:"snapshot_json,omitempty"`
-	HistorySeq    int64     `json:"history_seq"`
-	EventSeq      int64     `json:"event_seq,omitempty"`
-	MessageCount  int       `json:"message_count"`
-	HistorySHA256 string    `json:"history_sha256,omitempty"`
+	SchemaVersion             int       `json:"schema_version"`
+	SessionID                 string    `json:"session_id"`
+	CreatedAt                 time.Time `json:"created_at"`
+	UpdatedAt                 time.Time `json:"updated_at"`
+	HistoryJSONL              string    `json:"history_jsonl"`
+	EventsJSONL               string    `json:"events_jsonl,omitempty"`
+	SnapshotJSON              string    `json:"snapshot_json,omitempty"`
+	ConfigSnapshotJSON        string    `json:"config_snapshot_json,omitempty"`
+	ModelProviderSnapshotJSON string    `json:"model_provider_snapshot_json,omitempty"`
+	MCPSnapshotJSON           string    `json:"mcp_snapshot_json,omitempty"`
+	HistorySeq                int64     `json:"history_seq"`
+	EventSeq                  int64     `json:"event_seq,omitempty"`
+	MessageCount              int       `json:"message_count"`
+	HistorySHA256             string    `json:"history_sha256,omitempty"`
+}
+
+type sessionStoreSnapshots struct {
+	Config        map[string]any `json:"config,omitempty"`
+	ModelProvider map[string]any `json:"model_provider,omitempty"`
+	MCP           map[string]any `json:"mcp,omitempty"`
+}
+
+func (s *Session) setStoreSnapshots(snapshots sessionStoreSnapshots) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.storeSnapshots = sessionStoreSnapshots{
+		Config:        cloneSnapshotMap(snapshots.Config),
+		ModelProvider: cloneSnapshotMap(snapshots.ModelProvider),
+		MCP:           cloneSnapshotMap(snapshots.MCP),
+	}
+	s.mu.Unlock()
+}
+
+func (s *Session) snapshotFiles() sessionStoreSnapshots {
+	if s == nil {
+		return sessionStoreSnapshots{}
+	}
+	s.mu.Lock()
+	snapshots := s.storeSnapshots
+	s.mu.Unlock()
+	return sessionStoreSnapshots{
+		Config:        cloneSnapshotMap(snapshots.Config),
+		ModelProvider: cloneSnapshotMap(snapshots.ModelProvider),
+		MCP:           cloneSnapshotMap(snapshots.MCP),
+	}
+}
+
+func cloneSnapshotMap(value map[string]any) map[string]any {
+	if len(value) == 0 {
+		return nil
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		out := make(map[string]any, len(value))
+		for key, item := range value {
+			out[key] = item
+		}
+		return out
+	}
+	var out map[string]any
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil
+	}
+	return out
 }
 
 type sessionHistoryRecord struct {
@@ -170,14 +228,17 @@ func (s *sessionStore) AppendEvent(session *Session, event protocol.Event) (prot
 			created = time.Now().UTC()
 		}
 		manifest = sessionManifest{
-			SchemaVersion: gatewaySessionSchemaVersion,
-			SessionID:     id,
-			CreatedAt:     created,
-			UpdatedAt:     created,
-			HistoryJSONL:  sessionHistoryJSONLName,
-			EventsJSONL:   sessionEventsJSONLName,
-			SnapshotJSON:  id + ".json",
-			MessageCount:  len(session.messages()),
+			SchemaVersion:             gatewaySessionSchemaVersion,
+			SessionID:                 id,
+			CreatedAt:                 created,
+			UpdatedAt:                 created,
+			HistoryJSONL:              sessionHistoryJSONLName,
+			EventsJSONL:               sessionEventsJSONLName,
+			SnapshotJSON:              id + ".json",
+			ConfigSnapshotJSON:        sessionConfigSnapshotName,
+			ModelProviderSnapshotJSON: sessionModelSnapshotName,
+			MCPSnapshotJSON:           sessionMCPSnapshotName,
+			MessageCount:              len(session.messages()),
 		}
 		if err := writeSessionManifest(manifestPath, manifest); err != nil {
 			return event, err
@@ -313,19 +374,44 @@ func (s *sessionStore) saveLocked(session *Session) error {
 			return err
 		}
 	}
+	snapshots := session.snapshotFiles()
+	configSnapshotJSON := manifest.ConfigSnapshotJSON
+	modelSnapshotJSON := manifest.ModelProviderSnapshotJSON
+	mcpSnapshotJSON := manifest.MCPSnapshotJSON
+	if len(snapshots.Config) > 0 {
+		configSnapshotJSON = sessionConfigSnapshotName
+		if err := writeSessionSnapshot(filepath.Join(sessionDir, configSnapshotJSON), snapshots.Config); err != nil {
+			return err
+		}
+	}
+	if len(snapshots.ModelProvider) > 0 {
+		modelSnapshotJSON = sessionModelSnapshotName
+		if err := writeSessionSnapshot(filepath.Join(sessionDir, modelSnapshotJSON), snapshots.ModelProvider); err != nil {
+			return err
+		}
+	}
+	if len(snapshots.MCP) > 0 {
+		mcpSnapshotJSON = sessionMCPSnapshotName
+		if err := writeSessionSnapshot(filepath.Join(sessionDir, mcpSnapshotJSON), snapshots.MCP); err != nil {
+			return err
+		}
+	}
 
 	manifest = sessionManifest{
-		SchemaVersion: gatewaySessionSchemaVersion,
-		SessionID:     id,
-		CreatedAt:     created,
-		UpdatedAt:     now,
-		HistoryJSONL:  sessionHistoryJSONLName,
-		EventsJSONL:   sessionEventsJSONLName,
-		SnapshotJSON:  id + ".json",
-		HistorySeq:    history.lastSeq,
-		EventSeq:      eventSeq,
-		MessageCount:  len(messages),
-		HistorySHA256: history.historySHA256,
+		SchemaVersion:             gatewaySessionSchemaVersion,
+		SessionID:                 id,
+		CreatedAt:                 created,
+		UpdatedAt:                 now,
+		HistoryJSONL:              sessionHistoryJSONLName,
+		EventsJSONL:               sessionEventsJSONLName,
+		SnapshotJSON:              id + ".json",
+		ConfigSnapshotJSON:        configSnapshotJSON,
+		ModelProviderSnapshotJSON: modelSnapshotJSON,
+		MCPSnapshotJSON:           mcpSnapshotJSON,
+		HistorySeq:                history.lastSeq,
+		EventSeq:                  eventSeq,
+		MessageCount:              len(messages),
+		HistorySHA256:             history.historySHA256,
 	}
 	if err := writeSessionManifest(manifestPath, manifest); err != nil {
 		return err
@@ -605,6 +691,25 @@ func appendJSONL(path string, value any) error {
 
 func writeLegacySnapshot(path string, record storedSession) error {
 	bytes, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := ensurePrivateGatewayDir(filepath.Dir(path)); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(bytes, '\n'), 0o600); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func writeSessionSnapshot(path string, value any) error {
+	bytes, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}

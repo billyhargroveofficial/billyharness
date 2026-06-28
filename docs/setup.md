@@ -25,6 +25,14 @@ curl -fsS http://127.0.0.1:8765/health
 ./bin/fast-agent-harness doctor -json
 ```
 
+Inspect saved gateway sessions directly from JSONL files without calling the API:
+
+```sh
+./bin/fast-agent-harness sessions list
+./bin/fast-agent-harness sessions inspect SESSION_ID
+./bin/fast-agent-harness sessions inspect -json SESSION_ID
+```
+
 ## TUI
 
 The TUI auto-discovers the local gateway from config, so normal use does not need `-gateway`:
@@ -110,6 +118,7 @@ cd /root/billyharness
 git status --short
 ./bin/fast-agent-harness doctor -strict
 curl -fsS http://127.0.0.1:8765/health
+./bin/fast-agent-harness sessions list
 systemctl --no-pager --full status billyharness-gateway.service billyharness-telegram.service
 journalctl -u billyharness-gateway.service -n 80 --no-pager
 journalctl -u billyharness-telegram.service -n 80 --no-pager

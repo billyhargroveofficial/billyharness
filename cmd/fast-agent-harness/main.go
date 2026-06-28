@@ -64,6 +64,8 @@ func run() error {
 		return configCommand(os.Args[2:], os.Stdout)
 	case "bench":
 		return benchCmd(os.Args[2:])
+	case "sessions", "session":
+		return sessionsCmd(os.Args[2:])
 	case "tools":
 		return printTools()
 	case "doctor", "health":
@@ -870,6 +872,8 @@ func usage() {
 	fmt.Println("  serve|gateway [-mock] [-addr 127.0.0.1:8765]")
 	fmt.Println("  mcp")
 	fmt.Println("  config inspect [-json]")
+	fmt.Println("  sessions list [-dir DIR] [-json]")
+	fmt.Println("  sessions inspect [-dir DIR] [-json] SESSION_ID")
 	fmt.Println("  bench run -tasks tasks.jsonl -out runs [-model deepseek-v4-flash] [-max-rounds 100]")
 	fmt.Println("  bench terminal-bench export -tasks tasks.jsonl -out tb-dataset")
 	fmt.Println("  bench terminal-bench import -dataset tb-dataset [-out tasks.jsonl]")

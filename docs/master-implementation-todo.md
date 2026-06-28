@@ -792,23 +792,23 @@ Purpose: make every session and benchmark explainable after the fact.
 
 ### 8.1 Session Store
 
-- [ ] JSONL remains canonical.
+- [x] JSONL remains canonical.
 - [ ] Add or verify files:
-  - [ ] manifest
-  - [ ] history JSONL
-  - [ ] events JSONL
+  - [x] manifest
+  - [x] history JSONL
+  - [x] events JSONL
   - [ ] payload refs
-  - [ ] config snapshot
-  - [ ] model/provider snapshot
-  - [ ] MCP snapshot
-- [ ] Add schema version.
-- [ ] Add migration/fallback for older sessions.
-- [ ] Add session inspector command.
+  - [x] config snapshot
+  - [x] model/provider snapshot
+  - [x] MCP snapshot
+- [x] Add schema version.
+- [x] Add migration/fallback for older sessions.
+- [x] Add session inspector command.
 
 Acceptance:
 
-- [ ] A session can be replayed without API access.
-- [ ] Old sessions do not crash the loader.
+- [x] A session can be replayed without API access.
+- [x] Old sessions do not crash the loader.
 
 ### 8.2 Trace Bundles
 

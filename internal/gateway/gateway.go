@@ -25,6 +25,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
+	"github.com/billyhargroveofficial/billyharness/internal/runstate"
 	"github.com/billyhargroveofficial/billyharness/internal/secrets"
 	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
@@ -49,13 +50,14 @@ type ServerOptions struct {
 }
 
 type Session struct {
-	ID            string              `json:"id"`
-	Created       time.Time           `json:"created"`
-	Thread        *sessionpkg.Session `json:"-"`
-	events        *eventHub
-	eventRecorder func(protocol.Event) protocol.Event
-	mu            sync.Mutex
-	status        SessionStatus
+	ID             string              `json:"id"`
+	Created        time.Time           `json:"created"`
+	Thread         *sessionpkg.Session `json:"-"`
+	events         *eventHub
+	eventRecorder  func(protocol.Event) protocol.Event
+	storeSnapshots sessionStoreSnapshots
+	mu             sync.Mutex
+	status         SessionStatus
 }
 
 type RunRequest struct {
@@ -909,6 +911,7 @@ func (s *Server) saveSession(session *Session) error {
 	if s.store == nil {
 		return nil
 	}
+	s.refreshSessionSnapshots(session)
 	return s.store.Save(session)
 }
 
@@ -924,6 +927,121 @@ func (s *Server) attachSessionStore(session *Session) {
 		}
 		return stored
 	}
+}
+
+func (s *Server) refreshSessionSnapshots(session *Session) {
+	if s == nil || session == nil {
+		return
+	}
+	cfg := s.sessionSnapshotConfig(session)
+	var specs []protocol.ToolSpec
+	if s.registry != nil {
+		specs = s.registry.Specs()
+	}
+	runtimeSnapshot := runstate.NewSnapshot(cfg, session.messages(), specs)
+	session.setStoreSnapshots(sessionStoreSnapshots{
+		Config:        sessionConfigSnapshot(cfg),
+		ModelProvider: runtimeSnapshot.Metadata(),
+		MCP:           s.mcpSnapshot(cfg),
+	})
+}
+
+func (s *Server) sessionSnapshotConfig(session *Session) config.Config {
+	cfg := s.cfg
+	if session == nil {
+		cfg.ApplyModelProviderDefaults()
+		return cfg
+	}
+	status := session.Status()
+	if strings.TrimSpace(status.Provider) != "" {
+		cfg.Provider = status.Provider
+	}
+	if strings.TrimSpace(status.Model) != "" {
+		cfg.Model = status.Model
+	}
+	if strings.TrimSpace(status.Profile) != "" {
+		cfg.Profile = status.Profile
+	}
+	if strings.TrimSpace(status.ReasoningEffort) != "" {
+		cfg.ReasoningEffort = status.ReasoningEffort
+	}
+	cfg.ApplyModelProviderDefaults()
+	return cfg
+}
+
+func sessionConfigSnapshot(cfg config.Config) map[string]any {
+	return map[string]any{
+		"provider":                      cfg.Provider,
+		"model":                         cfg.Model,
+		"profile":                       cfg.Profile,
+		"thinking":                      cfg.Thinking,
+		"reasoning_effort":              cfg.ReasoningEffort,
+		"max_tokens":                    cfg.MaxTokens,
+		"max_tool_rounds":               cfg.MaxToolRounds,
+		"max_parallel_tools":            cfg.MaxParallelTools,
+		"provider_max_retries":          cfg.ProviderMaxRetries,
+		"context_window_tokens":         cfg.ContextWindowTokens,
+		"context_compact_tokens":        cfg.ContextCompactTokens,
+		"context_compact_keep":          cfg.ContextCompactKeep,
+		"context_compact_max_chars":     cfg.ContextCompactMaxChars,
+		"web_summary_mode":              cfg.WebSummaryMode,
+		"web_summary_provider":          cfg.WebSummaryProvider,
+		"web_summary_model":             cfg.WebSummaryModel,
+		"web_summary_max_input_tokens":  cfg.WebSummaryMaxInputTokens,
+		"web_summary_max_output_tokens": cfg.WebSummaryMaxOutputTokens,
+		"workspace_roots":               append([]string(nil), cfg.WorkspaceRoots...),
+		"max_tool_output_bytes":         cfg.MaxToolOutputBytes,
+		"auto_approve_dangerous":        cfg.AutoApproveDangerous,
+		"store_reasoning_content":       cfg.StoreReasoningContent,
+		"gateway_addr":                  cfg.GatewayAddr,
+		"mcp_enabled":                   cfg.MCPEnabled,
+		"mcp_config_files":              append([]string(nil), cfg.MCPConfigFiles...),
+		"mcp_allowed_servers":           append([]string(nil), cfg.MCPAllowedServers...),
+	}
+}
+
+func (s *Server) mcpSnapshot(cfg config.Config) map[string]any {
+	var runtimeStatuses []any
+	connected := 0
+	if s.registry != nil {
+		for _, status := range s.registry.MCPStatuses() {
+			runtimeStatuses = append(runtimeStatuses, status)
+			if status.Connected {
+				connected++
+			}
+		}
+	}
+	return map[string]any{
+		"enabled":        cfg.MCPEnabled,
+		"config_files":   append([]string(nil), cfg.MCPConfigFiles...),
+		"allowed":        append([]string(nil), cfg.MCPAllowedServers...),
+		"server_count":   len(cfg.MCPServers),
+		"status_count":   len(runtimeStatuses),
+		"connected":      connected,
+		"configured":     mcpServerSummaries(cfg.MCPServers),
+		"runtime_status": runtimeStatuses,
+	}
+}
+
+func mcpServerSummaries(servers []config.MCPServer) []map[string]any {
+	out := make([]map[string]any, 0, len(servers))
+	for _, server := range servers {
+		transport := "stdio"
+		if strings.TrimSpace(server.URL) != "" {
+			transport = "http"
+		}
+		out = append(out, map[string]any{
+			"name":           server.Name,
+			"enabled":        server.Enabled,
+			"required":       server.Required,
+			"transport":      transport,
+			"command":        filepath.Base(server.Command),
+			"url_set":        strings.TrimSpace(server.URL) != "",
+			"enabled_tools":  append([]string(nil), server.EnabledTools...),
+			"disabled_tools": append([]string(nil), server.DisabledTools...),
+		})
+	}
+	return out
 }
 
 func (s *Server) agentFor(req RunRequest) (*agent.Agent, error) {

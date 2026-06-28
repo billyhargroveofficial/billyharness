@@ -14,6 +14,8 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/provider"
+	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
 func TestGatewayRunSendsFullRunRequest(t *testing.T) {
@@ -123,6 +125,59 @@ func TestConfigInspectJSONDoesNotLeakDotenvSecrets(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"model"`) || !strings.Contains(out.String(), `deepseek-v4-pro`) {
 		t.Fatalf("config inspect missing model: %s", out.String())
+	}
+}
+
+func TestSessionsCommandListsAndInspectsStore(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := gateway.NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), gateway.ServerOptions{SessionStoreDir: storeDir})
+
+	create := httptest.NewRecorder()
+	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", nil))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var created gateway.SessionResponse
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	run := httptest.NewRecorder()
+	server.Handler().ServeHTTP(run, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/run", strings.NewReader(`{"prompt":"inspect me"}`)))
+	if run.Code != http.StatusOK {
+		t.Fatalf("run status = %d body=%s", run.Code, run.Body.String())
+	}
+
+	var listOut bytes.Buffer
+	if err := sessionsCommand([]string{"list", "-dir", storeDir}, &listOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(listOut.String(), created.ID) || !strings.Contains(listOut.String(), "replay=true") {
+		t.Fatalf("list output missing session/replay:\n%s", listOut.String())
+	}
+
+	var inspectOut bytes.Buffer
+	if err := sessionsCommand([]string{"inspect", "-dir", storeDir, created.ID}, &inspectOut); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"offline replay: true", "config_snapshot exists=true", "model_provider_snapshot exists=true", "mcp_snapshot exists=true"} {
+		if !strings.Contains(inspectOut.String(), want) {
+			t.Fatalf("inspect output missing %q:\n%s", want, inspectOut.String())
+		}
+	}
+
+	var jsonOut bytes.Buffer
+	if err := sessionsCommand([]string{"inspect", "-dir", storeDir, "-json", created.ID}, &jsonOut); err != nil {
+		t.Fatal(err)
+	}
+	var inspection gateway.StoredSessionInspection
+	if err := json.Unmarshal(jsonOut.Bytes(), &inspection); err != nil {
+		t.Fatal(err)
+	}
+	if inspection.SessionID != created.ID || !inspection.OfflineReplayReady || inspection.Events.Records == 0 {
+		t.Fatalf("inspection = %#v", inspection)
 	}
 }
 
