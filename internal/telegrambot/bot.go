@@ -29,6 +29,7 @@ type Options struct {
 	PollTimeoutSec   int
 	EditInterval     time.Duration
 	AllowedChatIDs   map[int64]bool
+	AllowedUserIDs   map[int64]bool
 	AllowAllChats    bool
 	SendEnabled      bool
 	DryRunDefault    bool
@@ -126,7 +127,7 @@ func (b *Bot) Run(ctx context.Context) error {
 
 func (b *Bot) handleMessage(parent context.Context, msg Message) {
 	key := chatKey(msg.Chat.ID, msg.ThreadID)
-	if !b.allowed(msg.Chat.ID) {
+	if !b.allowed(msg) {
 		_ = b.sendPlain(parent, msg, "Chat is not allowlisted for this bot.")
 		return
 	}
@@ -499,14 +500,20 @@ func (b *Bot) nextOffset() int {
 	return b.state.Offset
 }
 
-func (b *Bot) allowed(chatID int64) bool {
+func (b *Bot) allowed(msg Message) bool {
 	if b.opts.AllowAllChats {
 		return true
 	}
-	if len(b.opts.AllowedChatIDs) == 0 {
+	if len(b.opts.AllowedChatIDs) == 0 && len(b.opts.AllowedUserIDs) == 0 {
 		return !b.opts.RequireAllowlist
 	}
-	return b.opts.AllowedChatIDs[chatID]
+	if b.opts.AllowedChatIDs[msg.Chat.ID] {
+		return true
+	}
+	if msg.From != nil && b.opts.AllowedUserIDs[msg.From.ID] {
+		return true
+	}
+	return false
 }
 
 func (b *Bot) mutexFor(key string) *sync.Mutex {
@@ -648,15 +655,23 @@ Commands:
 }
 
 func StatusHTML(state ChatState, opts Options) string {
-	var allowed []string
+	var allowedChats []string
 	for chat := range opts.AllowedChatIDs {
-		allowed = append(allowed, strconv.FormatInt(chat, 10))
+		allowedChats = append(allowedChats, strconv.FormatInt(chat, 10))
 	}
-	sort.Strings(allowed)
+	sort.Strings(allowedChats)
+	var allowedUsers []string
+	for user := range opts.AllowedUserIDs {
+		allowedUsers = append(allowedUsers, strconv.FormatInt(user, 10))
+	}
+	sort.Strings(allowedUsers)
 	if opts.AllowAllChats {
-		allowed = []string{"all chats"}
-	} else if len(allowed) == 0 {
-		allowed = []string{"not configured"}
+		allowedChats = []string{"all chats"}
+	} else if len(allowedChats) == 0 {
+		allowedChats = []string{"not configured"}
+	}
+	if len(allowedUsers) == 0 {
+		allowedUsers = []string{"not configured"}
 	}
 	return "<b>Status</b>\n" +
 		"session: <code>" + esc(short(state.SessionID)) + "</code>\n" +
@@ -664,7 +679,8 @@ func StatusHTML(state ChatState, opts Options) string {
 		"profile: <code>" + esc(fallback(state.Profile, opts.Profile)) + "</code>\n" +
 		"reasoning: <code>" + esc(fallback(state.ReasoningEffort, opts.ReasoningEffort)) + "</code>\n" +
 		"send: <code>" + esc(fmt.Sprint(opts.SendEnabled && !opts.DryRunDefault)) + "</code>\n" +
-		"allowlist: <code>" + esc(strings.Join(allowed, ",")) + "</code>"
+		"allowed chats: <code>" + esc(strings.Join(allowedChats, ",")) + "</code>\n" +
+		"allowed users: <code>" + esc(strings.Join(allowedUsers, ",")) + "</code>"
 }
 
 func (r *Renderer) StreamPlainText(model, reasoning string, tools *ToolProgress) string {

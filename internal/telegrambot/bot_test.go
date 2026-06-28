@@ -239,7 +239,7 @@ func TestLiveTelegramRequiresAllowlistUnlessExplicitlyAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bot.allowed(123) {
+	if bot.allowed(Message{Chat: Chat{ID: 123}}) {
 		t.Fatal("live bot without allowlist should be fail-closed")
 	}
 	if !bot.opts.RequireAllowlist {
@@ -256,8 +256,27 @@ func TestLiveTelegramRequiresAllowlistUnlessExplicitlyAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !allowAll.allowed(123) {
+	if !allowAll.allowed(Message{Chat: Chat{ID: 123}}) {
 		t.Fatal("allow-all-chats should explicitly permit unknown chats")
+	}
+}
+
+func TestTelegramAllowsExplicitUserID(t *testing.T) {
+	bot, err := New(Options{
+		BotToken:       "token",
+		StatePath:      t.TempDir() + "/state.json",
+		AllowedUserIDs: map[int64]bool{8226987886: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, nil, newBlockingHarness())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bot.allowed(Message{Chat: Chat{ID: 999}, From: &User{ID: 8226987886}}) {
+		t.Fatal("explicit allowed user should be accepted even when chat id differs")
+	}
+	if bot.allowed(Message{Chat: Chat{ID: 999}, From: &User{ID: 111}}) {
+		t.Fatal("unknown user in unknown chat should be rejected")
 	}
 }
 
