@@ -100,11 +100,7 @@ func (c *Config) ApplyWebSummaryDefaults() {
 	c.WebSummaryModel = modelinfo.NormalizeAlias(c.WebSummaryModel)
 	c.WebSummaryProvider = modelinfo.NormalizeProvider(c.WebSummaryProvider)
 	if c.WebSummaryModel == "" {
-		if modelinfo.ProviderForModel(c.Model, c.Provider) == modelinfo.ProviderOpenAICodex {
-			c.WebSummaryModel = "gpt-5.4-mini"
-		} else {
-			c.WebSummaryModel = "deepseek-v4-flash"
-		}
+		c.WebSummaryModel = modelinfo.DefaultSummaryModel(c.Model, c.Provider)
 	}
 	if c.WebSummaryProvider == "" {
 		c.WebSummaryProvider = modelinfo.ProviderForModel(c.WebSummaryModel, c.Provider)

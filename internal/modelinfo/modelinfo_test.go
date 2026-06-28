@@ -39,3 +39,56 @@ func TestLookupIncludesBillingHints(t *testing.T) {
 		t.Fatalf("gpt = %#v", gpt)
 	}
 }
+
+func TestLookupIncludesCapabilityMetadata(t *testing.T) {
+	flash := Lookup("deepseek-v4-flash")
+	if flash.ContextWindowTokens != 1_000_000 || !flash.ToolCalls || !flash.ParallelToolCalls || !flash.Streaming ||
+		flash.DefaultSummaryModel != "deepseek-v4-flash" ||
+		!hasString(flash.ReasoningModes, "max") ||
+		!hasString(flash.TokenAccountingFields, "reasoning_tokens") ||
+		!hasString(flash.CacheAccountingFields, "cache_hit_tokens") {
+		t.Fatalf("flash capabilities = %#v", flash)
+	}
+	gpt := Lookup("gpt-5.5")
+	if gpt.ContextWindowTokens != 1_000_000 || !gpt.ToolCalls || !gpt.Streaming ||
+		gpt.DefaultSummaryModel != "gpt-5.4-mini" ||
+		!hasString(gpt.CacheAccountingFields, "cache_miss_tokens") {
+		t.Fatalf("gpt capabilities = %#v", gpt)
+	}
+}
+
+func TestProviderCatalogIncludesCoreAndCustomProviders(t *testing.T) {
+	deepseek := Provider("deepseek")
+	if !deepseek.OpenAICompatible || deepseek.Auth != "api-key" || len(deepseek.Models) == 0 {
+		t.Fatalf("deepseek provider = %#v", deepseek)
+	}
+	codex := Provider("codex")
+	if codex.ID != ProviderOpenAICodex || !codex.Subscription || codex.Auth != "codex-oauth" {
+		t.Fatalf("codex provider = %#v", codex)
+	}
+	custom := Provider("my-openai-compatible")
+	if !custom.Custom || !custom.OpenAICompatible || custom.Transport != "openai-compatible-chat-completions" {
+		t.Fatalf("custom provider = %#v", custom)
+	}
+	if len(Providers()) < 3 {
+		t.Fatalf("providers = %#v", Providers())
+	}
+}
+
+func TestDefaultSummaryModelUsesCatalog(t *testing.T) {
+	if got := DefaultSummaryModel("gpt-5.5", "deepseek"); got != "gpt-5.4-mini" {
+		t.Fatalf("codex summary model = %q", got)
+	}
+	if got := DefaultSummaryModel("deepseek-v4-pro", "openai-codex"); got != "deepseek-v4-flash" {
+		t.Fatalf("deepseek summary model = %q", got)
+	}
+}
+
+func hasString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}

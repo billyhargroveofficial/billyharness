@@ -270,20 +270,20 @@ Acceptance:
 
 ### 2.3 Provider Catalog
 
-- [ ] Add provider catalog entries:
-  - [ ] DeepSeek OpenAI-compatible
-  - [ ] Codex/OpenAI OAuth
-  - [ ] OpenAI-compatible custom provider
-- [ ] Add model metadata:
-  - [ ] context window
-  - [ ] reasoning modes
-  - [ ] tool-call support
-  - [ ] streaming support
-  - [ ] token accounting fields
-  - [ ] cache accounting fields
-  - [ ] default summary model
-  - [ ] pricing if known/configured
-- [ ] Add provider capability tests.
+- [x] Add provider catalog entries:
+  - [x] DeepSeek OpenAI-compatible
+  - [x] Codex/OpenAI OAuth
+  - [x] OpenAI-compatible custom provider
+- [x] Add model metadata:
+  - [x] context window
+  - [x] reasoning modes
+  - [x] tool-call support
+  - [x] streaming support
+  - [x] token accounting fields
+  - [x] cache accounting fields
+  - [x] default summary model
+  - [x] pricing if known/configured
+- [x] Add provider capability tests.
 - [ ] Add provider request metadata events:
   - [ ] request id
   - [ ] provider id
@@ -295,9 +295,9 @@ Acceptance:
 
 Acceptance:
 
-- [ ] Provider selection is data-driven where practical.
+- [x] Provider selection is data-driven where practical.
 - [ ] TUI/Telegram status line does not use confusing raw provider counters.
-- [ ] Context and cost displays are based on documented model metadata and provider usage.
+- [x] Context and cost displays are based on documented model metadata and provider usage.
 
 ### 2.4 AuthManager
 
