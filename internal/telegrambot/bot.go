@@ -51,6 +51,12 @@ type Bot struct {
 	cancel  map[string]context.CancelFunc
 }
 
+type gatewaySessionManager interface {
+	ListSessions(context.Context) ([]gateway.SessionSummary, error)
+	GetSession(context.Context, string) (gateway.SessionResponse, error)
+	CreateSessionFromMessages(context.Context, string, []protocol.Message) (string, error)
+}
+
 const telegramEditTimeout = 15 * time.Second
 
 func New(opts Options, client *Client, harness Harness) (*Bot, error) {
@@ -424,6 +430,10 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 		state.UpdatedAt = time.Now().UTC()
 		b.setChatState(key, state)
 		_ = b.sendPlain(ctx, msg, "New Billyharness session: "+short(id))
+	case "/resume":
+		b.handleResumeCommand(ctx, msg, key, legacyKey, arg)
+	case "/fork":
+		b.handleForkCommand(ctx, msg, key, legacyKey, arg)
 	case "/status":
 		state := b.chatStateWithLegacy(key, legacyKey)
 		_ = b.sendHTML(ctx, msg, StatusHTML(state, b.opts))
@@ -529,6 +539,154 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 	default:
 		_ = b.sendPlain(ctx, msg, "Unknown command. Use /help.")
 	}
+}
+
+func (b *Bot) handleResumeCommand(ctx context.Context, msg Message, key, legacyKey, arg string) {
+	manager, ok := b.harness.(gatewaySessionManager)
+	if !ok {
+		_ = b.sendPlain(ctx, msg, "Gateway session listing is not available in this harness.")
+		return
+	}
+	sessions, err := manager.ListSessions(ctx)
+	if err != nil {
+		_ = b.sendPlain(ctx, msg, "Resume failed: "+err.Error())
+		return
+	}
+	arg = strings.TrimSpace(arg)
+	state := b.chatStateWithLegacy(key, legacyKey)
+	if arg == "" {
+		_ = b.sendHTML(ctx, msg, formatTelegramSessionListHTML(sessions, state.SessionID))
+		return
+	}
+	session, err := resolveTelegramSession(sessions, arg)
+	if err != nil {
+		_ = b.sendPlain(ctx, msg, "Resume failed: "+err.Error())
+		return
+	}
+	state.SessionID = session.ID
+	state.LastEventSeq = 0
+	if session.Profile != "" {
+		state.Profile = session.Profile
+	}
+	if session.Model != "" {
+		state.Model = session.Model
+	}
+	if session.ReasoningEffort != "" {
+		state.ReasoningEffort = session.ReasoningEffort
+	}
+	if session.RunSeq > 0 {
+		state.AgentTurns = int(session.RunSeq)
+	}
+	state.UpdatedAt = time.Now().UTC()
+	b.setChatState(key, state)
+	_ = b.sendPlain(ctx, msg, "Resumed Billyharness session: "+short(session.ID))
+}
+
+func (b *Bot) handleForkCommand(ctx context.Context, msg Message, key, legacyKey, arg string) {
+	manager, ok := b.harness.(gatewaySessionManager)
+	if !ok {
+		_ = b.sendPlain(ctx, msg, "Gateway session forking is not available in this harness.")
+		return
+	}
+	state := b.chatStateWithLegacy(key, legacyKey)
+	sourceID := strings.TrimSpace(arg)
+	if sourceID == "" || strings.EqualFold(sourceID, "current") {
+		sourceID = state.SessionID
+	}
+	if sourceID == "" {
+		_ = b.sendPlain(ctx, msg, "No current session to fork. Send a message first or pass a session id.")
+		return
+	}
+	sessions, err := manager.ListSessions(ctx)
+	if err != nil {
+		_ = b.sendPlain(ctx, msg, "Fork failed: "+err.Error())
+		return
+	}
+	source, err := resolveTelegramSession(sessions, sourceID)
+	if err != nil {
+		_ = b.sendPlain(ctx, msg, "Fork failed: "+err.Error())
+		return
+	}
+	full, err := manager.GetSession(ctx, source.ID)
+	if err != nil {
+		_ = b.sendPlain(ctx, msg, "Fork failed: "+err.Error())
+		return
+	}
+	if len(full.Messages) == 0 {
+		_ = b.sendPlain(ctx, msg, "Fork failed: source session has no replayable messages.")
+		return
+	}
+	profile := state.Profile
+	if profile == "" {
+		profile = b.opts.Profile
+	}
+	id, err := manager.CreateSessionFromMessages(ctx, profile, full.Messages)
+	if err != nil {
+		_ = b.sendPlain(ctx, msg, "Fork failed: "+err.Error())
+		return
+	}
+	state.SessionID = id
+	state.LastEventSeq = 0
+	state.AgentTurns = 0
+	state.ToolCalls = 0
+	state.UpdatedAt = time.Now().UTC()
+	b.setChatState(key, state)
+	_ = b.sendPlain(ctx, msg, "Forked "+short(source.ID)+" into "+short(id))
+}
+
+func resolveTelegramSession(sessions []gateway.SessionSummary, prefix string) (gateway.SessionSummary, error) {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return gateway.SessionSummary{}, fmt.Errorf("session id required")
+	}
+	var matches []gateway.SessionSummary
+	for _, session := range sessions {
+		if session.ID == prefix {
+			return session, nil
+		}
+		if strings.HasPrefix(session.ID, prefix) {
+			matches = append(matches, session)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return gateway.SessionSummary{}, fmt.Errorf("session %q not found", prefix)
+	case 1:
+		return matches[0], nil
+	default:
+		return gateway.SessionSummary{}, fmt.Errorf("session prefix %q is ambiguous (%d matches)", prefix, len(matches))
+	}
+}
+
+func formatTelegramSessionListHTML(sessions []gateway.SessionSummary, currentID string) string {
+	if len(sessions) == 0 {
+		return "<b>Sessions</b>\nNo gateway sessions."
+	}
+	const maxSessions = 10
+	lines := []string{"<b>Sessions</b>"}
+	for i, session := range sessions {
+		if i >= maxSessions {
+			lines = append(lines, esc(fmt.Sprintf("… %d more", len(sessions)-maxSessions)))
+			break
+		}
+		marker := " "
+		if session.ID == currentID {
+			marker = "*"
+		}
+		meta := []string{strconv.Itoa(session.MessageCount) + " msgs"}
+		if session.Profile != "" {
+			meta = append(meta, session.Profile)
+		}
+		if session.Model != "" {
+			meta = append(meta, session.Model)
+		}
+		if session.Running {
+			meta = append(meta, "running")
+		}
+		lines = append(lines, esc(marker+" "+short(session.ID)+" · "+strings.Join(meta, " · ")))
+	}
+	lines = append(lines, "", "Use <code>/resume SESSION_ID</code> or <code>/fork SESSION_ID</code>.")
+	return trimTelegram(strings.Join(lines, "\n"))
 }
 
 func (b *Bot) toolViewHTML(ctx context.Context, sessionID string) (string, error) {
@@ -861,6 +1019,9 @@ Send a message to run the agent.
 
 Commands:
 <code>/new</code> new session
+<code>/resume</code> list sessions
+<code>/resume SESSION_ID</code> resume session
+<code>/fork current|SESSION_ID</code> fork session
 <code>/status</code> current chat settings
 <code>/model flash|pro|gpt|gpt-5.5</code>
 <code>/profile billy</code>

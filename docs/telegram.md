@@ -54,6 +54,9 @@ Older state files used only `chat_id[:message_thread_id]`. Billyharness still re
 /start
 /help
 /new
+/resume
+/resume SESSION_ID
+/fork current|SESSION_ID
 /status
 /model flash|pro|gpt|gpt-5.5
 /profile billy
@@ -68,9 +71,9 @@ Older state files used only `chat_id[:message_thread_id]`. Billyharness still re
 /cancel
 ```
 
-`/new` starts a fresh gateway session for the current Telegram state key and resets that key's turn/tool totals. `/context` shows active context and contributors for the current session. `/toolview` replays the current session and shows compact tool details for the latest run without raw tool output. `/mcp`, `/config`, and `/auth` show sanitized status.
+`/new` starts a fresh gateway session for the current Telegram state key and resets that key's turn/tool totals. `/resume` lists recent gateway sessions, and `/resume SESSION_ID` switches the current Telegram state key to that session. `/fork current` or `/fork SESSION_ID` clones the replayable messages from the source session into a new gateway session and makes it current. `/context` shows active context and contributors for the current session. `/toolview` replays the current session and shows compact tool details for the latest run without raw tool output. `/mcp`, `/config`, and `/auth` show sanitized status.
 
-`/resume` and `/fork` are not Telegram commands yet. Resuming and forking are currently handled through the TUI/gateway session tooling.
+Session id arguments can be full ids or unambiguous prefixes.
 
 ## Rendering And Throttling
 

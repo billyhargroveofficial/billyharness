@@ -183,11 +183,49 @@ type uniqueSessionHarness struct {
 	next int
 }
 
+type telegramSessionHarness struct {
+	scriptedHarness
+
+	mu              sync.Mutex
+	sessions        []gateway.SessionSummary
+	full            map[string]gateway.SessionResponse
+	createdProfile  string
+	createdMessages []protocol.Message
+	createdID       string
+}
+
 func (h *uniqueSessionHarness) CreateSession(context.Context, string) (string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.next++
 	return fmt.Sprintf("session-%d", h.next), nil
+}
+
+func (h *telegramSessionHarness) ListSessions(context.Context) ([]gateway.SessionSummary, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]gateway.SessionSummary(nil), h.sessions...), nil
+}
+
+func (h *telegramSessionHarness) GetSession(_ context.Context, sessionID string) (gateway.SessionResponse, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	session, ok := h.full[sessionID]
+	if !ok {
+		return gateway.SessionResponse{}, fmt.Errorf("session %s missing", sessionID)
+	}
+	return session, nil
+}
+
+func (h *telegramSessionHarness) CreateSessionFromMessages(_ context.Context, profile string, messages []protocol.Message) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.createdProfile = profile
+	h.createdMessages = append([]protocol.Message(nil), messages...)
+	if h.createdID == "" {
+		h.createdID = "forked-session"
+	}
+	return h.createdID, nil
 }
 
 func (h *telegramAuthHarness) SaveDeepSeekAPIKey(_ context.Context, apiKey string) (credentials.ProviderStatus, error) {
@@ -700,6 +738,144 @@ func TestTelegramToolViewShowsCompactLastRunTools(t *testing.T) {
 	harness.mu.Unlock()
 	if replaySeq != 0 {
 		t.Fatalf("toolview should replay current session from start, got after_seq=%d", replaySeq)
+	}
+}
+
+func TestTelegramResumeListsAndSelectsGatewaySession(t *testing.T) {
+	var sentTexts []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/botbottoken/sendMessage" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		text, _ := payload["text"].(string)
+		sentTexts = append(sentTexts, text)
+		writeTelegramResult(w, SentMessage{MessageID: 12, Chat: Chat{ID: 123}})
+	}))
+	defer server.Close()
+
+	statePath := t.TempDir() + "/state.json"
+	harness := &telegramSessionHarness{
+		sessions: []gateway.SessionSummary{
+			{ID: "abc123456789", MessageCount: 9, RunSeq: 3, Profile: "billy", Model: "deepseek-v4-pro", ReasoningEffort: "max"},
+			{ID: "def123456789", MessageCount: 2, Profile: "billy", Model: "deepseek-v4-flash"},
+		},
+	}
+	client := NewClient(ClientOptions{BaseURL: server.URL, Token: "bottoken", MinInterval: time.Nanosecond})
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      statePath,
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := Message{Chat: Chat{ID: 123}, From: &User{ID: 1001}}
+
+	msg.Text = "/resume"
+	bot.handleMessage(context.Background(), msg)
+	msg.Text = "/resume abc123"
+	bot.handleMessage(context.Background(), msg)
+
+	if len(sentTexts) != 2 || !strings.Contains(sentTexts[0], "<b>Sessions</b>") || !strings.Contains(sentTexts[0], "abc123456789") {
+		t.Fatalf("resume list messages = %#v", sentTexts)
+	}
+	if !strings.Contains(sentTexts[1], "Resumed Billyharness session") {
+		t.Fatalf("resume response = %#v", sentTexts)
+	}
+	state, err := (Store{Path: statePath}).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat := state.Chats[userChatKey(123, 0, 1001)]
+	if chat.SessionID != "abc123456789" || chat.Model != "deepseek-v4-pro" || chat.Profile != "billy" || chat.ReasoningEffort != "max" || chat.AgentTurns != 3 {
+		t.Fatalf("resumed chat state = %#v", chat)
+	}
+}
+
+func TestTelegramForkClonesGatewaySessionMessages(t *testing.T) {
+	var sentText string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/botbottoken/sendMessage" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		sentText, _ = payload["text"].(string)
+		writeTelegramResult(w, SentMessage{MessageID: 12, Chat: Chat{ID: 123}})
+	}))
+	defer server.Close()
+
+	statePath := t.TempDir() + "/state.json"
+	messages := []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "hello"},
+		{Role: protocol.RoleAssistant, Content: "world"},
+	}
+	harness := &telegramSessionHarness{
+		sessions: []gateway.SessionSummary{{ID: "source-session", MessageCount: len(messages), Profile: "billy"}},
+		full: map[string]gateway.SessionResponse{
+			"source-session": {ID: "source-session", Messages: messages, MessageCount: len(messages)},
+		},
+		createdID: "forked-session",
+	}
+	client := NewClient(ClientOptions{BaseURL: server.URL, Token: "bottoken", MinInterval: time.Nanosecond})
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      statePath,
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bot.setChatState(userChatKey(123, 0, 1001), ChatState{
+		SessionID:    "source-session",
+		Profile:      "billy",
+		AgentTurns:   4,
+		ToolCalls:    11,
+		LastEventSeq: 99,
+	})
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, From: &User{ID: 1001}, Text: "/fork current"})
+
+	if !strings.Contains(sentText, "Forked source-sessi into forked-sessi") {
+		t.Fatalf("fork response = %q", sentText)
+	}
+	harness.mu.Lock()
+	createdProfile := harness.createdProfile
+	createdMessages := append([]protocol.Message(nil), harness.createdMessages...)
+	harness.mu.Unlock()
+	if createdProfile != "billy" || len(createdMessages) != len(messages) || createdMessages[1].Content != "hello" {
+		t.Fatalf("created profile=%q messages=%#v", createdProfile, createdMessages)
+	}
+	state, err := (Store{Path: statePath}).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat := state.Chats[userChatKey(123, 0, 1001)]
+	if chat.SessionID != "forked-session" || chat.AgentTurns != 0 || chat.ToolCalls != 0 || chat.LastEventSeq != 0 {
+		t.Fatalf("forked chat state = %#v", chat)
 	}
 }
 

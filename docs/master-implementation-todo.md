@@ -709,7 +709,7 @@ Acceptance:
   - [x] provider/model
   - [x] reasoning
   - [x] current chat/session
-- [ ] Add `/new`, `/resume`, `/fork`, `/status`, `/context`, `/mcp`, `/model`, `/reasoning`, `/profile`, `/cancel`. Implemented so far: `/new`, `/status`, `/context`, `/mcp`, `/model`, `/reasoning`, `/profile`, `/cancel`; remaining: `/resume`, `/fork`.
+- [x] Add `/new`, `/resume`, `/fork`, `/status`, `/context`, `/mcp`, `/model`, `/reasoning`, `/profile`, `/cancel`.
 - [ ] Add admin-only commands for auth/config if needed.
 
 Acceptance:

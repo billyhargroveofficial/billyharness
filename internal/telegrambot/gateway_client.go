@@ -43,7 +43,11 @@ func NewGatewayClient(baseURL string) *GatewayClient {
 }
 
 func (c *GatewayClient) CreateSession(ctx context.Context, profile string) (string, error) {
-	body, err := json.Marshal(gateway.CreateSessionRequest{Profile: profile})
+	return c.CreateSessionFromMessages(ctx, profile, nil)
+}
+
+func (c *GatewayClient) CreateSessionFromMessages(ctx context.Context, profile string, messages []protocol.Message) (string, error) {
+	body, err := json.Marshal(gateway.CreateSessionRequest{Profile: profile, Messages: messages})
 	if err != nil {
 		return "", err
 	}
@@ -74,6 +78,23 @@ func (c *GatewayClient) CreateSession(ctx context.Context, profile string) (stri
 		return "", fmt.Errorf("gateway returned empty session id")
 	}
 	return out.ID, nil
+}
+
+func (c *GatewayClient) ListSessions(ctx context.Context) ([]gateway.SessionSummary, error) {
+	var out gateway.SessionListResponse
+	if err := c.gatewayJSON(ctx, http.MethodGet, "/v1/sessions", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Sessions, nil
+}
+
+func (c *GatewayClient) GetSession(ctx context.Context, sessionID string) (gateway.SessionResponse, error) {
+	var out gateway.SessionResponse
+	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID))
+	if err := c.gatewayJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return gateway.SessionResponse{}, err
+	}
+	return out, nil
 }
 
 func (c *GatewayClient) RunSession(ctx context.Context, sessionID string, run gateway.RunRequest, emit func(protocol.Event)) error {
