@@ -102,6 +102,14 @@ Gateway JSONL session append/replay has focused benchmarks for append cost and r
 
 Tail replay is expected to scan the canonical JSONL file until an index optimization lands; use this benchmark to prove any future replay index actually changes the profile.
 
+Provider streaming parsers have high-volume SSE benchmarks for DeepSeek-compatible chat streams and OpenAI/Codex Responses streams:
+
+```sh
+/root/.local/go/bin/go test ./internal/provider -run '^$' -bench 'BenchmarkParse(SSE|ResponsesSSE)HighVolume$' -benchmem
+```
+
+Use these before changing SSE parsing, provider buffering, or provider event backpressure behavior.
+
 ## Provider Comparison
 
 Generate a local-loop task file without running it:

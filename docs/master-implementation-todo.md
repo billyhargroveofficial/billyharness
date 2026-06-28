@@ -899,7 +899,7 @@ Acceptance:
 - [ ] Profile Telegram edit throttling.
 - [ ] Profile web fetch/extract.
 - [x] Profile JSONL append/replay.
-- [ ] Profile provider streaming.
+- [x] Profile provider streaming.
 - [x] Add backpressure tests for event stream.
 
 Acceptance:
