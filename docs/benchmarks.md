@@ -67,6 +67,12 @@ Every successful benchmark run attempts to replay-check its own event bundle. Th
 - `results_jsonl`: per-task outcomes and counters.
 - `events_jsonl`: replayable event stream.
 - `payloads_dir`: sanitized payload refs for large or sensitive events.
+- `avg_first_delta_ms`, `first_delta_p50_ms`, and `first_delta_p95_ms`: streaming responsiveness.
+- `model_latency_p50_ms`, `model_latency_p95_ms`, `tool_latency_p50_ms`, and `tool_latency_p95_ms`: per-task latency distributions.
+- `parallel_batch_p50_ms` and `parallel_batch_p95_ms`: parallel tool batch latency when a run uses parallel batches.
+- `max_context_tokens` and `max_context_growth_tokens`: active context growth from provider usage events.
+- `web_summary_saved_tokens`, `web_summary_api_tokens`, `web_summary_cost_usd`, and `web_summary_model_calls`: web fetch/extract/crawl summary economics when those tools are used.
+- `cost_marker` and `subscription`: whether the run is mock/free, metered API usage, subscription-backed, or unknown.
 
 If `replay_verified` is false or missing, treat the bundle as incomplete and inspect the error from the failed command before comparing performance numbers.
 

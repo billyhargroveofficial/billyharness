@@ -7,10 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -62,6 +64,8 @@ type Result struct {
 	TaskSuite              string         `json:"task_suite"`
 	Model                  string         `json:"model"`
 	Harness                string         `json:"harness"`
+	CostMarker             string         `json:"cost_marker,omitempty"`
+	Subscription           bool           `json:"subscription,omitempty"`
 	ProfileHash            string         `json:"profile_hash,omitempty"`
 	PromptHash             string         `json:"prompt_hash"`
 	Workspace              string         `json:"workspace,omitempty"`
@@ -84,7 +88,14 @@ type Result struct {
 	OutputTokens           int64          `json:"output_tokens,omitempty"`
 	CacheHitTokens         int64          `json:"cache_hit_tokens,omitempty"`
 	CacheMissTokens        int64          `json:"cache_miss_tokens,omitempty"`
+	ContextFirstTokens     int64          `json:"context_first_tokens,omitempty"`
+	ContextMaxTokens       int64          `json:"context_max_tokens,omitempty"`
+	ContextGrowthTokens    int64          `json:"context_growth_tokens,omitempty"`
 	ContextCompactions     int            `json:"context_compactions,omitempty"`
+	WebSummarySavedTokens  int64          `json:"web_summary_saved_tokens,omitempty"`
+	WebSummaryAPITokens    int64          `json:"web_summary_api_tokens,omitempty"`
+	WebSummaryCostUSD      float64        `json:"web_summary_cost_usd,omitempty"`
+	WebSummaryModelCalls   int            `json:"web_summary_model_calls,omitempty"`
 	ToolOutputTruncations  int            `json:"tool_output_truncations,omitempty"`
 	ToolOutputRefs         int            `json:"tool_output_refs,omitempty"`
 	EvaluatorTimeMS        int64          `json:"evaluator_time_ms,omitempty"`
@@ -101,21 +112,37 @@ type Summary struct {
 	Crashes                int     `json:"crashes"`
 	PassRate               float64 `json:"pass_rate"`
 	WallTimeMS             int64   `json:"wall_time_ms"`
+	CostMarker             string  `json:"cost_marker,omitempty"`
+	Subscription           bool    `json:"subscription,omitempty"`
 	Turns                  int     `json:"turns,omitempty"`
 	Steps                  int     `json:"steps,omitempty"`
 	StepErrors             int     `json:"step_errors,omitempty"`
 	ParallelBatches        int     `json:"parallel_batches,omitempty"`
 	AvgFirstDeltaMS        int64   `json:"avg_first_delta_ms,omitempty"`
+	FirstDeltaP50MS        int64   `json:"first_delta_p50_ms,omitempty"`
+	FirstDeltaP95MS        int64   `json:"first_delta_p95_ms,omitempty"`
 	ModelLatencyMS         int64   `json:"model_latency_ms,omitempty"`
+	ModelLatencyP50MS      int64   `json:"model_latency_p50_ms,omitempty"`
+	ModelLatencyP95MS      int64   `json:"model_latency_p95_ms,omitempty"`
 	ToolLatencyMS          int64   `json:"tool_latency_ms,omitempty"`
+	ToolLatencyP50MS       int64   `json:"tool_latency_p50_ms,omitempty"`
+	ToolLatencyP95MS       int64   `json:"tool_latency_p95_ms,omitempty"`
 	ParallelBatchLatencyMS int64   `json:"parallel_batch_latency_ms,omitempty"`
+	ParallelBatchP50MS     int64   `json:"parallel_batch_p50_ms,omitempty"`
+	ParallelBatchP95MS     int64   `json:"parallel_batch_p95_ms,omitempty"`
 	ModelCalls             int     `json:"model_calls"`
 	ToolCalls              int     `json:"tool_calls"`
 	InputTokens            int64   `json:"input_tokens,omitempty"`
 	OutputTokens           int64   `json:"output_tokens,omitempty"`
 	CacheHitTokens         int64   `json:"cache_hit_tokens,omitempty"`
 	CacheMissTokens        int64   `json:"cache_miss_tokens,omitempty"`
+	MaxContextTokens       int64   `json:"max_context_tokens,omitempty"`
+	MaxContextGrowthTokens int64   `json:"max_context_growth_tokens,omitempty"`
 	ContextCompactions     int     `json:"context_compactions,omitempty"`
+	WebSummarySavedTokens  int64   `json:"web_summary_saved_tokens,omitempty"`
+	WebSummaryAPITokens    int64   `json:"web_summary_api_tokens,omitempty"`
+	WebSummaryCostUSD      float64 `json:"web_summary_cost_usd,omitempty"`
+	WebSummaryModelCalls   int     `json:"web_summary_model_calls,omitempty"`
 	ToolOutputTruncations  int     `json:"tool_output_truncations,omitempty"`
 	ToolOutputRefs         int     `json:"tool_output_refs,omitempty"`
 	ManifestJSON           string  `json:"manifest_json,omitempty"`
@@ -142,6 +169,7 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 	}
 	cfg = applyRunConfig(cfg, rc)
 	profileHash := runProfileHash(cfg)
+	costMarker, subscription := benchCostMarker(cfg)
 	runID := time.Now().UTC().Format("20060102T150405Z")
 	manifestPath := filepath.Join(rc.OutDir, runID+"-manifest.json")
 	resultsPath := filepath.Join(rc.OutDir, runID+"-results.jsonl")
@@ -173,9 +201,15 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 		EventsJSONL:  eventsPath,
 		PayloadsDir:  payloadsDir,
 		ProfileHash:  profileHash,
+		CostMarker:   costMarker,
+		Subscription: subscription,
 	}
 	startAll := time.Now()
 	results := make([]Result, 0, len(tasks))
+	var firstDeltaLatencies []int64
+	var modelLatencies []int64
+	var toolLatencies []int64
+	var parallelBatchLatencies []int64
 	firstDeltaSamples := 0
 	for _, task := range tasks {
 		result := runTask(ctx, cfg, rc, runID, task, eventWriter)
@@ -191,16 +225,36 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 		if result.FirstDeltaMS > 0 {
 			firstDeltaSamples++
 			summary.AvgFirstDeltaMS += result.FirstDeltaMS
+			firstDeltaLatencies = append(firstDeltaLatencies, result.FirstDeltaMS)
 		}
 		summary.ModelLatencyMS += result.ModelLatencyMS
+		if result.ModelLatencyMS > 0 {
+			modelLatencies = append(modelLatencies, result.ModelLatencyMS)
+		}
 		summary.ToolLatencyMS += result.ToolLatencyMS
+		if result.ToolLatencyMS > 0 {
+			toolLatencies = append(toolLatencies, result.ToolLatencyMS)
+		}
 		summary.ParallelBatchLatencyMS += result.ParallelBatchLatencyMS
+		if result.ParallelBatchLatencyMS > 0 {
+			parallelBatchLatencies = append(parallelBatchLatencies, result.ParallelBatchLatencyMS)
+		}
 		summary.ToolCalls += result.ToolCalls
 		summary.InputTokens += result.InputTokens
 		summary.OutputTokens += result.OutputTokens
 		summary.CacheHitTokens += result.CacheHitTokens
 		summary.CacheMissTokens += result.CacheMissTokens
+		if result.ContextMaxTokens > summary.MaxContextTokens {
+			summary.MaxContextTokens = result.ContextMaxTokens
+		}
+		if result.ContextGrowthTokens > summary.MaxContextGrowthTokens {
+			summary.MaxContextGrowthTokens = result.ContextGrowthTokens
+		}
 		summary.ContextCompactions += result.ContextCompactions
+		summary.WebSummarySavedTokens += result.WebSummarySavedTokens
+		summary.WebSummaryAPITokens += result.WebSummaryAPITokens
+		summary.WebSummaryCostUSD += result.WebSummaryCostUSD
+		summary.WebSummaryModelCalls += result.WebSummaryModelCalls
 		summary.ToolOutputTruncations += result.ToolOutputTruncations
 		summary.ToolOutputRefs += result.ToolOutputRefs
 		switch result.Outcome {
@@ -221,6 +275,10 @@ func Run(ctx context.Context, cfg config.Config, rc RunConfig) (Summary, error) 
 	if firstDeltaSamples > 0 {
 		summary.AvgFirstDeltaMS /= int64(firstDeltaSamples)
 	}
+	summary.FirstDeltaP50MS, summary.FirstDeltaP95MS = latencyPercentiles(firstDeltaLatencies)
+	summary.ModelLatencyP50MS, summary.ModelLatencyP95MS = latencyPercentiles(modelLatencies)
+	summary.ToolLatencyP50MS, summary.ToolLatencyP95MS = latencyPercentiles(toolLatencies)
+	summary.ParallelBatchP50MS, summary.ParallelBatchP95MS = latencyPercentiles(parallelBatchLatencies)
 	if replay, err := trace.ReplayEvents(eventsPath); err == nil && replay.Records > 0 {
 		if err := verifyReplayAgainstResults(replay, results); err != nil {
 			return summary, err
@@ -515,12 +573,15 @@ func runTask(parent context.Context, cfg config.Config, rc RunConfig, runID stri
 	taskCfg := cfg
 	taskCfg.WorkspaceRoots = []string{workspace}
 	applyTaskConfig(&taskCfg, task)
+	costMarker, subscription := benchCostMarker(taskCfg)
 	result := Result{
 		RunID:           runID,
 		TaskID:          task.ID,
 		TaskSuite:       task.Suite,
 		Model:           taskCfg.Model,
 		Harness:         "fast-agent-harness-go",
+		CostMarker:      costMarker,
+		Subscription:    subscription,
 		ProfileHash:     runProfileHash(taskCfg),
 		PromptHash:      promptHash(task.Prompt),
 		Workspace:       workspace,
@@ -663,6 +724,9 @@ func observe(result *Result, event protocol.Event) {
 		if ok && toolResult.OutputRef != "" {
 			result.ToolOutputRefs++
 		}
+		if ok {
+			observeWebSummaryMetadata(result, toolResult.Metadata)
+		}
 		if toolResultIsError(event.Data) {
 			result.ToolErrors++
 		}
@@ -679,7 +743,35 @@ func observe(result *Result, event protocol.Event) {
 			result.OutputTokens += usage.OutputTokens
 			result.CacheHitTokens += usage.CacheHitTokens
 			result.CacheMissTokens += usage.CacheMissTokens
+			observeContextTokens(result, usage.InputTokens)
 		}
+	}
+}
+
+func observeContextTokens(result *Result, inputTokens int64) {
+	if inputTokens <= 0 {
+		return
+	}
+	if result.ContextFirstTokens == 0 {
+		result.ContextFirstTokens = inputTokens
+	}
+	if inputTokens > result.ContextMaxTokens {
+		result.ContextMaxTokens = inputTokens
+	}
+	if result.ContextFirstTokens > 0 {
+		result.ContextGrowthTokens = max(0, result.ContextMaxTokens-result.ContextFirstTokens)
+	}
+}
+
+func observeWebSummaryMetadata(result *Result, metadata map[string]any) {
+	if len(metadata) == 0 {
+		return
+	}
+	result.WebSummarySavedTokens += metadataInt64(metadata, "tool_summary_saved_tokens")
+	result.WebSummaryAPITokens += metadataInt64(metadata, "tool_summary_api_total_tokens")
+	result.WebSummaryCostUSD += metadataFloat64(metadata, "tool_summary_estimated_cost_usd")
+	if metadataBool(metadata, "tool_summary_external_model_used") {
+		result.WebSummaryModelCalls++
 	}
 }
 
@@ -750,6 +842,82 @@ func metadataInt64(metadata map[string]any, key string) int64 {
 	return 0
 }
 
+func metadataFloat64(metadata map[string]any, key string) float64 {
+	if metadata == nil {
+		return 0
+	}
+	switch value := metadata[key].(type) {
+	case float64:
+		return value
+	case float32:
+		return float64(value)
+	case int:
+		return float64(value)
+	case int64:
+		return float64(value)
+	case json.Number:
+		parsed, _ := value.Float64()
+		return parsed
+	}
+	return 0
+}
+
+func metadataBool(metadata map[string]any, key string) bool {
+	if metadata == nil {
+		return false
+	}
+	value, _ := metadata[key].(bool)
+	return value
+}
+
+func latencyPercentiles(samples []int64) (int64, int64) {
+	if len(samples) == 0 {
+		return 0, 0
+	}
+	sorted := append([]int64(nil), samples...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	return percentile(sorted, 0.50), percentile(sorted, 0.95)
+}
+
+func percentile(sorted []int64, p float64) int64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	if len(sorted) == 1 {
+		return sorted[0]
+	}
+	if p <= 0 {
+		return sorted[0]
+	}
+	if p >= 1 {
+		return sorted[len(sorted)-1]
+	}
+	index := int(math.Ceil(p*float64(len(sorted)))) - 1
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(sorted) {
+		index = len(sorted) - 1
+	}
+	return sorted[index]
+}
+
+func benchCostMarker(cfg config.Config) (string, bool) {
+	model := modelinfo.Lookup(cfg.Model)
+	providerInfo := modelinfo.Provider(cfg.Provider)
+	subscription := model.Subscription || providerInfo.Subscription
+	if subscription {
+		return "subscription", true
+	}
+	if model.Pricing.CacheHitPer1M > 0 || model.Pricing.CacheMissPer1M > 0 || model.Pricing.InputPer1M > 0 || model.Pricing.OutputPer1M > 0 {
+		return "metered", false
+	}
+	if cfg.Provider == modelinfo.ProviderMock {
+		return "none", false
+	}
+	return "unknown", false
+}
+
 type scriptedLoopProvider struct {
 	rounds   int
 	toolName string
@@ -794,6 +962,17 @@ func (p *scriptedLoopProvider) Stream(ctx context.Context, req provider.Request)
 			return
 		}
 		if call <= p.rounds {
+			if err := sleepProviderDelay(ctx, time.Millisecond); err != nil {
+				errs <- err
+				return
+			}
+			if err := sendProviderEvent(ctx, events, provider.Event{
+				Kind: provider.EventReasoning,
+				Text: fmt.Sprintf("scripted tool round %d\n", call),
+			}); err != nil {
+				errs <- err
+				return
+			}
 			if err := sendProviderEvent(ctx, events, provider.Event{
 				Kind:      provider.EventToolCallDelta,
 				ToolIndex: 0,
@@ -807,6 +986,10 @@ func (p *scriptedLoopProvider) Stream(ctx context.Context, req provider.Request)
 			_ = sendProviderEvent(ctx, events, provider.Event{Kind: provider.EventDone})
 			return
 		}
+		if err := sleepProviderDelay(ctx, time.Millisecond); err != nil {
+			errs <- err
+			return
+		}
 		if err := sendProviderEvent(ctx, events, provider.Event{
 			Kind: provider.EventContent,
 			Text: fmt.Sprintf("scripted loop complete after %d tool rounds", p.rounds),
@@ -817,6 +1000,17 @@ func (p *scriptedLoopProvider) Stream(ctx context.Context, req provider.Request)
 		_ = sendProviderEvent(ctx, events, provider.Event{Kind: provider.EventDone})
 	}()
 	return events, errs
+}
+
+func sleepProviderDelay(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func sendProviderEvent(ctx context.Context, events chan<- provider.Event, event provider.Event) error {

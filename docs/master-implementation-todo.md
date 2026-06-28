@@ -862,14 +862,14 @@ Purpose: prove the harness is fast and effective, not just nice to look at.
 - [ ] Record:
   - [x] success/failure
   - [x] total time
-  - [ ] first delta latency
-  - [ ] model latency p50/p95
-  - [ ] tool latency p50/p95
-  - [ ] parallel batch latency
-  - [ ] context growth
+  - [x] first delta latency
+  - [x] model latency p50/p95
+  - [x] tool latency p50/p95
+  - [x] parallel batch latency
+  - [x] context growth
   - [x] compaction count
-  - [ ] web summary savings
-  - [ ] cost or subscription marker
+  - [x] web summary savings
+  - [x] cost or subscription marker
 
 Acceptance:
 

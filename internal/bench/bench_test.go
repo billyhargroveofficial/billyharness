@@ -28,6 +28,9 @@ func TestRunMockTaskWritesResults(t *testing.T) {
 	if summary.Total != 1 || summary.Passed != 1 || summary.ModelCalls != 1 {
 		t.Fatalf("summary = %#v", summary)
 	}
+	if summary.CostMarker != "none" || summary.Subscription {
+		t.Fatalf("unexpected cost marker: %#v", summary)
+	}
 	if _, err := os.Stat(summary.ResultsJSONL); err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +86,9 @@ func TestRunMockTaskWritesResults(t *testing.T) {
 	}
 	if result.ProfileHash != summary.ProfileHash {
 		t.Fatalf("result profile hash = %q, want %q", result.ProfileHash, summary.ProfileHash)
+	}
+	if result.CostMarker != "none" || result.Subscription {
+		t.Fatalf("unexpected result cost marker: %#v", result)
 	}
 	replay, err := trace.ReplayEvents(summary.EventsJSONL)
 	if err != nil {
@@ -271,6 +277,15 @@ func TestLocalLoopBenchmarkGeneratesReplayableFiftyTurnSuite(t *testing.T) {
 	}
 	if summary.ToolCalls <= 0 || summary.ModelCalls != summary.Turns {
 		t.Fatalf("unexpected model/tool summary = %#v", summary)
+	}
+	if summary.AvgFirstDeltaMS <= 0 || summary.FirstDeltaP50MS <= 0 || summary.FirstDeltaP95MS < summary.FirstDeltaP50MS {
+		t.Fatalf("missing first-delta metrics: %#v", summary)
+	}
+	if summary.ModelLatencyP95MS < summary.ModelLatencyP50MS {
+		t.Fatalf("missing latency percentiles: %#v", summary)
+	}
+	if summary.MaxContextTokens <= 0 || summary.MaxContextGrowthTokens <= 0 {
+		t.Fatalf("missing context growth counters: %#v", summary)
 	}
 	resultsBytes, err := os.ReadFile(summary.ResultsJSONL)
 	if err != nil {
@@ -511,12 +526,24 @@ func TestObserveCountsUsageToolErrorsAndNames(t *testing.T) {
 		Content:   "nope",
 		IsError:   true,
 		ErrorCode: "validation_error",
+		Metadata: map[string]any{
+			"tool_summary_saved_tokens":        120,
+			"tool_summary_api_total_tokens":    40,
+			"tool_summary_estimated_cost_usd":  0.001,
+			"tool_summary_external_model_used": true,
+		},
 	}})
 	observe(&result, protocol.Event{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
 		"input_tokens":      10,
 		"output_tokens":     3,
 		"cache_hit_tokens":  7,
 		"cache_miss_tokens": 3,
+	}})
+	observe(&result, protocol.Event{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
+		"input_tokens":      22,
+		"output_tokens":     1,
+		"cache_hit_tokens":  12,
+		"cache_miss_tokens": 10,
 	}})
 	if result.ModelCalls != 1 || result.ToolCalls != 1 || result.ToolCallsByName["fs_read_file"] != 1 || result.ToolErrors != 1 {
 		t.Fatalf("counts = %#v", result)
@@ -527,8 +554,45 @@ func TestObserveCountsUsageToolErrorsAndNames(t *testing.T) {
 	if result.FirstDeltaMS != 5 || result.ModelLatencyMS != 12 || result.ToolLatencyMS != 3 || result.ParallelBatchLatencyMS != 8 {
 		t.Fatalf("latency counts = %#v", result)
 	}
-	if result.InputTokens != 10 || result.OutputTokens != 3 || result.CacheHitTokens != 7 || result.CacheMissTokens != 3 {
+	if result.InputTokens != 32 || result.OutputTokens != 4 || result.CacheHitTokens != 19 || result.CacheMissTokens != 13 {
 		t.Fatalf("usage = %#v", result)
+	}
+	if result.ContextFirstTokens != 10 || result.ContextMaxTokens != 22 || result.ContextGrowthTokens != 12 {
+		t.Fatalf("context growth = %#v", result)
+	}
+	if result.WebSummarySavedTokens != 120 || result.WebSummaryAPITokens != 40 ||
+		result.WebSummaryCostUSD != 0.001 || result.WebSummaryModelCalls != 1 {
+		t.Fatalf("web summary counters = %#v", result)
+	}
+}
+
+func TestLatencyPercentilesUseNearestRank(t *testing.T) {
+	p50, p95 := latencyPercentiles([]int64{40, 10, 20, 30})
+	if p50 != 20 || p95 != 40 {
+		t.Fatalf("percentiles = %d/%d, want 20/40", p50, p95)
+	}
+	p50, p95 = latencyPercentiles([]int64{7})
+	if p50 != 7 || p95 != 7 {
+		t.Fatalf("single percentiles = %d/%d, want 7/7", p50, p95)
+	}
+	p50, p95 = latencyPercentiles(nil)
+	if p50 != 0 || p95 != 0 {
+		t.Fatalf("empty percentiles = %d/%d, want 0/0", p50, p95)
+	}
+}
+
+func TestBenchCostMarkerUsesProviderCatalog(t *testing.T) {
+	marker, subscription := benchCostMarker(config.Config{Provider: "mock", Model: "mock"})
+	if marker != "none" || subscription {
+		t.Fatalf("mock marker = %q subscription=%v", marker, subscription)
+	}
+	marker, subscription = benchCostMarker(config.Config{Provider: "deepseek", Model: "deepseek-v4-flash"})
+	if marker != "metered" || subscription {
+		t.Fatalf("deepseek marker = %q subscription=%v", marker, subscription)
+	}
+	marker, subscription = benchCostMarker(config.Config{Provider: "openai-codex", Model: "gpt-5.5"})
+	if marker != "subscription" || !subscription {
+		t.Fatalf("codex marker = %q subscription=%v", marker, subscription)
 	}
 }
 
