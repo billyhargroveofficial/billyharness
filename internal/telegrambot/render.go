@@ -753,7 +753,7 @@ func splitRichMarkdownTable(block string, limit int) []string {
 
 func isFencedMarkdownBlock(block string) bool {
 	lines := strings.Split(block, "\n")
-	return len(lines) > 0 && strings.HasPrefix(strings.TrimSpace(lines[0]), "```")
+	return len(lines) > 0 && isMarkdownFenceLine(strings.TrimSpace(lines[0]))
 }
 
 func isMarkdownTableBlock(block string) bool {
@@ -805,7 +805,7 @@ func markdownBlocks(text string) []string {
 		current = nil
 	}
 	for _, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+		if isMarkdownFenceLine(strings.TrimSpace(line)) {
 			current = append(current, line)
 			inFence = !inFence
 			if !inFence {
@@ -840,6 +840,242 @@ func markdownInlineEscape(text string) string {
 }
 
 func markdownToTelegramHTML(text string) string {
+	blocks := markdownBlocks(text)
+	if len(blocks) == 0 {
+		return ""
+	}
+	out := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		block = strings.Trim(block, "\n")
+		if strings.TrimSpace(block) == "" {
+			continue
+		}
+		switch {
+		case isFencedMarkdownBlock(block):
+			out = append(out, renderMarkdownFenceTelegramHTML(block))
+		case isMarkdownTableBlock(block):
+			out = append(out, renderMarkdownTableTelegramHTML(block))
+		case isMarkdownQuoteBlock(block):
+			out = append(out, renderMarkdownQuoteTelegramHTML(block))
+		case isMarkdownListBlock(block):
+			out = append(out, renderMarkdownListTelegramHTML(block))
+		case isMarkdownHeadingBlock(block):
+			out = append(out, renderMarkdownHeadingTelegramHTML(block))
+		default:
+			out = append(out, markdownInlineToTelegramHTML(block))
+		}
+	}
+	return strings.Join(out, "\n\n")
+}
+
+func renderMarkdownFenceTelegramHTML(block string) string {
+	lines := strings.Split(block, "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	body := lines[1:]
+	if len(body) > 0 && isMarkdownFenceLine(strings.TrimSpace(body[len(body)-1])) {
+		body = body[:len(body)-1]
+	}
+	return "<pre>" + esc(strings.Trim(strings.Join(body, "\n"), "\n")) + "</pre>"
+}
+
+func renderMarkdownHeadingTelegramHTML(block string) string {
+	lines := strings.Split(block, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		level := 0
+		for level < len(trimmed) && trimmed[level] == '#' {
+			level++
+		}
+		if level > 0 && level <= 6 && level < len(trimmed) && trimmed[level] == ' ' {
+			lines[i] = "<b>" + markdownInlineToTelegramHTML(strings.TrimSpace(trimmed[level:])) + "</b>"
+			continue
+		}
+		lines[i] = markdownInlineToTelegramHTML(line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderMarkdownQuoteTelegramHTML(block string) string {
+	lines := strings.Split(block, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, ">"))
+		lines[i] = markdownInlineToTelegramHTML(trimmed)
+	}
+	return "<blockquote>" + strings.Join(lines, "\n") + "</blockquote>"
+}
+
+func renderMarkdownListTelegramHTML(block string) string {
+	lines := strings.Split(block, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		marker, body, ok := parseMarkdownListItem(line)
+		if !ok {
+			out = append(out, markdownInlineToTelegramHTML(line))
+			continue
+		}
+		out = append(out, esc(marker)+" "+markdownInlineToTelegramHTML(body))
+	}
+	return strings.Join(out, "\n")
+}
+
+func renderMarkdownTableTelegramHTML(block string) string {
+	rows := parseTelegramMarkdownTable(block)
+	if len(rows) < 3 {
+		return markdownInlineToTelegramHTML(block)
+	}
+	header := rows[0]
+	body := rows[2:]
+	lines := make([]string, 0, len(body))
+	for _, row := range body {
+		if len(row) != len(header) {
+			continue
+		}
+		switch len(row) {
+		case 0:
+			continue
+		case 1:
+			lines = append(lines, "• "+markdownInlineToTelegramHTML(row[0]))
+		case 2:
+			lines = append(lines, "• "+markdownInlineToTelegramHTML(row[0])+": "+markdownInlineToTelegramHTML(row[1]))
+		default:
+			parts := make([]string, 0, len(row))
+			for i := range row {
+				parts = append(parts, markdownInlineToTelegramHTML(header[i])+": "+markdownInlineToTelegramHTML(row[i]))
+			}
+			lines = append(lines, "• "+strings.Join(parts, " · "))
+		}
+	}
+	if len(lines) == 0 {
+		return markdownInlineToTelegramHTML(block)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func isMarkdownFenceLine(trimmed string) bool {
+	return strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~")
+}
+
+func isMarkdownHeadingBlock(block string) bool {
+	for _, line := range strings.Split(block, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		level := 0
+		for level < len(trimmed) && trimmed[level] == '#' {
+			level++
+		}
+		return level > 0 && level <= 6 && level < len(trimmed) && trimmed[level] == ' '
+	}
+	return false
+}
+
+func isMarkdownQuoteBlock(block string) bool {
+	for _, line := range strings.Split(block, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if !strings.HasPrefix(strings.TrimSpace(line), ">") {
+			return false
+		}
+	}
+	return strings.TrimSpace(block) != ""
+}
+
+func isMarkdownListBlock(block string) bool {
+	seen := false
+	for _, line := range strings.Split(block, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if _, _, ok := parseMarkdownListItem(line); !ok {
+			return false
+		}
+		seen = true
+	}
+	return seen
+}
+
+func parseMarkdownListItem(line string) (marker, body string, ok bool) {
+	trimmed := strings.TrimSpace(line)
+	for _, prefix := range []string{"- ", "* ", "+ "} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return "•", strings.TrimSpace(strings.TrimPrefix(trimmed, prefix)), true
+		}
+	}
+	dot := strings.Index(trimmed, ". ")
+	if dot <= 0 {
+		return "", "", false
+	}
+	for _, r := range trimmed[:dot] {
+		if r < '0' || r > '9' {
+			return "", "", false
+		}
+	}
+	return trimmed[:dot+1], strings.TrimSpace(trimmed[dot+2:]), true
+}
+
+func parseTelegramMarkdownTable(block string) [][]string {
+	lines := strings.Split(block, "\n")
+	rows := make([][]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		cells, ok := splitTelegramMarkdownTableRow(line)
+		if !ok {
+			return nil
+		}
+		rows = append(rows, cells)
+	}
+	return rows
+}
+
+func splitTelegramMarkdownTableRow(line string) ([]string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.Contains(trimmed, "|") {
+		return nil, false
+	}
+	var cells []string
+	var cell strings.Builder
+	inCode := false
+	for i := 0; i < len(trimmed); i++ {
+		switch trimmed[i] {
+		case '\\':
+			if i+1 < len(trimmed) && trimmed[i+1] == '|' {
+				cell.WriteByte('|')
+				i++
+				continue
+			}
+			cell.WriteByte(trimmed[i])
+		case '`':
+			inCode = !inCode
+			cell.WriteByte(trimmed[i])
+		case '|':
+			if !inCode {
+				cells = append(cells, strings.TrimSpace(cell.String()))
+				cell.Reset()
+				continue
+			}
+			cell.WriteByte(trimmed[i])
+		default:
+			cell.WriteByte(trimmed[i])
+		}
+	}
+	cells = append(cells, strings.TrimSpace(cell.String()))
+	if len(cells) > 0 && cells[0] == "" {
+		cells = cells[1:]
+	}
+	if len(cells) > 0 && cells[len(cells)-1] == "" {
+		cells = cells[:len(cells)-1]
+	}
+	return cells, len(cells) > 0
+}
+
+func markdownInlineToTelegramHTML(text string) string {
 	var out strings.Builder
 	for i := 0; i < len(text); {
 		if strings.HasPrefix(text[i:], "```") {
@@ -871,10 +1107,22 @@ func markdownToTelegramHTML(text string) string {
 		if strings.HasPrefix(text[i:], "**") {
 			if end := strings.Index(text[i+2:], "**"); end >= 0 {
 				out.WriteString("<b>")
-				out.WriteString(markdownToTelegramHTML(text[i+2 : i+2+end]))
+				out.WriteString(markdownInlineToTelegramHTML(text[i+2 : i+2+end]))
 				out.WriteString("</b>")
 				i += 2 + end + 2
 				continue
+			}
+		}
+		if text[i] == '*' && !strings.HasPrefix(text[i:], "**") {
+			if end := strings.IndexByte(text[i+1:], '*'); end > 0 {
+				inner := text[i+1 : i+1+end]
+				if strings.TrimSpace(inner) != "" {
+					out.WriteString("<i>")
+					out.WriteString(markdownInlineToTelegramHTML(inner))
+					out.WriteString("</i>")
+					i += 1 + end + 1
+					continue
+				}
 			}
 		}
 		if text[i] == '[' {
@@ -889,7 +1137,7 @@ func markdownToTelegramHTML(text string) string {
 							out.WriteString(`<a href="`)
 							out.WriteString(esc(url))
 							out.WriteString(`">`)
-							out.WriteString(esc(text[i+1 : labelEnd]))
+							out.WriteString(markdownInlineToTelegramHTML(text[i+1 : labelEnd]))
 							out.WriteString("</a>")
 							i = labelEnd + 2 + closeURL + 1
 							continue

@@ -38,6 +38,73 @@ func TestRendererFinalChunksAreTelegramSizedAndEscaped(t *testing.T) {
 	}
 }
 
+func TestMarkdownToTelegramHTMLSupportsTelegramSubset(t *testing.T) {
+	html := markdownToTelegramHTML(`# Заголовок
+
+Привет **жирный** и *курсив*, ` + "`код`" + `, [ссылка](https://example.com?a=1&b=2), <b>сырой</b>.
+
+> цитата **важная**
+
+- первый
+- второй с ` + "`кодом`" + `
+
+| Параметр | Значение |
+| --- | --- |
+| **Температура** | +19 °C |
+| Формула | $$\frac{\bar X - \mu}{\sigma/\sqrt n} \approx N(0,1)$$ |
+
+` + "```go\nfmt.Println(\"<hi>\")\n```")
+
+	for _, want := range []string{
+		"<b>Заголовок</b>",
+		"<b>жирный</b>",
+		"<i>курсив</i>",
+		"<code>код</code>",
+		`<a href="https://example.com?a=1&amp;b=2">ссылка</a>`,
+		"&lt;b&gt;сырой&lt;/b&gt;",
+		"<blockquote>цитата <b>важная</b></blockquote>",
+		"• первый",
+		"• второй с <code>кодом</code>",
+		"• <b>Температура</b>: +19 °C",
+		"• Формула: $$\\frac{\\bar X - \\mu}{\\sigma/\\sqrt n} \\approx N(0,1)$$",
+		"<pre>fmt.Println(&#34;&lt;hi&gt;&#34;)</pre>",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("telegram HTML missing %q in:\n%s", want, html)
+		}
+	}
+	for _, bad := range []string{"| --- |", "| Параметр |", "<b>сырой</b>"} {
+		if strings.Contains(html, bad) {
+			t.Fatalf("telegram HTML should not contain %q:\n%s", bad, html)
+		}
+	}
+}
+
+func TestRendererFinalChunksConvertTablesInHTMLFallback(t *testing.T) {
+	r := NewRenderer()
+	r.Apply(protocol.Event{Type: protocol.EventAssistantDelta, Data: `| Параметр | Значение |
+| --- | --- |
+| **Температура** | +19 °C |
+| Ветер | 4 м/с |`})
+	r.Apply(protocol.Event{Type: protocol.EventRunCompleted})
+
+	chunks := r.FinalChunks("deepseek-v4-flash", "high")
+	if len(chunks) != 1 {
+		t.Fatalf("chunks = %d, want 1", len(chunks))
+	}
+	got := chunks[0]
+	for _, want := range []string{"• <b>Температура</b>: +19 °C", "• Ветер: 4 м/с"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("final HTML fallback missing %q in:\n%s", want, got)
+		}
+	}
+	for _, bad := range []string{"| --- |", "| Параметр |"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("final HTML fallback should not contain table markdown %q:\n%s", bad, got)
+		}
+	}
+}
+
 func TestRendererProviderUsageDeduplicatesCumulativeSnapshots(t *testing.T) {
 	r := NewRendererWithContextWindow(1000)
 	r.Apply(protocol.Event{Type: protocol.EventRunStarted})

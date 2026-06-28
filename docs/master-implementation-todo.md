@@ -661,24 +661,24 @@ Purpose: make Telegram a real gateway, not a second-class output dump.
 
 ### 6.1 Rich Message Rendering
 
-- [ ] Use Telegram-supported Markdown/HTML correctly.
-- [ ] Escape content based on selected parse mode.
-- [ ] Support:
-  - [ ] bold
-  - [ ] italic
-  - [ ] inline code
-  - [ ] code blocks
-  - [ ] links
-  - [ ] blockquotes if supported by mode/client
-  - [ ] lists
-  - [ ] LaTeX-looking formulas as readable text/code where Telegram cannot render math natively
-- [ ] Do not send raw unsupported terminal markdown.
-- [ ] Add tests for escaping, links, code, Cyrillic, formulas, and tool summaries.
+- [x] Use Telegram-supported Markdown/HTML correctly.
+- [x] Escape content based on selected parse mode.
+- [x] Support:
+  - [x] bold
+  - [x] italic
+  - [x] inline code
+  - [x] code blocks
+  - [x] links
+  - [x] blockquotes if supported by mode/client
+  - [x] lists
+  - [x] LaTeX-looking formulas as readable text/code where Telegram cannot render math natively
+- [x] Do not send raw unsupported terminal markdown.
+- [x] Add tests for escaping, links, code, Cyrillic, formulas, and tool summaries.
 
 Acceptance:
 
-- [ ] Telegram messages render without literal `<b>` or escaped junk.
-- [ ] Tables are converted to readable Telegram-safe layout instead of broken terminal boxes.
+- [x] Telegram messages render without literal `<b>` or escaped junk.
+- [x] Tables are converted to readable Telegram-safe layout instead of broken terminal boxes.
 
 ### 6.2 Progress Message
 
