@@ -193,7 +193,7 @@ Acceptance:
 Acceptance:
 
 - [x] Parallel tests cover safe grouping.
-- [ ] Exclusive tools break batches.
+- [x] Exclusive tools break batches.
 - [ ] Rate-limited network tools do not exceed configured concurrency.
 
 ### 1.4 Runtime Event Envelope

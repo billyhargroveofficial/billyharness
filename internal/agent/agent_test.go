@@ -664,6 +664,86 @@ func TestRunMessagesExecutesParallelSafeToolsConcurrentlyAndPreservesOrder(t *te
 	}
 }
 
+func TestRunMessagesExclusiveToolBreaksParallelBatches(t *testing.T) {
+	cfg := config.Default()
+	cfg.MaxToolRounds = 3
+	cfg.MaxParallelTools = 2
+	cfg.AutoApproveDangerous = true
+	registry := tools.NewRegistry(cfg)
+	for _, name := range []string{"read_a", "read_b", "read_c", "read_d"} {
+		name := name
+		if err := registry.Register(tools.Tool{
+			Spec: protocol.ToolSpec{
+				Name:        name,
+				Description: "Read-only test tool.",
+				Parameters:  json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+				Risk:        protocol.RiskReadOnly,
+			},
+			Handler: func(context.Context, json.RawMessage) (tools.Result, error) {
+				return tools.Result{Content: name}, nil
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := registry.Register(tools.Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "write_x",
+			Description: "Exclusive write test tool.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+			Risk:        protocol.RiskWrite,
+		},
+		Handler: func(context.Context, json.RawMessage) (tools.Result, error) {
+			return tools.Result{Content: "write"}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_a", ToolName: "read_a", ArgsDelta: `{}`},
+			{Kind: provider.EventToolCallDelta, ToolIndex: 1, ToolID: "call_b", ToolName: "read_b", ArgsDelta: `{}`},
+			{Kind: provider.EventToolCallDelta, ToolIndex: 2, ToolID: "call_w", ToolName: "write_x", ArgsDelta: `{}`},
+			{Kind: provider.EventToolCallDelta, ToolIndex: 3, ToolID: "call_c", ToolName: "read_c", ArgsDelta: `{}`},
+			{Kind: provider.EventToolCallDelta, ToolIndex: 4, ToolID: "call_d", ToolName: "read_d", ArgsDelta: `{}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "finished"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	a := New(cfg, prov, registry)
+	var events []protocol.Event
+	_, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "mixed tools"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parallelBatches int
+	var sawExclusiveWrite bool
+	for _, event := range events {
+		if step, ok := stepEvent(event, protocol.EventStepStarted); ok {
+			if step.Kind == protocol.StepKindToolBatch && step.Parallel && step.BatchSize == 2 {
+				parallelBatches++
+			}
+			if step.Kind == protocol.StepKindToolCall && step.Name == "write_x" {
+				sawExclusiveWrite = step.Parallel == false &&
+					step.Metadata["parallel_policy"] == tools.ParallelPolicyExclusiveWorkspace &&
+					step.Metadata["parallel_decision"] == "serial_policy_"+tools.ParallelPolicyExclusiveWorkspace &&
+					step.Metadata["requires_exclusive_workspace"] == true
+			}
+		}
+	}
+	if parallelBatches != 2 || !sawExclusiveWrite {
+		t.Fatalf("parallelBatches=%d sawExclusiveWrite=%v events=%#v", parallelBatches, sawExclusiveWrite, events)
+	}
+}
+
 func TestRunMessagesRecordsAbortWhenActiveToolIsCanceled(t *testing.T) {
 	cfg := config.Default()
 	cfg.MaxToolRounds = 3
