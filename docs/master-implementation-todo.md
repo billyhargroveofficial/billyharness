@@ -84,13 +84,13 @@ Purpose: create the working plan, prevent drift, and define execution discipline
 - [x] Create this master TODO document.
 - [x] Add a short `docs/README.md` that links roadmap, master TODO, setup, auth, MCP, Telegram, and benchmarks.
 - [x] Add a "work protocol" section to `README.md`: run tests, commit, push, restart services when runtime changes.
-- [ ] Add a small command or script that prints project health: git status, build status, service health, current provider/model, session dir, config path.
+- [x] Add a small command or script that prints project health: git status, build status, service health, current provider/model, session dir, config path.
 
 Acceptance:
 
 - [x] The plan is discoverable from repository root.
-- [ ] New work can be mapped to a checkbox in this file.
-- [ ] No implementation work starts without knowing which phase and item it advances.
+- [x] New work can be mapped to a checkbox in this file.
+- [x] No implementation work starts without knowing which phase and item it advances.
 
 ## Phase 1: Runtime Core
 

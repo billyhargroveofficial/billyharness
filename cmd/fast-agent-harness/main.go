@@ -64,6 +64,8 @@ func run() error {
 		return benchCmd(os.Args[2:])
 	case "tools":
 		return printTools()
+	case "doctor", "health":
+		return doctorCmd(os.Args[2:])
 	default:
 		usage()
 		return fmt.Errorf("unknown command %q", os.Args[1])
@@ -773,4 +775,5 @@ func usage() {
 	fmt.Println("  bench terminal-bench export -tasks tasks.jsonl -out tb-dataset")
 	fmt.Println("  bench terminal-bench import -dataset tb-dataset [-out tasks.jsonl]")
 	fmt.Println("  tools")
+	fmt.Println("  doctor|health [-json] [-strict] [-build=true] [-services=true] [-gateway=true]")
 }

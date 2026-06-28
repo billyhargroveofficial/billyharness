@@ -16,6 +16,22 @@ Work protocol for runtime changes:
 5. Restart `billyharness-gateway.service` and `billyharness-telegram.service` when deployed runtime behavior changes.
 6. Commit and push coherent verified slices.
 
+Project health:
+
+```bash
+./bin/fast-agent-harness doctor
+./bin/fast-agent-harness doctor -json
+```
+
+`doctor` prints git status, a lightweight CLI build check, systemd service health, gateway `/health`,
+current provider/model/reasoning settings, session directory, and config paths.
+
+For a non-failing local snapshot while editing, disable active checks:
+
+```bash
+./bin/fast-agent-harness doctor -build=false -services=false -gateway=false
+```
+
 ## Quick start
 
 ```bash
