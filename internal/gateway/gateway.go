@@ -106,6 +106,7 @@ type SessionSummary struct {
 	Running         bool      `json:"running"`
 	RunSeq          int64     `json:"run_seq"`
 	MessageCount    int       `json:"message_count"`
+	DroppedEvents   int64     `json:"dropped_events,omitempty"`
 	LastEvent       string    `json:"last_event,omitempty"`
 	LastEventAt     time.Time `json:"last_event_at,omitempty"`
 	Model           string    `json:"model,omitempty"`
@@ -707,6 +708,7 @@ func sessionSummary(session *Session) SessionSummary {
 		Running:         status.Running,
 		RunSeq:          status.RunSeq,
 		MessageCount:    status.MessageCount,
+		DroppedEvents:   status.DroppedEvents,
 		LastEvent:       status.LastEvent,
 		LastEventAt:     status.LastEventAt,
 		Model:           status.Model,

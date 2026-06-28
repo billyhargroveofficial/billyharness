@@ -33,6 +33,8 @@ Inspect saved gateway sessions directly from JSONL files without calling the API
 ./bin/fast-agent-harness sessions inspect -json SESSION_ID
 ```
 
+Session status and list responses include `dropped_events` when a live `/events` subscriber falls behind its bounded buffer. The gateway keeps publishing without blocking the active run; clients should use the `after_seq` replay cursor to recover missed JSONL events when this counter is nonzero.
+
 ## TUI
 
 The TUI auto-discovers the local gateway from config, so normal use does not need `-gateway`:

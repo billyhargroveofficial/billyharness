@@ -26,13 +26,17 @@ type SessionStatus struct {
 	MessageCount    int       `json:"message_count"`
 	ModelCalls      int       `json:"model_calls"`
 	ToolCalls       int       `json:"tool_calls"`
+	DroppedEvents   int64     `json:"dropped_events,omitempty"`
 	LastError       string    `json:"last_error,omitempty"`
 }
 
 type eventHub struct {
 	mu          sync.Mutex
 	subscribers map[chan protocol.Event]struct{}
+	dropped     int64
 }
+
+const eventHubSubscriberBuffer = 256
 
 func newGatewaySession(id string, created time.Time, messages []protocol.Message) *Session {
 	if created.IsZero() {
@@ -62,7 +66,7 @@ func (h *eventHub) Subscribe() (<-chan protocol.Event, func()) {
 		close(ch)
 		return ch, func() {}
 	}
-	ch := make(chan protocol.Event, 256)
+	ch := make(chan protocol.Event, eventHubSubscriberBuffer)
 	h.mu.Lock()
 	h.subscribers[ch] = struct{}{}
 	h.mu.Unlock()
@@ -83,12 +87,28 @@ func (h *eventHub) Publish(event protocol.Event) {
 		subscribers = append(subscribers, ch)
 	}
 	h.mu.Unlock()
+	var dropped int64
 	for _, ch := range subscribers {
 		select {
 		case ch <- event:
 		default:
+			dropped++
 		}
 	}
+	if dropped > 0 {
+		h.mu.Lock()
+		h.dropped += dropped
+		h.mu.Unlock()
+	}
+}
+
+func (h *eventHub) Dropped() int64 {
+	if h == nil {
+		return 0
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.dropped
 }
 
 func (s *Session) ensureRuntime() {
@@ -119,9 +139,11 @@ func (s *Session) Status() SessionStatus {
 	s.mu.Lock()
 	s.ensureRuntime()
 	status := s.status
+	hub := s.events
 	s.mu.Unlock()
 	status.Running = s.Thread != nil && s.Thread.Running()
 	status.MessageCount = len(s.messages())
+	status.DroppedEvents = hub.Dropped()
 	return status
 }
 

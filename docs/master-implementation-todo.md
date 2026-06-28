@@ -900,7 +900,7 @@ Acceptance:
 - [ ] Profile web fetch/extract.
 - [ ] Profile JSONL append/replay.
 - [ ] Profile provider streaming.
-- [ ] Add backpressure tests for event stream.
+- [x] Add backpressure tests for event stream.
 
 Acceptance:
 

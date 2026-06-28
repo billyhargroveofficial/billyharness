@@ -453,6 +453,38 @@ func TestGatewaySessionEventsSubscribeReceivesRunEvents(t *testing.T) {
 	}
 }
 
+func TestGatewaySessionEventsReportSlowSubscriberDrops(t *testing.T) {
+	session := newGatewaySession("slow-subscriber", time.Now().UTC(), []protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	events, unsubscribe := session.Subscribe()
+	defer unsubscribe()
+
+	extra := 17
+	start := time.Now()
+	for i := 0; i < eventHubSubscriberBuffer+extra; i++ {
+		session.publish(protocol.Event{Type: protocol.EventAssistantDelta, Data: fmt.Sprintf("delta-%03d", i)})
+	}
+	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+		t.Fatalf("publishing to full subscriber took %s", elapsed)
+	}
+
+	var buffered int
+drain:
+	for {
+		select {
+		case <-events:
+			buffered++
+		default:
+			break drain
+		}
+	}
+	if buffered != eventHubSubscriberBuffer {
+		t.Fatalf("buffered events = %d, want %d", buffered, eventHubSubscriberBuffer)
+	}
+	if got := session.Status().DroppedEvents; got != int64(extra) {
+		t.Fatalf("dropped events = %d, want %d", got, extra)
+	}
+}
+
 func TestGatewaySessionStoreRestoresSessionAfterRestart(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"
