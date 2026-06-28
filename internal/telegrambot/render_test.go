@@ -73,6 +73,8 @@ func TestRendererProviderUsageDeduplicatesCumulativeSnapshots(t *testing.T) {
 	}
 	if footer := r.footerLine(); !strings.Contains(footer, "🪟 ctx 275/1.0k 28%") {
 		t.Fatalf("footer missing context usage: %q", footer)
+	} else if strings.Contains(footer, "🧠 9") {
+		t.Fatalf("footer should not show cumulative reasoning tokens: %q", footer)
 	}
 }
 
@@ -91,10 +93,13 @@ func TestRendererContextShowsLastModelCallNotCumulativeSpend(t *testing.T) {
 	}})
 
 	footer := r.footerLine()
-	for _, want := range []string{"📥 spent 2.3k 📤 300", "🪟 ctx 1.5k/10.0k 15%"} {
+	for _, want := range []string{"🪟 ctx 1.5k/10.0k 15%"} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("footer missing %q: %q", want, footer)
 		}
+	}
+	if strings.Contains(footer, "📥") || strings.Contains(footer, "📤") {
+		t.Fatalf("footer should not show cumulative token spend: %q", footer)
 	}
 }
 
@@ -112,10 +117,13 @@ func TestStreamPlainTextShowsContextAboveProgress(t *testing.T) {
 	_ = progress.Add(RenderEvent{Kind: "tool", Title: "Tool", Body: "🔨 mcp call read_history", Key: "read"})
 
 	text := renderer.StreamPlainText("deepseek-v4-pro", "max", progress)
-	for _, want := range []string{"🪟 ctx 6.0k/10.0k 60%", "Tools running", "📥 spent 5.7k 📤 300"} {
+	for _, want := range []string{"🪟 ctx 6.0k/10.0k 60%", "Tools running", "💾 hit 5.0k miss 700"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("stream text missing %q:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "📥") || strings.Contains(text, "📤") {
+		t.Fatalf("stream text should not show cumulative token spend:\n%s", text)
 	}
 	ctxPos := strings.Index(text, "🪟 ctx")
 	toolsPos := strings.Index(text, "Tools running")

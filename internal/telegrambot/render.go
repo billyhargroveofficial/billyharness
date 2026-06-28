@@ -207,24 +207,18 @@ func (r *Renderer) footerLineWithContext(includeContext bool) string {
 	if r.ToolCalls > 0 {
 		parts = append(parts, fmt.Sprintf("🛠 tools %d", r.ToolCalls))
 	}
-	if r.InputTokens+r.OutputTokens > 0 {
-		parts = append(parts, fmt.Sprintf("📥 spent %s 📤 %s", compactInt(r.InputTokens), compactInt(r.OutputTokens)))
-	}
 	if context := r.contextLine(); includeContext && context != "" {
 		parts = append(parts, context)
 	}
 	if r.CacheHit+r.CacheMiss > 0 {
 		parts = append(parts, fmt.Sprintf("💾 hit %s miss %s", compactInt(r.CacheHit), compactInt(r.CacheMiss)))
 	}
-	if r.Reasoning > 0 {
-		parts = append(parts, fmt.Sprintf("🧠 %s", compactInt(r.Reasoning)))
-	}
 	if r.ToolSummaryIn+r.ToolSummaryOut > 0 {
 		parts = append(parts, fmt.Sprintf("🧩 websum %s→%s", compactInt(r.ToolSummaryIn), compactInt(r.ToolSummaryOut)))
 		parts = append(parts, fmt.Sprintf("sumapi %s", compactInt(r.ToolSummaryAPI)))
 	}
 	if r.ThinkingChars > 0 {
-		parts = append(parts, fmt.Sprintf("💭 %s hidden", compactInt(int64(r.ThinkingChars))))
+		parts = append(parts, fmt.Sprintf("💭 thinking %s hidden", compactInt(int64(r.ThinkingChars))))
 	}
 	if len(parts) == 0 {
 		return "⚡ streaming"
