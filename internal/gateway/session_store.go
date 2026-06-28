@@ -137,23 +137,23 @@ func (s *sessionStore) Save(session *Session) error {
 	return s.saveLocked(session)
 }
 
-func (s *sessionStore) AppendEvent(session *Session, event protocol.Event) error {
+func (s *sessionStore) AppendEvent(session *Session, event protocol.Event) (protocol.Event, error) {
 	if s == nil || strings.TrimSpace(s.dir) == "" || session == nil {
-		return nil
+		return event, nil
 	}
 	id, err := cleanSessionID(session.ID)
 	if err != nil {
-		return err
+		return event, err
 	}
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
-		return err
+		return event, err
 	}
 	if err := os.Chmod(s.dir, 0o700); err != nil {
-		return err
+		return event, err
 	}
 	sessionDir := filepath.Join(s.dir, id)
 	if err := ensurePrivateGatewayDir(sessionDir); err != nil {
-		return err
+		return event, err
 	}
 
 	s.mu.Lock()
@@ -162,7 +162,7 @@ func (s *sessionStore) AppendEvent(session *Session, event protocol.Event) error
 	manifestPath := filepath.Join(sessionDir, sessionManifestName)
 	manifest, err := readSessionManifest(manifestPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+		return event, err
 	}
 	if manifest.SessionID == "" {
 		created := session.Created
@@ -180,7 +180,7 @@ func (s *sessionStore) AppendEvent(session *Session, event protocol.Event) error
 			MessageCount:  len(session.messages()),
 		}
 		if err := writeSessionManifest(manifestPath, manifest); err != nil {
-			return err
+			return event, err
 		}
 	}
 
@@ -189,7 +189,7 @@ func (s *sessionStore) AppendEvent(session *Session, event protocol.Event) error
 	if seq == 0 {
 		seq, err = lastSessionEventSeq(eventsPath, id)
 		if err != nil {
-			return err
+			return event, err
 		}
 	}
 	seq++
@@ -212,10 +212,29 @@ func (s *sessionStore) AppendEvent(session *Session, event protocol.Event) error
 		Event:         storedEvent,
 	}
 	if err := appendJSONL(eventsPath, record); err != nil {
-		return err
+		return event, err
 	}
 	s.eventSeq[id] = seq
-	return nil
+	return storedEvent, nil
+}
+
+func (s *sessionStore) ReplayEventsAfter(sessionID string, afterSeq int64) ([]protocol.Event, error) {
+	if s == nil || strings.TrimSpace(s.dir) == "" {
+		return nil, nil
+	}
+	id, err := cleanSessionID(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	manifest, err := readSessionManifest(filepath.Join(s.dir, id, sessionManifestName))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	eventsPath := filepath.Join(s.dir, id, sessionFileName(manifest.EventsJSONL, sessionEventsJSONLName))
+	return replaySessionEventsAfter(eventsPath, id, afterSeq)
 }
 
 func gatewaySessionRunID(sessionID string, runSeq int64) string {
@@ -462,6 +481,48 @@ func lastSessionEventSeq(path, sessionID string) (int64, error) {
 		expectedSeq++
 	}
 	return lastSeq, nil
+}
+
+func replaySessionEventsAfter(path, sessionID string, afterSeq int64) ([]protocol.Event, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer file.Close()
+
+	var events []protocol.Event
+	decoder := json.NewDecoder(file)
+	expectedSeq := int64(1)
+	for {
+		var record sessionEventRecord
+		err := decoder.Decode(&record)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return events, fmt.Errorf("%s record %d invalid: %w", path, expectedSeq, err)
+		}
+		if record.SchemaVersion != 0 && record.SchemaVersion != gatewaySessionSchemaVersion {
+			return events, fmt.Errorf("%s record %d unsupported schema_version %d", path, expectedSeq, record.SchemaVersion)
+		}
+		if record.Seq != expectedSeq {
+			return events, fmt.Errorf("%s sequence gap: got %d want %d", path, record.Seq, expectedSeq)
+		}
+		if record.SessionID != sessionID {
+			return events, fmt.Errorf("%s record %d session_id = %q, want %q", path, expectedSeq, record.SessionID, sessionID)
+		}
+		if record.EventType != "" && record.Event.Type != "" && record.EventType != string(record.Event.Type) {
+			return events, fmt.Errorf("%s record %d event_type = %q, event.type = %q", path, expectedSeq, record.EventType, record.Event.Type)
+		}
+		if record.Seq > afterSeq {
+			events = append(events, record.Event)
+		}
+		expectedSeq++
+	}
+	return events, nil
 }
 
 func readSessionManifest(path string) (sessionManifest, error) {

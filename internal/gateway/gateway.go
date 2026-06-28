@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -48,7 +49,7 @@ type Session struct {
 	Created       time.Time           `json:"created"`
 	Thread        *sessionpkg.Session `json:"-"`
 	events        *eventHub
-	eventRecorder func(protocol.Event)
+	eventRecorder func(protocol.Event) protocol.Event
 	mu            sync.Mutex
 	status        SessionStatus
 }
@@ -332,6 +333,11 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
+	afterSeq, hasAfterSeq, err := parseEventReplayCursor(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
@@ -348,19 +354,74 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	events, unsubscribe := session.Subscribe()
 	defer unsubscribe()
-	if !emit(protocol.Event{Type: protocol.EventSessionStatus, Data: session.Status()}) {
-		return
+	cursor := afterSeq
+	if hasAfterSeq && s.store != nil {
+		replayed, err := s.store.ReplayEventsAfter(session.ID, afterSeq)
+		if err != nil {
+			_ = emit(protocol.Event{Type: protocol.EventRunFailed, Data: "event replay failed: " + err.Error()})
+			return
+		}
+		for _, event := range replayed {
+			if event.Seq > cursor {
+				cursor = event.Seq
+			}
+			if !emit(event) {
+				return
+			}
+		}
+	} else if !hasAfterSeq {
+		if !emit(protocol.Event{Type: protocol.EventSessionStatus, Data: session.Status()}) {
+			return
+		}
 	}
+	if hasAfterSeq {
+		for {
+			select {
+			case event := <-events:
+				if event.Seq == 0 || event.Seq > cursor {
+					if event.Seq > cursor {
+						cursor = event.Seq
+					}
+					if !emit(event) {
+						return
+					}
+				}
+			default:
+				goto live
+			}
+		}
+	}
+live:
 	for {
 		select {
 		case <-r.Context().Done():
 			return
 		case event := <-events:
+			if hasAfterSeq {
+				if event.Seq != 0 && event.Seq <= cursor {
+					continue
+				}
+				if event.Seq > cursor {
+					cursor = event.Seq
+				}
+			}
 			if !emit(event) {
 				return
 			}
 		}
 	}
+}
+
+func parseEventReplayCursor(r *http.Request) (int64, bool, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("after_seq"))
+	if raw == "" {
+		return 0, false, nil
+	}
+	seq, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || seq < 0 {
+		return 0, true, fmt.Errorf("after_seq must be a non-negative integer")
+	}
+	return seq, true, nil
 }
 
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
@@ -448,10 +509,13 @@ func (s *Server) attachSessionStore(session *Session) {
 	if s.store == nil || session == nil {
 		return
 	}
-	session.eventRecorder = func(event protocol.Event) {
-		if err := s.store.AppendEvent(session, event); err != nil {
+	session.eventRecorder = func(event protocol.Event) protocol.Event {
+		stored, err := s.store.AppendEvent(session, event)
+		if err != nil {
 			log.Printf("gateway session event save failed id=%s type=%s: %v", session.ID, event.Type, err)
+			return event
 		}
+		return stored
 	}
 }
 

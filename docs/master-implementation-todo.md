@@ -767,7 +767,7 @@ Acceptance:
   - [ ] context status
   - [ ] benchmarks
 - [ ] Add typed response structs and tests.
-- [ ] Add event replay cursor: `after_seq`.
+- [x] Add event replay cursor: `after_seq`.
 
 Acceptance:
 
