@@ -702,20 +702,20 @@ Acceptance:
 
 ### 6.3 Telegram Sessions And Users
 
-- [ ] Confirm each allowed Telegram user has separate session state by chat/user.
-- [ ] Document concurrency behavior when two users use the bot simultaneously.
-- [ ] Add per-user defaults:
-  - [ ] profile
-  - [ ] provider/model
-  - [ ] reasoning
-  - [ ] current chat/session
-- [ ] Add `/new`, `/resume`, `/fork`, `/status`, `/context`, `/mcp`, `/model`, `/reasoning`, `/profile`, `/cancel`.
+- [x] Confirm each allowed Telegram user has separate session state by chat/user.
+- [x] Document concurrency behavior when two users use the bot simultaneously.
+- [x] Add per-user defaults:
+  - [x] profile
+  - [x] provider/model
+  - [x] reasoning
+  - [x] current chat/session
+- [ ] Add `/new`, `/resume`, `/fork`, `/status`, `/context`, `/mcp`, `/model`, `/reasoning`, `/profile`, `/cancel`. Implemented so far: `/new`, `/status`, `/context`, `/mcp`, `/model`, `/reasoning`, `/profile`, `/cancel`; remaining: `/resume`, `/fork`.
 - [ ] Add admin-only commands for auth/config if needed.
 
 Acceptance:
 
-- [ ] Two allowed users can run independent chats without corrupting each other.
-- [ ] One user's cancel does not cancel another user's run.
+- [x] Two allowed users can run independent chats without corrupting each other.
+- [x] One user's cancel does not cancel another user's run.
 
 ### 6.4 Telegram Tool UX
 
@@ -937,11 +937,11 @@ Purpose: make the project usable after sleep, reboot, or a week away.
   - [ ] tool/thinking views
   - [ ] copy/selection
 - [ ] `docs/telegram.md`:
-  - [ ] bot token setup
-  - [ ] allowed users
-  - [ ] commands
-  - [ ] sessions
-  - [ ] throttling
+  - [x] bot token setup
+  - [x] allowed users
+  - [x] commands
+  - [x] sessions
+  - [x] throttling
 - [x] `docs/benchmarks.md`:
   - [x] local bench
   - [x] Terminal-Bench adapter

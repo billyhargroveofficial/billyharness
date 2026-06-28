@@ -3,6 +3,7 @@ package telegrambot
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -175,6 +176,20 @@ type telegramAuthHarness struct {
 	importedCodex    bool
 }
 
+type uniqueSessionHarness struct {
+	scriptedHarness
+
+	mu   sync.Mutex
+	next int
+}
+
+func (h *uniqueSessionHarness) CreateSession(context.Context, string) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.next++
+	return fmt.Sprintf("session-%d", h.next), nil
+}
+
 func (h *telegramAuthHarness) SaveDeepSeekAPIKey(_ context.Context, apiKey string) (credentials.ProviderStatus, error) {
 	h.mu.Lock()
 	h.savedDeepSeekKey = apiKey
@@ -256,6 +271,140 @@ func TestCancelCommandBypassesActiveRunLock(t *testing.T) {
 	case <-runDone:
 	case <-time.After(time.Second):
 		t.Fatal("run handler did not finish after cancel")
+	}
+}
+
+func TestTelegramStateSeparatesUsersInSameChat(t *testing.T) {
+	statePath := t.TempDir() + "/state.json"
+	harness := &uniqueSessionHarness{
+		scriptedHarness: scriptedHarness{
+			events: []protocol.Event{
+				{Type: protocol.EventRunStarted},
+				{Type: protocol.EventAssistantDelta, Data: "ok"},
+			},
+		},
+	}
+	bot, err := New(Options{
+		BotToken:        "token",
+		StatePath:       statePath,
+		Model:           "deepseek-v4-flash",
+		Profile:         "billy",
+		ReasoningEffort: "high",
+		EditInterval:    time.Millisecond,
+		AllowedChatIDs:  map[int64]bool{123: true},
+		SendEnabled:     false,
+		DryRunDefault:   true,
+	}, nil, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	userOne := Message{Chat: Chat{ID: 123}, From: &User{ID: 1001}, Text: "first user"}
+	userTwo := Message{Chat: Chat{ID: 123}, From: &User{ID: 1002}, Text: "second user"}
+	bot.handleMessage(context.Background(), userOne)
+	bot.handleMessage(context.Background(), userTwo)
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, From: &User{ID: 1001}, Text: "/model pro"})
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, From: &User{ID: 1002}, Text: "/reasoning low"})
+
+	state, err := (Store{Path: statePath}).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := state.Chats[userChatKey(123, 0, 1001)]
+	second := state.Chats[userChatKey(123, 0, 1002)]
+	if first.SessionID == "" || second.SessionID == "" || first.SessionID == second.SessionID {
+		t.Fatalf("sessions were not separated: first=%#v second=%#v", first, second)
+	}
+	if first.Model != "deepseek-v4-pro" {
+		t.Fatalf("first user model = %q", first.Model)
+	}
+	if second.Model != "deepseek-v4-flash" {
+		t.Fatalf("second user model changed unexpectedly: %q", second.Model)
+	}
+	if first.ReasoningEffort != "high" || second.ReasoningEffort != "low" {
+		t.Fatalf("reasoning defaults crossed users: first=%q second=%q", first.ReasoningEffort, second.ReasoningEffort)
+	}
+}
+
+func TestTelegramCancelIsScopedToUser(t *testing.T) {
+	bot, err := New(Options{
+		BotToken:        "token",
+		StatePath:       t.TempDir() + "/state.json",
+		Model:           "deepseek-v4-flash",
+		Profile:         "billy",
+		ReasoningEffort: "high",
+		EditInterval:    time.Millisecond,
+		AllowedChatIDs:  map[int64]bool{123: true},
+		SendEnabled:     false,
+		DryRunDefault:   true,
+	}, nil, scriptedHarness{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstCancelled := make(chan struct{})
+	secondCancelled := make(chan struct{})
+	bot.setCancel(userChatKey(123, 0, 1001), func() { close(firstCancelled) })
+	bot.setCancel(userChatKey(123, 0, 1002), func() { close(secondCancelled) })
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, From: &User{ID: 1001}, Text: "/cancel"})
+
+	select {
+	case <-firstCancelled:
+	case <-time.After(time.Second):
+		t.Fatal("first user's run was not cancelled")
+	}
+	select {
+	case <-secondCancelled:
+		t.Fatal("second user's run was cancelled by first user's /cancel")
+	default:
+	}
+}
+
+func TestTelegramLegacyChatStateMigratesToUserKey(t *testing.T) {
+	statePath := t.TempDir() + "/state.json"
+	legacy := ChatState{
+		SessionID:       "legacy-session",
+		Model:           "deepseek-v4-flash",
+		Profile:         "billy",
+		ReasoningEffort: "high",
+		LastEventSeq:    7,
+		UpdatedAt:       time.Now().UTC(),
+	}
+	if err := (Store{Path: statePath}).Save(State{Chats: map[string]ChatState{
+		chatKey(123, 0): legacy,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	bot, err := New(Options{
+		BotToken:        "token",
+		StatePath:       statePath,
+		Model:           "deepseek-v4-flash",
+		Profile:         "billy",
+		ReasoningEffort: "high",
+		EditInterval:    time.Millisecond,
+		AllowedChatIDs:  map[int64]bool{123: true},
+		SendEnabled:     false,
+		DryRunDefault:   true,
+	}, nil, scriptedHarness{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, From: &User{ID: 1001}, Text: "/model pro"})
+
+	state, err := (Store{Path: statePath}).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrated := state.Chats[userChatKey(123, 0, 1001)]
+	if migrated.SessionID != "legacy-session" || migrated.LastEventSeq != 7 {
+		t.Fatalf("legacy session fields were not preserved: %#v", migrated)
+	}
+	if migrated.Model != "deepseek-v4-pro" {
+		t.Fatalf("legacy state command update did not land on user key: %#v", migrated)
+	}
+	if state.Chats[chatKey(123, 0)].SessionID != "legacy-session" {
+		t.Fatalf("legacy key should remain readable for older clients: %#v", state.Chats)
 	}
 }
 

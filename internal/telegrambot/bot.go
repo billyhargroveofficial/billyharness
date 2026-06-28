@@ -128,7 +128,8 @@ func (b *Bot) Run(ctx context.Context) error {
 }
 
 func (b *Bot) handleMessage(parent context.Context, msg Message) {
-	key := chatKey(msg.Chat.ID, msg.ThreadID)
+	key := messageChatKey(msg)
+	legacyKey := legacyChatKey(msg)
 	if !b.allowed(msg) {
 		_ = b.sendPlain(parent, msg, "Chat is not allowlisted for this bot.")
 		return
@@ -152,7 +153,7 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 	defer b.clearCancel(key)
 	defer cancel()
 
-	state := b.chatState(key)
+	state := b.chatStateWithLegacy(key, legacyKey)
 	if state.Profile == "" {
 		state.Profile = b.opts.Profile
 	}
@@ -398,7 +399,8 @@ func (b *Bot) finishRich(ctx context.Context, msg Message, placeholder SentMessa
 }
 
 func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
-	key := chatKey(msg.Chat.ID, msg.ThreadID)
+	key := messageChatKey(msg)
+	legacyKey := legacyChatKey(msg)
 	fields := strings.Fields(text)
 	cmd := strings.ToLower(strings.SplitN(fields[0], "@", 2)[0])
 	arg := strings.TrimSpace(strings.TrimPrefix(text, fields[0]))
@@ -406,7 +408,7 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 	case "/start", "/help":
 		_ = b.sendHTML(ctx, msg, HelpHTML())
 	case "/new", "/reset":
-		state := b.chatState(key)
+		state := b.chatStateWithLegacy(key, legacyKey)
 		if state.Profile == "" {
 			state.Profile = b.opts.Profile
 		}
@@ -423,10 +425,10 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 		b.setChatState(key, state)
 		_ = b.sendPlain(ctx, msg, "New Billyharness session: "+short(id))
 	case "/status":
-		state := b.chatState(key)
+		state := b.chatStateWithLegacy(key, legacyKey)
 		_ = b.sendHTML(ctx, msg, StatusHTML(state, b.opts))
 	case "/model":
-		state := b.chatState(key)
+		state := b.chatStateWithLegacy(key, legacyKey)
 		if arg == "" {
 			_ = b.sendPlain(ctx, msg, "Current model: "+fallback(state.Model, b.opts.Model))
 			return
@@ -436,7 +438,7 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 		b.setChatState(key, state)
 		_ = b.sendPlain(ctx, msg, "Model: "+state.Model)
 	case "/profile":
-		state := b.chatState(key)
+		state := b.chatStateWithLegacy(key, legacyKey)
 		if arg == "" {
 			_ = b.sendPlain(ctx, msg, "Current profile: "+fallback(state.Profile, b.opts.Profile))
 			return
@@ -462,7 +464,7 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 		b.setChatState(key, state)
 		_ = b.sendPlain(ctx, msg, "Profile: "+state.Profile+"; next message starts a new session")
 	case "/reasoning":
-		state := b.chatState(key)
+		state := b.chatStateWithLegacy(key, legacyKey)
 		if arg == "" {
 			_ = b.sendPlain(ctx, msg, "Current reasoning: "+fallback(state.ReasoningEffort, b.opts.ReasoningEffort))
 			return
@@ -486,7 +488,7 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 		}
 		_ = b.sendHTML(ctx, msg, "<b>Config</b>\n<pre>"+esc(status)+"</pre>")
 	case "/context":
-		state := b.chatState(key)
+		state := b.chatStateWithLegacy(key, legacyKey)
 		if state.SessionID == "" {
 			_ = b.sendPlain(ctx, msg, "No active session. Send a message first or use /new.")
 			return
@@ -500,7 +502,7 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 	case "/auth":
 		b.handleAuthCommand(ctx, msg, arg)
 	case "/cancel":
-		state := b.chatState(key)
+		state := b.chatStateWithLegacy(key, legacyKey)
 		localCancelled := b.cancelChat(key)
 		if state.SessionID != "" {
 			b.cancelGatewaySession(state.SessionID)
@@ -663,6 +665,14 @@ func (b *Bot) chatState(key string) ChatState {
 	return state
 }
 
+func (b *Bot) chatStateWithLegacy(key, legacyKey string) ChatState {
+	state := b.chatState(key)
+	if !emptyChatState(state) || legacyKey == "" || legacyKey == key {
+		return state
+	}
+	return b.chatState(legacyKey)
+}
+
 func (b *Bot) setChatState(key string, state ChatState) {
 	b.saveMu.Lock()
 	defer b.saveMu.Unlock()
@@ -767,6 +777,33 @@ func chatKey(chatID int64, threadID int) string {
 		return strconv.FormatInt(chatID, 10) + ":" + strconv.Itoa(threadID)
 	}
 	return strconv.FormatInt(chatID, 10)
+}
+
+func legacyChatKey(msg Message) string {
+	return chatKey(msg.Chat.ID, msg.ThreadID)
+}
+
+func messageChatKey(msg Message) string {
+	return userChatKey(msg.Chat.ID, msg.ThreadID, messageUserID(msg))
+}
+
+func messageUserID(msg Message) int64 {
+	if msg.From == nil || msg.From.IsBot {
+		return 0
+	}
+	return msg.From.ID
+}
+
+func userChatKey(chatID int64, threadID int, userID int64) string {
+	key := chatKey(chatID, threadID)
+	if userID > 0 {
+		key += ":u" + strconv.FormatInt(userID, 10)
+	}
+	return key
+}
+
+func emptyChatState(state ChatState) bool {
+	return state == (ChatState{})
 }
 
 func HelpHTML() string {
