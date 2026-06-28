@@ -133,7 +133,7 @@ Acceptance:
 
 Purpose: centralize permission, attempt, retry, cancellation, audit, output refs, and telemetry.
 
-- [ ] Add `internal/toolorchestrator` or equivalent package only if it pays for itself.
+- [x] Add `internal/toolorchestrator` or equivalent package only if it pays for itself.
 - [ ] Define orchestration lifecycle:
   - [ ] prepare
   - [ ] permission decision
@@ -143,16 +143,16 @@ Purpose: centralize permission, attempt, retry, cancellation, audit, output refs
   - [ ] finalize
   - [ ] cancel/abort
 - [ ] Add structured events:
-  - [ ] `tool.call_requested`
-  - [ ] `tool.permission_requested`
-  - [ ] `tool.permission_decided`
-  - [ ] `tool.call_started`
+  - [x] `tool.call_requested`
+  - [x] `tool.permission_requested`
+  - [x] `tool.permission_decided`
+  - [x] `tool.call_started`
   - [ ] `tool.call_progress`
-  - [ ] `tool.call_finished`
-  - [ ] `tool.call_failed`
-  - [ ] `tool.call_aborted`
-  - [ ] `tool.output_ref_created`
-- [ ] Keep `tool.audit` as a derived/security event, not the only permission record.
+  - [x] `tool.call_finished`
+  - [x] `tool.call_failed`
+  - [x] `tool.call_aborted`
+  - [x] `tool.output_ref_created`
+- [x] Keep `tool.audit` as a derived/security event, not the only permission record.
 - [ ] Add attempt metadata:
   - [ ] tool name
   - [ ] args summary
@@ -169,11 +169,11 @@ Purpose: centralize permission, attempt, retry, cancellation, audit, output refs
 
 Acceptance:
 
-- [ ] Golden event test covers one successful safe tool.
-- [ ] Golden event test covers one denied dangerous tool.
-- [ ] Golden event test covers one parallel read-only batch.
+- [x] Golden event test covers one successful safe tool.
+- [x] Golden event test covers one denied dangerous tool.
+- [x] Golden event test covers one parallel read-only batch.
 - [ ] Golden event test covers cancellation while a tool is active.
-- [ ] TUI and Telegram can still render compact tool lines.
+- [x] TUI and Telegram can still render compact tool lines.
 
 ### 1.3 Parallel Policy
 
@@ -1041,10 +1041,10 @@ Before final response:
 
 Start here after this document lands:
 
-- [ ] Implement minimal `ToolOrchestrator` around existing tool execution.
-- [ ] Add `attempt_id` and permission decision events.
-- [ ] Keep old compact renderer working.
-- [ ] Add tests for successful safe tool, denied dangerous tool, and parallel batch event order.
-- [ ] Run `go test -count=1 ./internal/agent ./internal/tools ./internal/gateway ./internal/telegrambot ./internal/tui`.
-- [ ] If green, run `go test -count=1 ./...`.
-- [ ] Rebuild and restart services only if runtime binary changed.
+- [x] Implement minimal `ToolOrchestrator` around existing tool execution.
+- [x] Add `attempt_id` and permission decision events.
+- [x] Keep old compact renderer working.
+- [x] Add tests for successful safe tool, denied dangerous tool, and parallel batch event order.
+- [x] Run `go test -count=1 ./internal/agent ./internal/tools ./internal/gateway ./internal/telegrambot ./internal/tui`.
+- [x] If green, run `go test -count=1 ./...`.
+- [x] Rebuild and restart services only if runtime binary changed.

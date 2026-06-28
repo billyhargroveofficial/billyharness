@@ -238,17 +238,18 @@ type toolExecutionResult struct {
 	Call       protocol.ToolCall
 	Result     protocol.ToolResult
 	DurationMS int64
+	AttemptID  string
 }
 
 func (a *Agent) executeToolCalls(ctx context.Context, turnID string, round int, calls []protocol.ToolCall, emit func(protocol.Event)) []toolExecutionResult {
 	results := make([]toolExecutionResult, len(calls))
+	orchestrator := a.newToolOrchestrator(emit)
 	for _, call := range calls {
-		emit(protocol.Event{Type: protocol.EventToolCallRequested, Data: call})
-		a.emitToolAudit(call, emit)
+		orchestrator.Request(call)
 	}
 	for i := 0; i < len(calls); {
 		if !a.canRunToolParallel(calls[i]) {
-			results[i] = a.executeOneTool(ctx, turnID, round, i, calls[i], false, "", 0, 0, emit)
+			results[i] = a.executeOneTool(ctx, orchestrator, turnID, round, i, calls[i], false, "", 0, 0, emit)
 			i++
 			continue
 		}
@@ -256,10 +257,242 @@ func (a *Agent) executeToolCalls(ctx context.Context, turnID string, round int, 
 		for j < len(calls) && a.canRunToolParallel(calls[j]) {
 			j++
 		}
-		a.executeParallelToolBatch(ctx, turnID, round, calls, i, j, results, emit)
+		a.executeParallelToolBatch(ctx, orchestrator, turnID, round, calls, i, j, results, emit)
 		i = j
 	}
 	return results
+}
+
+type toolOrchestrator struct {
+	agent     *Agent
+	emit      func(protocol.Event)
+	decisions map[string]toolPermissionDecision
+}
+
+type toolPermissionDecision struct {
+	CallID           string
+	Name             string
+	Risk             protocol.Risk
+	KnownRisk        bool
+	RequiresApproval bool
+	Decision         string
+	Source           string
+	Reason           string
+}
+
+func (a *Agent) newToolOrchestrator(emit func(protocol.Event)) *toolOrchestrator {
+	return &toolOrchestrator{
+		agent:     a,
+		emit:      emit,
+		decisions: map[string]toolPermissionDecision{},
+	}
+}
+
+func (o *toolOrchestrator) Request(call protocol.ToolCall) {
+	if o == nil || o.emit == nil {
+		return
+	}
+	o.emit(protocol.Event{Type: protocol.EventToolCallRequested, Data: call})
+	decision := o.permissionDecision(call)
+	o.decisions[call.ID] = decision
+	o.emit(protocol.Event{Type: protocol.EventToolPermissionRequested, Data: decision.requestEventData()})
+	o.emit(protocol.Event{Type: protocol.EventToolPermissionDecided, Data: decision.decisionEventData()})
+	if o.agent != nil {
+		o.agent.emitToolAudit(call, o.emit)
+	}
+}
+
+func (o *toolOrchestrator) EmitAttemptStarted(call protocol.ToolCall, attemptID string) {
+	if o == nil || o.emit == nil {
+		return
+	}
+	o.emit(protocol.Event{Type: protocol.EventToolCallStarted, Data: call.Name})
+}
+
+func (o *toolOrchestrator) Execute(ctx context.Context, index int, call protocol.ToolCall, attemptID string) toolExecutionResult {
+	started := time.Now()
+	decision := o.decision(call)
+	var out protocol.ToolResult
+	if decision.Decision == "deny" {
+		out = protocol.ToolResult{
+			CallID:    call.ID,
+			Name:      call.Name,
+			Content:   dangerousToolDisabledMessage(),
+			IsError:   true,
+			ErrorCode: "permission_denied",
+			Metadata:  map[string]any{},
+		}
+	} else if o == nil || o.agent == nil || o.agent.tools == nil {
+		out = protocol.ToolResult{
+			CallID:    call.ID,
+			Name:      call.Name,
+			Content:   "tool registry unavailable",
+			IsError:   true,
+			ErrorCode: "tool_registry_unavailable",
+			Metadata:  map[string]any{},
+		}
+	} else {
+		result, err := o.agent.tools.Call(ctx, call)
+		out = protocol.ToolResult{
+			CallID:    call.ID,
+			Name:      call.Name,
+			Content:   result.Content,
+			IsError:   result.IsError,
+			ErrorCode: result.ErrorCode,
+			Metadata:  result.Metadata,
+			Truncated: result.Truncated,
+			OutputRef: result.OutputRef,
+		}
+		if err != nil {
+			out.IsError = true
+			if out.ErrorCode == "" {
+				if ctx.Err() != nil {
+					out.ErrorCode = "tool_aborted"
+				} else {
+					out.ErrorCode = "tool_error"
+				}
+			}
+			if out.Content == "" {
+				out.Content = err.Error()
+			}
+		}
+		o.agent.compactToolResult(index, call, &out)
+	}
+	ensureToolMetadata(&out)
+	out.Metadata["attempt_id"] = attemptID
+	out.Metadata["permission_decision"] = decision.Decision
+	out.Metadata["permission_source"] = decision.Source
+	out.Metadata["permission_reason"] = decision.Reason
+	if decision.KnownRisk {
+		out.Metadata["risk"] = decision.Risk
+	}
+	out.Metadata["output_bytes"] = len(out.Content)
+	out.Metadata["output_estimated_tokens"] = estimateMessagesTokens([]protocol.Message{{Role: protocol.RoleTool, Content: out.Content}})
+	return toolExecutionResult{Index: index, Call: call, Result: out, DurationMS: durationMS(started), AttemptID: attemptID}
+}
+
+func (o *toolOrchestrator) EmitAttemptFinished(result toolExecutionResult) {
+	if o == nil || o.emit == nil {
+		return
+	}
+	if result.Result.OutputRef != "" {
+		o.emit(protocol.Event{Type: protocol.EventToolOutputRefCreated, Data: map[string]any{
+			"call_id":    result.Call.ID,
+			"name":       result.Call.Name,
+			"attempt_id": result.AttemptID,
+			"output_ref": result.Result.OutputRef,
+			"truncated":  result.Result.Truncated,
+		}})
+	}
+	if result.Result.IsError {
+		eventType := protocol.EventToolCallFailed
+		if result.Result.ErrorCode == "tool_aborted" {
+			eventType = protocol.EventToolCallAborted
+		}
+		o.emit(protocol.Event{Type: eventType, Data: result.Result})
+	}
+	o.emit(protocol.Event{Type: protocol.EventToolCallFinished, Data: result.Result})
+}
+
+func (o *toolOrchestrator) StepMetadata(call protocol.ToolCall, attemptID string, base map[string]any) map[string]any {
+	metadata := map[string]any{}
+	for key, value := range base {
+		metadata[key] = value
+	}
+	decision := o.decision(call)
+	metadata["attempt_id"] = attemptID
+	metadata["permission_decision"] = decision.Decision
+	metadata["permission_source"] = decision.Source
+	metadata["permission_reason"] = decision.Reason
+	if decision.KnownRisk {
+		metadata["risk"] = decision.Risk
+	}
+	return metadata
+}
+
+func (o *toolOrchestrator) decision(call protocol.ToolCall) toolPermissionDecision {
+	if o != nil {
+		if decision, ok := o.decisions[call.ID]; ok {
+			return decision
+		}
+		return o.permissionDecision(call)
+	}
+	return toolPermissionDecision{
+		CallID:   call.ID,
+		Name:     call.Name,
+		Decision: "allow",
+		Source:   "auto",
+		Reason:   "no_orchestrator",
+	}
+}
+
+func (o *toolOrchestrator) permissionDecision(call protocol.ToolCall) toolPermissionDecision {
+	decision := toolPermissionDecision{
+		CallID:   call.ID,
+		Name:     call.Name,
+		Decision: "allow",
+		Source:   "auto",
+		Reason:   "safe_or_existing_policy",
+	}
+	if o == nil || o.agent == nil || o.agent.tools == nil {
+		decision.Reason = "tool_registry_unavailable"
+		return decision
+	}
+	risk, ok := o.agent.tools.Risk(call.Name)
+	if !ok {
+		decision.Reason = "unknown_tool_checked_at_execution"
+		return decision
+	}
+	decision.Risk = risk
+	decision.KnownRisk = true
+	switch risk {
+	case protocol.RiskWrite, protocol.RiskExecute:
+		decision.RequiresApproval = true
+		if !o.agent.cfg.AutoApproveDangerous {
+			decision.Decision = "deny"
+			decision.Source = "config"
+			decision.Reason = "dangerous_tools_disabled"
+			return decision
+		}
+		decision.Source = "config"
+		decision.Reason = "auto_approve_dangerous"
+	case protocol.RiskExternal:
+		decision.RequiresApproval = true
+		decision.Reason = "external_tool_allowed_by_existing_policy"
+	default:
+		decision.Reason = "safe_tool"
+	}
+	return decision
+}
+
+func (d toolPermissionDecision) requestEventData() map[string]any {
+	data := map[string]any{
+		"call_id":           d.CallID,
+		"name":              d.Name,
+		"requires_approval": d.RequiresApproval,
+	}
+	if d.KnownRisk {
+		data["risk"] = d.Risk
+	}
+	return data
+}
+
+func (d toolPermissionDecision) decisionEventData() map[string]any {
+	data := d.requestEventData()
+	data["decision"] = d.Decision
+	data["source"] = d.Source
+	data["reason"] = d.Reason
+	return data
+}
+
+func ensureToolMetadata(out *protocol.ToolResult) {
+	if out.Metadata == nil {
+		out.Metadata = map[string]any{}
+	}
+}
+
+func dangerousToolDisabledMessage() string {
+	return "tool disabled; set FAST_AGENT_AUTO_APPROVE_DANGEROUS=true or unset FAST_AGENT_AUTO_APPROVE_DANGEROUS to enable write/execute tools"
 }
 
 func (a *Agent) emitToolAudit(call protocol.ToolCall, emit func(protocol.Event)) {
@@ -283,11 +516,11 @@ func (a *Agent) emitToolAudit(call protocol.ToolCall, emit func(protocol.Event))
 	}})
 }
 
-func (a *Agent) executeParallelToolBatch(ctx context.Context, turnID string, round int, calls []protocol.ToolCall, start, end int, results []toolExecutionResult, emit func(protocol.Event)) {
+func (a *Agent) executeParallelToolBatch(ctx context.Context, orchestrator *toolOrchestrator, turnID string, round int, calls []protocol.ToolCall, start, end int, results []toolExecutionResult, emit func(protocol.Event)) {
 	limit := a.cfg.MaxParallelTools
 	if limit <= 1 || end-start == 1 {
 		for i := start; i < end; i++ {
-			results[i] = a.executeOneTool(ctx, turnID, round, i, calls[i], false, "", 0, 0, emit)
+			results[i] = a.executeOneTool(ctx, orchestrator, turnID, round, i, calls[i], false, "", 0, 0, emit)
 		}
 		return
 	}
@@ -310,8 +543,9 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, turnID string, rou
 		ParallelLimit: limit,
 	}})
 	for i := start; i < end; i++ {
-		emitToolStepStarted(emit, turnID, round, i, calls[i], true, batchID, batchSize, limit, a.toolStepMetadata(calls[i], true, batchSize))
-		emit(protocol.Event{Type: protocol.EventToolCallStarted, Data: calls[i].Name})
+		attemptID := agentAttemptID(turnID, i)
+		emitToolStepStarted(emit, turnID, round, i, calls[i], true, batchID, batchSize, limit, orchestrator.StepMetadata(calls[i], attemptID, a.toolStepMetadata(calls[i], true, batchSize)))
+		orchestrator.EmitAttemptStarted(calls[i], attemptID)
 	}
 	jobs := make(chan int)
 	done := make(chan toolExecutionResult, end-start)
@@ -321,7 +555,7 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, turnID string, rou
 		go func() {
 			defer wg.Done()
 			for idx := range jobs {
-				done <- a.callTool(ctx, idx, calls[idx])
+				done <- orchestrator.Execute(ctx, idx, calls[idx], agentAttemptID(turnID, idx))
 			}
 		}()
 	}
@@ -336,7 +570,7 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, turnID string, rou
 	for result := range done {
 		results[result.Index] = result
 		emitToolStepCompleted(emit, turnID, round, result, true, batchID, batchSize, limit)
-		emit(protocol.Event{Type: protocol.EventToolCallFinished, Data: result.Result})
+		orchestrator.EmitAttemptFinished(result)
 	}
 	emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
 		TurnID:        turnID,
@@ -353,12 +587,13 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, turnID string, rou
 	}})
 }
 
-func (a *Agent) executeOneTool(ctx context.Context, turnID string, round, index int, call protocol.ToolCall, parallel bool, batchID string, batchSize, limit int, emit func(protocol.Event)) toolExecutionResult {
-	emitToolStepStarted(emit, turnID, round, index, call, parallel, batchID, batchSize, limit, a.toolStepMetadata(call, parallel, batchSize))
-	emit(protocol.Event{Type: protocol.EventToolCallStarted, Data: call.Name})
-	result := a.callTool(ctx, index, call)
+func (a *Agent) executeOneTool(ctx context.Context, orchestrator *toolOrchestrator, turnID string, round, index int, call protocol.ToolCall, parallel bool, batchID string, batchSize, limit int, emit func(protocol.Event)) toolExecutionResult {
+	attemptID := agentAttemptID(turnID, index)
+	emitToolStepStarted(emit, turnID, round, index, call, parallel, batchID, batchSize, limit, orchestrator.StepMetadata(call, attemptID, a.toolStepMetadata(call, parallel, batchSize)))
+	orchestrator.EmitAttemptStarted(call, attemptID)
+	result := orchestrator.Execute(ctx, index, call, attemptID)
 	emitToolStepCompleted(emit, turnID, round, result, parallel, batchID, batchSize, limit)
-	emit(protocol.Event{Type: protocol.EventToolCallFinished, Data: result.Result})
+	orchestrator.EmitAttemptFinished(result)
 	return result
 }
 
@@ -434,6 +669,7 @@ func emitToolStepCompleted(emit func(protocol.Event), turnID string, round int, 
 		DurationMS:    result.DurationMS,
 		Error:         errorText,
 		Metadata: map[string]any{
+			"attempt_id": result.AttemptID,
 			"truncated":  result.Result.Truncated,
 			"output_ref": result.Result.OutputRef,
 		},
@@ -449,6 +685,10 @@ func agentStepID(turnID, kind string, index int) string {
 	return fmt.Sprintf("%s:%s-%03d", turnID, kind, index)
 }
 
+func agentAttemptID(turnID string, index int) string {
+	return fmt.Sprintf("%s:attempt-001", agentStepID(turnID, protocol.StepKindToolCall, index+1))
+}
+
 func durationMS(started time.Time) int64 {
 	if started.IsZero() {
 		return 0
@@ -461,32 +701,6 @@ func elapsedMS(started, ended time.Time) int64 {
 		return 0
 	}
 	return ended.Sub(started).Milliseconds()
-}
-
-func (a *Agent) callTool(ctx context.Context, index int, call protocol.ToolCall) toolExecutionResult {
-	started := time.Now()
-	result, err := a.tools.Call(ctx, call)
-	out := protocol.ToolResult{
-		CallID:    call.ID,
-		Name:      call.Name,
-		Content:   result.Content,
-		IsError:   result.IsError,
-		ErrorCode: result.ErrorCode,
-		Metadata:  result.Metadata,
-		Truncated: result.Truncated,
-		OutputRef: result.OutputRef,
-	}
-	if err != nil {
-		out.IsError = true
-		if out.ErrorCode == "" {
-			out.ErrorCode = "tool_error"
-		}
-		if out.Content == "" {
-			out.Content = err.Error()
-		}
-	}
-	a.compactToolResult(index, call, &out)
-	return toolExecutionResult{Index: index, Call: call, Result: out, DurationMS: durationMS(started)}
 }
 
 func (a *Agent) compactToolResult(index int, call protocol.ToolCall, out *protocol.ToolResult) {

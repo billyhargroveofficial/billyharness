@@ -407,9 +407,97 @@ func TestRunMessagesExecutesToolAndContinuesLoop(t *testing.T) {
 	}
 	if result, ok := firstToolResult(events); !ok || result.Name != "fs_write_file" || result.CallID != "call_1" || result.IsError {
 		t.Fatalf("tool result event = %#v ok=%v", result, ok)
+	} else if result.Metadata["attempt_id"] == "" ||
+		result.Metadata["permission_decision"] != "allow" ||
+		result.Metadata["permission_source"] != "config" ||
+		result.Metadata["permission_reason"] != "auto_approve_dangerous" {
+		t.Fatalf("tool result metadata missing orchestrator fields: %#v", result.Metadata)
+	}
+	if !sawPermissionDecision(events, "fs_write_file", "allow", "config", "auto_approve_dangerous") {
+		t.Fatalf("permission decision missing: %#v", events)
 	}
 	if prov.calls != 2 {
 		t.Fatalf("provider calls = %d", prov.calls)
+	}
+}
+
+func TestRunMessagesToolOrchestratorEmitsSafePermissionAndAttempt(t *testing.T) {
+	cfg := config.Default()
+	cfg.MaxToolRounds = 2
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_time", ToolName: "time_now", ArgsDelta: `{}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "finished"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	a := New(cfg, prov, tools.NewRegistry(cfg))
+	var events []protocol.Event
+	_, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "time"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sawPermissionDecision(events, "time_now", "allow", "auto", "safe_tool") {
+		t.Fatalf("safe permission decision missing: %#v", events)
+	}
+	decisionIndex := eventIndex(events, protocol.EventToolPermissionDecided)
+	startIndex := eventIndex(events, protocol.EventToolCallStarted)
+	if decisionIndex < 0 || startIndex < 0 || decisionIndex > startIndex {
+		t.Fatalf("permission decision should precede call start; decision=%d start=%d events=%#v", decisionIndex, startIndex, events)
+	}
+	result, ok := firstToolResult(events)
+	if !ok || result.CallID != "call_time" || result.Metadata["attempt_id"] == "" || result.Metadata["output_estimated_tokens"] == nil {
+		t.Fatalf("tool result metadata = %#v ok=%v", result, ok)
+	}
+}
+
+func TestRunMessagesToolOrchestratorDeniesDangerousToolBeforeExecution(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.MaxToolRounds = 2
+	cfg.AutoApproveDangerous = false
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_write", ToolName: "fs_write_file", ArgsDelta: `{"path":"out.txt","content":"blocked"}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "finished"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	a := New(cfg, prov, tools.NewRegistry(cfg))
+	var events []protocol.Event
+	_, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "write"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "out.txt")); !os.IsNotExist(err) {
+		t.Fatalf("denied tool should not write file, stat err=%v", err)
+	}
+	if !sawPermissionDecision(events, "fs_write_file", "deny", "config", "dangerous_tools_disabled") {
+		t.Fatalf("deny permission decision missing: %#v", events)
+	}
+	result, ok := firstToolResult(events)
+	if !ok || !result.IsError || result.ErrorCode != "permission_denied" || !strings.Contains(result.Content, "tool disabled") {
+		t.Fatalf("denied tool result = %#v ok=%v", result, ok)
+	}
+	if !sawEvent(events, protocol.EventToolCallFailed) {
+		t.Fatalf("tool.call_failed missing: %#v", events)
 	}
 }
 
@@ -507,7 +595,11 @@ func TestRunMessagesExecutesParallelSafeToolsConcurrentlyAndPreservesOrder(t *te
 	for _, event := range events {
 		step, ok := stepEvent(event, protocol.EventStepStarted)
 		if ok && step.Kind == protocol.StepKindToolCall && step.BatchID == batchStarted.BatchID && step.Parallel {
-			if step.Metadata["parallel_policy"] != "parallel_batch" || step.Metadata["parallel_safe"] != true || step.Metadata["risk"] != string(protocol.RiskReadOnly) {
+			if step.Metadata["parallel_policy"] != "parallel_batch" ||
+				step.Metadata["parallel_safe"] != true ||
+				step.Metadata["risk"] != string(protocol.RiskReadOnly) ||
+				step.Metadata["attempt_id"] == "" ||
+				step.Metadata["permission_decision"] != "allow" {
 				t.Fatalf("parallel tool metadata = %#v", step.Metadata)
 			}
 			parallelToolStarts++
@@ -866,6 +958,38 @@ func sawToolAudit(events []protocol.Event, name string, risk protocol.Risk, auto
 		}
 	}
 	return false
+}
+
+func sawPermissionDecision(events []protocol.Event, name, decision, source, reason string) bool {
+	for _, event := range events {
+		if event.Type != protocol.EventToolPermissionDecided {
+			continue
+		}
+		data := eventDataMap(event)
+		if data["name"] == name &&
+			data["decision"] == decision &&
+			data["source"] == source &&
+			data["reason"] == reason {
+			return true
+		}
+	}
+	return false
+}
+
+func eventIndex(events []protocol.Event, typ protocol.EventType) int {
+	for i, event := range events {
+		if event.Type == typ {
+			return i
+		}
+	}
+	return -1
+}
+
+func eventDataMap(event protocol.Event) map[string]any {
+	bytes, _ := json.Marshal(event.Data)
+	var data map[string]any
+	_ = json.Unmarshal(bytes, &data)
+	return data
 }
 
 func firstToolResult(events []protocol.Event) (protocol.ToolResult, bool) {
