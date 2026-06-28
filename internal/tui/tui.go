@@ -1187,6 +1187,7 @@ func (m Model) inlineStatusView() string {
 		statusSegment{"tools " + strconv.Itoa(m.toolCalls), styles.statusDim},
 		statusSegment{"v" + m.version, styles.statusDim},
 		statusSegment{"theme " + m.theme, styles.statusDim},
+		statusSegment{"profile " + m.currentProfile(), styles.statusDim},
 		statusSegment{"Main [" + shortID(m.localChatID) + "]", styles.statusDim},
 	)
 	width := max(1, m.statusContentWidth(styles))

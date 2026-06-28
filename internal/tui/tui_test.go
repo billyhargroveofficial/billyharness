@@ -1328,6 +1328,7 @@ func TestInlineStatusShowsModelAccessCacheCostAndSession(t *testing.T) {
 		"agent turns",
 		"v0.1.0",
 		"theme dark",
+		"profile billy",
 		"Main [",
 	} {
 		if !strings.Contains(status, want) {

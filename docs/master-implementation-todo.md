@@ -596,7 +596,7 @@ Acceptance:
 ### 5.4 Status Line
 
 - [x] Make status priority-based and width-aware.
-- [ ] Include:
+- [x] Include:
   - [x] run state
   - [x] elapsed turn time
   - [x] model
@@ -607,7 +607,7 @@ Acceptance:
   - [x] web summary metrics when present
   - [x] cached summary/cache status where meaningful
   - [x] cost/subscription
-  - [ ] chat/profile
+  - [x] chat/profile
 - [x] Remove confusing raw provider counters from default footer.
 - [ ] Add detailed status view command.
 
