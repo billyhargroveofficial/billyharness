@@ -1,15 +1,14 @@
 package credentials
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/codexauth"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 )
 
@@ -49,24 +48,24 @@ type CodexAuthResolution struct {
 }
 
 type Manager struct {
-	cfg config.Config
+	auth config.AuthSettings
 }
 
-func NewManager(cfg config.Config) Manager {
-	if strings.TrimSpace(cfg.APIKeyEnv) == "" {
-		cfg.APIKeyEnv = deepSeekKeyEnv
+func NewManagerFromAuthSettings(auth config.AuthSettings) Manager {
+	if strings.TrimSpace(auth.APIKeyEnv) == "" {
+		auth.APIKeyEnv = deepSeekKeyEnv
 	}
-	if strings.TrimSpace(cfg.CredentialFile) == "" {
-		cfg.CredentialFile = config.DefaultCredentialFile()
+	if strings.TrimSpace(auth.CredentialFile) == "" {
+		auth.CredentialFile = config.DefaultCredentialFile()
 	}
-	if strings.TrimSpace(cfg.CodexAuthFile) == "" {
-		cfg.CodexAuthFile = config.DefaultCodexAuthFile()
+	if strings.TrimSpace(auth.CodexAuthFile) == "" {
+		auth.CodexAuthFile = config.DefaultCodexAuthFile()
 	}
-	return Manager{cfg: cfg}
+	return Manager{auth: auth}
 }
 
-func CurrentStatus(cfg config.Config) Status {
-	return NewManager(cfg).Status()
+func CurrentStatusFromAuthSettings(auth config.AuthSettings) Status {
+	return NewManagerFromAuthSettings(auth).Status()
 }
 
 func (m Manager) Status() Status {
@@ -77,7 +76,7 @@ func (m Manager) Status() Status {
 }
 
 func DeepSeekStatus() ProviderStatus {
-	return NewManager(config.Config{APIKeyEnv: deepSeekKeyEnv}).DeepSeekStatus()
+	return NewManagerFromAuthSettings(config.AuthSettings{APIKeyEnv: deepSeekKeyEnv}).DeepSeekStatus()
 }
 
 func (m Manager) DeepSeekStatus() ProviderStatus {
@@ -89,7 +88,7 @@ func (m Manager) DeepSeekStatus() ProviderStatus {
 }
 
 func (m Manager) ResolveDeepSeekAPIKey() (SecretValue, error) {
-	envKey := strings.TrimSpace(m.cfg.APIKeyEnv)
+	envKey := strings.TrimSpace(m.auth.APIKeyEnv)
 	if envKey == "" {
 		envKey = deepSeekKeyEnv
 	}
@@ -118,21 +117,21 @@ func (m Manager) ResolveCodexAuth() CodexAuthResolution {
 }
 
 func (m Manager) CodexAuthFilePath() string {
-	if path := strings.TrimSpace(m.cfg.CodexAuthFile); path != "" {
+	if path := strings.TrimSpace(m.auth.CodexAuthFile); path != "" {
 		return path
 	}
 	return config.DefaultCodexAuthFile()
 }
 
 func (m Manager) CredentialFilePath() string {
-	if path := strings.TrimSpace(m.cfg.CredentialFile); path != "" {
+	if path := strings.TrimSpace(m.auth.CredentialFile); path != "" {
 		return path
 	}
 	return config.DefaultCredentialFile()
 }
 
 func SaveDeepSeekAPIKey(apiKey string) (ProviderStatus, error) {
-	return NewManager(config.Config{APIKeyEnv: deepSeekKeyEnv}).SaveDeepSeekAPIKey(apiKey)
+	return NewManagerFromAuthSettings(config.AuthSettings{APIKeyEnv: deepSeekKeyEnv}).SaveDeepSeekAPIKey(apiKey)
 }
 
 func (m Manager) SaveDeepSeekAPIKey(apiKey string) (ProviderStatus, error) {
@@ -143,15 +142,19 @@ func (m Manager) SaveDeepSeekAPIKey(apiKey string) (ProviderStatus, error) {
 	if !strings.HasPrefix(apiKey, "sk-") {
 		return ProviderStatus{}, fmt.Errorf("DeepSeek API key should start with sk-")
 	}
+	envKey := strings.TrimSpace(m.auth.APIKeyEnv)
+	if envKey == "" {
+		envKey = deepSeekKeyEnv
+	}
 	path := BillyDotenvPath()
-	if err := upsertDotenvValue(path, deepSeekKeyEnv, apiKey); err != nil {
+	if err := upsertDotenvValue(path, envKey, apiKey); err != nil {
 		return ProviderStatus{}, err
 	}
 	return ProviderStatus{Configured: true, Source: path, Path: path}, nil
 }
 
-func CodexStatus(cfg config.Config) ProviderStatus {
-	return NewManager(cfg).CodexStatus()
+func CodexStatusFromAuthSettings(auth config.AuthSettings) ProviderStatus {
+	return NewManagerFromAuthSettings(auth).CodexStatus()
 }
 
 func (m Manager) CodexStatus() ProviderStatus {
@@ -165,12 +168,12 @@ func (m Manager) CodexStatus() ProviderStatus {
 	if err != nil {
 		return status
 	}
-	status.Mode = stringField(payload, "auth_mode")
-	if token := stringField(payload, "personal_access_token"); token != "" {
+	status.Mode = codexauth.StringField(payload, "auth_mode")
+	if token := codexauth.StringField(payload, "personal_access_token"); token != "" {
 		status.Configured = true
 		status.Source = path
 		status.Mode = "personalAccessToken"
-		status.AccountID = stringField(payload, "chatgpt_account_id")
+		status.AccountID = codexauth.StringField(payload, "chatgpt_account_id")
 		status.Refresh = "not_required"
 		return status
 	}
@@ -178,21 +181,21 @@ func (m Manager) CodexStatus() ProviderStatus {
 	if tokens == nil {
 		return status
 	}
-	accessToken := stringField(tokens, "access_token")
-	refreshToken := stringField(tokens, "refresh_token")
+	accessToken := codexauth.StringField(tokens, "access_token")
+	refreshToken := codexauth.StringField(tokens, "refresh_token")
 	if accessToken == "" && refreshToken == "" {
 		return status
 	}
 	status.Configured = true
 	status.Source = path
-	if status.AccountID = stringField(tokens, "account_id"); status.AccountID == "" {
-		status.AccountID = accountIDFromJWT(stringField(tokens, "id_token"))
+	if status.AccountID = codexauth.StringField(tokens, "account_id"); status.AccountID == "" {
+		status.AccountID = codexauth.AccountIDFromJWT(codexauth.StringField(tokens, "id_token"))
 	}
 	if status.AccountID == "" {
-		status.AccountID = accountIDFromJWT(accessToken)
+		status.AccountID = codexauth.AccountIDFromJWT(accessToken)
 	}
-	exp := expirationFromJWT(accessToken)
-	status.Refresh = codexRefreshStatus(accessToken, refreshToken, exp, false)
+	exp := codexauth.ExpirationFromJWT(accessToken)
+	status.Refresh = codexauth.RefreshStatus(accessToken, refreshToken, exp, false)
 	if !exp.IsZero() {
 		status.ExpiresAt = exp.UTC().Format(time.RFC3339)
 	}
@@ -234,56 +237,22 @@ func codexEnvStatus(token, accountID, source, path string) ProviderStatus {
 	}
 	status.Mode = "accessToken"
 	if status.AccountID == "" {
-		status.AccountID = accountIDFromJWT(token)
+		status.AccountID = codexauth.AccountIDFromJWT(token)
 	}
-	exp := expirationFromJWT(token)
-	status.Refresh = codexRefreshStatus(token, "", exp, false)
+	exp := codexauth.ExpirationFromJWT(token)
+	status.Refresh = codexauth.RefreshStatus(token, "", exp, false)
 	if !exp.IsZero() {
 		status.ExpiresAt = exp.UTC().Format(time.RFC3339)
 	}
 	return status
 }
 
-func codexRefreshStatus(accessToken, refreshToken string, expiresAt time.Time, personalAccessToken bool) string {
-	if personalAccessToken || strings.HasPrefix(strings.TrimSpace(accessToken), "at-") {
-		return "not_required"
-	}
-	hasAccess := strings.TrimSpace(accessToken) != ""
-	hasRefresh := strings.TrimSpace(refreshToken) != ""
-	if !hasAccess && hasRefresh {
-		return "refresh_required"
-	}
-	if !hasAccess {
-		return ""
-	}
-	if expiresAt.IsZero() {
-		if hasRefresh {
-			return "refreshable_unknown_expiry"
-		}
-		return "unknown"
-	}
-	now := time.Now()
-	if !expiresAt.After(now) {
-		if hasRefresh {
-			return "refresh_required"
-		}
-		return "expired"
-	}
-	if !expiresAt.After(now.Add(5 * time.Minute)) {
-		if hasRefresh {
-			return "refresh_soon"
-		}
-		return "expires_soon"
-	}
-	return "fresh"
-}
-
-func ImportCodexAuth(cfg config.Config, sourcePath string) (ProviderStatus, error) {
-	return NewManager(cfg).ImportCodexAuth(sourcePath)
+func ImportCodexAuthFromAuthSettings(auth config.AuthSettings, sourcePath string) (ProviderStatus, error) {
+	return NewManagerFromAuthSettings(auth).ImportCodexAuth(sourcePath)
 }
 
 func (m Manager) ImportCodexAuth(sourcePath string) (ProviderStatus, error) {
-	dest := m.cfg.CodexAuthFile
+	dest := m.auth.CodexAuthFile
 	if strings.TrimSpace(dest) == "" {
 		dest = config.DefaultCodexAuthFile()
 	}
@@ -313,24 +282,24 @@ func (m Manager) ImportCodexAuth(sourcePath string) (ProviderStatus, error) {
 	if err != nil {
 		return ProviderStatus{}, err
 	}
-	if !hasCodexTokens(payload) {
+	if !codexauth.HasTokens(payload) {
 		return ProviderStatus{}, fmt.Errorf("Codex auth file %s does not contain OAuth tokens", sourcePath)
 	}
 	if err := writeAuthPayload(dest, payload); err != nil {
 		return ProviderStatus{}, err
 	}
-	status := NewManager(config.Config{CodexAuthFile: dest}).CodexStatus()
+	status := NewManagerFromAuthSettings(config.AuthSettings{CodexAuthFile: dest}).CodexStatus()
 	status.Source = sourcePath
 	status.Path = dest
 	return status, nil
 }
 
-func SaveCodexAuthJSON(cfg config.Config, raw json.RawMessage) (ProviderStatus, error) {
-	return NewManager(cfg).SaveCodexAuthJSON(raw)
+func SaveCodexAuthJSONFromAuthSettings(auth config.AuthSettings, raw json.RawMessage) (ProviderStatus, error) {
+	return NewManagerFromAuthSettings(auth).SaveCodexAuthJSON(raw)
 }
 
 func (m Manager) SaveCodexAuthJSON(raw json.RawMessage) (ProviderStatus, error) {
-	dest := m.cfg.CodexAuthFile
+	dest := m.auth.CodexAuthFile
 	if strings.TrimSpace(dest) == "" {
 		dest = config.DefaultCodexAuthFile()
 	}
@@ -338,13 +307,13 @@ func (m Manager) SaveCodexAuthJSON(raw json.RawMessage) (ProviderStatus, error) 
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return ProviderStatus{}, fmt.Errorf("invalid Codex auth JSON: %w", err)
 	}
-	if !hasCodexTokens(payload) {
+	if !codexauth.HasTokens(payload) {
 		return ProviderStatus{}, fmt.Errorf("Codex auth JSON does not contain OAuth tokens")
 	}
 	if err := writeAuthPayload(dest, payload); err != nil {
 		return ProviderStatus{}, err
 	}
-	return NewManager(config.Config{CodexAuthFile: dest}).CodexStatus(), nil
+	return NewManagerFromAuthSettings(config.AuthSettings{CodexAuthFile: dest}).CodexStatus(), nil
 }
 
 func BillyDotenvPath() string {
@@ -421,7 +390,7 @@ func credentialFileValue(path string, keys ...string) (string, bool) {
 	}
 	for _, key := range keys {
 		for _, candidate := range []string{key, strings.ToLower(key), strings.ToUpper(key)} {
-			if value := stringField(payload, candidate); value != "" {
+			if value := codexauth.StringField(payload, candidate); value != "" {
 				return value, true
 			}
 		}
@@ -452,17 +421,6 @@ func writeAuthPayload(path string, payload map[string]any) error {
 	return os.WriteFile(path, append(body, '\n'), 0o600)
 }
 
-func hasCodexTokens(payload map[string]any) bool {
-	if strings.TrimSpace(stringField(payload, "personal_access_token")) != "" {
-		return true
-	}
-	tokens, _ := payload["tokens"].(map[string]any)
-	if tokens == nil {
-		return false
-	}
-	return stringField(tokens, "access_token") != "" || stringField(tokens, "refresh_token") != ""
-}
-
 func samePath(a, b string) bool {
 	aa, err := filepath.Abs(a)
 	if err != nil {
@@ -473,53 +431,4 @@ func samePath(a, b string) bool {
 		bb = b
 	}
 	return aa == bb
-}
-
-func stringField(m map[string]any, key string) string {
-	if m == nil {
-		return ""
-	}
-	value, _ := m[key].(string)
-	return strings.TrimSpace(value)
-}
-
-func accountIDFromJWT(token string) string {
-	claims := jwtClaims(token)
-	if value := stringField(claims, "chatgpt_account_id"); value != "" {
-		return value
-	}
-	if auth, _ := claims["https://api.openai.com/auth"].(map[string]any); auth != nil {
-		return stringField(auth, "chatgpt_account_id")
-	}
-	return ""
-}
-
-func expirationFromJWT(token string) time.Time {
-	claims := jwtClaims(token)
-	switch exp := claims["exp"].(type) {
-	case float64:
-		return time.Unix(int64(exp), 0)
-	case string:
-		if parsed, err := strconv.ParseInt(exp, 10, 64); err == nil && parsed > 0 {
-			return time.Unix(parsed, 0)
-		}
-	}
-	return time.Time{}
-}
-
-func jwtClaims(token string) map[string]any {
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 || parts[1] == "" {
-		return nil
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		raw, err = base64.URLEncoding.DecodeString(parts[1])
-	}
-	if err != nil {
-		return nil
-	}
-	var claims map[string]any
-	_ = json.Unmarshal(raw, &claims)
-	return claims
 }

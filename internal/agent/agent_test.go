@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/eventlog"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
@@ -23,7 +24,7 @@ func TestRunWithMockProvider(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"
 	cfg.Model = "mock"
-	prov, err := provider.New(cfg)
+	prov, err := provider.NewFromBinding(cfg.ProviderBinding())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,6 +60,7 @@ func TestRunMessagesEmitsTypedTurnAndModelStepEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertAgentLifecycleValid(t, events)
 	runStarted, ok := firstEventData(events, protocol.EventRunStarted)
 	if !ok || runStarted["submission_id"] == "" || runStarted["run_id"] == "" {
 		t.Fatalf("run started = %#v ok=%v", runStarted, ok)
@@ -201,7 +203,9 @@ func TestRunMessagesCompactsBeforeProviderCall(t *testing.T) {
 	}
 	var compacted bool
 	var compactEvent map[string]any
+	var events []protocol.Event
 	next, err := a.RunMessages(context.Background(), messages, func(event protocol.Event) {
+		events = append(events, event)
 		if event.Type == protocol.EventContextCompacted {
 			compacted = true
 			bytes, _ := json.Marshal(event.Data)
@@ -211,6 +215,7 @@ func TestRunMessagesCompactsBeforeProviderCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertAgentLifecycleValid(t, events)
 	if !compacted {
 		t.Fatalf("expected context compaction event")
 	}
@@ -256,6 +261,38 @@ func TestEstimateMessagesTokensIgnoresStoredReasoningContent(t *testing.T) {
 	}
 }
 
+func TestCompactMessagesUsesCurrentEstimateAfterHugeToolOutput(t *testing.T) {
+	cfg := config.Default()
+	cfg.ContextCompactTokens = 100
+	cfg.ContextCompactKeep = 1
+	cfg.ContextCompactMaxChars = 2000
+	messages := []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "old request"},
+		{Role: protocol.RoleAssistant, ToolCalls: []protocol.ToolCall{{
+			ID:        "call-1",
+			Name:      "web_fetch",
+			Arguments: json.RawMessage(`{"url":"https://example.com"}`),
+		}}},
+		{Role: protocol.RoleTool, ToolCallID: "call-1", Name: "web_fetch", Content: strings.Repeat("large tool output ", 80)},
+		{Role: protocol.RoleUser, Content: "latest task"},
+	}
+
+	compacted, report, ok := compactMessages(messages, cfg.RuntimeLimits(), 10)
+	if !ok {
+		t.Fatalf("expected compaction from current estimated transcript tokens, estimate=%d", estimateMessagesTokens(messages))
+	}
+	if report.TriggerSource != "estimated_messages" || report.TriggerPromptTokens <= int64(cfg.ContextCompactTokens) {
+		t.Fatalf("trigger should use current estimate, report=%#v", report)
+	}
+	if compacted[len(compacted)-1].Content != "latest task" {
+		t.Fatalf("latest task not preserved: %#v", compacted)
+	}
+	if !strings.Contains(compacted[1].Content, "large tool output") {
+		t.Fatalf("summary should include compacted tool output: %#v", compacted)
+	}
+}
+
 func TestEmitContextThresholdEventsOncePerRun(t *testing.T) {
 	cfg := config.Default()
 	cfg.ContextWindowTokens = 1000
@@ -265,10 +302,10 @@ func TestEmitContextThresholdEventsOncePerRun(t *testing.T) {
 		{Role: protocol.RoleSystem, Content: "system"},
 		{Role: protocol.RoleUser, Content: strings.Repeat("x", 2200)},
 	}
-	emitContextThresholdEvents(messages, cfg, 2, "after_tool_results", emitted, func(event protocol.Event) {
+	emitContextThresholdEvents(messages, cfg.RuntimeLimits(), 2, "after_tool_results", emitted, func(event protocol.Event) {
 		events = append(events, event)
 	})
-	emitContextThresholdEvents(messages, cfg, 3, "before_turn", emitted, func(event protocol.Event) {
+	emitContextThresholdEvents(messages, cfg.RuntimeLimits(), 3, "before_turn", emitted, func(event protocol.Event) {
 		events = append(events, event)
 	})
 	if len(events) != 1 {
@@ -299,7 +336,7 @@ func TestCompactMessagesPreservesAgentsContextPrefix(t *testing.T) {
 		{Role: protocol.RoleAssistant, Content: "old answer"},
 		{Role: protocol.RoleUser, Content: "latest"},
 	}
-	compacted, _, ok := compactMessages(messages, cfg, 100)
+	compacted, _, ok := compactMessages(messages, cfg.RuntimeLimits(), 100)
 	if !ok {
 		t.Fatal("expected compaction")
 	}
@@ -324,7 +361,7 @@ func TestCompactMessagesPreservesProfileSystemPrefix(t *testing.T) {
 		{Role: protocol.RoleAssistant, Content: "old answer"},
 		{Role: protocol.RoleUser, Content: "latest"},
 	}
-	compacted, _, ok := compactMessages(messages, cfg, 100)
+	compacted, _, ok := compactMessages(messages, cfg.RuntimeLimits(), 100)
 	if !ok {
 		t.Fatal("expected compaction")
 	}
@@ -353,7 +390,7 @@ func TestCompactMessagesReportsProtectedPrefixPolicyAndCompactedBudget(t *testin
 		{Role: protocol.RoleAssistant, Content: "old answer"},
 		{Role: protocol.RoleUser, Content: "latest"},
 	}
-	compacted, report, ok := compactMessages(messages, cfg, 1234)
+	compacted, report, ok := compactMessages(messages, cfg.RuntimeLimits(), 1234)
 	if !ok {
 		t.Fatal("expected compaction")
 	}
@@ -415,7 +452,7 @@ func TestCompactMessagesReportsTopContextContributors(t *testing.T) {
 		{Role: protocol.RoleTool, Name: "mcp_call", ToolCallID: "call-mcp", Content: strings.Repeat("mcp ", 50)},
 		{Role: protocol.RoleUser, Content: "latest"},
 	}
-	_, report, ok := compactMessages(messages, cfg, 1000)
+	_, report, ok := compactMessages(messages, cfg.RuntimeLimits(), 1000)
 	if !ok {
 		t.Fatal("expected compaction")
 	}
@@ -444,9 +481,9 @@ func TestModelCompactionStrategyReplacesSummaryAndReportsModel(t *testing.T) {
 	cfg.WebSummaryMaxOutputTokens = 100
 	capture := &captureProvider{}
 	oldSummaryProvider := newCompactionSummaryProvider
-	newCompactionSummaryProvider = func(got config.Config) (provider.Provider, error) {
-		if got.Model != "mock-summary" || got.Provider != "mock" || got.Thinking != "disabled" {
-			t.Fatalf("summary cfg = provider:%q model:%q thinking:%q", got.Provider, got.Model, got.Thinking)
+	newCompactionSummaryProvider = func(got config.ProviderBinding) (provider.Provider, error) {
+		if got.Model.Model != "mock-summary" || got.Provider.Provider != "mock" || got.Model.Thinking != "disabled" {
+			t.Fatalf("summary binding = provider:%q model:%q thinking:%q", got.Provider.Provider, got.Model.Model, got.Model.Thinking)
 		}
 		return staticContentProvider{text: "model says keep latest task and important file path", usage: provider.Usage{InputTokens: 123, OutputTokens: 9}}, nil
 	}
@@ -490,7 +527,7 @@ func TestDefaultDeepSeekCompactionThresholdTriggersAtSixHundredK(t *testing.T) {
 		{Role: protocol.RoleAssistant, Content: "old answer"},
 		{Role: protocol.RoleUser, Content: "latest task"},
 	}
-	compacted, report, ok := compactMessages(messages, cfg, 600_000)
+	compacted, report, ok := compactMessages(messages, cfg.RuntimeLimits(), 600_000)
 	if !ok {
 		t.Fatal("expected default 600k compaction trigger")
 	}
@@ -513,7 +550,7 @@ func TestCompactionSummaryPreservesToolOutputRefs(t *testing.T) {
 		{Role: protocol.RoleTool, ToolCallID: "call_1", Name: "web_fetch", Content: "compact digest\noutput_ref=/root/billyharness/tool-output/20260628/ref.txt"},
 		{Role: protocol.RoleUser, Content: "latest task"},
 	}
-	compacted, _, ok := compactMessages(messages, cfg, 100)
+	compacted, _, ok := compactMessages(messages, cfg.RuntimeLimits(), 100)
 	if !ok {
 		t.Fatal("expected compaction")
 	}
@@ -538,7 +575,7 @@ func TestCompactMessagesPreservesToolAdjacency(t *testing.T) {
 		{Role: protocol.RoleTool, ToolCallID: "call_1", Name: "fs_read", Content: "readme"},
 		{Role: protocol.RoleUser, Content: "continue"},
 	}
-	compacted, _, ok := compactMessages(messages, cfg, 10)
+	compacted, _, ok := compactMessages(messages, cfg.RuntimeLimits(), 10)
 	if !ok {
 		t.Fatalf("expected compaction")
 	}
@@ -597,6 +634,7 @@ func TestRunMessagesExecutesToolAndContinuesLoop(t *testing.T) {
 	if !sawEvent(events, protocol.EventToolCallRequested) || !sawEvent(events, protocol.EventToolCallFinished) || !sawEvent(events, protocol.EventRunCompleted) {
 		t.Fatalf("events missing tool/run completion: %#v", events)
 	}
+	assertAgentLifecycleValid(t, events)
 	if !sawToolAudit(events, "fs_write_file", protocol.RiskWrite, true) {
 		t.Fatalf("write tool audit event missing: %#v", events)
 	}
@@ -719,6 +757,7 @@ func TestRunMessagesToolOrchestratorDeniesDangerousToolBeforeExecution(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertAgentLifecycleValid(t, events)
 	if _, err := os.Stat(filepath.Join(root, "out.txt")); !os.IsNotExist(err) {
 		t.Fatalf("denied tool should not write file, stat err=%v", err)
 	}
@@ -807,6 +846,7 @@ func TestRunMessagesExecutesParallelSafeToolsConcurrentlyAndPreservesOrder(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertAgentLifecycleValid(t, events)
 	var toolMessages []protocol.Message
 	for _, msg := range next {
 		if msg.Role == protocol.RoleTool && (msg.Name == "slow_a" || msg.Name == "slow_b") {
@@ -905,6 +945,7 @@ func TestRunMessagesParallelBatchCompletesOutOfOrderWithCallIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertAgentLifecycleValid(t, events)
 	var completed []string
 	for _, event := range events {
 		step, ok := stepEvent(event, protocol.EventStepCompleted)
@@ -1290,6 +1331,7 @@ func TestRunMessagesRecordsAbortWhenActiveToolIsCanceled(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("run error = %v, want context.Canceled", err)
 	}
+	assertAgentLifecycleValid(t, events)
 	var aborted protocol.ToolResult
 	var sawAborted bool
 	for _, event := range events {
@@ -1314,6 +1356,46 @@ func TestRunMessagesRecordsAbortWhenActiveToolIsCanceled(t *testing.T) {
 	}
 	if !sawCancelProgress {
 		t.Fatalf("cancel progress missing: %#v", toolProgressEvents(events, "call_cancel"))
+	}
+}
+
+func TestRunMessagesModelStreamCancellationIsLifecycleValid(t *testing.T) {
+	cfg := config.Default()
+	cfg.MaxToolRounds = 1
+	prov := &cancelDuringModelProvider{started: make(chan struct{})}
+	a := New(cfg, prov, tools.NewRegistry(cfg))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var events []protocol.Event
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.RunMessages(ctx, []protocol.Message{
+			{Role: protocol.RoleSystem, Content: "system"},
+			{Role: protocol.RoleUser, Content: "cancel model"},
+		}, func(event protocol.Event) {
+			events = append(events, event)
+		})
+		done <- err
+	}()
+	select {
+	case <-prov.started:
+	case <-time.After(time.Second):
+		t.Fatal("model stream did not start")
+	}
+	cancel()
+	err := <-done
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("run error = %v, want context.Canceled", err)
+	}
+	assertAgentLifecycleValid(t, events)
+	finished, ok := firstEventData(events, protocol.EventModelCallFinished)
+	if !ok ||
+		finished["status"] != protocol.StepStatusFailed ||
+		!strings.Contains(fmt.Sprint(finished["error"]), context.Canceled.Error()) {
+		t.Fatalf("model.call_finished = %#v ok=%v", finished, ok)
+	}
+	if !sawEvent(events, protocol.EventRunFailed) {
+		t.Fatalf("run.failed missing after model cancellation: %#v", events)
 	}
 }
 
@@ -1506,42 +1588,95 @@ func TestRunMessagesReturnsMaxRoundsError(t *testing.T) {
 	}
 }
 
-func TestRunMessagesEmitsRunFailedForInvalidToolArguments(t *testing.T) {
+func TestRunMessagesTurnsInvalidToolArgumentsIntoToolError(t *testing.T) {
 	cfg := config.Default()
-	cfg.MaxToolRounds = 1
-	prov := &scriptedProvider{repeat: []provider.Event{
-		{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_1", ToolName: "time_now", ArgsDelta: `{bad`},
-		{Kind: provider.EventDone},
+	cfg.MaxToolRounds = 2
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_1", ToolName: "time_now", ArgsDelta: `{bad`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "recovered"},
+			{Kind: provider.EventDone},
+		},
 	}}
 	a := New(cfg, prov, tools.NewRegistry(cfg))
 	var failed bool
-	_, err := a.RunMessages(context.Background(), []protocol.Message{
+	var toolFailed bool
+	next, err := a.RunMessages(context.Background(), []protocol.Message{
 		{Role: protocol.RoleSystem, Content: "system"},
 		{Role: protocol.RoleUser, Content: "bad tool"},
 	}, func(event protocol.Event) {
 		if event.Type == protocol.EventRunFailed {
 			failed = true
 		}
+		if event.Type == protocol.EventToolCallFailed {
+			result, ok := event.Data.(protocol.ToolResult)
+			if ok && result.ErrorCode == "invalid_json_args" && strings.Contains(result.Content, "not valid JSON") {
+				toolFailed = true
+			}
+		}
 	})
-	if err == nil || !strings.Contains(err.Error(), "invalid JSON") {
+	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	if !failed {
-		t.Fatalf("run.failed event not emitted")
+	if failed {
+		t.Fatalf("run.failed should not be emitted for malformed tool args")
+	}
+	if !toolFailed {
+		t.Fatalf("tool.call_failed invalid_json_args not emitted")
+	}
+	if len(next) == 0 || next[len(next)-1].Content != "recovered" {
+		t.Fatalf("messages = %#v", next)
+	}
+	if prov.calls != 2 {
+		t.Fatalf("provider calls = %d", prov.calls)
+	}
+	if len(prov.requests) != 2 {
+		t.Fatalf("requests = %d", len(prov.requests))
+	}
+	second := prov.requests[1].Messages
+	if len(second) < 2 {
+		t.Fatalf("second request messages = %#v", second)
+	}
+	assistant := second[len(second)-2]
+	tool := second[len(second)-1]
+	if assistant.Role != protocol.RoleAssistant || len(assistant.ToolCalls) != 1 || string(assistant.ToolCalls[0].Arguments) != "{}" {
+		t.Fatalf("assistant malformed call should be sanitized: %#v", assistant)
+	}
+	if assistant.ToolCalls[0].InvalidArguments != "{bad" {
+		t.Fatalf("invalid args should be retained in memory: %#v", assistant.ToolCalls[0])
+	}
+	if tool.Role != protocol.RoleTool || tool.ToolCallID != "call_1" || !strings.Contains(tool.Content, "not valid JSON") {
+		t.Fatalf("tool result message = %#v", tool)
 	}
 }
 
 func TestRunMessagesEmitsRunFailedOnProviderError(t *testing.T) {
 	cfg := config.Default()
+	cfg.Provider = "deepseek"
+	cfg.Model = "deepseek-v4-flash"
 	cfg.MaxToolRounds = 1
-	wantErr := errors.New("provider exploded")
+	wantErr := &provider.ProviderError{
+		Provider:  "deepseek",
+		ModelID:   "deepseek-v4-flash",
+		Kind:      provider.ErrorServer,
+		Status:    503,
+		Message:   "provider exploded",
+		RequestID: "deepseek-request-3",
+		Attempts:  3,
+		Retries:   2,
+	}
 	prov := &scriptedProvider{err: wantErr}
 	a := New(cfg, prov, tools.NewRegistry(cfg))
 	var failed bool
+	var events []protocol.Event
 	_, err := a.RunMessages(context.Background(), []protocol.Message{
 		{Role: protocol.RoleSystem, Content: "system"},
 		{Role: protocol.RoleUser, Content: "fail"},
 	}, func(event protocol.Event) {
+		events = append(events, event)
 		if event.Type == protocol.EventRunFailed && fmt.Sprint(event.Data) == wantErr.Error() {
 			failed = true
 		}
@@ -1551,6 +1686,18 @@ func TestRunMessagesEmitsRunFailedOnProviderError(t *testing.T) {
 	}
 	if !failed {
 		t.Fatalf("run.failed event not emitted")
+	}
+	finished, ok := firstEventData(events, protocol.EventModelCallFinished)
+	if !ok ||
+		finished["status"] != protocol.StepStatusFailed ||
+		finished["provider_id"] != "deepseek" ||
+		finished["model_id"] != "deepseek-v4-flash" ||
+		finished["provider_request_id"] != "deepseek-request-3" ||
+		finished["status_code"] != float64(503) ||
+		finished["attempts"] != float64(3) ||
+		finished["retries"] != float64(2) ||
+		!strings.Contains(fmt.Sprint(finished["error"]), "provider exploded") {
+		t.Fatalf("model.call_finished = %#v ok=%v", finished, ok)
 	}
 }
 
@@ -1587,6 +1734,7 @@ type scriptedProvider struct {
 	err       error
 	calls     int
 	lastTools []protocol.ToolSpec
+	requests  []provider.Request
 }
 
 type staticContentProvider struct {
@@ -1617,14 +1765,21 @@ func (p staticContentProvider) Stream(ctx context.Context, _ provider.Request) (
 func (p *scriptedProvider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, <-chan error) {
 	p.calls++
 	p.lastTools = req.Tools
+	p.requests = append(p.requests, req)
 	events := make(chan provider.Event, 8)
 	errs := make(chan error, 1)
 	call := p.calls
 	go func() {
+		var streamErr error
+		defer func() {
+			if streamErr != nil {
+				errs <- streamErr
+			}
+			close(errs)
+		}()
 		defer close(events)
-		defer close(errs)
 		if p.err != nil {
-			errs <- p.err
+			streamErr = p.err
 			return
 		}
 		step := p.repeat
@@ -1635,7 +1790,7 @@ func (p *scriptedProvider) Stream(ctx context.Context, req provider.Request) (<-
 			select {
 			case events <- event:
 			case <-ctx.Done():
-				errs <- ctx.Err()
+				streamErr = ctx.Err()
 				return
 			}
 		}
@@ -1645,6 +1800,29 @@ func (p *scriptedProvider) Stream(ctx context.Context, req provider.Request) (<-
 
 type cancelAfterToolProvider struct {
 	calls int
+}
+
+type cancelDuringModelProvider struct {
+	started chan struct{}
+}
+
+func (p *cancelDuringModelProvider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, <-chan error) {
+	events := make(chan provider.Event)
+	errs := make(chan error, 1)
+	go func() {
+		var streamErr error
+		defer func() {
+			if streamErr != nil {
+				errs <- streamErr
+			}
+			close(errs)
+		}()
+		defer close(events)
+		close(p.started)
+		<-ctx.Done()
+		streamErr = ctx.Err()
+	}()
+	return events, errs
 }
 
 func (p *cancelAfterToolProvider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, <-chan error) {
@@ -1673,6 +1851,13 @@ func sawEvent(events []protocol.Event, typ protocol.EventType) bool {
 		}
 	}
 	return false
+}
+
+func assertAgentLifecycleValid(t *testing.T, events []protocol.Event) {
+	t.Helper()
+	if err := eventlog.ValidateLifecycle(events); err != nil {
+		t.Fatalf("event lifecycle invalid: %v\nevents=%#v", err, events)
+	}
 }
 
 func firstTurnEvent(events []protocol.Event, typ protocol.EventType) (protocol.TurnEvent, bool) {

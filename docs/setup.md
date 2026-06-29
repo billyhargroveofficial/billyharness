@@ -4,6 +4,7 @@
 
 ```sh
 cd /root/billyharness
+GO_BIN=/root/.local/go/bin/go ./scripts/verify-deps.sh
 /root/.local/go/bin/go test -count=1 ./...
 /root/.local/go/bin/go build -o ./bin/fast-agent-harness ./cmd/fast-agent-harness
 ```

@@ -52,6 +52,34 @@ Minimum report fields:
 - provider input/output tokens when available
 - evaluator command, evaluator time, evaluator output
 
+## Fixture Ownership And Generated Output Policy
+
+Tracked benchmark fixtures should be hand-owned source inputs, not outputs from
+benchmark runs. Keep generated run bundles under ignored output directories such
+as `bench-runs/`, `tb-runs/`, or another explicit scratch path outside
+`benchmarks/`.
+
+Each task suite owns its task JSONL and workspace templates:
+
+- `benchmarks/local-code-smoke/` owns small standalone JS/Python workspaces used
+  by local code smoke tasks.
+- `benchmarks/agent-loop-stress/` owns deterministic mock-agent loop tasks.
+- `benchmarks/mcp-smoke/` owns the fake MCP server and its test MCP config.
+
+Workspace templates should stay runnable in isolation. Small duplicate files are
+allowed when they make each fixture self-contained and avoid hidden coupling
+between tasks. Current allowlisted duplicates:
+
+- `benchmarks/local-code-smoke/workspace/package.json`
+- `benchmarks/local-code-smoke/workspace-js-text-index/package.json`
+
+Do not copy large fixture trees to make task variants. Prefer a new task JSONL
+entry pointing at an existing `workspace_template`, or add a clearly named
+workspace template when the files actually diverge. If a generated adapter output
+must be checked in for compatibility testing, put it in a dedicated fixture
+directory with a README that names the generator command, source task, and reason
+the generated files are versioned.
+
 ## DeepSeek V4 Flash Configuration
 
 Use environment variables instead of hard-coding secrets:

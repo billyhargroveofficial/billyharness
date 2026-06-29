@@ -92,34 +92,82 @@ decomposition safer.
 
 ### P0.1 Shared Eventlog And Lifecycle Validator
 
-- [ ] Create `internal/eventlog` for event envelope validation, lifecycle
+- [x] Create `internal/eventlog` for event envelope validation, lifecycle
   validation, JSONL append/replay helpers, and corruption diagnostics.
-- [ ] Move common validation currently split between `internal/protocol`,
+  - [x] Add `internal/eventlog` record validation for schema version, sequence,
+        stream scope, event type, and optional protocol envelope validation.
+  - [x] Add `internal/eventlog` lifecycle validation for run, turn, step,
+        tool call, and tool attempt ordering.
+  - [x] Move JSONL append/replay helpers into `eventlog`.
+  - [x] Add structured corruption diagnostics shared by trace, gateway replay,
+        and session inspection.
+- [x] Move common validation currently split between `internal/protocol`,
   `internal/trace`, and `internal/gateway/session_store.go` into `eventlog`.
-- [ ] Validate run/turn/step/tool-attempt ordering:
-  - [ ] no completed run without started run;
-  - [ ] no orphan step completion;
-  - [ ] no tool result without matching `call_id`;
-  - [ ] no attempt finish without matching `attempt_id`;
-  - [ ] parallel child steps may complete out of order but must reference the
+  - [x] Trace replay uses `eventlog.RecordValidator` for schema, sequence,
+        run scope, event type, and strict envelope checks.
+  - [x] Gateway session JSONL replay uses `eventlog.RecordValidator` for schema,
+        sequence, session scope, and event type checks.
+  - [x] Move or wrap `protocol.ValidateEventEnvelope` at the `eventlog`
+        boundary once agent and trace lifecycle validation share the same path.
+- [x] Validate run/turn/step/tool-attempt ordering:
+  - [x] no completed run without started run;
+  - [x] no orphan step completion;
+  - [x] no tool result without matching `call_id`;
+  - [x] no attempt finish without matching `attempt_id`;
+  - [x] parallel child steps may complete out of order but must reference the
         correct batch/run/turn.
-- [ ] Use the same validator in agent tests, trace replay, gateway JSONL replay,
+  - [x] Wire lifecycle validation into agent tests, trace replay, gateway JSONL
+        replay, and session inspection.
+- [x] Use the same validator in agent tests, trace replay, gateway JSONL replay,
   and session inspection.
-- [ ] Document event identity rules:
-  - [ ] agent run id;
-  - [ ] gateway session id;
-  - [ ] session run sequence;
-  - [ ] event `seq` scope;
-  - [ ] persisted event shape.
+  - [x] Shared record validator is used in trace replay.
+  - [x] Shared record validator is used in gateway JSONL replay and session
+        inspection.
+  - [x] Shared lifecycle validator is used in agent tests, trace replay, gateway
+        JSONL replay, and session inspection.
+- [x] Document event identity rules:
+  - [x] agent run id;
+  - [x] gateway session id;
+  - [x] session run sequence;
+  - [x] event `seq` scope;
+  - [x] persisted event shape.
+
+Event identity rules:
+
+- Agent run id: `agent.RunMessages` creates a `run-*` id and `submission-*`
+  id for each runtime invocation. Agent protocol events use that run id for
+  lifecycle validation; gateway persistence must not replace an existing agent
+  `event.run_id`.
+- Gateway session id: `/v1/sessions` creates the durable session id. Session
+  history, manifest, and event JSONL records are scoped by this id and stored
+  under the matching gateway session directory.
+- Session run sequence: gateway `SessionStatus.RunSeq` increments once for each
+  session run. Session event records persist this as `run_seq`; gateway-originated
+  status events may use `<session_id>:run-<run_seq>` when no agent run id exists.
+- Event `seq` scope: agent stream `seq` values are scoped to one agent run;
+  benchmark trace `seq` values are scoped to one trace run; gateway persisted
+  `seq` values are scoped to one session `events.jsonl`. Gateway replay cursors
+  use the gateway session event `seq`.
+- Persisted event shape: gateway session event JSONL stores
+  `{schema_version, seq, session_id, run_seq, ts, event_type, event}`. The nested
+  `event.seq` is set to the same gateway session sequence so replayed events and
+  streamed session events share one cursor shape.
 
 Acceptance:
 
-- [ ] A scripted agent run validates full lifecycle.
-- [ ] A gateway session run persists events, replays after restart, and passes
+- [x] A scripted agent run validates full lifecycle.
+- [x] A gateway session run persists events, replays after restart, and passes
   the same validator.
-- [ ] Corrupt JSONL tests fail deterministically for seq gaps, missing IDs,
+- [x] Corrupt JSONL tests fail deterministically for seq gaps, missing IDs,
   orphan completions, and invalid event types.
-- [ ] `go test -count=1 ./internal/protocol ./internal/trace ./internal/gateway ./internal/agent` passes.
+  - [x] `internal/eventlog` corruption tests cover seq gaps, missing call/attempt
+        IDs, orphan completions, and invalid event type mismatches.
+  - [x] Gateway and trace corrupt JSONL tests exercise lifecycle validation
+        through their replay paths.
+  - [x] Shared JSONL replay returns structured `eventlog.CorruptionError`
+        diagnostics from eventlog, trace replay, gateway replay, and session
+        inspection paths.
+- [x] `go test -count=1 ./internal/protocol ./internal/trace ./internal/gateway ./internal/agent` passes.
 
 ### P0.2 Gateway Session Stream Contract
 
@@ -127,420 +175,857 @@ Problem: `/v1/sessions/{id}/run` currently records session events and streams
 the original agent event. The recorded event may be enriched with session `seq`,
 while TUI/Telegram cursors depend on `event.Seq`.
 
-- [ ] Change session run streaming so it emits the same sequenced event shape
+- [x] Change session run streaming so it emits the same sequenced event shape
   that is stored for replay.
-- [ ] Make `session.observeRunEvent` return the recorded/enriched event, or add a
+- [x] Make `session.observeRunEvent` return the recorded/enriched event, or add a
   single record-and-stream helper.
-- [ ] Add client-side cursor dedupe: ignore replay/live events with `Seq <= lastSeq`.
-- [ ] Add tests proving replay after the final streamed seq returns no duplicate
+- [x] Add client-side cursor dedupe: ignore replay/live events with `Seq <= lastSeq`.
+- [x] Add tests proving replay after the final streamed seq returns no duplicate
   already-rendered events.
 
 Acceptance:
 
-- [ ] TUI and Telegram cursor tests cover run, replay, reconnect, and resume.
-- [ ] Session stream events are monotonic and nonzero for stored gateway sessions.
-- [ ] `go test -count=1 ./internal/gateway ./internal/tui ./internal/telegrambot` passes.
+- [x] TUI and Telegram cursor tests cover run, replay, reconnect, and resume.
+  - [x] TUI drops replay/live events at or before the current gateway cursor.
+  - [x] Telegram drops stale replay events and duplicate live run events at or
+        before the current gateway cursor.
+  - [x] Add shared gatewayclient reconnect/follow cursor coverage after the
+        gatewayclient split.
+  - [x] Add end-to-end TUI/Telegram reconnect/resume flow coverage if those
+        clients grow a background `FollowSessionEvents` path; current UI paths
+        use replay-before-run plus direct run streaming.
+    - [x] Blocked/not applicable as of 2026-06-29: `internal/gatewayclient`
+          owns `FollowSessionEvents`, but `internal/tui` calls
+          `gatewayclient.RunSessionResult` for live runs and `internal/telegrambot`
+          exposes only `ReplaySessionEvents` plus `RunSession` through its
+          harness interface. Add this end-to-end coverage when either UI client
+          gains a background `FollowSessionEvents` path.
+- [x] Session stream events are monotonic and nonzero for stored gateway sessions.
+- [x] `go test -count=1 ./internal/gateway ./internal/tui ./internal/telegrambot` passes.
 
 ### P0.3 Central Tool Policy Boundary
 
 Problem: dangerous checks live in the agent and in some handlers, but direct
 registry/MCP-server callers can bypass handler-local assumptions.
 
-- [ ] Add a `ToolPolicy` or `ToolExecutor` boundary used by agent, MCP server,
+- [x] Add a `ToolPolicy` or `ToolExecutor` boundary used by agent, MCP server,
   and direct registry callers.
-- [ ] Enforce risk before any handler runs.
-- [ ] Remove ad hoc dangerous checks from individual handlers where the central
+- [x] Enforce risk before any handler runs.
+- [x] Remove ad hoc dangerous checks from individual handlers where the central
   policy now owns them.
-- [ ] Ensure `web_cache_clear` and every `RiskWrite`/`RiskExecute` tool is denied
+- [x] Ensure `web_cache_clear` and every `RiskWrite`/`RiskExecute` tool is denied
   when dangerous mode is disabled.
 
 Acceptance:
 
-- [ ] `AutoApproveDangerous=false` denies write/execute tools through agent,
+- [x] `AutoApproveDangerous=false` denies write/execute tools through agent,
   direct `Registry.Call`, and MCP server paths.
-- [ ] Audit events still include permission source, risk, decision, and reason.
-- [ ] `go test -count=1 ./internal/tools ./internal/agent ./internal/mcpserver` passes.
+- [x] Audit events still include permission source, risk, decision, and reason.
+- [x] `go test -count=1 ./internal/tools ./internal/agent ./internal/mcpserver` passes.
 
 ### P0.4 Web Public-Host Policy Bound To Actual Dial
 
 Problem: web fetch validates public DNS before the request, then `http.Client`
 dials normally. That leaves a DNS rebinding gap.
 
-- [ ] Extract an `internal/webtools` HTTP client with injectable resolver and
+- [x] Extract an `internal/webtools` HTTP client with injectable resolver and
   dialer.
-- [ ] Enforce public-IP validation on the actual dial target, including redirects.
-- [ ] Keep existing compact-output, cache, and output-ref behavior unchanged.
-- [ ] Add fake resolver/dialer tests for:
-  - [ ] public then private rebinding;
-  - [ ] redirect to private IP;
-  - [ ] localhost;
-  - [ ] RFC1918/private ranges;
-  - [ ] normal public host.
+- [x] Enforce public-IP validation on the actual dial target, including redirects.
+- [x] Keep existing compact-output, cache, and output-ref behavior unchanged.
+- [x] Add fake resolver/dialer tests for:
+  - [x] public then private rebinding;
+  - [x] redirect to private IP;
+  - [x] localhost;
+  - [x] RFC1918/private ranges;
+  - [x] normal public host.
 
 Acceptance:
 
-- [ ] Web tools still return compact summaries/output refs by default.
-- [ ] Private-network attempts fail before body fetch.
-- [ ] `go test -count=1 ./internal/tools` passes before and after extraction.
+- [x] Web tools still return compact summaries/output refs by default.
+- [x] Private-network attempts fail before body fetch.
+- [x] `go test -count=1 ./internal/tools` passes before and after extraction.
 
 ### P0.5 Enforceable Package Boundary Map
 
-- [ ] Add `docs/architecture.md` with every `internal/*` package, its
+- [x] Add `docs/architecture.md` with every `internal/*` package, its
   responsibility, allowed imports, forbidden imports, and owner notes.
-- [ ] Add a lightweight import-graph guard command or test.
-- [ ] Encode at least these forbidden imports:
-  - [ ] TUI must not import `internal/agent`, `internal/provider`,
+- [x] Add a lightweight import-graph guard command or test.
+- [x] Encode at least these forbidden imports:
+  - [x] TUI must not import `internal/agent`, `internal/provider`,
         `internal/tools`, or gateway server internals after the gatewayclient
         migration.
-  - [ ] Telegram must not import gateway server internals after DTO/client split.
-  - [ ] Tools must not import `internal/provider` after summarizer injection.
-  - [ ] Trace and gateway replay must use `internal/eventlog`.
+  - [x] Telegram must not import gateway server internals after DTO/client split.
+  - [x] Tools must not import `internal/provider` after summarizer injection.
+  - [x] Trace and gateway replay must use `internal/eventlog`.
 
 Acceptance:
 
-- [ ] Import guard runs locally and in the documented verification command.
-- [ ] Exceptions are listed with a removal issue/TODO and target phase.
+- [x] Import guard runs locally and in the documented verification command.
+- [x] Exceptions are listed with a removal issue/TODO and target phase.
 
 ### P0.6 Remove Tools To Provider Coupling
 
-- [ ] Define a narrow web summarizer interface in tools/webtools.
-- [ ] Inject the summarizer from runtime wiring instead of storing `provider.New`
+- [x] Define a narrow web summarizer interface in tools/webtools.
+- [x] Inject the summarizer from runtime wiring instead of storing `provider.New`
   inside `internal/tools`.
-- [ ] Keep extractive summarization as the zero-provider default.
-- [ ] Preserve `tool_summary_*` and `websum_*` metadata.
+- [x] Keep extractive summarization as the zero-provider default.
+- [x] Preserve `tool_summary_*` and `websum_*` metadata.
 
 Acceptance:
 
-- [ ] `internal/tools` no longer imports `internal/provider`.
-- [ ] Existing model-summary tests pass using a fake summarizer.
-- [ ] Web extractive mode still makes zero provider calls.
+- [x] `internal/tools` no longer imports `internal/provider`.
+- [x] Existing model-summary tests pass using a fake summarizer.
+- [x] Web extractive mode still makes zero provider calls.
 
 ## P1: Structural Decomposition Slices
 
 ### P1.1 Runtime Loop Split
 
-- [ ] Split `Agent.RunMessages` into:
-  - [ ] runtime loop;
-  - [ ] model-call step;
-  - [ ] tool-attempt orchestration;
-  - [ ] transcript mutation;
-  - [ ] event builder.
-- [ ] Decide whether `runstate.Run/Turn/Step` is authoritative lifecycle state
+- [x] Split `Agent.RunMessages` into:
+  - [x] runtime loop;
+    - [x] Move `Run`, `RunMessages`, transcript append helpers, failed-turn
+          lifecycle handling, and top-level tool-call dispatch into
+          `internal/agent/runtime_loop.go`; `agent.go` now holds agent
+          construction and lower-level helper surfaces.
+  - [x] model-call step;
+    - [x] Extract provider stream collection, assistant/reasoning delta
+          emission, usage updates, provider retry hook payloads, and tool-call
+          accumulation into a dedicated model-call stream helper.
+    - [x] Extract model-call step lifecycle into a dedicated helper that emits
+          model step started/finished/completed events and returns content,
+          reasoning, prompt token usage, tool calls, or step errors to the
+          runtime loop.
+    - [x] Move model-call step helpers into `internal/agent/model_call.go`;
+          `agent.go` no longer owns provider stream collection or model-step
+          lifecycle implementation details.
+  - [x] tool-attempt orchestration;
+    - [x] Move tool-attempt permission, attempt lifecycle, hook payload,
+          execution progress, and permission decision event helpers into
+          `internal/agent/tool_attempt.go`; `agent.go` now owns scheduling and
+          runtime-loop wiring, not the attempt orchestration machinery.
+  - [x] transcript mutation;
+    - [x] Extract assistant response and tool-result transcript appends into
+          dedicated helpers so the runtime loop no longer constructs those
+          protocol messages inline.
+    - [x] Move initial transcript construction, MCP instruction insertion,
+          assistant/tool result appends, and reasoning-storage selection into
+          `internal/agent/transcript.go`.
+  - [x] event builder.
+    - [x] Extract failed-turn/session-done/run-failed event emission into a
+          helper so model-step failure handling does not build the lifecycle
+          event sequence inline.
+    - [x] Move run/turn lifecycle event constructors plus successful, failed,
+          and max-tool-round terminal paths into `internal/agent/event_builder.go`.
+- [x] Decide whether `runstate.Run/Turn/Step` is authoritative lifecycle state
   or only snapshot metadata.
-- [ ] Replace high-value map payloads with typed protocol structs:
-  - [ ] model call data;
-  - [ ] permission decision;
-  - [ ] output ref;
-  - [ ] hook summaries;
-  - [ ] provider retry metadata.
+  - [x] Decision: lifecycle authority stays in the protocol event stream plus
+        `internal/eventlog` validation. `runstate.Snapshot` is the durable
+        per-turn metadata snapshot; `runstate.Run` is currently an ID/status
+        envelope helper for agent events and hooks; `runstate.Turn` and
+        `runstate.Step` are not runtime transition authority. Do not add a
+        second mutable lifecycle state machine in `runstate` without replacing
+        the eventlog authority explicitly.
+  - [x] Evidence: Go usages are limited to agent run/submission IDs, MCP hook
+        payloads, model-call metadata, and `runstate.NewSnapshot` calls in
+        agent, gateway, and benchmark setup; no runtime code consumes
+        `runstate.Turn` or `runstate.Step` as authoritative state.
+- [x] Replace high-value map payloads with typed protocol structs:
+  - [x] model call data;
+    - [x] Add `protocol.ModelCallEvent` for `model.call_started` and
+          `model.call_finished`, including snapshot, usage, latency, and error
+          fields while preserving the persisted JSON shape.
+  - [x] permission decision;
+    - [x] Add `protocol.ToolPermissionEvent`, use it for
+          `tool.permission_requested` and `tool.permission_decided`, and teach
+          event enrichment to copy `call_id` from the typed payload.
+  - [x] output ref;
+    - [x] Add `protocol.ToolOutputRefEvent`, use it for
+          `tool.output_ref_created`, and teach event enrichment to copy
+          `call_id` and `attempt_id` from the typed payload.
+  - [x] hook summaries;
+    - [x] Add `protocol.HookEvent`, use it for `hook.started`,
+          `hook.finished`, and `hook.failed`, and teach event enrichment to
+          copy hook turn/step/call/attempt IDs and duration from the typed
+          payload.
+  - [x] provider retry metadata.
+    - [x] `protocol.ModelCallEvent` now carries typed provider request,
+          attempts, retries, and status-code fields for model-call events;
+          hook summary payloads remain tracked separately.
 
 Acceptance:
 
-- [ ] `agent.go` drops below 1,200 LOC or has a documented split exception.
-- [ ] Lifecycle tests cover model-only, tool, parallel-tool, denied-tool,
+- [x] `agent.go` drops below 1,200 LOC or has a documented split exception.
+  - [x] `internal/agent/agent.go` is 867 LOC after extracting runtime-loop,
+        transcript, model-call, and tool-attempt helpers into dedicated files.
+- [x] Lifecycle tests cover model-only, tool, parallel-tool, denied-tool,
   aborted-tool, and compaction runs.
+  - [x] Agent tests now run `eventlog.ValidateLifecycle` over model-only,
+        compaction, normal tool, denied tool, parallel tool, out-of-order
+        parallel completion, and canceled/aborted tool scenarios.
 
 ### P1.2 Gateway API DTOs And Shared Client
 
-- [ ] Create `internal/gatewayapi` for HTTP request/response DTOs currently owned
+- [x] Create `internal/gatewayapi` for HTTP request/response DTOs currently owned
   by the server package.
-- [ ] Create `internal/gatewayclient` for:
-  - [ ] auth headers;
-  - [ ] URL/path escaping;
-  - [ ] typed status errors;
-  - [ ] `ErrSessionNotFound`;
-  - [ ] NDJSON event decoding;
-  - [ ] `RunSession` terminal-state reporting;
-  - [ ] replay/follow helpers.
-- [ ] Migrate Telegram and TUI from duplicate gateway code to `gatewayclient`.
+  - [x] Gateway server keeps compatibility aliases while DTO ownership moves to
+        `gatewayapi`.
+  - [x] Telegram and TUI context/session DTO references use `gatewayapi` instead
+        of gateway server-owned types where behavior helpers are not required.
+- [x] Create `internal/gatewayclient` for:
+  - [x] auth headers;
+  - [x] URL/path escaping;
+  - [x] typed status errors;
+  - [x] `ErrSessionNotFound`;
+  - [x] NDJSON event decoding;
+  - [x] `RunSession` terminal-state reporting;
+  - [x] replay/follow helpers.
+  - [x] one-shot session replay helper with client-side cursor dedupe.
+  - [x] raw streaming `Do` path for clients that need to scan session run
+        events directly.
+- [x] Migrate Telegram and TUI from duplicate gateway code to `gatewayclient`.
+  - [x] Telegram session client wrapper delegates to `gatewayclient` and no
+        longer imports gateway server internals.
+  - [x] TUI HTTP gateway calls use `gatewayclient` URL/auth/retry behavior.
+  - [x] TUI session run streaming uses `gatewayclient.RunSessionResult` instead
+        of a local NDJSON scanner.
+  - [x] Move TUI local context/report helpers off gateway server imports.
 
 Acceptance:
 
-- [ ] Telegram no longer imports `internal/gateway`.
-- [ ] TUI gateway calls use the same client as Telegram.
-- [ ] Contract tests cover 404, auth, large NDJSON events, cursor replay, and
+- [x] Telegram no longer imports `internal/gateway`.
+- [x] TUI no longer imports `internal/gateway`.
+- [x] TUI gateway calls use the same client as Telegram.
+- [x] Contract tests cover 404, auth, large NDJSON events, cursor replay, and
   run cancellation.
+  - [x] `gatewayclient` tests cover auth header propagation, typed 404
+        `ErrSessionNotFound`, and cursor replay dedupe.
+  - [x] `gatewayclient` tests cover large NDJSON events, follow/reconnect cursor
+        dedupe, terminal run-state reporting, and cancellation.
 
 ### P1.3 Shared Client UX Projector
 
-- [ ] Create `internal/clientux/projector`.
-- [ ] Project `protocol.Event` into a client-neutral run snapshot:
-  - [ ] assistant text;
-  - [ ] reasoning text;
-  - [ ] tool items keyed by `call_id`;
-  - [ ] run state;
-  - [ ] usage and context counters;
-  - [ ] web summary metrics;
-  - [ ] model/tool totals;
-  - [ ] errors;
-  - [ ] last sequence.
-- [ ] Move duplicated usage/tool/context accounting from TUI and Telegram into
+- [x] Create `internal/clientux/projector`.
+- [x] Project `protocol.Event` into a client-neutral run snapshot:
+  - [x] assistant text;
+  - [x] reasoning text;
+  - [x] tool items keyed by `call_id`;
+  - [x] run state;
+  - [x] usage and context counters;
+  - [x] web summary metrics;
+  - [x] model/tool totals;
+  - [x] errors;
+  - [x] last sequence.
+- [x] Move duplicated usage/tool/context accounting from TUI and Telegram into
   the projector.
+  - [x] Telegram renderer sources model/tool totals, usage counters, web summary
+        metrics, and terminal state from `clientux/projector`.
+  - [x] TUI event accounting now syncs model/tool counts, provider usage
+        counters, last context usage, terminal state, and tool-summary token
+        totals from `clientux/projector`; the old TUI usage accumulator and
+        local tool-summary parser were removed.
 
 Acceptance:
 
-- [ ] Same event trace produces the same counts, context, tool summaries, and
+- [x] Same event trace produces the same counts, context, tool summaries, and
   terminal state for TUI and Telegram tests.
-- [ ] TUI and Telegram renderers become mostly presentation code over projector
+  - [x] TUI has a projector parity test over one event trace for model/tool
+        counts, context usage, tool-summary tokens, and completed terminal
+        state; Telegram renderer tests cover the same projector-backed usage
+        and context accounting path.
+- [x] TUI and Telegram renderers become mostly presentation code over projector
   snapshots.
+  - [x] TUI transcript event application delegates assistant streams, tool
+        calls/results/audits, tool batches, and live-cell finalization to
+        `internal/tui/transcript.Projector`.
+    - [x] `Model.applyEvent` now routes those event types through
+          `transcript.Projector` and keeps the TUI switch focused on status,
+          grouping, collapse, and run-summary presentation.
+    - [x] Removed the duplicate TUI-local assistant/tool/audit/tool-batch block
+          mutation helpers; compact TUI tool/audit cell text now lives in the
+          transcript projector.
+    - [x] Added a TUI/projector parity regression over assistant streams,
+          reasoning, audits, tool calls/results, tool batches, and run
+          completion.
+  - [x] TUI accounting/state presentation reads model/tool counts, usage,
+        context, tool-summary tokens, and terminal state from
+        `clientux/projector` snapshots.
+  - [x] Telegram renderer reads model/tool counts, usage, context,
+        tool-summary tokens, and terminal state from `clientux/projector`
+        snapshots.
+  - [x] Telegram final/status message rendering consumes projected assistant,
+        reasoning, and tool-item snapshots instead of renderer-owned content
+        and tool-summary maps.
+    - [x] `clientux/projector` now owns assistant turn separation and stores the
+          projected tool call on each tool item.
+    - [x] Telegram final and live progress text read assistant content from the
+          projector snapshot, with only a legacy `Content` fallback for direct
+          test/manual construction paths.
+    - [x] Telegram finished-tool summaries use the projected tool item as their
+          base instead of a renderer-local `toolSummaries` map; reasoning
+          visibility remains snapshot-derived via `ReasoningText` length.
+  - [x] TUI context threshold/compaction cells move from renderer-local text
+        projection to transcript projector cells without changing displayed
+        diagnostics.
+    - [x] `internal/tui/transcript` owns context compaction and threshold cell
+          text via projector-applied `COMPACT`/`CONTEXT` cells.
+    - [x] TUI keeps only status-line updates for context events; block creation
+          now comes from `transcript.Projector`.
+    - [x] Added transcript projector context diagnostic tests and extended TUI
+          projector parity coverage to include context compaction/threshold
+          events.
 
 ### P1.4 TUI Transcript Decomposition
 
-- [ ] Create `internal/tui/transcript`:
-  - [ ] `Cell`;
-  - [ ] typed `CellType`;
-  - [ ] `Projector.Apply(protocol.Event)`;
-  - [ ] tool/call indexes;
-  - [ ] run-summary cells;
-  - [ ] canonical persistence DTOs.
-- [ ] Create `internal/tui/render`:
-  - [ ] `CellRenderer`;
-  - [ ] markdown renderer;
-  - [ ] activity/tool/status renderers;
-  - [ ] render cache keys.
-- [ ] Create `internal/tui/selection` for mouse coordinates, visible-cell line
+- [x] Create `internal/tui/transcript`:
+  - [x] `Cell`;
+  - [x] typed `CellType`;
+  - [x] `Projector.Apply(protocol.Event)`;
+  - [x] tool/call indexes;
+  - [x] run-summary cells;
+  - [x] canonical persistence DTOs.
+  - [x] Event identity enrichment for tool/call/attempt metadata now lives in
+        `internal/tui/transcript` and is covered without rendering imports.
+  - [x] `transcript.BuildIndex` owns tool call, step, and latest run-summary
+        lookup rules; TUI no longer maintains a renderer-local call-id cache.
+  - [x] `transcript.NewRunSummaryCell` owns run-summary title/body/copy
+        construction; TUI supplies the run snapshot and upserts the returned
+        cell.
+  - [x] `transcript.Projector.Apply` projects assistant/reasoning streams, tool
+        calls/results, tool-batch steps, context status cells, and live-cell
+        finalization from protocol events with focused package tests.
+- [x] Create `internal/tui/render`:
+  - [x] `CellRenderer`;
+  - [x] markdown renderer;
+  - [x] activity/tool/status renderers;
+  - [x] render cache keys.
+  - [x] `internal/tui/render` owns transcript and rich terminal cache key
+        construction, plus rich terminal cache hit/miss behavior through
+        `render.CellRenderer`.
+  - [x] `internal/tui/render` owns terminal-safe markdown rendering,
+        live-stream markdown holdback, markdown table parsing, and fenced-code
+        extraction; TUI now passes markdown styles and calls renderer entry
+        points instead of owning the parser.
+  - [x] `internal/tui/render` owns activity/tool/status title normalization,
+        guide-line wrapping, and compact activity block rendering; TUI keeps
+        transcript visibility/collapse decisions and adapts its private block
+        fields into renderer inputs.
+- [x] Create `internal/tui/selection` for mouse coordinates, visible-cell line
   ranges, selected rendered text, OSC52, and clipboard adapter.
-- [ ] Create `internal/tui/runtimeclient` so Bubble Tea state does not directly
+  - [x] `internal/tui/selection` owns ANSI-aware mouse point clamping, selected
+        rendered text, byte ranges, highlight ranges, clipboard writes, and
+        OSC52 fallback; TUI keeps only Bubble Tea message adaptation.
+- [x] Create `internal/tui/runtimeclient` so Bubble Tea state does not directly
   import agent/provider/tools for normal operation.
-- [ ] Stop classifying context tools from rendered title strings; use structured
+  - [x] Local initial messages, local agent runs, and local MCP status now go
+        through `internal/tui/runtimeclient`; `internal/tui` no longer imports
+        `internal/agent`, `internal/provider`, or `internal/tools`, and the
+        architecture guard enforces those direct imports stay out.
+- [x] Stop classifying context tools from rendered title strings; use structured
   tool name/args/metadata.
+  - [x] TUI tool blocks now persist structured `tool_name` metadata from
+        protocol tool events, and context-tool grouping classifies by that tool
+        name instead of parsing rendered titles. A regression test scrambles
+        display titles and still expects web context grouping to work.
 
 Acceptance:
 
-- [ ] `internal/tui/transcript` has no Bubble Tea, lipgloss, gateway, provider,
+- [x] `internal/tui/transcript` has no Bubble Tea, lipgloss, gateway, provider,
   tools, or agent imports.
-- [ ] Hidden thinking/tool cells cannot be selected/copied through visible-cell
+  - [x] Architecture guard enforces `internal/tui/transcript` imports only
+        `internal/protocol`.
+- [x] Hidden thinking/tool cells cannot be selected/copied through visible-cell
   navigation.
-- [ ] `/toolview current`, grouped context tools, and out-of-order tool updates
+  - [x] `TestTranscriptSelectionCannotCopyHiddenThinkingOrTools` selects across
+        the rendered viewport with thinking/tool views hidden and verifies
+        hidden reasoning and tool output are absent from copied and highlighted
+        text.
+- [x] `/toolview current`, grouped context tools, and out-of-order tool updates
   still pass tests.
-- [ ] Ordinary printable input does not re-render the full transcript.
+- [x] Ordinary printable input does not re-render the full transcript.
+  - [x] `TestPrintableInputDoesNotReflowTranscript` verifies a normal typed key
+        updates the textarea while preserving existing transcript viewport
+        content.
 
 ### P1.5 TUI Action Registry
 
-- [ ] Move slash commands, keybindings, command palette metadata, aliases, and
+- [x] Move slash commands, keybindings, command palette metadata, aliases, and
   argument providers into one action registry.
-- [ ] `Update` should dispatch actions rather than contain all command logic.
-- [ ] Help text, slash popup, and Telegram command metadata should derive from
+  - [x] Slash commands, slash aliases, command palette metadata, summaries, and
+        argument providers are defined by `internal/tui`'s action registry.
+  - [x] Keybindings moved from the main `Update` switch into the same action
+        registry; registry key actions now cover send/newline, command palette,
+        model/reasoning cycling, thinking visibility, gateway reconnect,
+        viewport navigation, selected-block navigation, collapse/expand, and
+        quit.
+- [x] `Update` should dispatch actions rather than contain all command logic.
+  - [x] `Update` now delegates key commands through registry key dispatch after
+        slash navigation; slash commands already dispatch through registry
+        actions. Non-action Bubble Tea message handling remains in `Update`.
+- [x] Help text, slash popup, and Telegram command metadata should derive from
   shared action definitions where practical.
+  - [x] TUI help text, keybinding help, and slash popup derive command metadata
+        from the action registry.
+  - [x] Telegram command metadata consumes shared `internal/clientux` action
+        definitions for aliases, usage strings, and summaries; tests verify
+        every action with Telegram aliases is present in the Telegram command
+        table.
 
 Acceptance:
 
-- [ ] Adding an action does not require editing the main TUI `Update` switch.
-- [ ] Slash popup, keybinding help, and command validation use one source of
+- [x] Adding an action does not require editing the main TUI `Update` switch.
+  - [x] New slash or key actions are registered in `actionRegistry`; `Update`
+        only calls registry dispatch.
+- [x] Slash popup, keybinding help, and command validation use one source of
   metadata.
+  - [x] Slash popup and slash command validation use registry metadata.
+  - [x] Keybinding help is generated from the registry's keybinding metadata.
 
 ### P1.6 Telegram Package Split
 
-- [ ] Split `telegrambot` into:
-  - [ ] poller/update loop;
-  - [ ] authz/allowlist;
-  - [ ] state and sessions;
-  - [ ] command dispatch;
-  - [ ] runner/gateway bridge;
-  - [ ] progress throttler;
-  - [ ] delivery/send/edit/delete;
-  - [ ] render/chunking.
-- [ ] Replace hand-written command switch with shared command metadata plus
+- [x] Split `telegrambot` into:
+  - [x] poller/update loop;
+  - [x] authz/allowlist;
+  - [x] state and sessions;
+  - [x] command dispatch;
+  - [x] runner/gateway bridge;
+  - [x] progress throttler;
+  - [x] delivery/send/edit/delete;
+  - [x] render/chunking.
+    - [x] Move shared Telegram UTF-16 length, trimming, escaping, and raw chunk
+          helpers into `internal/telegrambot/chunking.go`.
+    - [x] Move remaining markdown/rich chunk splitting out of
+          `internal/telegrambot/render.go`.
+- [x] Replace hand-written command switch with shared command metadata plus
   Telegram-specific handlers.
-- [ ] Add fake-clock progress tests for burst deltas, final flush, retry-after,
+  - [x] Telegram command metadata now drives dispatch, help text, and active-run
+        bypass checks.
+- [x] Add fake-clock progress tests for burst deltas, final flush, retry-after,
   and UTF-16 Telegram limits.
 
 Acceptance:
 
-- [ ] `bot.go` drops below 900 LOC or has a documented split exception.
-- [ ] Per-user isolation, scoped `/cancel`, `/resume`, `/fork`, and rich fallback
+- [x] `bot.go` drops below 900 LOC or has a documented split exception.
+- [x] Per-user isolation, scoped `/cancel`, `/resume`, `/fork`, and rich fallback
   tests still pass.
 
 ### P1.7 Session Ownership Metadata
 
-- [ ] Add owner metadata to gateway sessions:
-  - [ ] client type;
-  - [ ] Telegram chat id;
-  - [ ] Telegram thread id;
-  - [ ] Telegram user id;
-  - [ ] TUI chat id;
-  - [ ] profile/model at creation.
-- [ ] Filter Telegram `/resume` and `/fork` by owner unless explicitly
+- [x] Add owner metadata to gateway sessions:
+  - [x] client type;
+  - [x] Telegram chat id;
+  - [x] Telegram thread id;
+  - [x] Telegram user id;
+  - [x] TUI chat id;
+  - [x] profile/model at creation.
+- [x] Filter Telegram `/resume` and `/fork` by owner unless explicitly
   admin/global.
-- [ ] Keep solo mode ergonomic with clear override/admin behavior.
+  - [x] Owner-scoped filters hide other Telegram users' sessions for list,
+        resume, and fork.
+  - [x] Ownerless legacy/solo sessions remain visible.
+  - [x] Explicit admin/global override semantics are defined in
+        `docs/telegram.md`: there is currently no Telegram admin/global
+        session-owner override, and `AllowAllChats` admits chats without
+        bypassing per-user session ownership.
+- [x] Keep solo mode ergonomic with clear override/admin behavior.
+  - [x] Ownerless solo session lists remain accessible.
+  - [x] Admin/global override behavior is intentionally absent until a separate
+        Telegram admin/global mode is introduced; ownerless legacy/solo
+        sessions remain the compatibility path.
 
 Acceptance:
 
-- [ ] Two allowed Telegram users cannot accidentally resume/fork each other's
+- [x] Two allowed Telegram users cannot accidentally resume/fork each other's
   sessions unless global/admin mode is used.
-- [ ] Existing solo session list remains accessible to the owner.
+- [x] Existing solo session list remains accessible to the owner.
 
 ### P1.8 Tool Discovery And Dynamic MCP Catalog
 
-- [ ] Move native/MCP discovery filtering into `internal/tools/discovery`.
-- [ ] Make `tool_search` and `mcp_list_tools` use the same query engine.
-- [ ] Make MCP catalog manager-owned and refreshed on successful start/reconnect.
-- [ ] Add collision handling and change events.
+- [x] Move native/MCP discovery filtering into `internal/tools/discovery`.
+- [x] Make `tool_search` and `mcp_list_tools` use the same query engine.
+- [x] Make MCP catalog manager-owned and refreshed on successful start/reconnect.
+- [x] Add collision handling and change events.
 
 Acceptance:
 
-- [ ] Optional MCP server failing at startup and later reconnecting updates
+- [x] Optional MCP server failing at startup and later reconnecting updates
   `mcp_list_tools`, `tool_search`, and `mcp_call` validation.
-- [ ] Query, namespace, risk, alias, limit, and schema-budget tests are shared.
+- [x] Query, namespace, risk, alias, limit, and schema-budget tests are shared.
 
 ### P1.9 Output Ref Service
 
-- [ ] Create `internal/tooloutput` for:
-  - [ ] safe artifact names;
-  - [ ] private directories;
-  - [ ] `0600` writes;
-  - [ ] byte/hash metadata;
-  - [ ] existence checks;
-  - [ ] future retention hooks.
-- [ ] Migrate web output refs and generic oversized tool refs to the same
+- [x] Create `internal/tooloutput` for:
+  - [x] safe artifact names;
+  - [x] private directories;
+  - [x] `0600` writes;
+  - [x] byte/hash metadata;
+  - [x] existence checks;
+  - [x] future retention hooks.
+- [x] Migrate web output refs and generic oversized tool refs to the same
   service.
 
 Acceptance:
 
-- [ ] Web and generic tool refs have identical metadata semantics.
-- [ ] Cache misses if an output ref file is deleted.
-- [ ] No duplicate path/hash/chmod logic remains in agent and tools.
+- [x] Web and generic tool refs have identical metadata semantics.
+- [x] Cache misses if an output ref file is deleted.
+- [x] No duplicate path/hash/chmod logic remains in agent and tools.
 
 ### P1.10 Webtools Split
 
-- [ ] Move web code out of `internal/tools/tools.go` into thin handlers plus:
-  - [ ] fetch;
-  - [ ] extract;
-  - [ ] crawl;
-  - [ ] compact;
-  - [ ] summary;
-  - [ ] cache;
-  - [ ] metadata.
-- [ ] Preserve the public tool JSON contract.
-- [ ] Add golden JSON tests for `web_fetch`, `web_extract`, and `web_crawl`.
+- [x] Move web code out of `internal/tools/tools.go` into thin handlers plus:
+  - [x] fetch;
+  - [x] extract;
+  - [x] crawl;
+  - [x] compact;
+  - [x] summary;
+  - [x] cache;
+  - [x] metadata.
+- [x] Preserve the public tool JSON contract.
+- [x] Add golden JSON tests for `web_fetch`, `web_extract`, and `web_crawl`.
 
 Acceptance:
 
-- [ ] `internal/tools/tools.go` drops below 1,500 LOC or only contains registry
+- [x] `internal/tools/tools.go` drops below 1,500 LOC or only contains registry
   and thin native handlers.
-- [ ] Existing web summary/cache/output-ref tests pass after moves.
+- [x] Existing web summary/cache/output-ref tests pass after moves.
 
 ### P1.11 Config/Auth/Provider Projections
 
-- [ ] Add narrow projections on `config.Config`:
-  - [ ] `AuthSettings`;
-  - [ ] `ProviderSelection`;
-  - [ ] `ModelSelection`;
-  - [ ] `ProfileSelection`;
-  - [ ] `RuntimeLimits`;
-  - [ ] `ToolPolicySettings`;
-  - [ ] `MCPSettings`.
-- [ ] Migrate provider, credentials, doctor, gateway, tools, and command code to
+- [x] Add narrow projections on `config.Config`:
+  - [x] `AuthSettings`;
+  - [x] `ProviderSelection`;
+  - [x] `ModelSelection`;
+  - [x] `ProfileSelection`;
+  - [x] `RuntimeLimits`;
+  - [x] `ToolPolicySettings`;
+  - [x] `MCPSettings`;
+  - [x] `HookSettings`;
+  - [x] `InstructionSettings`.
+- [x] Migrate provider, credentials, doctor, gateway, tools, and command code to
   projections before splitting the underlying struct.
-- [ ] Extract shared Codex auth parser/status/refresh metadata into a
+  - [x] Provider factory accepts `config.ProviderBinding`; legacy
+        `provider.New(config.Config)` delegate removed after all callers moved
+        to the binding path.
+  - [x] Credentials manager stores `config.AuthSettings`; provider Codex auth
+        resolution/refresh helpers consume auth settings instead of full config.
+  - [x] Doctor config status embeds `config.ProviderAuthSnapshot`.
+  - [x] Gateway `/v1/config` and CLI `config inspect -json` include
+        `config.DiagnosticSnapshot` for provider/auth fields.
+  - [x] Doctor config status embeds `config.RuntimeToolSnapshot`.
+  - [x] Tools registry stores `config.ToolPolicySettings` and
+        `config.MCPSettings`; policy, workspace, web-cache, and MCP startup
+        decisions read those projections instead of full config fields.
+  - [x] Gateway auth manager, health response, MCP status, and session
+        config/MCP snapshots read auth, provider/model, runtime, tool, and MCP
+        projections for static settings.
+  - [x] CLI, gateway override runs, TUI local mode, and benchmark provider
+        construction call `provider.NewFromBinding(config.ProviderBinding)`.
+  - [x] Web summarizer construction accepts `config.ProviderBinding` plus
+        `config.ToolPolicySettings`; CLI, TUI, and benchmark registry setup
+        inject the summarizer from projections, and tools web summary/cache
+        request metadata read projected web-summary settings. The full-config
+        web summarizer wrapper has been removed.
+  - [x] Credentials status/import/save expose `config.AuthSettings` entry
+        points; TUI local auth and credentials tests use them, and the
+        full-config credentials wrappers have been removed.
+  - [x] Agent model-compaction summary provider construction calls
+        `provider.NewFromBinding(config.ProviderBinding)` instead of a
+        full-config provider factory.
+  - [x] Tools registry no longer stores or exposes full `config.Config`;
+        gateway and TUI MCP status paths read `config.MCPSettings` through a
+        projection accessor on the registry.
+  - [x] Agent caches `config.ProviderBinding`, `config.RuntimeLimits`, and
+        `config.ToolPolicySettings`; model metadata, model requests, max tool
+        rounds, parallel-tool limits, dangerous audit flags, tool-output
+        truncation, and reasoning-content storage read those projections.
+  - [x] Gateway server caches base `config.ProviderAuthSnapshot`,
+        `config.ProviderBinding`, and `config.ProfileSelection`; health and
+        default session owner fields read projections while request override
+        paths continue to resolve per-run configs.
+  - [x] Shared client context response builder accepts `config.RuntimeLimits`
+        instead of full `config.Config`; gateway and TUI context status pass
+        runtime projections.
+  - [x] TUI model state caches `config.ProviderBinding`,
+        `config.ProfileSelection`, `config.RuntimeLimits`, and
+        `config.ToolPolicySettings`; read-only status/context/provider/profile
+        paths use projections while `currentConfig` remains the full-config
+        operation builder.
+  - [x] Agent context threshold and deterministic/model compaction helpers read
+        `config.RuntimeLimits`, `config.ProviderBinding`, and
+        `config.ToolPolicySettings` instead of full `config.Config`.
+  - [x] `runstate.NewSnapshot` accepts a projection-only
+        `runstate.SnapshotInput`; agent, gateway session snapshots, benchmark
+        profile hashes, and runstate tests build snapshot metadata from
+        projections.
+  - [x] Hook runner construction accepts `config.HookSettings`; agent caches
+        hook settings and no longer passes full `config.Config` into hooks.
+  - [x] Instruction loading accepts `config.InstructionSettings`; agent caches
+        instruction settings and no longer stores full `config.Config`.
+  - [x] Gateway session config and MCP snapshot map builders accept projection
+        values.
+  - [x] Gateway default session messages use cached `config.InstructionSettings`
+        and profile override projection instead of cloning full server config.
+  - [x] Gateway `sessionSnapshotConfig` was replaced by projection-based
+        session snapshot metadata; only run override builders and `/v1/config`
+        runtime diffing still assemble full configs.
+  - [x] Gateway run override mutation is centralized in `configForRunRequest`;
+        `/v1/run` and session runs build the override config once and derive
+        agent construction plus run status metadata from it.
+  - [x] TUI local auth actions and initial-message resets use cached
+        `config.AuthSettings` and `config.InstructionSettings` projections.
+  - [x] TUI gateway run request construction is isolated in a projection-backed
+        helper; it uses cached provider/profile projections and UI selection
+        state instead of `currentConfig`.
+  - [x] MCP client and tools registry expose projection constructors; TUI local
+        runs and local MCP status use cached provider/tool/MCP projections
+        instead of assembling `currentConfig`.
+  - [x] Agent construction has a projection settings entry point; TUI local
+        runs pass cached provider/profile/runtime/tool/MCP/hook/instruction
+        projections into the agent.
+  - [x] Gateway run handlers convert `configForRunRequest` output into
+        projection run settings; provider construction, agent construction, and
+        run status metadata no longer consume full config directly.
+  - [x] Config runtime diff reporting has a projection bridge; gateway
+        `/v1/config` and TUI local `/config` diff reporting pass
+        `config.RuntimeDiffSettings` instead of comparing caller-owned full
+        configs directly.
+  - [x] Split remaining TUI full-config operation builder: `currentConfig` was
+        removed, local runs/MCP status/config diffing use projection settings,
+        and profile metadata loading remains an explicit profile-selection
+        operation.
+  - [x] Split remaining `gateway.Server.cfg` override/snapshot paths:
+        gateway no longer stores full `config.Config`; run overrides resolve
+        through `config.RuntimeDiffSettingsWithRunOverrides`, and
+        `/v1/config` runtime diff reporting uses `config.RuntimeDiffSettings`.
+- [x] Extract shared Codex auth parser/status/refresh metadata into a
   `codexauth` package.
-- [ ] Make DeepSeek credential save respect configured `APIKeyEnv`, or reject
+- [x] Make DeepSeek credential save respect configured `APIKeyEnv`, or reject
   non-default save targets with a clear diagnostic.
-- [ ] Make config/profile reading side-effect-free; default file creation should
+- [x] Make config/profile reading side-effect-free; default file creation should
   be explicit initialization.
-- [ ] Centralize diagnostic snapshots for doctor, gateway `/v1/config`, and CLI
+  - [x] `Resolve`/`Default` and `LoadProfileMetadata` no longer create default
+        Billy profile files; built-in Billy metadata is applied from memory.
+  - [x] `LoadDefaultMCPServers` reads existing default MCP config files only;
+        `EnsureDefaultMCPConfigFile` remains the explicit initialization path.
+- [x] Centralize diagnostic snapshots for doctor, gateway `/v1/config`, and CLI
   `config inspect`.
+  - [x] Provider/auth diagnostics use `config.DiagnosticSnapshot` across doctor,
+        gateway `/v1/config`, and CLI `config inspect`.
+  - [x] Runtime/tool/web/MCP diagnostics use `config.RuntimeToolSnapshot` across
+        doctor, gateway `/v1/config`, and CLI `config inspect`.
 
 Acceptance:
 
-- [ ] Provider factory can be called from a resolved provider binding rather than
+- [x] Provider factory can be called from a resolved provider binding rather than
   full `config.Config`.
-- [ ] Codex auth parsing is not duplicated between credentials and provider.
-- [ ] Config inspect and doctor cannot drift on provider/auth fields.
-- [ ] Tests cover auth precedence, custom `APIKeyEnv`, model routing, Spark
+- [x] Codex auth parsing is not duplicated between credentials and provider.
+- [x] Config inspect and doctor cannot drift on provider/auth fields.
+- [x] Tests cover auth precedence, custom `APIKeyEnv`, model routing, Spark
   disablement, redaction, and config read purity.
+  - [x] Projection/provider/credentials tests cover custom `APIKeyEnv`, model
+        routing, and Spark disablement for the new binding path.
+  - [x] Provider auth tests cover Codex env-before-file precedence and token
+        redaction through the `AuthSettings` path.
+  - [x] Config tests cover `Resolve` preserving built-in Billy profile defaults
+        without creating `profile.toml` or `SOUL.md`.
+  - [x] Config tests cover default MCP server loading without creating
+        `mcp.config.toml`.
 
 ### P1.12 Shared Testkit And Fixture Hygiene
 
-- [ ] Consolidate duplicated test helpers:
-  - [ ] scripted provider;
-  - [ ] test JWT;
-  - [ ] round trip function;
-  - [ ] gateway fake client/server helpers;
-  - [ ] Telegram fake API helpers.
-- [ ] Prefer package-local helpers unless multiple packages truly need them; use
+- [x] Consolidate duplicated test helpers:
+  - [x] scripted provider;
+    - [x] No cross-package duplicate remains for the exact helper concept:
+          `rg '^type scriptedProvider' --glob '*_test.go'` reports only
+          `internal/agent/agent_test.go`, so it stays package-local.
+  - [x] test JWT;
+    - [x] Add `internal/testkit.JWT` and replace duplicated JWT helpers in
+          credentials, codexauth, and provider tests.
+  - [x] round trip function;
+    - [x] Add `internal/testkit.RoundTripFunc` and replace duplicate local HTTP
+          transport adapters in gateway and Telegram tests.
+  - [x] gateway fake client/server helpers;
+    - [x] Add `internal/testkit.NewRouteServer`, `DecodeJSON`,
+          `WriteJSON`, and `WriteJSONLines` for gateway-style HTTP JSON and
+          NDJSON tests; gatewayclient, Telegram gateway-client wrapper, and TUI
+          gateway tests now share the helper instead of repeating routed
+          `httptest` servers.
+  - [x] Telegram fake API helpers.
+    - [x] Add a package-local Telegram API test server/client helper that
+          decodes request payloads, routes by Telegram API method, and writes
+          standard success/error envelopes; Telegram client tests and command
+          tests now use it instead of repeating `httptest` path and JSON
+          boilerplate.
+- [x] Prefer package-local helpers unless multiple packages truly need them; use
   `internal/testkit` only for cross-package helper concepts.
-- [ ] Add benchmark fixture ownership rules to `benchmarks/README.md`.
-- [ ] Add generated-output and duplicate-fixture policy.
+  - [x] `internal/testkit` now contains only cross-package helper concepts
+        (`JWT`, `RoundTripFunc`, and the generic HTTP route/JSON helpers);
+        Telegram API helpers stay package-local because they depend on Telegram
+        DTOs and method semantics.
+- [x] Add benchmark fixture ownership rules to `benchmarks/README.md`.
+- [x] Add generated-output and duplicate-fixture policy.
+  - [x] `benchmarks/README.md` now names benchmark fixture owners, keeps
+        generated run bundles out of `benchmarks/`, and allowlists the small
+        duplicate `package.json` files that keep local smoke workspaces
+        self-contained.
 
 Acceptance:
 
-- [ ] `rg '^type scriptedProvider|^func testJWT|^type roundTripFunc'` shows one
+- [x] `rg '^type scriptedProvider|^func testJWT|^type roundTripFunc'` shows one
   canonical helper per concept or a documented exception.
-- [ ] Benchmark fixture duplicates are either removed, templated, or allowlisted.
+  - [x] The command now reports only the package-local
+        `internal/agent/agent_test.go` scripted provider; JWT and round-trip
+        helpers use `internal/testkit`.
+- [x] Benchmark fixture duplicates are either removed, templated, or allowlisted.
 
 ## P2: Cleanup And Long-Term Hygiene
 
 ### P2.1 MCP Client File Split
 
-- [ ] Split `internal/mcpclient/client.go` into:
-  - [ ] manager;
-  - [ ] catalog;
-  - [ ] server lifecycle;
-  - [ ] stdio transport;
-  - [ ] JSON-RPC;
-  - [ ] content rendering;
-  - [ ] env/secrets;
-  - [ ] reconnect/status fanout.
+- [x] Split `internal/mcpclient/client.go` into:
+  - [x] manager;
+  - [x] catalog;
+  - [x] server lifecycle;
+  - [x] stdio transport;
+  - [x] JSON-RPC;
+  - [x] content rendering;
+  - [x] env/secrets;
+  - [x] reconnect/status fanout.
+  - [x] `internal/mcpclient/manager.go` now owns manager construction,
+        config projection cloning, listener registration/fanout, status/tool
+        snapshots, refresh, close, and catalog rebuild orchestration.
+  - [x] `internal/mcpclient/catalog.go` now owns catalog construction,
+        external MCP tool naming, enabled/disabled tool filtering, and catalog
+        collision handling.
+  - [x] `internal/mcpclient/server.go` now owns managed server lifecycle,
+        static errors, reconnect startup, close, catalog snapshots, and status
+        publication hooks.
+  - [x] `internal/mcpclient/stdio.go` now owns stdio process startup, workspace
+        cwd validation, process close/watch lifecycle, stderr tails, shell
+        blocking, and bounded stderr buffers.
+  - [x] `internal/mcpclient/jsonrpc.go` now owns JSON-RPC request/notify/write
+        and response read limits, tool calls, oversized response errors, and
+        transport stderr wrapping.
+  - [x] `internal/mcpclient/content.go` now owns MCP tool content rendering,
+        output caps, truncation notes, and UTF-8-safe trimming.
+  - [x] `internal/mcpclient/env.go` now owns inherited env selection,
+        configured env lookup, deterministic env ordering, and secret discovery
+        for redaction.
+  - [x] `internal/mcpclient/status.go` now owns status cloning, catalog-change
+        cloning, reconnect backoff, status-change comparison, timestamp helpers,
+        and redacted server errors.
+  - [x] `internal/mcpclient/client.go` is now the shared MCP contract/type file
+        and all MCP client implementation files are under the source file-size
+        target.
 
 Acceptance:
 
-- [ ] Existing lifecycle tests pass.
-- [ ] Narrow tests cover output caps, env redaction, status fanout, and process
+- [x] Existing lifecycle tests pass.
+  - [x] `go test ./internal/mcpclient ./internal/tools ./internal/mcpserver`
+        passes after the catalog/content/env split.
+- [x] Narrow tests cover output caps, env redaction, status fanout, and process
   cleanup.
+  - [x] Existing MCP tests cover capped tool output, oversized raw response
+        failure, dotenv env lookup, redaction of server/env secrets, status
+        listeners, reconnect/backoff status, and process termination on close.
 
 ### P2.2 Tool Rendering Registry
 
-- [ ] Replace hard-coded tool-name switches in `toolrender` with a small renderer
+- [x] Replace hard-coded tool-name switches in `toolrender` with a small renderer
   registry/table keyed by namespace/tool family.
-- [ ] Keep it simple. Do not build a full display DSL.
+- [x] Keep it simple. Do not build a full display DSL.
+  - [x] `internal/toolrender` now routes known call-line rendering through a
+        compact `callRenderers` table with TUI/Telegram render callbacks and
+        keeps the existing generic fallback for unknown tools.
 
 Acceptance:
 
-- [ ] Snapshot tests cover TUI and Telegram call/result lines.
-- [ ] Adding a native tool requires adding one renderer entry, not editing a
+- [x] Snapshot tests cover TUI and Telegram call/result lines.
+  - [x] `TestCallLineSnapshotsCommonTools` pins exact TUI and Telegram call
+        lines for shell, filesystem, web, and MCP calls; existing result-line
+        tests continue to cover compact result metadata.
+- [x] Adding a native tool requires adding one renderer entry, not editing a
   large switch.
+  - [x] A search for old `switch call.Name`, `tuiCallLine`, and
+        `telegramCallLine` paths in `internal/toolrender/toolrender.go` finds
+        no tool-name switches or style-specific switch functions; new known
+        tools are added to `callRenderers`.
 
 ### P2.3 File Size Budget
 
-- [ ] Adopt file-size targets:
-  - [ ] handwritten `.go` files under 1,500 LOC;
-  - [ ] `_test.go` files under 1,200 LOC;
-  - [ ] exceptions documented in `docs/architecture.md` with owner and split
+- [x] Adopt file-size targets:
+  - [x] handwritten `.go` files under 1,500 LOC;
+  - [x] `_test.go` files under 1,200 LOC;
+  - [x] exceptions documented in `docs/architecture.md` with owner and split
         plan.
-- [ ] Add a hygiene command using `git ls-files`, not raw filesystem traversal.
-- [ ] Report ignored runtime artifact size separately.
+  - [x] `docs/architecture.md` now records the file-size targets and current
+        exceptions for large source/test files with decomposition owners and
+        split plans.
+- [x] Add a hygiene command using `git ls-files`, not raw filesystem traversal.
+  - [x] `fast-agent-harness hygiene` collects tracked Go source files through
+        `git ls-files -- '*.go'`, supports `-json` and `-strict`, and has
+        focused command tests using a fake Git runner.
+- [x] Report ignored runtime artifact size separately.
+  - [x] The hygiene report has a separate runtime artifact section for ignored
+        paths such as `gateway-sessions`, `bench-runs`, `tool-output`, `auth`,
+        logs, config, cache, and binaries.
 
 Acceptance:
 
-- [ ] Hygiene command flags large files and ignored artifact growth without
+- [x] Hygiene command flags large files and ignored artifact growth without
   counting `gateway-sessions`, `bench-runs`, `tool-output`, auth files, or
   binaries as source.
+  - [x] `go run ./cmd/fast-agent-harness hygiene -repo /root/billyharness`
+        reports large tracked source files and separate runtime artifact sizes;
+        in the current dirty tree it also warns about tracked files deleted by
+        the in-progress TUI file move.
 
 ### P2.4 Dependency Metadata Hygiene
 
-- [ ] Pin CI/local verification to the Go version in `go.mod`.
-- [ ] Ensure `go mod tidy` produces no diff.
-- [ ] Keep direct source imports in a direct `require` block, not hidden as
+- [x] Pin CI/local verification to the Go version in `go.mod`.
+  - [x] `scripts/verify-deps.sh` reads the `go` directive from `go.mod` and
+        fails when the active `GO_BIN` reports a different `go env GOVERSION`;
+        README/setup docs call it with `/root/.local/go/bin/go`.
+- [x] Ensure `go mod tidy` produces no diff.
+  - [x] `scripts/verify-deps.sh` runs `go mod tidy`, reports any `go.mod` or
+        `go.sum` diff, and restores the original files on failure.
+- [x] Keep direct source imports in a direct `require` block, not hidden as
   indirect dependencies.
+  - [x] `go.mod` now has a direct `require` block for source-imported external
+        modules (`bubbles`, `bubbletea`, `lipgloss`, `toml`, `clipboard`, and
+        `x/ansi`) and a separate indirect block for transitive modules; the
+        dependency verifier compares source/test imports with direct
+        requirements.
 
 Acceptance:
 
-- [ ] Dependency hygiene check is part of documented verification.
+- [x] Dependency hygiene check is part of documented verification.
+  - [x] README work protocol and `docs/setup.md` include
+        `GO_BIN=/root/.local/go/bin/go ./scripts/verify-deps.sh`.
 
 ### P2.5 Optional Storage Indexes Stay Optional
 
-- [ ] Keep JSONL canonical.
-- [ ] Add rebuildable indexes only when concrete UX or perf needs exist:
-  - [ ] session search;
-  - [ ] tool calls;
-  - [ ] cost/usage;
-  - [ ] errors.
+- [x] Keep JSONL canonical.
+  - [x] Gateway session list/inspect paths replay the canonical manifest,
+        history JSONL, and events JSONL; corrupt index files do not affect
+        `ListStoredSessions`.
+- [x] Add rebuildable indexes only when concrete UX or perf needs exist:
+  - [x] session search deferred until a concrete query UX exists; the current
+        optional index is only a rebuildable session-list cache.
+  - [x] tool calls deferred until a concrete inspector needs it.
+  - [x] cost/usage deferred until a concrete analytics view needs it.
+  - [x] errors deferred until a concrete diagnostics view needs it.
+  - [x] `sessions index rebuild|show|delete` exposes the optional session-list
+        index without making it part of the live runtime path.
 
 Acceptance:
 
-- [ ] Deleting indexes and rebuilding restores the same visible state.
-- [ ] No runtime path treats an index as canonical session data.
+- [x] Deleting indexes and rebuilding restores the same visible state.
+  - [x] Gateway storage tests delete the session index, verify it is gone, then
+        rebuild/read it back from canonical session files; CLI tests cover
+        `sessions index rebuild`, `show -json`, and `delete`.
+- [x] No runtime path treats an index as canonical session data.
+  - [x] Gateway storage tests write a corrupt index and still expect
+        `ListStoredSessions` to return the same canonical session list.
 
 ## Recommended Execution Order
 

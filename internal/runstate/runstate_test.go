@@ -34,7 +34,7 @@ func TestNewSnapshotCapturesTurnRuntimeState(t *testing.T) {
 		{Name: "fs_read_file", Description: "read", Parameters: []byte(`{"type":"object"}`), Risk: protocol.RiskReadOnly},
 	}
 
-	snapshot := NewSnapshot(cfg, messages, specs)
+	snapshot := NewSnapshot(snapshotInput(cfg), messages, specs)
 	metadata := snapshot.Metadata()
 	if snapshot.ProviderID != "deepseek" ||
 		snapshot.ModelID != "deepseek-v4-flash" ||
@@ -90,12 +90,22 @@ func TestSnapshotHashesAreStableForEquivalentToolAndMCPOrder(t *testing.T) {
 		{Name: "z", Parameters: []byte(`{"z":true}`), Risk: protocol.RiskReadOnly},
 	}
 
-	a := NewSnapshot(cfgA, nil, specsA)
-	b := NewSnapshot(cfgB, nil, specsB)
+	a := NewSnapshot(snapshotInput(cfgA), nil, specsA)
+	b := NewSnapshot(snapshotInput(cfgB), nil, specsB)
 	if a.ToolSnapshotHash != b.ToolSnapshotHash {
 		t.Fatalf("tool hashes differ: %s != %s", a.ToolSnapshotHash, b.ToolSnapshotHash)
 	}
 	if a.MCPStatusSnapshotHash != b.MCPStatusSnapshotHash {
 		t.Fatalf("mcp hashes differ: %s != %s", a.MCPStatusSnapshotHash, b.MCPStatusSnapshotHash)
+	}
+}
+
+func snapshotInput(cfg config.Config) SnapshotInput {
+	return SnapshotInput{
+		Provider:   cfg.ProviderBinding(),
+		Profile:    cfg.ProfileSelection(),
+		Runtime:    cfg.RuntimeLimits(),
+		ToolPolicy: cfg.ToolPolicySettings(),
+		MCP:        cfg.MCPSettings(),
 	}
 }

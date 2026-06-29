@@ -88,6 +88,12 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	if report.Config.Provider != "deepseek" || report.Config.Model != "deepseek-v4-pro" || report.Config.ReasoningEffort != "xhigh" {
 		t.Fatalf("Config = %#v", report.Config)
 	}
+	if report.Config.APIKeyEnv != "DEEPSEEK_API_KEY" || report.Config.CodexAuthFile == "" || report.CodexAuthPath != report.Config.CodexAuthFile {
+		t.Fatalf("provider/auth diagnostics = %#v codex_path=%q", report.Config.ProviderAuthSnapshot, report.CodexAuthPath)
+	}
+	if report.Config.MaxToolRounds == 0 || report.Config.MCPAllowedServers == "" || report.Config.WebSummaryMode == "" {
+		t.Fatalf("runtime/tool diagnostics = %#v", report.Config.RuntimeToolSnapshot)
+	}
 	assertDoctorCheck(t, report, "git status", "ok")
 	assertDoctorCheck(t, report, "build check", "ok")
 	assertDoctorCheck(t, report, "service billyharness-gateway.service", "ok")

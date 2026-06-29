@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
-	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -65,16 +64,24 @@ type Snapshot struct {
 	DangerousPermissionMode string `json:"dangerous_permission_mode,omitempty"`
 }
 
-func NewSnapshot(cfg config.Config, messages []protocol.Message, specs []protocol.ToolSpec) Snapshot {
+type SnapshotInput struct {
+	Provider   config.ProviderBinding
+	Profile    config.ProfileSelection
+	Runtime    config.RuntimeLimits
+	ToolPolicy config.ToolPolicySettings
+	MCP        config.MCPSettings
+}
+
+func NewSnapshot(input SnapshotInput, messages []protocol.Message, specs []protocol.ToolSpec) Snapshot {
 	return Snapshot{
-		ProviderID:              modelinfo.ProviderForModel(cfg.Model, cfg.Provider),
-		ModelID:                 cfg.Model,
-		ReasoningMode:           reasoningMode(cfg),
-		ContextBudgetTokens:     cfg.ContextWindowTokens,
+		ProviderID:              input.Provider.Provider.Provider,
+		ModelID:                 input.Provider.Model.Model,
+		ReasoningMode:           reasoningMode(input.Provider.Model),
+		ContextBudgetTokens:     input.Runtime.ContextWindowTokens,
 		ToolSnapshotHash:        toolSnapshotHash(specs),
-		MCPStatusSnapshotHash:   mcpSnapshotHash(cfg),
-		ProfileInstructionHash:  instructionHash(cfg, messages),
-		DangerousPermissionMode: dangerousPermissionMode(cfg),
+		MCPStatusSnapshotHash:   mcpSnapshotHash(input.MCP),
+		ProfileInstructionHash:  instructionHash(input.Profile, messages),
+		DangerousPermissionMode: dangerousPermissionMode(input.ToolPolicy),
 	}
 }
 
@@ -102,9 +109,9 @@ func (s Snapshot) Metadata() map[string]any {
 	return metadata
 }
 
-func reasoningMode(cfg config.Config) string {
-	thinking := strings.TrimSpace(cfg.Thinking)
-	effort := strings.TrimSpace(cfg.ReasoningEffort)
+func reasoningMode(model config.ModelSelection) string {
+	thinking := strings.TrimSpace(model.Thinking)
+	effort := strings.TrimSpace(model.ReasoningEffort)
 	switch {
 	case thinking != "" && effort != "":
 		return thinking + "/" + effort
@@ -115,14 +122,14 @@ func reasoningMode(cfg config.Config) string {
 	}
 }
 
-func dangerousPermissionMode(cfg config.Config) string {
-	if cfg.AutoApproveDangerous {
+func dangerousPermissionMode(policy config.ToolPolicySettings) string {
+	if policy.AutoApproveDangerous {
 		return "auto_approve_dangerous"
 	}
 	return "safe_only"
 }
 
-func instructionHash(cfg config.Config, messages []protocol.Message) string {
+func instructionHash(profile config.ProfileSelection, messages []protocol.Message) string {
 	type instructionMessage struct {
 		Role    protocol.Role `json:"role"`
 		Name    string        `json:"name,omitempty"`
@@ -131,7 +138,7 @@ func instructionHash(cfg config.Config, messages []protocol.Message) string {
 	payload := struct {
 		Profile  string               `json:"profile,omitempty"`
 		Messages []instructionMessage `json:"messages,omitempty"`
-	}{Profile: cfg.Profile}
+	}{Profile: profile.Profile}
 	for _, msg := range messages {
 		if msg.Role == protocol.RoleSystem {
 			payload.Messages = append(payload.Messages, instructionMessage{Role: msg.Role, Name: msg.Name, Content: msg.Content})
@@ -164,7 +171,7 @@ func toolSnapshotHash(specs []protocol.ToolSpec) string {
 	return hashJSON(items)
 }
 
-func mcpSnapshotHash(cfg config.Config) string {
+func mcpSnapshotHash(settings config.MCPSettings) string {
 	type serverSnapshot struct {
 		Name      string   `json:"name"`
 		Enabled   bool     `json:"enabled"`
@@ -181,16 +188,16 @@ func mcpSnapshotHash(cfg config.Config) string {
 		AllowedServers []string         `json:"allowed_servers,omitempty"`
 		Servers        []serverSnapshot `json:"servers,omitempty"`
 	}{
-		Enabled:        cfg.MCPEnabled,
-		ConfigFiles:    append([]string(nil), cfg.MCPConfigFiles...),
-		AllowedServers: append([]string(nil), cfg.MCPAllowedServers...),
+		Enabled:        settings.Enabled,
+		ConfigFiles:    append([]string(nil), settings.ConfigFiles...),
+		AllowedServers: append([]string(nil), settings.AllowedServers...),
 	}
 	for i := range payload.ConfigFiles {
 		payload.ConfigFiles[i] = filepath.Clean(payload.ConfigFiles[i])
 	}
 	sort.Strings(payload.ConfigFiles)
 	sort.Strings(payload.AllowedServers)
-	for _, server := range cfg.MCPServers {
+	for _, server := range settings.Servers {
 		transport := "stdio"
 		if strings.TrimSpace(server.URL) != "" {
 			transport = "http"

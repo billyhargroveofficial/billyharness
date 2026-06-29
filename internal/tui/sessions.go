@@ -11,7 +11,12 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	tuiruntime "github.com/billyhargroveofficial/billyharness/internal/tui/runtimeclient"
+	"github.com/billyhargroveofficial/billyharness/internal/tui/transcript"
 )
 
 type chatSession struct {
@@ -36,23 +41,7 @@ type chatSession struct {
 	ModelCalls       int                `json:"model_calls"`
 }
 
-type savedBlock struct {
-	ID             string `json:"id,omitempty"`
-	Kind           string `json:"kind"`
-	CellType       string `json:"cell_type,omitempty"`
-	Title          string `json:"title"`
-	Content        string `json:"content"`
-	EventType      string `json:"event_type,omitempty"`
-	TurnID         string `json:"turn_id,omitempty"`
-	StepID         string `json:"step_id,omitempty"`
-	CallID         string `json:"call_id,omitempty"`
-	AttemptID      string `json:"attempt_id,omitempty"`
-	ParentStepID   string `json:"parent_step_id,omitempty"`
-	RawCopy        string `json:"raw_copy,omitempty"`
-	RenderCacheKey string `json:"render_cache_key,omitempty"`
-	Collapsed      bool   `json:"collapsed,omitempty"`
-	CollapseSet    bool   `json:"collapse_set,omitempty"`
-}
+type savedBlock = transcript.PersistedCell
 
 func newChatID() string {
 	var bytes [6]byte
@@ -135,4 +124,246 @@ func sessionTitle(prompt string) string {
 		return "untitled"
 	}
 	return text
+}
+
+func (m *Model) resetFreshChatState(title string) {
+	m.localChatID = newChatID()
+	m.chatTitle = title
+	if m.chatTitle == "" {
+		m.chatTitle = "new chat"
+	}
+	m.chatCreated = time.Now().UTC()
+	m.messages = tuiruntime.InitialMessages(m.instructions)
+	m.blocks = nil
+	m.clearRichRenderCache()
+	m.collapsed = map[int]bool{}
+	m.selected = 0
+	m.modelCalls = 0
+	m.toolCalls = 0
+	m.inputTok = 0
+	m.outputTok = 0
+	m.cacheHitTok = 0
+	m.cacheMissTok = 0
+	m.reasoningTok = 0
+	m.lastInputTok = 0
+	m.lastOutputTok = 0
+	m.lastCacheHitTok = 0
+	m.lastCacheMissTok = 0
+	m.toolSummaryInTok = 0
+	m.toolSummaryOutTok = 0
+	m.toolSummaryAPITok = 0
+	m.resetProjectedAccounting()
+	m.sessionID = ""
+	m.lastGatewayEventSeq = 0
+	m.followOutput = true
+	m.resetTranscriptProjector()
+}
+
+func (m *Model) newChat() tea.Cmd {
+	if m.busy {
+		m.status = "busy"
+		return nil
+	}
+	_ = m.saveCurrentSession()
+	m.resetFreshChatState("new chat")
+	m.status = "new chat " + shortID(m.localChatID)
+	_ = m.saveSettings()
+	_ = m.saveCurrentSession()
+	if m.gatewayURL != "" {
+		return m.createSessionCmd()
+	}
+	return nil
+}
+
+func (m *Model) resumeChat(prefix string) tea.Cmd {
+	if m.busy {
+		m.status = "busy"
+		return nil
+	}
+	prefix = strings.TrimSpace(strings.ToLower(prefix))
+	if prefix == "list" || prefix == "all" {
+		prefix = ""
+	}
+	if strings.TrimSpace(prefix) == "" {
+		m.addInfoBlock("CHATS", m.sessionsText())
+		m.status = "chats listed"
+		return nil
+	}
+	session, err := loadChatSession(m.sessionsDir, prefix)
+	if err != nil {
+		m.status = err.Error()
+		m.addBlock("error", "ERROR", err.Error())
+		return nil
+	}
+	m.applyChatSession(session)
+	m.status = "resumed " + shortID(m.localChatID)
+	if m.gatewayURL != "" {
+		if strings.TrimSpace(m.sessionID) != "" {
+			return m.replayGatewayEventsCmd(true)
+		}
+		return m.createSessionCmd()
+	}
+	return nil
+}
+
+func (m *Model) forkChat(prefix string) tea.Cmd {
+	if m.busy {
+		m.status = "busy"
+		return nil
+	}
+	prefix = strings.TrimSpace(strings.ToLower(prefix))
+	if prefix == "current" {
+		prefix = ""
+	}
+	if strings.TrimSpace(prefix) != "" {
+		session, err := loadChatSession(m.sessionsDir, prefix)
+		if err != nil {
+			m.status = err.Error()
+			m.addBlock("error", "ERROR", err.Error())
+			return nil
+		}
+		m.applyChatSession(session)
+	}
+	old := m.localChatID
+	m.localChatID = newChatID()
+	m.chatTitle = "fork of " + shortID(old)
+	m.chatCreated = time.Now().UTC()
+	m.sessionID = ""
+	m.lastGatewayEventSeq = 0
+	m.status = "forked " + shortID(old) + " -> " + shortID(m.localChatID)
+	m.addInfoBlock("FORK", m.status)
+	_ = m.saveSettings()
+	_ = m.saveCurrentSession()
+	if m.gatewayURL != "" {
+		return m.createSessionCmd()
+	}
+	return nil
+}
+
+func (m *Model) applyChatSession(session chatSession) {
+	m.localChatID = session.ID
+	m.chatTitle = session.Title
+	if m.chatTitle == "" {
+		m.chatTitle = "untitled"
+	}
+	m.chatCreated = session.CreatedAt
+	if m.chatCreated.IsZero() {
+		m.chatCreated = time.Now().UTC()
+	}
+	if session.Profile != "" {
+		m.cfg.Profile = config.NormalizeProfileName(session.Profile)
+	}
+	m.refreshConfigProjections()
+	if len(session.Messages) > 0 {
+		m.messages = append([]protocol.Message(nil), session.Messages...)
+	} else {
+		m.messages = tuiruntime.InitialMessages(m.instructions)
+	}
+	m.blocks = decodeBlocks(session.Blocks)
+	m.clearRichRenderCache()
+	m.ensureBlockMetadata()
+	m.resetTranscriptProjector()
+	m.collapsed = map[int]bool{}
+	m.selected = max(0, len(m.blocks)-1)
+	m.inputTok = session.InputTokens
+	m.outputTok = session.OutputTokens
+	m.cacheHitTok = session.CacheHitTokens
+	m.cacheMissTok = session.CacheMissTokens
+	m.reasoningTok = session.ReasoningTokens
+	m.lastInputTok = 0
+	m.lastOutputTok = 0
+	m.lastCacheHitTok = 0
+	m.lastCacheMissTok = 0
+	m.toolSummaryInTok = 0
+	m.toolSummaryOutTok = 0
+	m.toolSummaryAPITok = 0
+	m.toolCalls = session.ToolCalls
+	m.modelCalls = session.ModelCalls
+	m.resetProjectedAccounting()
+	m.sessionID = session.GatewaySessionID
+	m.lastGatewayEventSeq = session.GatewayEventSeq
+	if session.Model != "" {
+		m.models = appendIfMissing(m.models, session.Model)
+		for i, model := range m.models {
+			if model == session.Model {
+				m.modelIndex = i
+				break
+			}
+		}
+	}
+	for i, mode := range m.thinking {
+		if mode.kind == session.ReasoningKind && mode.effort == session.ReasoningEffort {
+			m.thinkingIdx = i
+			break
+		}
+	}
+	m.refreshConfigProjections()
+	_ = m.saveSettings()
+	_ = m.saveCurrentSession()
+	m.reflow(true)
+}
+
+func (m Model) sessionsText() string {
+	sessions, err := listChatSessions(m.sessionsDir)
+	if err != nil {
+		return err.Error()
+	}
+	if len(sessions) == 0 {
+		return "no saved chats"
+	}
+	var lines []string
+	for i, session := range sessions {
+		if i >= 20 {
+			lines = append(lines, fmt.Sprintf("... %d more", len(sessions)-i))
+			break
+		}
+		title := session.Title
+		if title == "" {
+			title = "untitled"
+		}
+		lines = append(lines, fmt.Sprintf("%s  %s  %s  tok:%d/%d tools:%d",
+			shortID(session.ID),
+			session.UpdatedAt.Local().Format("2006-01-02 15:04"),
+			title,
+			session.InputTokens,
+			session.OutputTokens,
+			session.ToolCalls,
+		))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *Model) saveCurrentSession() error {
+	if m.sessionsDir == "" || m.localChatID == "" {
+		return nil
+	}
+	created := m.chatCreated
+	if created.IsZero() {
+		created = time.Now().UTC()
+	}
+	title := m.chatTitle
+	if title == "" {
+		title = "untitled"
+	}
+	return saveChatSession(m.sessionsDir, chatSession{
+		ID:               m.localChatID,
+		Title:            title,
+		CreatedAt:        created,
+		UpdatedAt:        time.Now().UTC(),
+		Model:            m.currentModel(),
+		Profile:          m.currentProfile(),
+		ReasoningKind:    m.currentThinking().kind,
+		ReasoningEffort:  m.currentThinking().effort,
+		GatewaySessionID: m.sessionID,
+		GatewayEventSeq:  m.lastGatewayEventSeq,
+		Messages:         append([]protocol.Message(nil), m.messages...),
+		Blocks:           encodeBlocks(m.blocks),
+		InputTokens:      m.inputTok,
+		OutputTokens:     m.outputTok,
+		CacheHitTokens:   m.cacheHitTok,
+		CacheMissTokens:  m.cacheMissTok,
+		ReasoningTokens:  m.reasoningTok,
+		ToolCalls:        m.toolCalls,
+		ModelCalls:       m.modelCalls,
+	})
 }

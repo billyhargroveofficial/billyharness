@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -13,8 +14,8 @@ import (
 
 func TestRunnerRunsHookWithRedactedCappedOutput(t *testing.T) {
 	t.Setenv("BILLY_SECRET_TOKEN", "env-secret-value")
-	runner := New(config.Config{
-		HooksEnabled: true,
+	runner := New(config.HookSettings{
+		Enabled: true,
 		Hooks: []config.Hook{{
 			Name:           "capture",
 			Event:          "before_tool",
@@ -43,7 +44,7 @@ func TestRunnerRunsHookWithRedactedCappedOutput(t *testing.T) {
 	if fmt.Sprint(data["stdout"]) == "" || strings.Contains(fmt.Sprint(data["stdout"]), "env-secret-value") {
 		t.Fatalf("stdout was not redacted: %#v", data)
 	}
-	if data["stdout_truncated"] != true || data["exit_code"] != 0 {
+	if data["stdout_truncated"] != true || hookEventInt(data["exit_code"]) != 0 {
 		t.Fatalf("hook output metadata = %#v", data)
 	}
 	if data["call_id"] != "call-1" || data["attempt_id"] != "attempt-1" || data["tool_name"] != "time_now" {
@@ -52,8 +53,8 @@ func TestRunnerRunsHookWithRedactedCappedOutput(t *testing.T) {
 }
 
 func TestRunnerNonFatalFailureEmitsFailedAndContinues(t *testing.T) {
-	runner := New(config.Config{
-		HooksEnabled: true,
+	runner := New(config.HookSettings{
+		Enabled: true,
 		Hooks: []config.Hook{{
 			Name:           "fails",
 			Event:          "after_tool",
@@ -75,14 +76,14 @@ func TestRunnerNonFatalFailureEmitsFailedAndContinues(t *testing.T) {
 		t.Fatalf("events = %#v", events)
 	}
 	data := hookEventMap(t, events[1])
-	if data["exit_code"] != 7 || !strings.Contains(fmt.Sprint(data["stderr"]), "nope") {
+	if hookEventInt(data["exit_code"]) != 7 || !strings.Contains(fmt.Sprint(data["stderr"]), "nope") {
 		t.Fatalf("failed hook data = %#v", data)
 	}
 }
 
 func TestRunnerFatalFailureReturnsError(t *testing.T) {
-	runner := New(config.Config{
-		HooksEnabled: true,
+	runner := New(config.HookSettings{
+		Enabled: true,
 		Hooks: []config.Hook{{
 			Name:           "fatal",
 			Event:          "session_start",
@@ -102,9 +103,26 @@ func TestRunnerFatalFailureReturnsError(t *testing.T) {
 
 func hookEventMap(t *testing.T, event protocol.Event) map[string]any {
 	t.Helper()
-	data, ok := event.Data.(map[string]any)
-	if !ok {
-		t.Fatalf("event data = %#v", event.Data)
+	bytes, err := json.Marshal(event.Data)
+	if err != nil {
+		t.Fatalf("event data marshal: %v", err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(bytes, &data); err != nil {
+		t.Fatalf("event data unmarshal: %v", err)
 	}
 	return data
+}
+
+func hookEventInt(value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	default:
+		return 0
+	}
 }

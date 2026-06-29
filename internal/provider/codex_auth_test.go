@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,11 +12,12 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/testkit"
 )
 
 func TestReadCodexAuthFileParsesCodexCLIAuthJSON(t *testing.T) {
 	exp := time.Now().Add(time.Hour).Unix()
-	accessJWT := testJWT(t, map[string]any{
+	accessJWT := testkit.JWT(t, map[string]any{
 		"exp": exp,
 		"https://api.openai.com/auth": map[string]any{
 			"chatgpt_account_id":         "acct_123",
@@ -33,7 +33,7 @@ func TestReadCodexAuthFileParsesCodexCLIAuthJSON(t *testing.T) {
 		"last_refresh": time.Now().UTC().Format(time.RFC3339),
 	})
 
-	auth, err := readCodexAuthFile(context.Background(), config.Config{}, http.DefaultClient, path)
+	auth, err := readCodexAuthFile(context.Background(), config.AuthSettings{}, http.DefaultClient, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestReadCodexAuthFileParsesPersonalAccessToken(t *testing.T) {
 		"personal_access_token": "at-test",
 	})
 
-	auth, err := readCodexAuthFile(context.Background(), config.Config{CodexAuthAPIBaseURL: server.URL}, http.DefaultClient, path)
+	auth, err := readCodexAuthFile(context.Background(), config.AuthSettings{CodexAuthAPIBaseURL: server.URL}, http.DefaultClient, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,19 +96,19 @@ func TestLoadCodexAuthRefreshesExpiredAuthJSONAndPersistsTokens(t *testing.T) {
 	t.Setenv("CODEX_HOME", "")
 	t.Setenv("FAST_AGENT_ENV_FILE", emptyEnvFile(t))
 
-	expiredJWT := testJWT(t, map[string]any{
+	expiredJWT := testkit.JWT(t, map[string]any{
 		"exp": time.Now().Add(-time.Hour).Unix(),
 		"https://api.openai.com/auth": map[string]any{
 			"chatgpt_account_id": "acct_old",
 		},
 	})
-	newAccessJWT := testJWT(t, map[string]any{
+	newAccessJWT := testkit.JWT(t, map[string]any{
 		"exp": time.Now().Add(time.Hour).Unix(),
 		"https://api.openai.com/auth": map[string]any{
 			"chatgpt_account_id": "acct_new",
 		},
 	})
-	idJWT := testJWT(t, map[string]any{
+	idJWT := testkit.JWT(t, map[string]any{
 		"https://api.openai.com/auth": map[string]any{
 			"chatgpt_account_id":         "acct_new",
 			"chatgpt_account_is_fedramp": true,
@@ -152,7 +152,7 @@ func TestLoadCodexAuthRefreshesExpiredAuthJSONAndPersistsTokens(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	auth, err := loadCodexAuth(context.Background(), config.Config{
+	auth, err := loadCodexAuth(context.Background(), config.AuthSettings{
 		CodexAuthFile:   path,
 		CodexRefreshURL: server.URL,
 		CodexClientID:   "client-test",
@@ -215,7 +215,7 @@ func TestLoadCodexAuthHydratesPATFromEnv(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	auth, err := loadCodexAuth(context.Background(), config.Config{CodexAuthAPIBaseURL: server.URL}, http.DefaultClient)
+	auth, err := loadCodexAuth(context.Background(), config.AuthSettings{CodexAuthAPIBaseURL: server.URL}, http.DefaultClient)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestLoadCodexAuthRefreshHTTPErrorDoesNotExposeRefreshToken(t *testing.T) {
 	path := writeJSONFile(t, map[string]any{
 		"auth_mode": "chatgpt",
 		"tokens": map[string]any{
-			"access_token":  testJWT(t, map[string]any{"exp": time.Now().Add(-time.Hour).Unix()}),
+			"access_token":  testkit.JWT(t, map[string]any{"exp": time.Now().Add(-time.Hour).Unix()}),
 			"refresh_token": "refresh-secret",
 		},
 	})
@@ -240,7 +240,7 @@ func TestLoadCodexAuthRefreshHTTPErrorDoesNotExposeRefreshToken(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	_, err := loadCodexAuth(context.Background(), config.Config{
+	_, err := loadCodexAuth(context.Background(), config.AuthSettings{
 		CodexAuthFile:   path,
 		CodexRefreshURL: server.URL,
 		CodexClientID:   "client-test",
@@ -265,7 +265,7 @@ func TestReadCodexAuthFilePATMetadataHTTPErrorDoesNotExposePAT(t *testing.T) {
 		"auth_mode":             "personalAccessToken",
 		"personal_access_token": "at-secret",
 	})
-	_, err := readCodexAuthFile(context.Background(), config.Config{CodexAuthAPIBaseURL: server.URL}, http.DefaultClient, path)
+	_, err := readCodexAuthFile(context.Background(), config.AuthSettings{CodexAuthAPIBaseURL: server.URL}, http.DefaultClient, path)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -279,7 +279,7 @@ func TestReadCodexAuthFilePATMetadataHTTPErrorDoesNotExposePAT(t *testing.T) {
 
 func TestLoadCodexAuthUsesEnvTokenBeforeAuthFileAndEnvAccountID(t *testing.T) {
 	t.Setenv("FAST_AGENT_ENV_FILE", emptyEnvFile(t))
-	envJWT := testJWT(t, map[string]any{
+	envJWT := testkit.JWT(t, map[string]any{
 		"exp":                         time.Now().Add(time.Hour).Unix(),
 		"chatgpt_account_id":          "acct_claim",
 		"chatgpt_account_is_fedramp":  true,
@@ -290,11 +290,11 @@ func TestLoadCodexAuthUsesEnvTokenBeforeAuthFileAndEnvAccountID(t *testing.T) {
 	path := writeJSONFile(t, map[string]any{
 		"auth_mode": "chatgpt",
 		"tokens": map[string]any{
-			"access_token":  testJWT(t, map[string]any{"exp": time.Now().Add(-time.Hour).Unix()}),
+			"access_token":  testkit.JWT(t, map[string]any{"exp": time.Now().Add(-time.Hour).Unix()}),
 			"refresh_token": "refresh-file",
 		},
 	})
-	auth, err := loadCodexAuth(context.Background(), config.Config{CodexAuthFile: path}, http.DefaultClient)
+	auth, err := loadCodexAuth(context.Background(), config.AuthSettings{CodexAuthFile: path}, http.DefaultClient)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestLoadCodexAuthUsesEnvTokenBeforeAuthFileAndEnvAccountID(t *testing.T) {
 
 func TestLoadCodexAuthReadsDotenvCodexToken(t *testing.T) {
 	root := t.TempDir()
-	envJWT := testJWT(t, map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "chatgpt_account_id": "acct_dotenv"})
+	envJWT := testkit.JWT(t, map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "chatgpt_account_id": "acct_dotenv"})
 	envPath := filepath.Join(root, ".env")
 	if err := os.WriteFile(envPath, []byte("CODEX_ACCESS_TOKEN="+envJWT+"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -319,7 +319,7 @@ func TestLoadCodexAuthReadsDotenvCodexToken(t *testing.T) {
 	t.Setenv("CODEX_ACCESS_TOKEN", "")
 	t.Setenv("CODEX_HOME", "")
 	t.Setenv("FAST_AGENT_ENV_FILE", envPath)
-	auth, err := loadCodexAuth(context.Background(), config.Config{}, http.DefaultClient)
+	auth, err := loadCodexAuth(context.Background(), config.AuthSettings{}, http.DefaultClient)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,10 +332,10 @@ func TestCodexAuthPathPrefersConfiguredFileThenBillyharnessHome(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "configured.json")
 	billyHome := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", billyHome)
-	if got := codexAuthPath(config.Config{CodexAuthFile: cfgPath}); got != cfgPath {
+	if got := codexAuthPath(config.AuthSettings{CodexAuthFile: cfgPath}); got != cfgPath {
 		t.Fatalf("configured path = %q", got)
 	}
-	if got := codexAuthPath(config.Config{}); got != filepath.Join(billyHome, "auth", "codex.json") {
+	if got := codexAuthPath(config.AuthSettings{}); got != filepath.Join(billyHome, "auth", "codex.json") {
 		t.Fatalf("billyharness auth path = %q", got)
 	}
 }
@@ -346,7 +346,7 @@ func TestReadCodexAuthFileRejectsUnsupportedAuthModes(t *testing.T) {
 		{"auth_mode": "bedrockApiKey", "bedrock_api_key": "bedrock"},
 		{"auth_mode": "agentIdentity", "agent_identity": map[string]any{}},
 	} {
-		_, err := readCodexAuthFile(context.Background(), config.Config{}, http.DefaultClient, writeJSONFile(t, payload))
+		_, err := readCodexAuthFile(context.Background(), config.AuthSettings{}, http.DefaultClient, writeJSONFile(t, payload))
 		if err == nil {
 			t.Fatalf("expected unsupported auth mode error for %#v", payload)
 		}
@@ -370,18 +370,6 @@ func TestCodexAuthNeedsRefreshBoundaries(t *testing.T) {
 	if (&codexAuth{AccessToken: "tok", LastRefresh: now.Add(-2 * 24 * time.Hour)}).needsRefresh(now) {
 		t.Fatal("unknown expiry with recent refresh should not refresh")
 	}
-}
-
-func testJWT(t *testing.T, claims map[string]any) string {
-	t.Helper()
-	encode := func(v any) string {
-		raw, err := json.Marshal(v)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return base64.RawURLEncoding.EncodeToString(raw)
-	}
-	return encode(map[string]string{"alg": "none", "typ": "JWT"}) + "." + encode(claims) + ".sig"
 }
 
 func writeJSONFile(t *testing.T, value any) string {

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -22,15 +23,16 @@ type StoredSessionList struct {
 }
 
 type StoredSessionSummary struct {
-	ID                 string    `json:"id"`
-	CreatedAt          time.Time `json:"created_at,omitempty"`
-	UpdatedAt          time.Time `json:"updated_at,omitempty"`
-	MessageCount       int       `json:"message_count"`
-	HistorySeq         int64     `json:"history_seq,omitempty"`
-	EventSeq           int64     `json:"event_seq,omitempty"`
-	LastEvent          string    `json:"last_event,omitempty"`
-	Legacy             bool      `json:"legacy,omitempty"`
-	OfflineReplayReady bool      `json:"offline_replay_ready"`
+	ID                 string                  `json:"id"`
+	CreatedAt          time.Time               `json:"created_at,omitempty"`
+	UpdatedAt          time.Time               `json:"updated_at,omitempty"`
+	MessageCount       int                     `json:"message_count"`
+	HistorySeq         int64                   `json:"history_seq,omitempty"`
+	EventSeq           int64                   `json:"event_seq,omitempty"`
+	LastEvent          string                  `json:"last_event,omitempty"`
+	Owner              gatewayapi.SessionOwner `json:"owner,omitempty"`
+	Legacy             bool                    `json:"legacy,omitempty"`
+	OfflineReplayReady bool                    `json:"offline_replay_ready"`
 }
 
 type StoredSessionInspection struct {
@@ -48,20 +50,21 @@ type StoredSessionInspection struct {
 }
 
 type StoredSessionManifest struct {
-	SchemaVersion             int       `json:"schema_version,omitempty"`
-	SessionID                 string    `json:"session_id,omitempty"`
-	CreatedAt                 time.Time `json:"created_at,omitempty"`
-	UpdatedAt                 time.Time `json:"updated_at,omitempty"`
-	HistoryJSONL              string    `json:"history_jsonl,omitempty"`
-	EventsJSONL               string    `json:"events_jsonl,omitempty"`
-	SnapshotJSON              string    `json:"snapshot_json,omitempty"`
-	ConfigSnapshotJSON        string    `json:"config_snapshot_json,omitempty"`
-	ModelProviderSnapshotJSON string    `json:"model_provider_snapshot_json,omitempty"`
-	MCPSnapshotJSON           string    `json:"mcp_snapshot_json,omitempty"`
-	HistorySeq                int64     `json:"history_seq,omitempty"`
-	EventSeq                  int64     `json:"event_seq,omitempty"`
-	MessageCount              int       `json:"message_count,omitempty"`
-	HistorySHA256             string    `json:"history_sha256,omitempty"`
+	SchemaVersion             int                     `json:"schema_version,omitempty"`
+	SessionID                 string                  `json:"session_id,omitempty"`
+	CreatedAt                 time.Time               `json:"created_at,omitempty"`
+	UpdatedAt                 time.Time               `json:"updated_at,omitempty"`
+	HistoryJSONL              string                  `json:"history_jsonl,omitempty"`
+	EventsJSONL               string                  `json:"events_jsonl,omitempty"`
+	SnapshotJSON              string                  `json:"snapshot_json,omitempty"`
+	ConfigSnapshotJSON        string                  `json:"config_snapshot_json,omitempty"`
+	ModelProviderSnapshotJSON string                  `json:"model_provider_snapshot_json,omitempty"`
+	MCPSnapshotJSON           string                  `json:"mcp_snapshot_json,omitempty"`
+	HistorySeq                int64                   `json:"history_seq,omitempty"`
+	EventSeq                  int64                   `json:"event_seq,omitempty"`
+	MessageCount              int                     `json:"message_count,omitempty"`
+	Owner                     gatewayapi.SessionOwner `json:"owner,omitempty"`
+	HistorySHA256             string                  `json:"history_sha256,omitempty"`
 }
 
 type StoredSessionFile struct {
@@ -357,6 +360,7 @@ func storedSessionManifest(manifest sessionManifest) StoredSessionManifest {
 		HistorySeq:                manifest.HistorySeq,
 		EventSeq:                  manifest.EventSeq,
 		MessageCount:              manifest.MessageCount,
+		Owner:                     manifest.Owner,
 		HistorySHA256:             manifest.HistorySHA256,
 	}
 }
@@ -370,6 +374,7 @@ func inspectionSummary(inspection StoredSessionInspection) StoredSessionSummary 
 		HistorySeq:         inspection.History.LastSeq,
 		EventSeq:           inspection.Events.LastSeq,
 		LastEvent:          inspection.Events.LastEvent,
+		Owner:              inspection.Manifest.Owner,
 		Legacy:             inspection.Legacy,
 		OfflineReplayReady: inspection.OfflineReplayReady,
 	}

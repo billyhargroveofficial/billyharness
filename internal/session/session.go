@@ -96,6 +96,14 @@ func (s *Session) Run(ctx context.Context, runner Runner, prompt string, emit fu
 	}
 	runMessages := append(base, protocol.Message{Role: protocol.RoleUser, Content: prompt})
 	next, err := runner.RunMessages(runCtx, runMessages, emit)
+	// Cancellation rollback policy: interrupted runs restore the pre-run
+	// transcript and discard the prompt plus any late runner messages. The event
+	// stream remains durable; callers must emit or synthesize a terminal event
+	// for replay validity.
+	if runInterrupted(runCtx, err) {
+		s.finishRun(base, base)
+		return err
+	}
 	s.finishRun(next, runMessages)
 	return err
 }
@@ -109,6 +117,13 @@ func (s *Session) Cancel() bool {
 	}
 	cancel()
 	return true
+}
+
+func runInterrupted(ctx context.Context, err error) bool {
+	if ctx != nil && ctx.Err() != nil {
+		return true
+	}
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func (s *Session) startRun(cancel context.CancelFunc) ([]protocol.Message, InputDecision) {

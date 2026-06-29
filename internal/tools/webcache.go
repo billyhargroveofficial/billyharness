@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/tooloutput"
 )
 
 const webCacheSchemaVersion = 1
@@ -46,14 +47,14 @@ type webCacheFile struct {
 }
 
 func (r *Registry) webCacheKey(ctx context.Context, toolName, rawURL string, opts webFetchOptions, extra map[string]any) (string, bool) {
-	if r == nil || !r.cfg.WebCacheEnabled || r.cfg.WebCacheTTL <= 0 || r.cfg.WebCacheMaxBytes <= 0 {
+	if r == nil || !r.toolPolicy.WebCacheEnabled || r.toolPolicy.WebCacheTTL <= 0 || r.toolPolicy.WebCacheMaxBytes <= 0 {
 		return "", false
 	}
 	u, err := validatePublicHTTPURL(ctx, rawURL)
 	if err != nil {
 		return "", false
 	}
-	summaryCfg := r.webSummaryProviderConfig()
+	summarySettings := r.webSummarySettings()
 	payload := map[string]any{
 		"version":                       webCacheSchemaVersion,
 		"tool":                          toolName,
@@ -66,11 +67,11 @@ func (r *Registry) webCacheKey(ctx context.Context, toolName, rawURL string, opt
 		"include_text":                  opts.IncludeText,
 		"full_text":                     opts.FullText,
 		"max_links":                     opts.MaxLinks,
-		"web_summary_mode":              config.NormalizeWebSummaryMode(r.cfg.WebSummaryMode),
-		"web_summary_provider":          summaryCfg.Provider,
-		"web_summary_model":             summaryCfg.Model,
-		"web_summary_max_input_tokens":  summaryCfg.WebSummaryMaxInputTokens,
-		"web_summary_max_output_tokens": summaryCfg.WebSummaryMaxOutputTokens,
+		"web_summary_mode":              config.NormalizeWebSummaryMode(r.toolPolicy.WebSummaryMode),
+		"web_summary_provider":          summarySettings.Provider,
+		"web_summary_model":             summarySettings.Model,
+		"web_summary_max_input_tokens":  summarySettings.MaxInputTokens,
+		"web_summary_max_output_tokens": summarySettings.MaxOutputTokens,
 		"extra":                         extra,
 	}
 	bytes, _ := json.Marshal(payload)
@@ -85,12 +86,12 @@ func (r *Registry) loadWebPageCache(key string) (compactPage, bool) {
 		return compactPage{}, false
 	}
 	page := *entry.Page
-	page.applyWebCache(key, true, age, r.cfg.WebCacheTTL)
+	page.applyWebCache(key, true, age, r.toolPolicy.WebCacheTTL)
 	return page, true
 }
 
 func (r *Registry) saveWebPageCache(key string, page compactPage) error {
-	page.applyWebCache(key, false, 0, r.cfg.WebCacheTTL)
+	page.applyWebCache(key, false, 0, r.toolPolicy.WebCacheTTL)
 	return r.saveWebCacheEntry(key, webCacheEntry{Tool: "web_page", Page: &page})
 }
 
@@ -101,12 +102,12 @@ func (r *Registry) loadWebCrawlCache(key string) (compactCrawlOutput, bool) {
 		return compactCrawlOutput{}, false
 	}
 	crawl := *entry.Crawl
-	crawl.applyWebCache(key, true, age, r.cfg.WebCacheTTL)
+	crawl.applyWebCache(key, true, age, r.toolPolicy.WebCacheTTL)
 	return crawl, true
 }
 
 func (r *Registry) saveWebCrawlCache(key string, crawl compactCrawlOutput) error {
-	crawl.applyWebCache(key, false, 0, r.cfg.WebCacheTTL)
+	crawl.applyWebCache(key, false, 0, r.toolPolicy.WebCacheTTL)
 	return r.saveWebCacheEntry(key, webCacheEntry{Tool: "web_crawl", Crawl: &crawl})
 }
 
@@ -130,19 +131,19 @@ func (r *Registry) loadWebCacheEntry(key string, out *webCacheEntry) (time.Durat
 }
 
 func (r *Registry) saveWebCacheEntry(key string, entry webCacheEntry) error {
-	if key == "" || r == nil || !r.cfg.WebCacheEnabled || r.cfg.WebCacheTTL <= 0 || r.cfg.WebCacheMaxBytes <= 0 {
+	if key == "" || r == nil || !r.toolPolicy.WebCacheEnabled || r.toolPolicy.WebCacheTTL <= 0 || r.toolPolicy.WebCacheMaxBytes <= 0 {
 		return nil
 	}
 	now := time.Now().UTC()
 	entry.SchemaVersion = webCacheSchemaVersion
 	entry.Key = key
 	entry.CreatedAt = now
-	entry.ExpiresAt = now.Add(r.cfg.WebCacheTTL)
+	entry.ExpiresAt = now.Add(r.toolPolicy.WebCacheTTL)
 	path := r.webCachePath(key)
-	if err := ensurePrivateToolDir(r.webCacheDir()); err != nil {
+	if err := ensurePrivateWebCacheDir(r.webCacheDir()); err != nil {
 		return err
 	}
-	if err := ensurePrivateToolDir(filepath.Dir(path)); err != nil {
+	if err := ensurePrivateWebCacheDir(filepath.Dir(path)); err != nil {
 		return err
 	}
 	bytes, err := json.MarshalIndent(entry, "", "  ")
@@ -165,12 +166,12 @@ func (r *Registry) saveWebCacheEntry(key string, entry webCacheEntry) error {
 
 func (r *Registry) webCacheStatus() webCacheStatus {
 	status := webCacheStatus{
-		Enabled:  r != nil && r.cfg.WebCacheEnabled,
+		Enabled:  r != nil && r.toolPolicy.WebCacheEnabled,
 		CacheDir: r.webCacheDir(),
 	}
 	if r != nil {
-		status.TTLMS = r.cfg.WebCacheTTL.Milliseconds()
-		status.MaxBytes = r.cfg.WebCacheMaxBytes
+		status.TTLMS = r.toolPolicy.WebCacheTTL.Milliseconds()
+		status.MaxBytes = r.toolPolicy.WebCacheMaxBytes
 	}
 	files := r.webCacheFiles(time.Now().UTC())
 	for _, file := range files {
@@ -199,7 +200,7 @@ func (r *Registry) clearWebCache() (int, int64, error) {
 }
 
 func (r *Registry) cleanupWebCache() error {
-	if r == nil || r.cfg.WebCacheMaxBytes <= 0 {
+	if r == nil || r.toolPolicy.WebCacheMaxBytes <= 0 {
 		return nil
 	}
 	now := time.Now().UTC()
@@ -214,13 +215,13 @@ func (r *Registry) cleanupWebCache() error {
 		kept = append(kept, file)
 		total += file.Size
 	}
-	if total <= r.cfg.WebCacheMaxBytes {
+	if total <= r.toolPolicy.WebCacheMaxBytes {
 		_ = removeEmptyDirs(r.webCacheDir())
 		return nil
 	}
 	sort.Slice(kept, func(i, j int) bool { return kept[i].ModTime.Before(kept[j].ModTime) })
 	for _, file := range kept {
-		if total <= r.cfg.WebCacheMaxBytes {
+		if total <= r.toolPolicy.WebCacheMaxBytes {
 			break
 		}
 		if err := os.Remove(file.Path); err != nil && !os.IsNotExist(err) {
@@ -305,11 +306,14 @@ func (crawl *compactCrawlOutput) applyWebCache(key string, hit bool, age time.Du
 }
 
 func webOutputRefExists(path string) bool {
-	if strings.TrimSpace(path) == "" {
-		return true
+	return tooloutput.Exists(path)
+}
+
+func ensurePrivateWebCacheDir(path string) error {
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
 	}
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
+	return os.Chmod(path, 0o700)
 }
 
 func removeEmptyDirs(root string) error {

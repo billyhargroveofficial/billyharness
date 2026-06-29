@@ -31,12 +31,10 @@ func CallKeyAndLine(data any, style Style) (string, string) {
 
 func CallLine(call protocol.ToolCall, style Style) string {
 	args := CallArgs(call)
-	switch style {
-	case StyleTelegram:
-		return telegramCallLine(call, args)
-	default:
-		return tuiCallLine(call, args)
+	if line, ok := registeredCallLine(call, args, style); ok {
+		return line
 	}
+	return fallbackCallLine(call, args, style)
 }
 
 func CallName(data any) string {
@@ -89,9 +87,29 @@ func DecodeCall(data any) (protocol.ToolCall, bool) {
 }
 
 func ResultKeyAndLine(data any, base string, style Style) (string, string) {
-	result, ok := DecodeResult(data)
+	summary, ok := ResultSummaryFor(data, base, style)
 	if !ok {
 		return "", ""
+	}
+	return summary.Key, summary.Line
+}
+
+type ResultSummary struct {
+	Key             string
+	Line            string
+	IsError         bool
+	Truncated       bool
+	OutputRef       string
+	DurationMS      int64
+	EstimatedTokens int64
+	OriginalBytes   int64
+	CacheLabel      string
+}
+
+func ResultSummaryFor(data any, base string, style Style) (ResultSummary, bool) {
+	result, ok := DecodeResult(data)
+	if !ok {
+		return ResultSummary{}, false
 	}
 	key := result.CallID
 	if key == "" {
@@ -99,6 +117,12 @@ func ResultKeyAndLine(data any, base string, style Style) (string, string) {
 	}
 	if base == "" {
 		base = result.Name
+	}
+	summary := ResultSummary{
+		Key:       key,
+		IsError:   result.IsError,
+		Truncated: result.Truncated,
+		OutputRef: result.OutputRef,
 	}
 	var parts []string
 	if result.IsError {
@@ -110,7 +134,8 @@ func ResultKeyAndLine(data any, base string, style Style) (string, string) {
 		if text := CompactText(strings.TrimSpace(result.Content), 96); text != "" && text != "-" {
 			parts = append(parts, text)
 		}
-		return key, strings.Join(parts, " · ")
+		summary.Line = strings.Join(parts, " · ")
+		return summary, true
 	}
 	prefix := "Done"
 	if style == StyleTelegram {
@@ -124,18 +149,23 @@ func ResultKeyAndLine(data any, base string, style Style) (string, string) {
 		parts = append(parts, "ref "+CompactText(filepathBase(result.OutputRef), 56))
 	}
 	if durationMS := metadataInt(result.Metadata, "duration_ms"); durationMS > 0 {
+		summary.DurationMS = durationMS
 		parts = append(parts, CompactDurationMS(durationMS))
 	}
 	if cacheLabel := webCacheLabel(result.Metadata); cacheLabel != "" {
+		summary.CacheLabel = cacheLabel
 		parts = append(parts, cacheLabel)
 	}
 	if tokens := metadataInt(result.Metadata, "estimated_text_tokens"); tokens > 0 {
+		summary.EstimatedTokens = tokens
 		parts = append(parts, "~"+CompactInt(tokens)+" tok")
 	}
 	if original := metadataInt(result.Metadata, "original_output_bytes"); original > 0 {
+		summary.OriginalBytes = original
 		parts = append(parts, CompactInt(original)+"B")
 	}
-	return key, strings.Join(parts, " · ")
+	summary.Line = strings.Join(parts, " · ")
+	return summary, true
 }
 
 func DecodeResult(data any) (protocol.ToolResult, bool) {
@@ -147,40 +177,120 @@ func DecodeResult(data any) (protocol.ToolResult, bool) {
 	return result, result.Name != "" || result.CallID != "" || result.Content != ""
 }
 
-func tuiCallLine(call protocol.ToolCall, args map[string]any) string {
-	switch call.Name {
-	case "shell_exec":
-		if argv := stringSliceArg(args["argv"]); len(argv) > 0 {
-			return "Ran " + Preview(formatArgv(argv), 120)
-		}
-	case "fs_read_file":
-		return "Read " + firstArg(args, "path", "file")
-	case "fs_list":
-		return "Listed " + firstArgDefault(args, ".", "path")
-	case "fs_search":
-		query := firstArg(args, "query", "pattern")
-		path := firstArgDefault(args, ".", "path")
-		if query != "" {
-			return "Searched " + Preview(query, 72) + " in " + path
-		}
-	case "fs_write_file":
-		return "Wrote " + firstArg(args, "path", "file")
-	case "fs_make_dir":
-		return "Created dir " + firstArg(args, "path")
-	case "web_fetch":
-		return "Fetched " + CompactURL(args["url"], 88)
-	case "web_extract":
-		return "Extracted " + JoinParts(CompactURL(args["url"], 64), OptionalPart("query", args["query"], 48))
-	case "web_search":
-		return "Searched web " + CompactArg(args["query"], 96)
-	case "web_crawl":
-		return "Crawled " + CompactURL(args["url"], 88)
-	case "time_now":
-		return "Checked time"
-	case "mcp_list_tools":
-		return "Listed MCP tools " + JoinParts("server="+CompactArg(args["server"], 32), OptionalPart("query", args["query"], 48))
-	case "mcp_call":
-		return "Called MCP " + CompactArg(args["name"], 80)
+type callRenderFunc func(protocol.ToolCall, map[string]any) (string, bool)
+
+type callRenderer struct {
+	tui      callRenderFunc
+	telegram callRenderFunc
+}
+
+var callRenderers = map[string]callRenderer{
+	"shell_exec": {
+		tui: func(_ protocol.ToolCall, args map[string]any) (string, bool) {
+			if argv := stringSliceArg(args["argv"]); len(argv) > 0 {
+				return "Ran " + Preview(formatArgv(argv), 120), true
+			}
+			return "", false
+		},
+		telegram: func(_ protocol.ToolCall, args map[string]any) (string, bool) {
+			if argv := stringSliceArg(args["argv"]); len(argv) > 0 {
+				return "⚙️ shell " + CompactText(formatArgv(argv), 120), true
+			}
+			return "⚙️ shell " + CompactArg(args["argv"], 120), true
+		},
+	},
+	"fs_read_file": {
+		tui:      staticCallLine(func(args map[string]any) string { return "Read " + firstArg(args, "path", "file") }),
+		telegram: staticCallLine(func(args map[string]any) string { return "📖 read " + CompactArg(args["path"], 96) }),
+	},
+	"fs_list": {
+		tui:      staticCallLine(func(args map[string]any) string { return "Listed " + firstArgDefault(args, ".", "path") }),
+		telegram: staticCallLine(func(args map[string]any) string { return "📁 list " + CompactArg(args["path"], 96) }),
+	},
+	"fs_search": {
+		tui: func(_ protocol.ToolCall, args map[string]any) (string, bool) {
+			query := firstArg(args, "query", "pattern")
+			path := firstArgDefault(args, ".", "path")
+			if query != "" {
+				return "Searched " + Preview(query, 72) + " in " + path, true
+			}
+			return "", false
+		},
+		telegram: staticCallLine(func(args map[string]any) string {
+			return "🔍 search " + CompactArg(args["query"], 56) + " in " + CompactArg(args["path"], 56)
+		}),
+	},
+	"fs_write_file": {
+		tui:      staticCallLine(func(args map[string]any) string { return "Wrote " + firstArg(args, "path", "file") }),
+		telegram: staticCallLine(func(args map[string]any) string { return "✍️ write " + CompactArg(args["path"], 96) }),
+	},
+	"fs_make_dir": {
+		tui: staticCallLine(func(args map[string]any) string { return "Created dir " + firstArg(args, "path") }),
+	},
+	"web_fetch": {
+		tui:      staticCallLine(func(args map[string]any) string { return "Fetched " + CompactURL(args["url"], 88) }),
+		telegram: staticCallLine(func(args map[string]any) string { return "🌐 web_fetch " + CompactURL(args["url"], 88) }),
+	},
+	"web_extract": {
+		tui: staticCallLine(func(args map[string]any) string {
+			return "Extracted " + JoinParts(CompactURL(args["url"], 64), OptionalPart("query", args["query"], 48))
+		}),
+		telegram: staticCallLine(func(args map[string]any) string {
+			return "🧩 web_extract " + JoinParts(CompactURL(args["url"], 60), OptionalPart("query", args["query"], 48))
+		}),
+	},
+	"web_search": {
+		tui:      staticCallLine(func(args map[string]any) string { return "Searched web " + CompactArg(args["query"], 96) }),
+		telegram: staticCallLine(func(args map[string]any) string { return "🔎 web_search " + CompactArg(args["query"], 96) }),
+	},
+	"web_crawl": {
+		tui:      staticCallLine(func(args map[string]any) string { return "Crawled " + CompactURL(args["url"], 88) }),
+		telegram: staticCallLine(func(args map[string]any) string { return "🕸 web_crawl " + CompactURL(args["url"], 88) }),
+	},
+	"time_now": {
+		tui: staticCallLine(func(map[string]any) string { return "Checked time" }),
+	},
+	"mcp_list_tools": {
+		tui: staticCallLine(func(args map[string]any) string {
+			return "Listed MCP tools " + JoinParts("server="+CompactArg(args["server"], 32), OptionalPart("query", args["query"], 48))
+		}),
+		telegram: staticCallLine(func(args map[string]any) string {
+			return "🔌 mcp tools " + JoinParts("server="+CompactArg(args["server"], 32), OptionalPart("query", args["query"], 48))
+		}),
+	},
+	"mcp_call": {
+		tui:      staticCallLine(func(args map[string]any) string { return "Called MCP " + CompactArg(args["name"], 80) }),
+		telegram: staticCallLine(func(args map[string]any) string { return "🔌 mcp call " + CompactArg(args["name"], 80) }),
+	},
+}
+
+func staticCallLine(render func(map[string]any) string) callRenderFunc {
+	return func(_ protocol.ToolCall, args map[string]any) (string, bool) {
+		return render(args), true
+	}
+}
+
+func registeredCallLine(call protocol.ToolCall, args map[string]any, style Style) (string, bool) {
+	entry, ok := callRenderers[call.Name]
+	if !ok {
+		return "", false
+	}
+	var render callRenderFunc
+	switch style {
+	case StyleTelegram:
+		render = entry.telegram
+	default:
+		render = entry.tui
+	}
+	if render == nil {
+		return "", false
+	}
+	return render(call, args)
+}
+
+func fallbackCallLine(call protocol.ToolCall, args map[string]any, style Style) string {
+	if style == StyleTelegram {
+		return "🛠 " + call.Name + " " + Preview(string(call.Arguments), 160)
 	}
 	for _, key := range []string{"path", "command", "cmd", "query", "url", "pattern", "glob", "file"} {
 		if text, ok := args[key].(string); ok && text != "" {
@@ -188,38 +298,6 @@ func tuiCallLine(call protocol.ToolCall, args map[string]any) string {
 		}
 	}
 	return "Called " + call.Name
-}
-
-func telegramCallLine(call protocol.ToolCall, args map[string]any) string {
-	switch call.Name {
-	case "web_search":
-		return "🔎 web_search " + CompactArg(args["query"], 96)
-	case "web_fetch":
-		return "🌐 web_fetch " + CompactURL(args["url"], 88)
-	case "web_extract":
-		return "🧩 web_extract " + JoinParts(CompactURL(args["url"], 60), OptionalPart("query", args["query"], 48))
-	case "web_crawl":
-		return "🕸 web_crawl " + CompactURL(args["url"], 88)
-	case "fs_read_file":
-		return "📖 read " + CompactArg(args["path"], 96)
-	case "fs_list":
-		return "📁 list " + CompactArg(args["path"], 96)
-	case "fs_search":
-		return "🔍 search " + CompactArg(args["query"], 56) + " in " + CompactArg(args["path"], 56)
-	case "fs_write_file":
-		return "✍️ write " + CompactArg(args["path"], 96)
-	case "shell_exec":
-		if argv := stringSliceArg(args["argv"]); len(argv) > 0 {
-			return "⚙️ shell " + CompactText(formatArgv(argv), 120)
-		}
-		return "⚙️ shell " + CompactArg(args["argv"], 120)
-	case "mcp_list_tools":
-		return "🔌 mcp tools " + JoinParts("server="+CompactArg(args["server"], 32), OptionalPart("query", args["query"], 48))
-	case "mcp_call":
-		return "🔌 mcp call " + CompactArg(args["name"], 80)
-	default:
-		return "🛠 " + call.Name + " " + Preview(string(call.Arguments), 160)
-	}
 }
 
 func CompactArg(value any, limit int) string {

@@ -2,28 +2,21 @@ package tools
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"html"
-	"io"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
-	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
-	"github.com/billyhargroveofficial/billyharness/internal/provider"
+	"github.com/billyhargroveofficial/billyharness/internal/tools/discovery"
+	"github.com/billyhargroveofficial/billyharness/internal/webtools"
 )
 
 const (
@@ -47,13 +40,9 @@ const (
 	webMaxLinks              = 20
 	maxWriteBytes            = 2 * 1024 * 1024
 	maxExecOutput            = 512 * 1024
-	defaultToolSchemaTokens  = 1200
-	maxToolSchemaTokens      = 4000
 	defaultSkillReadChars    = 12 * 1024
 	maxSkillReadChars        = 60 * 1024
 )
-
-var newWebSummaryProvider = provider.New
 
 type Result struct {
 	Content   string
@@ -87,15 +76,76 @@ const (
 )
 
 type Registry struct {
-	cfg          config.Config
-	tools        map[string]Tool
-	mcpTools     map[string]Tool
-	manager      *mcpclient.Manager
-	instructions []string
+	toolPolicy      config.ToolPolicySettings
+	mcpSettings     config.MCPSettings
+	tools           map[string]Tool
+	mcpTools        map[string]Tool
+	mcpCatalog      mcpCatalogState
+	mcpUnsubscribe  func()
+	mcpMu           sync.RWMutex
+	manager         *mcpclient.Manager
+	instructions    []string
+	webSummarizer   webtools.Summarizer
+	webSummarySlots chan struct{}
+	webSummarySeq   int64
 }
 
-func NewRegistry(cfg config.Config) *Registry {
-	r := &Registry{cfg: cfg, tools: map[string]Tool{}, mcpTools: map[string]Tool{}}
+type RegistryOption func(*Registry)
+
+type RegistrySettings struct {
+	Provider   config.ProviderBinding
+	ToolPolicy config.ToolPolicySettings
+	MCP        config.MCPSettings
+}
+
+type mcpCatalogState struct {
+	Kind         string   `json:"kind"`
+	Version      int64    `json:"version"`
+	ToolCount    int      `json:"tool_count"`
+	Stale        bool     `json:"stale"`
+	ModelVisible bool     `json:"model_visible"`
+	Collisions   []string `json:"collisions,omitempty"`
+}
+
+type modelVisibleToolCatalog struct {
+	Kind                    string   `json:"kind"`
+	ToolCount               int      `json:"tool_count"`
+	IncludesDynamicMCPTools bool     `json:"includes_dynamic_mcp_tools"`
+	MCPDiscoveryTools       []string `json:"mcp_discovery_tools"`
+}
+
+func RegistrySettingsFromConfig(cfg config.Config) RegistrySettings {
+	return RegistrySettings{
+		Provider:   cfg.ProviderBinding(),
+		ToolPolicy: cfg.ToolPolicySettings(),
+		MCP:        cfg.MCPSettings(),
+	}
+}
+
+func WithWebSummarizer(summarizer webtools.Summarizer) RegistryOption {
+	return func(r *Registry) {
+		r.webSummarizer = summarizer
+	}
+}
+
+func NewRegistry(cfg config.Config, opts ...RegistryOption) *Registry {
+	return NewRegistryFromSettings(RegistrySettingsFromConfig(cfg), opts...)
+}
+
+func NewRegistryFromSettings(settings RegistrySettings, opts ...RegistryOption) *Registry {
+	settings = cloneRegistrySettings(settings)
+	r := &Registry{
+		toolPolicy:      settings.ToolPolicy,
+		mcpSettings:     settings.MCP,
+		tools:           map[string]Tool{},
+		mcpTools:        map[string]Tool{},
+		webSummarySlots: make(chan struct{}, defaultWebSummaryConcurrency),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(r)
+		}
+	}
 	r.addTime()
 	r.addFSRead()
 	r.addFSList()
@@ -113,61 +163,97 @@ func NewRegistry(cfg config.Config) *Registry {
 	return r
 }
 
-func NewRegistryWithMCP(ctx context.Context, cfg config.Config) (*Registry, error) {
-	if !cfg.MCPEnabled {
-		return NewRegistry(cfg), nil
+func NewRegistryWithMCP(ctx context.Context, cfg config.Config, opts ...RegistryOption) (*Registry, error) {
+	return NewRegistryWithMCPFromSettings(ctx, RegistrySettingsFromConfig(cfg), opts...)
+}
+
+func NewRegistryWithMCPFromSettings(ctx context.Context, settings RegistrySettings, opts ...RegistryOption) (*Registry, error) {
+	settings = cloneRegistrySettings(settings)
+	mcpSettings := settings.MCP
+	if !mcpSettings.Enabled {
+		return NewRegistryFromSettings(settings, opts...), nil
 	}
-	if cfg.Provider == "mock" && len(cfg.MCPServers) == 0 && len(cfg.MCPConfigFiles) == 0 {
-		return NewRegistry(cfg), nil
+	if settings.Provider.Provider.Provider == "mock" && len(mcpSettings.Servers) == 0 && len(mcpSettings.ConfigFiles) == 0 {
+		return NewRegistryFromSettings(settings, opts...), nil
 	}
-	if len(cfg.MCPServers) == 0 {
-		if err := cfg.LoadDefaultMCPServers(); err != nil {
+	if len(mcpSettings.Servers) == 0 {
+		loaded, err := config.LoadDefaultMCPSettings(mcpSettings)
+		if err != nil {
 			return nil, err
 		}
+		mcpSettings = loaded
+		settings.MCP = mcpSettings
 	}
-	registry := NewRegistry(cfg)
-	if len(cfg.MCPServers) == 0 {
+	registry := NewRegistryFromSettings(settings, opts...)
+	if len(mcpSettings.Servers) == 0 {
 		return registry, nil
 	}
-	manager, err := mcpclient.NewManager(ctx, cfg)
+	manager, err := mcpclient.NewManagerFromSettings(ctx, mcpclient.ManagerSettingsFromProjections(settings.ToolPolicy, mcpSettings))
 	if err != nil {
 		return nil, err
 	}
 	registry.manager = manager
-	registry.instructions = manager.Instructions()
-	for _, external := range manager.Tools() {
-		spec := external.Spec
-		handler := external.Handler
-		registry.mcpTools[spec.Name] = Tool{
-			Spec: spec,
-			Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
-				content, err := handler(ctx, args)
-				return Result{Content: content}, err
-			},
-		}
-	}
-	if len(registry.mcpTools) > 0 {
-		registry.addMCPGateway()
-	}
+	registry.mcpUnsubscribe = manager.AddCatalogListener(func(change mcpclient.CatalogChange) {
+		registry.markMCPCatalogStale(change)
+		registry.syncMCPToolsFromManager()
+	})
+	registry.syncMCPToolsFromManager()
+	registry.addMCPGateway()
 	return registry, nil
+}
+
+func cloneRegistrySettings(settings RegistrySettings) RegistrySettings {
+	settings.ToolPolicy = cloneToolPolicySettings(settings.ToolPolicy)
+	settings.MCP = cloneMCPSettings(settings.MCP)
+	return settings
+}
+
+func cloneToolPolicySettings(settings config.ToolPolicySettings) config.ToolPolicySettings {
+	settings.WorkspaceRoots = append([]string(nil), settings.WorkspaceRoots...)
+	settings.ProjectDocFallbacks = append([]string(nil), settings.ProjectDocFallbacks...)
+	return settings
+}
+
+func cloneMCPSettings(settings config.MCPSettings) config.MCPSettings {
+	return config.Config{
+		MCPEnabled:        settings.Enabled,
+		MCPConfigFiles:    settings.ConfigFiles,
+		MCPAllowedServers: settings.AllowedServers,
+		MCPServers:        settings.Servers,
+	}.MCPSettings()
 }
 
 func (r *Registry) Instructions() []string {
 	if r == nil {
 		return nil
 	}
+	r.mcpMu.RLock()
 	instructions := append([]string(nil), r.instructions...)
-	if r.hasMCPServer("telegram_parilka") {
+	hasParilka := false
+	for name := range r.mcpTools {
+		if discovery.MCPServerFromToolName(name) == "telegram_parilka" {
+			hasParilka = true
+			break
+		}
+	}
+	r.mcpMu.RUnlock()
+	if hasParilka {
 		instructions = append(instructions, `telegram-parilka: Russian "парилка" / "Parilka" means the configured Telegram Parilka chat. For requests asking what is happening there, use mcp_list_tools with server "telegram-parilka", then mcp_call on read_history/search_messages/get_thread_context/get_chat_info. Do not inspect filesystem paths for this.`)
 	}
 	return instructions
 }
 
-func (r *Registry) Config() config.Config {
+func (r *Registry) MCPSettings() config.MCPSettings {
 	if r == nil {
-		return config.Config{}
+		return config.MCPSettings{}
 	}
-	return r.cfg
+	settings := r.mcpSettings
+	return config.Config{
+		MCPEnabled:        settings.Enabled,
+		MCPConfigFiles:    settings.ConfigFiles,
+		MCPAllowedServers: settings.AllowedServers,
+		MCPServers:        settings.Servers,
+	}.MCPSettings()
 }
 
 func (r *Registry) MCPStatuses() []mcpclient.ServerStatus {
@@ -184,12 +270,134 @@ func (r *Registry) AddMCPStatusListener(listener func(mcpclient.ServerStatus)) f
 	return r.manager.AddStatusListener(listener)
 }
 
+func (r *Registry) AddMCPCatalogListener(listener func(mcpclient.CatalogChange)) func() {
+	if r == nil || r.manager == nil {
+		return func() {}
+	}
+	return r.manager.AddCatalogListener(listener)
+}
+
+func (r *Registry) refreshMCPTools(ctx context.Context) {
+	if r == nil || r.manager == nil {
+		return
+	}
+	r.manager.Refresh(ctx)
+	r.syncMCPToolsFromManager()
+}
+
+func (r *Registry) syncMCPToolsFromManager() {
+	if r == nil || r.manager == nil {
+		return
+	}
+	snapshot := r.manager.CatalogSnapshot()
+	next := map[string]Tool{}
+	for _, external := range snapshot.Tools {
+		spec := external.Spec
+		handler := external.Handler
+		next[spec.Name] = Tool{
+			Spec: spec,
+			Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
+				content, err := handler(ctx, args)
+				return Result{Content: content}, err
+			},
+		}
+	}
+	r.mcpMu.Lock()
+	r.mcpTools = next
+	r.instructions = snapshot.Instructions
+	r.mcpCatalog = mcpCatalogState{
+		Kind:         "dynamic_mcp_catalog",
+		Version:      snapshot.Version,
+		ToolCount:    len(next),
+		Stale:        false,
+		ModelVisible: false,
+		Collisions:   append([]string(nil), snapshot.Collisions...),
+	}
+	r.mcpMu.Unlock()
+}
+
+func (r *Registry) markMCPCatalogStale(change mcpclient.CatalogChange) {
+	if r == nil {
+		return
+	}
+	r.mcpMu.Lock()
+	if change.Version > r.mcpCatalog.Version {
+		r.mcpCatalog.Stale = true
+	}
+	r.mcpMu.Unlock()
+}
+
+func (r *Registry) mcpCatalogSnapshot() mcpCatalogState {
+	if r == nil {
+		return mcpCatalogState{}
+	}
+	r.mcpMu.RLock()
+	defer r.mcpMu.RUnlock()
+	state := r.mcpCatalog
+	state.Kind = "dynamic_mcp_catalog"
+	state.ToolCount = len(r.mcpTools)
+	state.ModelVisible = false
+	state.Collisions = append([]string(nil), state.Collisions...)
+	return state
+}
+
+func (r *Registry) modelVisibleToolCatalogSnapshot() modelVisibleToolCatalog {
+	count := 0
+	if r != nil {
+		count = len(r.tools)
+	}
+	return modelVisibleToolCatalog{
+		Kind:                    "static_gateway_tools",
+		ToolCount:               count,
+		IncludesDynamicMCPTools: false,
+		MCPDiscoveryTools:       []string{"tool_search", "mcp_list_tools", "mcp_call"},
+	}
+}
+
+func addMCPCatalogMetadata(metadata map[string]any, state mcpCatalogState) map[string]any {
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["mcp_catalog_kind"] = state.Kind
+	metadata["mcp_catalog_version"] = state.Version
+	metadata["mcp_catalog_tool_count"] = state.ToolCount
+	metadata["mcp_catalog_stale"] = state.Stale
+	metadata["mcp_catalog_model_visible"] = state.ModelVisible
+	if len(state.Collisions) > 0 {
+		metadata["mcp_catalog_collisions"] = append([]string(nil), state.Collisions...)
+	}
+	return metadata
+}
+
+func addModelVisibleToolMetadata(metadata map[string]any, state modelVisibleToolCatalog) map[string]any {
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["model_visible_tool_catalog_kind"] = state.Kind
+	metadata["model_visible_tool_count"] = state.ToolCount
+	metadata["model_visible_includes_dynamic_mcp_tools"] = state.IncludesDynamicMCPTools
+	return metadata
+}
+
+func (r *Registry) mcpToolsSnapshot() map[string]Tool {
+	if r == nil {
+		return nil
+	}
+	r.mcpMu.RLock()
+	defer r.mcpMu.RUnlock()
+	out := make(map[string]Tool, len(r.mcpTools))
+	for name, tool := range r.mcpTools {
+		out[name] = tool
+	}
+	return out
+}
+
 func (r *Registry) hasMCPServer(server string) bool {
 	if r == nil {
 		return false
 	}
-	for name := range r.mcpTools {
-		if mcpServerFromToolName(name) == server {
+	for name := range r.mcpToolsSnapshot() {
+		if discovery.MCPServerFromToolName(name) == server {
 			return true
 		}
 	}
@@ -211,6 +419,11 @@ func (r *Registry) Call(ctx context.Context, call protocol.ToolCall) (Result, er
 		return errorResult("unknown_tool", fmt.Sprintf("unknown tool %s", call.Name)), fmt.Errorf("unknown tool %s", call.Name)
 	}
 	call.Arguments = normalizeArgs(call.Arguments)
+	if decision, err := r.checkPolicy(tool); err != nil {
+		result := errorResult("permission_denied", err.Error())
+		result.Metadata = decision.Metadata()
+		return result, err
+	}
 	if err := validateArgs(tool.Spec.Parameters, call.Arguments); err != nil {
 		return errorResult("validation_error", err.Error()), err
 	}
@@ -325,6 +538,10 @@ func defaultParallelMetadata(name string, risk protocol.Risk) ParallelMetadata {
 
 func (r *Registry) Close() {
 	if r != nil && r.manager != nil {
+		if r.mcpUnsubscribe != nil {
+			r.mcpUnsubscribe()
+			r.mcpUnsubscribe = nil
+		}
 		r.manager.Close()
 		r.manager = nil
 	}
@@ -475,9 +692,6 @@ func (r *Registry) addFSWrite() {
 			Risk:        protocol.RiskWrite,
 		},
 		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
-			if err := r.requireDangerous(); err != nil {
-				return Result{}, err
-			}
 			var in struct {
 				Path       string `json:"path"`
 				Content    string `json:"content"`
@@ -530,9 +744,6 @@ func (r *Registry) addFSMkdir() {
 			Risk:        protocol.RiskWrite,
 		},
 		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
-			if err := r.requireDangerous(); err != nil {
-				return Result{}, err
-			}
 			var in struct {
 				Path string `json:"path"`
 			}
@@ -560,9 +771,6 @@ func (r *Registry) addShellExec() {
 			Risk:        protocol.RiskExecute,
 		},
 		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
-			if err := r.requireDangerous(); err != nil {
-				return Result{}, err
-			}
 			var in struct {
 				Argv           []string `json:"argv"`
 				CWD            string   `json:"cwd"`
@@ -609,227 +817,15 @@ func (r *Registry) addShellExec() {
 	})
 }
 
-func (r *Registry) addWebFetch() {
-	r.add(Tool{
-		Spec: protocol.ToolSpec{
-			Name:        "web_fetch",
-			Description: "Fetch a public HTTP(S) URL and return a compact digest, key points, short extract, links, and an output_ref to the full extracted text. By default it does not return raw page text to protect the agent context.",
-			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"query":{"type":"string","description":"Optional focus for extraction/snippets."},"max_bytes":{"type":"integer","default":65536},"max_tokens":{"type":"integer","default":0,"description":"Optional capped inline text token budget; default 0 returns no raw text."},"max_chars":{"type":"integer","description":"Optional capped inline text characters; ignored unless include_text/full_text is true."},"include_text":{"type":"boolean","default":false,"description":"Return capped raw extracted text inline. Prefer output_ref unless exact short quotes are needed."},"full_text":{"type":"boolean","default":false,"description":"Legacy alias for include_text; still capped hard."},"max_links":{"type":"integer","default":20}},"required":["url"],"additionalProperties":false}`),
-			Risk:        protocol.RiskNetwork,
-		},
-		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
-			var in struct {
-				URL         string `json:"url"`
-				Query       string `json:"query"`
-				MaxBytes    int    `json:"max_bytes"`
-				MaxTokens   int    `json:"max_tokens"`
-				MaxChars    int    `json:"max_chars"`
-				IncludeText bool   `json:"include_text"`
-				FullText    bool   `json:"full_text"`
-				MaxLinks    int    `json:"max_links"`
-			}
-			if err := json.Unmarshal(args, &in); err != nil {
-				return Result{}, err
-			}
-			return r.fetchCompactPageResult(ctx, "web_fetch", in.URL, webFetchOptions{
-				Query:       in.Query,
-				MaxBytes:    in.MaxBytes,
-				MaxChars:    in.MaxChars,
-				MaxTokens:   in.MaxTokens,
-				IncludeText: in.IncludeText,
-				FullText:    in.FullText,
-				MaxLinks:    in.MaxLinks,
-			})
-		},
-	})
-}
-
-func (r *Registry) addWebExtract() {
-	r.add(Tool{
-		Spec: protocol.ToolSpec{
-			Name:        "web_extract",
-			Description: "Fetch a public HTTP(S) URL and extract a focused digest for a query/topic. Returns compact out-of-band summary plus output_ref to full extracted text; never dumps raw page text unless include_text is true.",
-			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"query":{"type":"string","description":"Topic, question, or terms to focus extraction."},"max_bytes":{"type":"integer","default":65536},"max_tokens":{"type":"integer","default":0},"max_chars":{"type":"integer"},"include_text":{"type":"boolean","default":false},"max_links":{"type":"integer","default":20}},"required":["url"],"additionalProperties":false}`),
-			Risk:        protocol.RiskNetwork,
-		},
-		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
-			var in struct {
-				URL         string `json:"url"`
-				Query       string `json:"query"`
-				MaxBytes    int    `json:"max_bytes"`
-				MaxTokens   int    `json:"max_tokens"`
-				MaxChars    int    `json:"max_chars"`
-				IncludeText bool   `json:"include_text"`
-				MaxLinks    int    `json:"max_links"`
-			}
-			if err := json.Unmarshal(args, &in); err != nil {
-				return Result{}, err
-			}
-			return r.fetchCompactPageResult(ctx, "web_extract", in.URL, webFetchOptions{
-				Query:       in.Query,
-				MaxBytes:    in.MaxBytes,
-				MaxChars:    in.MaxChars,
-				MaxTokens:   in.MaxTokens,
-				IncludeText: in.IncludeText,
-				MaxLinks:    in.MaxLinks,
-			})
-		},
-	})
-}
-
-func (r *Registry) addWebSearch() {
-	r.add(Tool{
-		Spec: protocol.ToolSpec{
-			Name:        "web_search",
-			Description: "Search the web via DuckDuckGo Lite and return public result URLs. No API key required.",
-			Parameters:  raw(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer","default":5}},"required":["query"],"additionalProperties":false}`),
-			Risk:        protocol.RiskNetwork,
-		},
-		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
-			var in struct {
-				Query string `json:"query"`
-				Limit int    `json:"limit"`
-			}
-			if err := json.Unmarshal(args, &in); err != nil {
-				return Result{}, err
-			}
-			if strings.TrimSpace(in.Query) == "" {
-				return Result{}, fmt.Errorf("query required")
-			}
-			if in.Limit <= 0 || in.Limit > 10 {
-				in.Limit = 5
-			}
-			results, err := searchDuckDuckGoLite(ctx, in.Query, in.Limit)
-			if err != nil {
-				return Result{}, err
-			}
-			out, _ := json.MarshalIndent(results, "", "  ")
-			return Result{Content: string(out)}, nil
-		},
-	})
-}
-
-func (r *Registry) addWebCrawl() {
-	r.add(Tool{
-		Spec: protocol.ToolSpec{
-			Name:        "web_crawl",
-			Description: "Crawl public HTTP(S) pages breadth-first and return compact per-page digests plus one output_ref containing full extracted crawl text. Raw page text is not returned inline by default.",
-			Parameters:  raw(`{"type":"object","properties":{"url":{"type":"string"},"query":{"type":"string","description":"Optional focus for extraction/snippets."},"max_pages":{"type":"integer","default":3},"max_depth":{"type":"integer","default":1},"same_host":{"type":"boolean","default":true},"max_bytes_per_page":{"type":"integer","default":65536},"max_tokens_per_page":{"type":"integer","default":0},"max_total_tokens":{"type":"integer","default":0},"max_chars_per_page":{"type":"integer","description":"Optional capped inline text characters per page; ignored unless include_text/full_text is true."},"include_text":{"type":"boolean","default":false},"full_text":{"type":"boolean","default":false}},"required":["url"],"additionalProperties":false}`),
-			Risk:        protocol.RiskNetwork,
-		},
-		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
-			var in struct {
-				URL              string `json:"url"`
-				Query            string `json:"query"`
-				MaxPages         int    `json:"max_pages"`
-				MaxDepth         int    `json:"max_depth"`
-				SameHost         *bool  `json:"same_host"`
-				MaxBytesPerPage  int    `json:"max_bytes_per_page"`
-				MaxTokensPerPage int    `json:"max_tokens_per_page"`
-				MaxTotalTokens   int    `json:"max_total_tokens"`
-				MaxCharsPerPage  int    `json:"max_chars_per_page"`
-				IncludeText      bool   `json:"include_text"`
-				FullText         bool   `json:"full_text"`
-			}
-			if err := json.Unmarshal(args, &in); err != nil {
-				return Result{}, err
-			}
-			sameHost := true
-			if in.SameHost != nil {
-				sameHost = *in.SameHost
-			}
-			opts := webFetchOptions{
-				Query:          in.Query,
-				MaxChars:       in.MaxCharsPerPage,
-				MaxTokens:      in.MaxTokensPerPage,
-				MaxTotalTokens: in.MaxTotalTokens,
-				IncludeText:    in.IncludeText,
-				FullText:       in.FullText,
-				MaxLinks:       0,
-			}
-			cacheKey, cacheOK := r.webCacheKey(ctx, "web_crawl", in.URL, opts, map[string]any{
-				"max_pages":          normalizedCrawlMaxPages(in.MaxPages),
-				"max_depth":          normalizedCrawlMaxDepth(in.MaxDepth),
-				"same_host":          sameHost,
-				"max_bytes_per_page": boundedBytes(in.MaxBytesPerPage),
-			})
-			if cacheOK {
-				if compact, hit := r.loadWebCrawlCache(cacheKey); hit {
-					out, _ := json.MarshalIndent(compact, "", "  ")
-					return Result{Content: string(out), Metadata: crawlMetadata(compact), Truncated: compact.OutputTextTruncated, OutputRef: compact.OutputRef}, nil
-				}
-			}
-			pages, err := r.crawl(ctx, in.URL, in.MaxPages, in.MaxDepth, sameHost, boundedBytes(in.MaxBytesPerPage))
-			if err != nil {
-				return Result{}, err
-			}
-			compact, ref, storeErr := r.compactCrawlResult(ctx, pages, opts)
-			if storeErr != nil {
-				compact.CompactNote = strings.TrimSpace(compact.CompactNote + " full crawl text save failed: " + storeErr.Error())
-			}
-			if cacheOK {
-				compact.applyWebCache(cacheKey, false, 0, r.cfg.WebCacheTTL)
-				_ = r.saveWebCrawlCache(cacheKey, compact)
-			}
-			out, _ := json.MarshalIndent(compact, "", "  ")
-			return Result{Content: string(out), Metadata: crawlMetadata(compact), Truncated: compact.OutputTextTruncated, OutputRef: ref}, nil
-		},
-	})
-}
-
-func (r *Registry) addWebCache() {
-	r.add(Tool{
-		Spec: protocol.ToolSpec{
-			Name:        "web_cache_status",
-			Description: "Inspect the native web fetch/extract/crawl cache. Shows entry count, total bytes, TTL, max size, and expired entries.",
-			Parameters:  raw(`{"type":"object","properties":{},"additionalProperties":false}`),
-			Risk:        protocol.RiskReadOnly,
-		},
-		Handler: func(context.Context, json.RawMessage) (Result, error) {
-			status := r.webCacheStatus()
-			out, _ := json.MarshalIndent(status, "", "  ")
-			return Result{Content: string(out), Metadata: map[string]any{
-				"web_cache_enabled": status.Enabled,
-				"web_cache_entries": status.Entries,
-				"web_cache_bytes":   status.Bytes,
-				"web_cache_expired": status.ExpiredEntries,
-			}}, nil
-		},
-	})
-	r.add(Tool{
-		Spec: protocol.ToolSpec{
-			Name:        "web_cache_clear",
-			Description: "Clear the native web cache under $BILLYHARNESS_HOME/web-cache. This does not delete saved tool-output refs.",
-			Parameters:  raw(`{"type":"object","properties":{},"additionalProperties":false}`),
-			Risk:        protocol.RiskWrite,
-		},
-		Handler: func(context.Context, json.RawMessage) (Result, error) {
-			removed, bytes, err := r.clearWebCache()
-			if err != nil {
-				return Result{}, err
-			}
-			out, _ := json.MarshalIndent(map[string]any{
-				"removed_entries": removed,
-				"removed_bytes":   bytes,
-				"cache_dir":       r.webCacheDir(),
-			}, "", "  ")
-			return Result{Content: string(out), Metadata: map[string]any{
-				"web_cache_removed_entries": removed,
-				"web_cache_removed_bytes":   bytes,
-			}}, nil
-		},
-	})
-}
-
 func (r *Registry) addToolSearch() {
 	r.add(Tool{
 		Spec: protocol.ToolSpec{
 			Name:        "tool_search",
-			Description: "Search native and connected MCP tools by name or description without listing every external tool in the model prompt. Returns compact call hints.",
+			Description: "Search static model-visible gateway tools and the dynamic MCP catalog by name or description. MCP results are call hints for mcp_call, not direct model-visible tool specs.",
 			Parameters:  raw(`{"type":"object","properties":{"query":{"type":"string","description":"Tool capability, name, or description text to search for. Empty returns the first matching tools."},"server":{"type":"string","description":"Optional MCP server filter: telegram, telegram-parilka, github, or context7."},"namespace":{"type":"string","description":"Optional namespace filter such as fs, web, shell, mcp, mcp.github, or telegram-parilka."},"risk":{"type":"string","description":"Optional risk filter: read_only, network, write, execute, or external."},"limit":{"type":"integer","default":20},"include_schema":{"type":"boolean","default":false,"description":"Include input schemas for matching tools when exact arguments are needed, capped by max_schema_tokens."},"max_schema_tokens":{"type":"integer","default":1200,"description":"Maximum estimated schema tokens to include across all returned tools."}},"additionalProperties":false}`),
 			Risk:        protocol.RiskReadOnly,
 		},
-		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
+		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in struct {
 				Query           string `json:"query"`
 				Server          string `json:"server"`
@@ -845,273 +841,79 @@ func (r *Registry) addToolSearch() {
 			if in.Limit <= 0 || in.Limit > 80 {
 				in.Limit = 20
 			}
+			r.refreshMCPTools(ctx)
 			results := r.searchTools(in.Query, in.Server, in.Namespace, in.Risk, in.Limit, in.IncludeSchema, in.MaxSchemaTokens)
+			catalog := r.mcpCatalogSnapshot()
+			modelVisible := r.modelVisibleToolCatalogSnapshot()
 			out, _ := json.MarshalIndent(map[string]any{
-				"tools":     results.Items,
-				"truncated": results.Truncated,
-				"metrics":   results.Metrics,
+				"tools":               results.Items,
+				"truncated":           results.Truncated,
+				"metrics":             results.Metrics,
+				"model_visible_tools": modelVisible,
+				"mcp_catalog":         catalog,
 			}, "", "  ")
-			return Result{Content: string(out), Metadata: results.Metrics.Metadata()}, nil
+			metadata := addMCPCatalogMetadata(results.Metrics.Metadata(), catalog)
+			metadata = addModelVisibleToolMetadata(metadata, modelVisible)
+			return Result{Content: string(out), Metadata: metadata}, nil
 		},
 	})
 }
 
-type toolSearchResults struct {
-	Items     []toolSearchItem
-	Truncated bool
-	Metrics   toolDiscoveryMetrics
-}
-
-type toolSearchItem struct {
-	Name                string          `json:"name"`
-	Source              string          `json:"source"`
-	Namespace           string          `json:"namespace,omitempty"`
-	Server              string          `json:"server,omitempty"`
-	CallTool            string          `json:"call_tool"`
-	CallName            string          `json:"call_name,omitempty"`
-	Risk                protocol.Risk   `json:"risk,omitempty"`
-	Description         string          `json:"description,omitempty"`
-	InputSchema         json.RawMessage `json:"input_schema,omitempty"`
-	SchemaOmittedReason string          `json:"schema_omitted,omitempty"`
-}
-
-type toolDiscoveryMetrics struct {
-	DiscoveryCalls     int                  `json:"discovery_calls"`
-	ScannedNative      int                  `json:"scanned_native"`
-	ScannedMCP         int                  `json:"scanned_mcp"`
-	Matched            int                  `json:"matched"`
-	Returned           int                  `json:"returned"`
-	SchemaIncluded     int                  `json:"schema_included"`
-	SchemaOmitted      int                  `json:"schema_omitted"`
-	SchemaTokens       int                  `json:"schema_tokens"`
-	SchemaBudgetTokens int                  `json:"schema_budget_tokens,omitempty"`
-	SchemaTruncated    bool                 `json:"schema_truncated,omitempty"`
-	Filters            toolDiscoveryFilters `json:"filters"`
-}
-
-type toolDiscoveryFilters struct {
-	Query     string `json:"query,omitempty"`
-	Server    string `json:"server,omitempty"`
-	Namespace string `json:"namespace,omitempty"`
-	Risk      string `json:"risk,omitempty"`
-}
-
-func (m toolDiscoveryMetrics) Metadata() map[string]any {
-	return map[string]any{
-		"discovery_calls":      m.DiscoveryCalls,
-		"matches":              m.Returned,
-		"matched":              m.Matched,
-		"truncated":            m.Returned < m.Matched || m.SchemaTruncated,
-		"scanned_native":       m.ScannedNative,
-		"scanned_mcp":          m.ScannedMCP,
-		"schema_included":      m.SchemaIncluded,
-		"schema_omitted":       m.SchemaOmitted,
-		"schema_tokens":        m.SchemaTokens,
-		"schema_budget_tokens": m.SchemaBudgetTokens,
-		"schema_truncated":     m.SchemaTruncated,
-	}
-}
-
-func (r *Registry) searchTools(query, server, namespace, risk string, limit int, includeSchema bool, maxSchemaTokens int) toolSearchResults {
+func (r *Registry) searchTools(query, server, namespace, risk string, limit int, includeSchema bool, maxSchemaTokens int) discovery.Results {
 	if limit <= 0 {
 		limit = 20
 	}
-	query = strings.ToLower(strings.TrimSpace(query))
-	serverFilter := normalizeMCPServerFilter(server)
-	if serverFilter == "" && isParilkaAlias(query) {
-		serverFilter = "telegram_parilka"
-		query = ""
-	}
-	namespaceFilter := normalizeToolNamespaceFilter(namespace)
-	riskFilter := normalizeRiskFilter(risk)
-	schemaBudget := 0
-	if includeSchema {
-		schemaBudget = normalizedToolSchemaBudget(maxSchemaTokens)
-	}
-	metrics := toolDiscoveryMetrics{
-		DiscoveryCalls:     1,
-		SchemaBudgetTokens: schemaBudget,
-		Filters: toolDiscoveryFilters{
-			Query:     query,
-			Server:    displayMCPServerName(serverFilter),
-			Namespace: namespaceFilter,
-			Risk:      string(riskFilter),
-		},
-	}
-	var items []toolSearchItem
-	truncated := false
-	add := func(item toolSearchItem, spec protocol.ToolSpec) bool {
-		if namespaceFilter != "" && !toolNamespaceMatches(item, namespaceFilter) {
-			return false
-		}
-		if riskFilter != "" && spec.Risk != riskFilter {
-			return false
-		}
-		haystack := strings.ToLower(spec.Name + " " + spec.Description + " " + item.Server + " " + item.Namespace + " " + string(spec.Risk) + " " + item.Source)
-		if !toolSearchMatches(haystack, query) {
-			return false
-		}
-		metrics.Matched++
-		if len(items) >= limit {
-			truncated = true
-			return true
-		}
-		item.Description = truncate(oneLine(spec.Description), 240)
-		item.Risk = spec.Risk
-		if includeSchema {
-			addSchemaWithinBudget(&item, spec.Parameters, &metrics)
-		}
-		items = append(items, item)
-		metrics.Returned = len(items)
-		return false
-	}
+	return discovery.Search(r.discoveryCandidates(true, true), discovery.Query{
+		Query:           query,
+		Server:          server,
+		Namespace:       namespace,
+		Risk:            risk,
+		Limit:           limit,
+		IncludeSchema:   includeSchema,
+		MaxSchemaTokens: maxSchemaTokens,
+	})
+}
 
+func (r *Registry) discoveryCandidates(includeNative, includeMCP bool) []discovery.Candidate {
+	var candidates []discovery.Candidate
 	nativeNames := make([]string, 0, len(r.tools))
-	for name := range r.tools {
-		nativeNames = append(nativeNames, name)
-	}
-	sort.Strings(nativeNames)
-	for _, name := range nativeNames {
-		if serverFilter != "" {
-			continue
+	if includeNative {
+		for name := range r.tools {
+			nativeNames = append(nativeNames, name)
 		}
-		tool := r.tools[name]
-		metrics.ScannedNative++
-		if stop := add(toolSearchItem{
-			Name:      tool.Spec.Name,
-			Source:    "native",
-			Namespace: nativeToolNamespace(tool.Spec.Name),
-			CallTool:  tool.Spec.Name,
-		}, tool.Spec); stop {
-			return toolSearchResults{Items: items, Truncated: truncated || metrics.SchemaTruncated, Metrics: metrics}
+		sort.Strings(nativeNames)
+		for _, name := range nativeNames {
+			tool := r.tools[name]
+			candidates = append(candidates, discovery.Candidate{
+				Spec:      tool.Spec,
+				Source:    discovery.SourceNative,
+				Namespace: discovery.NativeNamespace(tool.Spec.Name),
+				CallTool:  tool.Spec.Name,
+			})
 		}
 	}
 
-	mcpNames := make([]string, 0, len(r.mcpTools))
-	for name := range r.mcpTools {
-		mcpNames = append(mcpNames, name)
-	}
-	sort.Strings(mcpNames)
-	for _, name := range mcpNames {
-		tool := r.mcpTools[name]
-		serverName := mcpServerFromToolName(name)
-		if serverFilter != "" && serverName != serverFilter {
-			continue
+	mcpTools := r.mcpToolsSnapshot()
+	mcpNames := make([]string, 0, len(mcpTools))
+	if includeMCP {
+		for name := range mcpTools {
+			mcpNames = append(mcpNames, name)
 		}
-		metrics.ScannedMCP++
-		if stop := add(toolSearchItem{
-			Name:      tool.Spec.Name,
-			Source:    "mcp",
-			Namespace: mcpToolNamespace(serverName),
-			Server:    displayMCPServerName(serverName),
-			CallTool:  "mcp_call",
-			CallName:  tool.Spec.Name,
-		}, tool.Spec); stop {
-			return toolSearchResults{Items: items, Truncated: truncated || metrics.SchemaTruncated, Metrics: metrics}
+		sort.Strings(mcpNames)
+		for _, name := range mcpNames {
+			tool := mcpTools[name]
+			serverName := discovery.MCPServerFromToolName(name)
+			candidates = append(candidates, discovery.Candidate{
+				Spec:      tool.Spec,
+				Source:    discovery.SourceMCP,
+				Namespace: discovery.MCPNamespace(serverName),
+				Server:    serverName,
+				CallTool:  "mcp_call",
+				CallName:  tool.Spec.Name,
+			})
 		}
 	}
-	return toolSearchResults{Items: items, Truncated: truncated || metrics.SchemaTruncated, Metrics: metrics}
-}
-
-func addSchemaWithinBudget(item *toolSearchItem, schema json.RawMessage, metrics *toolDiscoveryMetrics) {
-	if len(schema) == 0 {
-		return
-	}
-	tokens := estimateTokens(string(schema))
-	remaining := metrics.SchemaBudgetTokens - metrics.SchemaTokens
-	if metrics.SchemaBudgetTokens <= 0 || tokens > remaining {
-		item.SchemaOmittedReason = fmt.Sprintf("schema budget exceeded: need %d tokens, remaining %d", tokens, maxInt(0, remaining))
-		metrics.SchemaOmitted++
-		metrics.SchemaTruncated = true
-		return
-	}
-	item.InputSchema = schema
-	metrics.SchemaIncluded++
-	metrics.SchemaTokens += tokens
-}
-
-func normalizedToolSchemaBudget(tokens int) int {
-	if tokens <= 0 {
-		return defaultToolSchemaTokens
-	}
-	if tokens > maxToolSchemaTokens {
-		return maxToolSchemaTokens
-	}
-	return tokens
-}
-
-func normalizeRiskFilter(value string) protocol.Risk {
-	value = strings.ToLower(strings.TrimSpace(value))
-	value = strings.ReplaceAll(value, "-", "_")
-	switch value {
-	case "", "any", "all":
-		return ""
-	case "read", "readonly", "read_only":
-		return protocol.RiskReadOnly
-	case "network":
-		return protocol.RiskNetwork
-	case "write":
-		return protocol.RiskWrite
-	case "exec", "execute":
-		return protocol.RiskExecute
-	case "external", "mcp":
-		return protocol.RiskExternal
-	default:
-		return protocol.Risk(value)
-	}
-}
-
-func normalizeToolNamespaceFilter(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	value = strings.ReplaceAll(value, "_", "-")
-	value = strings.Trim(value, ".- ")
-	if isParilkaAlias(value) {
-		return "telegram-parilka"
-	}
-	return value
-}
-
-func nativeToolNamespace(name string) string {
-	switch {
-	case strings.HasPrefix(name, "fs_"):
-		return "fs"
-	case strings.HasPrefix(name, "web_"):
-		return "web"
-	case strings.HasPrefix(name, "shell_"):
-		return "shell"
-	case strings.HasPrefix(name, "mcp_"):
-		return "mcp-gateway"
-	case strings.HasPrefix(name, "tool_"):
-		return "tool"
-	}
-	prefix, _, ok := strings.Cut(name, "_")
-	if ok {
-		return prefix
-	}
-	return name
-}
-
-func mcpToolNamespace(server string) string {
-	server = displayMCPServerName(server)
-	if server == "" {
-		return "mcp"
-	}
-	return "mcp." + server
-}
-
-func toolNamespaceMatches(item toolSearchItem, filter string) bool {
-	namespace := normalizeToolNamespaceFilter(item.Namespace)
-	server := normalizeToolNamespaceFilter(item.Server)
-	if filter == "native" {
-		return item.Source == "native"
-	}
-	if filter == "mcp" {
-		return item.Source == "mcp" || strings.HasPrefix(namespace, "mcp")
-	}
-	if namespace == filter || server == filter {
-		return true
-	}
-	return strings.TrimPrefix(namespace, "mcp.") == filter
+	return candidates
 }
 
 func (r *Registry) addSkills() {
@@ -1145,7 +947,7 @@ func (r *Registry) addSkills() {
 					continue
 				}
 				haystack := strings.ToLower(skill.Name + " " + skill.Source + " " + skill.Summary)
-				if query != "" && !toolSearchMatches(haystack, query) {
+				if query != "" && !discovery.Matches(haystack, query) {
 					continue
 				}
 				if len(items) >= in.Limit {
@@ -1252,7 +1054,7 @@ type skillListItem struct {
 func (r *Registry) discoverSkills(includeCompat bool) []skillRecord {
 	var dirs []skillSearchDir
 	dirs = append(dirs, skillSearchDir{Source: "home", Path: filepath.Join(config.BillyHomeDir(), "skills")})
-	for _, root := range r.cfg.WorkspaceRoots {
+	for _, root := range r.toolPolicy.WorkspaceRoots {
 		root = strings.TrimSpace(root)
 		if root == "" {
 			continue
@@ -1357,27 +1159,11 @@ func truncateRunesWithSimpleMarker(text string, maxRunes int) (string, bool) {
 	return string(runes[:maxRunes]) + "\n...[truncated]", true
 }
 
-func toolSearchMatches(haystack, query string) bool {
-	query = strings.TrimSpace(strings.ToLower(query))
-	if query == "" {
-		return true
-	}
-	if strings.Contains(haystack, query) {
-		return true
-	}
-	for _, term := range strings.Fields(query) {
-		if !strings.Contains(haystack, term) {
-			return false
-		}
-	}
-	return true
-}
-
 func (r *Registry) addMCPGateway() {
 	r.add(Tool{
 		Spec: protocol.ToolSpec{
 			Name:        "mcp_list_tools",
-			Description: "List connected MCP tools compactly. Use before mcp_call when Telegram, Telegram Parilka, GitHub, or Context7 tools are needed. For Russian парилка/Parilka chat requests, use server telegram-parilka.",
+			Description: "List the dynamic MCP catalog compactly. Returned MCP tools are not direct model-visible specs; use mcp_call with a listed full tool name. For Russian парилка/Parilka chat requests, use server telegram-parilka.",
 			Parameters:  raw(`{"type":"object","properties":{"server":{"type":"string","description":"Optional MCP server filter: telegram, telegram-parilka, github, or context7. telegram_parilka and парилка are also accepted."},"query":{"type":"string","description":"Optional case-insensitive name/description filter."},"namespace":{"type":"string","description":"Optional namespace filter such as mcp, mcp.github, github, or telegram-parilka."},"risk":{"type":"string","description":"Optional risk filter: read_only, network, write, execute, or external."},"limit":{"type":"integer","default":40},"include_schema":{"type":"boolean","default":false,"description":"Include matching tool input schemas only when needed to call them, capped by max_schema_tokens."},"max_schema_tokens":{"type":"integer","default":1200,"description":"Maximum estimated schema tokens to include across returned tools."}},"additionalProperties":false}`),
 			Risk:        protocol.RiskReadOnly,
 		},
@@ -1422,86 +1208,43 @@ func (r *Registry) addMCPGateway() {
 				NextRetryAt       *time.Time `json:"next_retry_at,omitempty"`
 				Error             string     `json:"error,omitempty"`
 			}
-			if r.manager != nil {
-				r.manager.Refresh(ctx)
+			r.refreshMCPTools(ctx)
+			results := discovery.Search(r.discoveryCandidates(false, true), discovery.Query{
+				Query:           in.Query,
+				Server:          in.Server,
+				Namespace:       in.Namespace,
+				Risk:            in.Risk,
+				Limit:           in.Limit,
+				IncludeSchema:   in.IncludeSchema,
+				MaxSchemaTokens: in.MaxSchemaTokens,
+			})
+			tools := make([]item, 0, len(results.Items))
+			for _, found := range results.Items {
+				tools = append(tools, item{
+					Name:                found.Name,
+					Server:              found.Server,
+					Namespace:           found.Namespace,
+					Risk:                found.Risk,
+					Description:         found.Description,
+					InputSchema:         found.InputSchema,
+					SchemaOmittedReason: found.SchemaOmittedReason,
+				})
 			}
-			serverFilter := normalizeMCPServerFilter(in.Server)
+
+			serverFilter := discovery.NormalizeMCPServerFilter(in.Server)
 			query := strings.ToLower(strings.TrimSpace(in.Query))
-			if serverFilter == "" && isParilkaAlias(query) {
+			if serverFilter == "" && discovery.IsParilkaAlias(query) {
 				serverFilter = "telegram_parilka"
-				query = ""
-			}
-			namespaceFilter := normalizeToolNamespaceFilter(in.Namespace)
-			riskFilter := normalizeRiskFilter(in.Risk)
-			schemaBudget := 0
-			if in.IncludeSchema {
-				schemaBudget = normalizedToolSchemaBudget(in.MaxSchemaTokens)
-			}
-			metrics := toolDiscoveryMetrics{
-				DiscoveryCalls:     1,
-				SchemaBudgetTokens: schemaBudget,
-				Filters: toolDiscoveryFilters{
-					Query:     query,
-					Server:    displayMCPServerName(serverFilter),
-					Namespace: namespaceFilter,
-					Risk:      string(riskFilter),
-				},
-			}
-			names := make([]string, 0, len(r.mcpTools))
-			for name := range r.mcpTools {
-				names = append(names, name)
-			}
-			sort.Strings(names)
-			var tools []item
-			truncated := false
-			for _, name := range names {
-				tool := r.mcpTools[name]
-				server := mcpServerFromToolName(name)
-				if serverFilter != "" && server != serverFilter {
-					continue
-				}
-				metrics.ScannedMCP++
-				namespace := mcpToolNamespace(server)
-				if namespaceFilter != "" && !toolNamespaceMatches(toolSearchItem{Source: "mcp", Namespace: namespace, Server: displayMCPServerName(server)}, namespaceFilter) {
-					continue
-				}
-				if riskFilter != "" && tool.Spec.Risk != riskFilter {
-					continue
-				}
-				haystack := strings.ToLower(name + " " + tool.Spec.Description)
-				if query != "" && !strings.Contains(haystack, query) {
-					continue
-				}
-				metrics.Matched++
-				if len(tools) >= in.Limit {
-					truncated = true
-					break
-				}
-				out := item{
-					Name:        name,
-					Server:      displayMCPServerName(server),
-					Namespace:   namespace,
-					Risk:        tool.Spec.Risk,
-					Description: truncate(oneLine(tool.Spec.Description), 240),
-				}
-				if in.IncludeSchema {
-					searchItem := toolSearchItem{}
-					addSchemaWithinBudget(&searchItem, tool.Spec.Parameters, &metrics)
-					out.InputSchema = searchItem.InputSchema
-					out.SchemaOmittedReason = searchItem.SchemaOmittedReason
-				}
-				tools = append(tools, out)
-				metrics.Returned = len(tools)
 			}
 			statuses := r.MCPStatuses()
 			servers := make([]serverItem, 0, len(statuses))
 			for _, status := range statuses {
-				normalized := normalizeMCPServerFilter(status.Name)
+				normalized := discovery.NormalizeMCPServerFilter(status.Name)
 				if serverFilter != "" && normalized != serverFilter {
 					continue
 				}
 				servers = append(servers, serverItem{
-					Name:              displayMCPServerName(normalized),
+					Name:              discovery.DisplayMCPServerName(normalized),
 					Transport:         status.Transport,
 					Enabled:           status.Enabled,
 					Required:          status.Required,
@@ -1517,19 +1260,25 @@ func (r *Registry) addMCPGateway() {
 					Error:             status.Error,
 				})
 			}
+			catalog := r.mcpCatalogSnapshot()
+			modelVisible := r.modelVisibleToolCatalogSnapshot()
 			out, _ := json.MarshalIndent(map[string]any{
-				"tools":     tools,
-				"servers":   servers,
-				"truncated": truncated || metrics.SchemaTruncated,
-				"metrics":   metrics,
+				"tools":               tools,
+				"servers":             servers,
+				"truncated":           results.Truncated,
+				"metrics":             results.Metrics,
+				"model_visible_tools": modelVisible,
+				"mcp_catalog":         catalog,
 			}, "", "  ")
-			return Result{Content: string(out), Metadata: metrics.Metadata()}, nil
+			metadata := addMCPCatalogMetadata(results.Metrics.Metadata(), catalog)
+			metadata = addModelVisibleToolMetadata(metadata, modelVisible)
+			return Result{Content: string(out), Metadata: metadata}, nil
 		},
 	})
 	r.add(Tool{
 		Spec: protocol.ToolSpec{
 			Name:        "mcp_call",
-			Description: "Call a connected MCP tool by full name after inspecting it with mcp_list_tools. For Parilka chat requests, call a tool named like mcp__telegram_parilka__read_history or mcp__telegram_parilka__search_messages.",
+			Description: "Call a connected dynamic MCP catalog tool by full name after inspecting it with mcp_list_tools or tool_search. For Parilka chat requests, call a tool named like mcp__telegram_parilka__read_history or mcp__telegram_parilka__search_messages.",
 			Parameters:  raw(`{"type":"object","properties":{"name":{"type":"string","description":"Full MCP tool name, for example mcp__github__search_repositories."},"arguments":{"type":["object","null"],"description":"Arguments for the MCP tool.","additionalProperties":true}},"required":["name"],"additionalProperties":false}`),
 			Risk:        protocol.RiskExternal,
 		},
@@ -1548,7 +1297,8 @@ func (r *Registry) addMCPGateway() {
 			if len(in.Arguments) == 0 || string(in.Arguments) == "null" {
 				in.Arguments = json.RawMessage(`{}`)
 			}
-			tool, ok := r.mcpTools[name]
+			r.refreshMCPTools(ctx)
+			tool, ok := r.mcpToolsSnapshot()[name]
 			if !ok {
 				return Result{}, fmt.Errorf("unknown MCP tool %s; call mcp_list_tools first", name)
 			}
@@ -1558,13 +1308,6 @@ func (r *Registry) addMCPGateway() {
 			return tool.Handler(ctx, in.Arguments)
 		},
 	})
-}
-
-func (r *Registry) requireDangerous() error {
-	if r.cfg.AutoApproveDangerous {
-		return nil
-	}
-	return fmt.Errorf("tool disabled; set FAST_AGENT_AUTO_APPROVE_DANGEROUS=true or unset FAST_AGENT_AUTO_APPROVE_DANGEROUS to enable write/execute tools")
 }
 
 func (r *Registry) safePath(input string) (string, error) {
@@ -1588,7 +1331,7 @@ func (r *Registry) safePath(input string) (string, error) {
 	if sensitive(policyPath) {
 		return "", fmt.Errorf("refusing sensitive path %s", policyPath)
 	}
-	for _, root := range r.cfg.WorkspaceRoots {
+	for _, root := range r.toolPolicy.WorkspaceRoots {
 		absRoot, _ := filepath.Abs(root)
 		policyRoot, err := filepath.EvalSymlinks(absRoot)
 		if err != nil {
@@ -1629,8 +1372,8 @@ func resolvedPathForPolicy(path string) (string, error) {
 }
 
 func (r *Registry) relativeBase() string {
-	if len(r.cfg.WorkspaceRoots) > 0 && r.cfg.WorkspaceRoots[0] != "" {
-		return r.cfg.WorkspaceRoots[0]
+	if len(r.toolPolicy.WorkspaceRoots) > 0 && r.toolPolicy.WorkspaceRoots[0] != "" {
+		return r.toolPolicy.WorkspaceRoots[0]
 	}
 	cwd, _ := os.Getwd()
 	return cwd
@@ -1644,1646 +1387,6 @@ func sensitive(path string) bool {
 		}
 	}
 	return false
-}
-
-type fetchedPage struct {
-	URL             string   `json:"url"`
-	Status          int      `json:"status"`
-	ContentType     string   `json:"content_type"`
-	Title           string   `json:"title,omitempty"`
-	Text            string   `json:"text"`
-	Links           []string `json:"links,omitempty"`
-	RawBytesFetched int      `json:"raw_bytes_fetched,omitempty"`
-	MaxBytes        int      `json:"max_bytes,omitempty"`
-	Truncated       bool     `json:"truncated,omitempty"`
-}
-
-type searchResult struct {
-	Title string `json:"title"`
-	URL   string `json:"url"`
-}
-
-type crawlItem struct {
-	URL   string `json:"url"`
-	Depth int    `json:"depth"`
-}
-
-type crawlPage struct {
-	URL             string `json:"url"`
-	Depth           int    `json:"depth"`
-	Title           string `json:"title,omitempty"`
-	Text            string `json:"text"`
-	RawBytesFetched int    `json:"raw_bytes_fetched,omitempty"`
-	MaxBytes        int    `json:"max_bytes,omitempty"`
-	Truncated       bool   `json:"truncated,omitempty"`
-	Error           string `json:"error,omitempty"`
-}
-
-type webFetchOptions struct {
-	Query          string
-	MaxBytes       int
-	MaxChars       int
-	MaxTokens      int
-	MaxTotalTokens int
-	IncludeText    bool
-	FullText       bool
-	MaxLinks       int
-}
-
-type compactPage struct {
-	URL                  string   `json:"url"`
-	Status               int      `json:"status,omitempty"`
-	ContentType          string   `json:"content_type,omitempty"`
-	OutputClass          string   `json:"output_class,omitempty"`
-	SummaryMode          string   `json:"summary_mode,omitempty"`
-	Title                string   `json:"title,omitempty"`
-	Summary              string   `json:"summary,omitempty"`
-	SummaryChars         int      `json:"summary_chars,omitempty"`
-	SummarizerProvider   string   `json:"summarizer_provider,omitempty"`
-	SummarizerModel      string   `json:"summarizer_model,omitempty"`
-	WebsumInputTokens    int64    `json:"websum_input_tokens,omitempty"`
-	WebsumOutputTokens   int64    `json:"websum_output_tokens,omitempty"`
-	WebsumCacheHit       int64    `json:"websum_cache_hit,omitempty"`
-	WebsumCost           float64  `json:"websum_cost,omitempty"`
-	WebsumModel          string   `json:"websum_model,omitempty"`
-	WebsumError          string   `json:"websum_error,omitempty"`
-	WebCacheHit          bool     `json:"web_cache_hit"`
-	WebCacheKey          string   `json:"web_cache_key,omitempty"`
-	WebCacheAgeMS        int64    `json:"web_cache_age_ms,omitempty"`
-	WebCacheTTLMS        int64    `json:"web_cache_ttl_ms,omitempty"`
-	WebCacheLookupMS     int64    `json:"web_cache_lookup_ms,omitempty"`
-	WebHTTPFetchMS       int64    `json:"web_http_fetch_ms,omitempty"`
-	WebCompactMS         int64    `json:"web_compact_ms,omitempty"`
-	WebSummaryMS         int64    `json:"web_summary_ms,omitempty"`
-	WebOutputRefMS       int64    `json:"web_output_ref_ms,omitempty"`
-	WebCacheSaveMS       int64    `json:"web_cache_save_ms,omitempty"`
-	WebTotalMS           int64    `json:"web_total_ms,omitempty"`
-	KeyPoints            []string `json:"key_points,omitempty"`
-	Extract              string   `json:"extract,omitempty"`
-	Text                 string   `json:"text,omitempty"`
-	Links                []string `json:"links,omitempty"`
-	OutputRef            string   `json:"output_ref,omitempty"`
-	Truncated            bool     `json:"truncated,omitempty"`
-	RawBytesFetched      int      `json:"raw_bytes_fetched,omitempty"`
-	MaxBytes             int      `json:"max_bytes,omitempty"`
-	OriginalTextChars    int      `json:"original_text_chars,omitempty"`
-	OriginalTextTokens   int      `json:"original_text_tokens,omitempty"`
-	ReturnedTextChars    int      `json:"returned_text_chars,omitempty"`
-	EstimatedTextTokens  int      `json:"estimated_text_tokens,omitempty"`
-	EstimatedTokensSaved int      `json:"estimated_tokens_saved,omitempty"`
-	BudgetTextChars      int      `json:"budget_text_chars,omitempty"`
-	BudgetTextTokens     int      `json:"budget_text_tokens,omitempty"`
-	OutputTextTruncated  bool     `json:"output_text_truncated,omitempty"`
-	CompactNote          string   `json:"compact_note,omitempty"`
-}
-
-type compactCrawlPage struct {
-	URL                  string   `json:"url"`
-	Depth                int      `json:"depth"`
-	OutputClass          string   `json:"output_class,omitempty"`
-	SummaryMode          string   `json:"summary_mode,omitempty"`
-	Title                string   `json:"title,omitempty"`
-	Summary              string   `json:"summary,omitempty"`
-	SummaryChars         int      `json:"summary_chars,omitempty"`
-	SummarizerProvider   string   `json:"summarizer_provider,omitempty"`
-	SummarizerModel      string   `json:"summarizer_model,omitempty"`
-	WebsumInputTokens    int64    `json:"websum_input_tokens,omitempty"`
-	WebsumOutputTokens   int64    `json:"websum_output_tokens,omitempty"`
-	WebsumCacheHit       int64    `json:"websum_cache_hit,omitempty"`
-	WebsumCost           float64  `json:"websum_cost,omitempty"`
-	WebsumModel          string   `json:"websum_model,omitempty"`
-	WebsumError          string   `json:"websum_error,omitempty"`
-	WebCacheHit          bool     `json:"web_cache_hit,omitempty"`
-	WebCacheKey          string   `json:"web_cache_key,omitempty"`
-	WebCacheAgeMS        int64    `json:"web_cache_age_ms,omitempty"`
-	WebCacheTTLMS        int64    `json:"web_cache_ttl_ms,omitempty"`
-	KeyPoints            []string `json:"key_points,omitempty"`
-	Extract              string   `json:"extract,omitempty"`
-	Text                 string   `json:"text,omitempty"`
-	Error                string   `json:"error,omitempty"`
-	OutputRef            string   `json:"output_ref,omitempty"`
-	RawBytesFetched      int      `json:"raw_bytes_fetched,omitempty"`
-	MaxBytes             int      `json:"max_bytes,omitempty"`
-	Truncated            bool     `json:"truncated,omitempty"`
-	OriginalTextChars    int      `json:"original_text_chars,omitempty"`
-	OriginalTextTokens   int      `json:"original_text_tokens,omitempty"`
-	ReturnedTextChars    int      `json:"returned_text_chars,omitempty"`
-	EstimatedTextTokens  int      `json:"estimated_text_tokens,omitempty"`
-	EstimatedTokensSaved int      `json:"estimated_tokens_saved,omitempty"`
-	BudgetTextChars      int      `json:"budget_text_chars,omitempty"`
-	BudgetTextTokens     int      `json:"budget_text_tokens,omitempty"`
-	OutputTextTruncated  bool     `json:"output_text_truncated,omitempty"`
-	CompactNote          string   `json:"compact_note,omitempty"`
-}
-
-type compactCrawlOutput struct {
-	Pages                []compactCrawlPage `json:"pages"`
-	OutputClass          string             `json:"output_class,omitempty"`
-	SummaryMode          string             `json:"summary_mode,omitempty"`
-	SummaryChars         int                `json:"summary_chars,omitempty"`
-	SummarizerProvider   string             `json:"summarizer_provider,omitempty"`
-	SummarizerModel      string             `json:"summarizer_model,omitempty"`
-	WebsumInputTokens    int64              `json:"websum_input_tokens,omitempty"`
-	WebsumOutputTokens   int64              `json:"websum_output_tokens,omitempty"`
-	WebsumCacheHit       int64              `json:"websum_cache_hit,omitempty"`
-	WebsumCost           float64            `json:"websum_cost,omitempty"`
-	WebsumModel          string             `json:"websum_model,omitempty"`
-	WebsumError          string             `json:"websum_error,omitempty"`
-	WebCacheHit          bool               `json:"web_cache_hit"`
-	WebCacheKey          string             `json:"web_cache_key,omitempty"`
-	WebCacheAgeMS        int64              `json:"web_cache_age_ms,omitempty"`
-	WebCacheTTLMS        int64              `json:"web_cache_ttl_ms,omitempty"`
-	OutputRef            string             `json:"output_ref,omitempty"`
-	RawBytesFetched      int                `json:"raw_bytes_fetched,omitempty"`
-	MaxBytesPerPage      int                `json:"max_bytes_per_page,omitempty"`
-	OriginalTextChars    int                `json:"original_text_chars,omitempty"`
-	OriginalTextTokens   int                `json:"original_text_tokens,omitempty"`
-	ReturnedTextChars    int                `json:"returned_text_chars,omitempty"`
-	EstimatedTextTokens  int                `json:"estimated_text_tokens,omitempty"`
-	EstimatedTokensSaved int                `json:"estimated_tokens_saved,omitempty"`
-	OutputTextTruncated  bool               `json:"output_text_truncated,omitempty"`
-	CompactNote          string             `json:"compact_note,omitempty"`
-}
-
-func compactFetchedPage(page fetchedPage, opts webFetchOptions) compactPage {
-	maxChars, budgetTokens := webTextBudget(opts, webTextChars, webDefaultTextTokens, webMaxTextTokens)
-	text := ""
-	outputTruncated := false
-	includeText := opts.IncludeText || opts.FullText
-	if includeText {
-		text, outputTruncated = compactWebText(page.Text, maxChars, opts.FullText)
-	} else {
-		outputTruncated = strings.TrimSpace(page.Text) != ""
-	}
-	maxLinks := opts.MaxLinks
-	if maxLinks <= 0 || maxLinks > 50 {
-		maxLinks = webMaxLinks
-	}
-	links := page.Links
-	if len(links) > maxLinks {
-		links = links[:maxLinks]
-	}
-	summary := summarizeText(page.Title, page.Text, webDigestChars)
-	points := keyPoints(page.Text, opts.Query, 5, webKeyPointChars)
-	extract := extractSnippets(page.Text, opts.Query, webExtractChars)
-	originalTokens := estimateTokens(page.Text)
-	outputClass := webOutputClass(includeText)
-	summaryMode := "extractive"
-	summarizerModel := "extractive"
-	if tinyDirectWebAnswer(page.Text, page.Links, page.Truncated, includeText, originalTokens) {
-		text = strings.TrimSpace(page.Text)
-		outputTruncated = false
-		outputClass = "tiny_direct_answer"
-		summaryMode = "direct"
-		summarizerModel = "direct"
-		summary = text
-		points = nil
-		extract = ""
-	}
-	estimatedTokens := estimateTokens(compactInlineText(text, page.Title, page.Text, opts.Query))
-	if outputClass == "tiny_direct_answer" {
-		estimatedTokens = originalTokens
-	}
-	estimatedSaved := maxInt(0, originalTokens-estimatedTokens)
-	return compactPage{
-		URL:                  page.URL,
-		Status:               page.Status,
-		ContentType:          page.ContentType,
-		OutputClass:          outputClass,
-		SummaryMode:          summaryMode,
-		Title:                page.Title,
-		Summary:              summary,
-		SummaryChars:         webSummaryChars(summary, points, extract),
-		SummarizerProvider:   "native",
-		SummarizerModel:      summarizerModel,
-		WebsumInputTokens:    int64(originalTokens),
-		WebsumOutputTokens:   int64(estimatedTokens),
-		WebsumModel:          summarizerModel,
-		KeyPoints:            points,
-		Extract:              extract,
-		Text:                 text,
-		Links:                links,
-		Truncated:            page.Truncated,
-		RawBytesFetched:      page.RawBytesFetched,
-		MaxBytes:             page.MaxBytes,
-		OriginalTextChars:    len([]rune(page.Text)),
-		OriginalTextTokens:   originalTokens,
-		ReturnedTextChars:    len([]rune(text)),
-		EstimatedTextTokens:  estimatedTokens,
-		EstimatedTokensSaved: estimatedSaved,
-		BudgetTextChars:      maxChars,
-		BudgetTextTokens:     budgetTokens,
-		OutputTextTruncated:  outputTruncated || len(page.Links) > len(links),
-		CompactNote:          webCompactNote(outputTruncated || len(page.Links) > len(links), includeText, opts.FullText),
-	}
-}
-
-func compactCrawlPages(pages []crawlPage, opts webFetchOptions) []compactCrawlPage {
-	maxChars, budgetTokens := webTextBudget(opts, webCrawlChars, webCrawlDefaultTokens, webMaxTextTokens)
-	totalTextChars, totalTokens := webTotalTextBudget(opts.MaxTotalTokens, len(pages))
-	if totalTextChars > 0 && len(pages) > 0 {
-		perPageTotalCap := max(800, totalTextChars/len(pages))
-		if maxChars > perPageTotalCap {
-			maxChars = perPageTotalCap
-			budgetTokens = estimateTokensByChars(maxChars)
-		}
-	}
-	out := make([]compactCrawlPage, 0, len(pages))
-	for _, page := range pages {
-		text := ""
-		outputTruncated := false
-		includeText := opts.IncludeText || opts.FullText
-		if includeText {
-			text, outputTruncated = compactWebText(page.Text, maxChars, opts.FullText)
-		} else {
-			outputTruncated = strings.TrimSpace(page.Text) != ""
-		}
-		summary := summarizeText(page.Title, page.Text, webDigestChars)
-		points := keyPoints(page.Text, opts.Query, 4, webKeyPointChars)
-		extract := extractSnippets(page.Text, opts.Query, webExtractChars)
-		originalTokens := estimateTokens(page.Text)
-		outputClass := webOutputClass(includeText)
-		summaryMode := "extractive"
-		summarizerModel := "extractive"
-		if tinyDirectWebAnswer(page.Text, nil, page.Truncated, includeText, originalTokens) {
-			text = strings.TrimSpace(page.Text)
-			outputTruncated = false
-			outputClass = "tiny_direct_answer"
-			summaryMode = "direct"
-			summarizerModel = "direct"
-			summary = text
-			points = nil
-			extract = ""
-		}
-		estimatedTokens := estimateTokens(compactInlineText(text, page.Title, page.Text, opts.Query))
-		if outputClass == "tiny_direct_answer" {
-			estimatedTokens = originalTokens
-		}
-		out = append(out, compactCrawlPage{
-			URL:                  page.URL,
-			Depth:                page.Depth,
-			OutputClass:          outputClass,
-			SummaryMode:          summaryMode,
-			Title:                page.Title,
-			Summary:              summary,
-			SummaryChars:         webSummaryChars(summary, points, extract),
-			SummarizerProvider:   "native",
-			SummarizerModel:      summarizerModel,
-			WebsumInputTokens:    int64(originalTokens),
-			WebsumOutputTokens:   int64(estimatedTokens),
-			WebsumModel:          summarizerModel,
-			KeyPoints:            points,
-			Extract:              extract,
-			Text:                 text,
-			Error:                page.Error,
-			RawBytesFetched:      page.RawBytesFetched,
-			MaxBytes:             page.MaxBytes,
-			Truncated:            page.Truncated,
-			OriginalTextChars:    len([]rune(page.Text)),
-			OriginalTextTokens:   originalTokens,
-			ReturnedTextChars:    len([]rune(text)),
-			EstimatedTextTokens:  estimatedTokens,
-			EstimatedTokensSaved: maxInt(0, originalTokens-estimatedTokens),
-			BudgetTextChars:      maxChars,
-			BudgetTextTokens:     min(budgetTokens, totalTokens),
-			OutputTextTruncated:  outputTruncated,
-			CompactNote:          webCompactNote(outputTruncated, includeText, opts.FullText),
-		})
-	}
-	return out
-}
-
-func (r *Registry) fetchCompactPageResult(ctx context.Context, toolName, rawURL string, opts webFetchOptions) (Result, error) {
-	totalStart := time.Now()
-	opts.MaxBytes = boundedBytes(opts.MaxBytes)
-	cacheLookupStart := time.Now()
-	cacheKey, cacheOK := r.webCacheKey(ctx, toolName, rawURL, opts, nil)
-	cacheLookupMS := elapsedMillis(cacheLookupStart)
-	if cacheOK {
-		if compact, hit := r.loadWebPageCache(cacheKey); hit {
-			compact.resetWebPhaseTimings()
-			compact.WebCacheLookupMS = cacheLookupMS
-			compact.WebTotalMS = elapsedMillis(totalStart)
-			out, _ := json.MarshalIndent(compact, "", "  ")
-			return Result{
-				Content:   string(out),
-				Metadata:  webPageMetadata(compact),
-				Truncated: compact.OutputTextTruncated,
-				OutputRef: compact.OutputRef,
-			}, nil
-		}
-	}
-	fetchStart := time.Now()
-	page, err := fetchPage(ctx, rawURL, opts.MaxBytes)
-	if err != nil {
-		return Result{}, err
-	}
-	fetchMS := elapsedMillis(fetchStart)
-	compactStart := time.Now()
-	compact := compactFetchedPage(page, opts)
-	compact.WebCacheLookupMS = cacheLookupMS
-	compact.WebHTTPFetchMS = fetchMS
-	compact.WebCompactMS = elapsedMillis(compactStart)
-	summaryStart := time.Now()
-	r.applyModelSummaryToPage(ctx, &compact, page, opts)
-	compact.WebSummaryMS = elapsedMillis(summaryStart)
-	outputRefStart := time.Now()
-	ref, err := storeWebOutput(toolName, page.URL, renderFetchedPageArtifact(page))
-	compact.WebOutputRefMS = elapsedMillis(outputRefStart)
-	if err != nil {
-		compact.CompactNote = strings.TrimSpace(compact.CompactNote + " full extracted text save failed: " + err.Error())
-	} else {
-		compact.OutputRef = ref
-	}
-	if cacheOK {
-		cacheSaveStart := time.Now()
-		compact.applyWebCache(cacheKey, false, 0, r.cfg.WebCacheTTL)
-		_ = r.saveWebPageCache(cacheKey, compact)
-		compact.WebCacheSaveMS = elapsedMillis(cacheSaveStart)
-	}
-	compact.WebTotalMS = elapsedMillis(totalStart)
-	out, _ := json.MarshalIndent(compact, "", "  ")
-	return Result{
-		Content:   string(out),
-		Metadata:  webPageMetadata(compact),
-		Truncated: compact.OutputTextTruncated,
-		OutputRef: compact.OutputRef,
-	}, nil
-}
-
-type webSummarySource struct {
-	URL   string
-	Title string
-	Query string
-	Text  string
-}
-
-type webModelSummary struct {
-	Text         string
-	Provider     string
-	Model        string
-	InputTokens  int64
-	OutputTokens int64
-	CacheHit     int64
-	CostUSD      float64
-}
-
-func (r *Registry) applyModelSummaryToPage(ctx context.Context, compact *compactPage, page fetchedPage, opts webFetchOptions) {
-	if compact == nil || r == nil || config.NormalizeWebSummaryMode(r.cfg.WebSummaryMode) != "model" {
-		return
-	}
-	if compact.OutputClass == "tiny_direct_answer" {
-		return
-	}
-	summary, err := r.modelWebSummary(ctx, webSummarySource{
-		URL:   page.URL,
-		Title: page.Title,
-		Query: opts.Query,
-		Text:  page.Text,
-	})
-	if err != nil {
-		compact.WebsumError = truncateRunes(oneLine(err.Error()), 240)
-		return
-	}
-	applyWebModelSummaryToPage(compact, summary)
-}
-
-func (r *Registry) applyModelSummaryToCrawlPage(ctx context.Context, compact *compactCrawlPage, page crawlPage, opts webFetchOptions) {
-	if compact == nil || r == nil || config.NormalizeWebSummaryMode(r.cfg.WebSummaryMode) != "model" {
-		return
-	}
-	if compact.OutputClass == "tiny_direct_answer" {
-		return
-	}
-	summary, err := r.modelWebSummary(ctx, webSummarySource{
-		URL:   page.URL,
-		Title: page.Title,
-		Query: opts.Query,
-		Text:  page.Text,
-	})
-	if err != nil {
-		compact.WebsumError = truncateRunes(oneLine(err.Error()), 240)
-		return
-	}
-	applyWebModelSummaryToCrawlPage(compact, summary)
-}
-
-func (r *Registry) modelWebSummary(ctx context.Context, src webSummarySource) (webModelSummary, error) {
-	cfg := r.webSummaryProviderConfig()
-	input, inputTruncated := webSummaryInput(src.Text, cfg.WebSummaryMaxInputTokens)
-	prompt := webSummaryPrompt(src, input, inputTruncated)
-	estimatedInputTokens := int64(estimateTokens(prompt))
-	ctx, cancel := context.WithTimeout(ctx, cfg.WebSummaryTimeout)
-	defer cancel()
-	prov, err := newWebSummaryProvider(cfg)
-	if err != nil {
-		return webModelSummary{}, err
-	}
-	temp := 0.1
-	events, errs := prov.Stream(ctx, provider.Request{
-		Model: cfg.Model,
-		Messages: []protocol.Message{
-			{
-				Role:    protocol.RoleSystem,
-				Content: "You produce compact factual web-page summaries for another coding agent. Return only the summary text. Preserve concrete dates, numbers, names, and source-specific caveats. Do not include raw page dumps.",
-			},
-			{Role: protocol.RoleUser, Content: prompt},
-		},
-		Temperature: &temp,
-	})
-	var content strings.Builder
-	var usage provider.Usage
-	for event := range events {
-		switch event.Kind {
-		case provider.EventContent:
-			content.WriteString(event.Text)
-		case provider.EventUsage:
-			usage = event.Usage
-		}
-	}
-	if err := <-errs; err != nil {
-		return webModelSummary{}, err
-	}
-	text := normalizeWebSummaryOutput(content.String(), cfg.WebSummaryMaxOutputTokens)
-	if text == "" {
-		return webModelSummary{}, fmt.Errorf("web summarizer returned empty summary")
-	}
-	inputTokens := usage.InputTokens
-	if inputTokens == 0 {
-		inputTokens = estimatedInputTokens
-	}
-	outputTokens := usage.OutputTokens
-	if outputTokens == 0 {
-		outputTokens = int64(estimateTokens(text))
-	}
-	cacheHit := usage.CacheHitTokens
-	return webModelSummary{
-		Text:         text,
-		Provider:     cfg.Provider,
-		Model:        cfg.Model,
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		CacheHit:     cacheHit,
-		CostUSD:      webSummaryCostUSD(cfg.Model, inputTokens, outputTokens, cacheHit, usage.CacheMissTokens),
-	}, nil
-}
-
-func (r *Registry) webSummaryProviderConfig() config.Config {
-	cfg := r.cfg
-	cfg.ApplyModelProviderDefaults()
-	cfg.ApplyWebSummaryDefaults()
-	cfg.Provider = cfg.WebSummaryProvider
-	cfg.Model = cfg.WebSummaryModel
-	cfg.ApplyModelProviderDefaults()
-	cfg.Thinking = "disabled"
-	cfg.ReasoningEffort = ""
-	cfg.MaxTokens = cfg.WebSummaryMaxOutputTokens
-	if cfg.WebSummaryTimeout > 0 {
-		cfg.RequestTimeout = cfg.WebSummaryTimeout
-		if cfg.StreamIdleTimeout <= 0 || cfg.StreamIdleTimeout > cfg.WebSummaryTimeout {
-			cfg.StreamIdleTimeout = cfg.WebSummaryTimeout
-		}
-	}
-	return cfg
-}
-
-func webSummaryInput(text string, maxTokens int) (string, bool) {
-	if maxTokens <= 0 {
-		maxTokens = 12_000
-	}
-	if maxTokens > 24_000 {
-		maxTokens = 24_000
-	}
-	return truncateRunesWithMarker(strings.TrimSpace(text), maxTokens*4)
-}
-
-func webSummaryPrompt(src webSummarySource, text string, truncated bool) string {
-	var b strings.Builder
-	b.WriteString("URL: " + strings.TrimSpace(src.URL) + "\n")
-	if strings.TrimSpace(src.Title) != "" {
-		b.WriteString("Title: " + strings.TrimSpace(src.Title) + "\n")
-	}
-	if strings.TrimSpace(src.Query) != "" {
-		b.WriteString("Focus query: " + strings.TrimSpace(src.Query) + "\n")
-	}
-	if truncated {
-		b.WriteString("Input note: extracted text was capped before summarization.\n")
-	}
-	b.WriteString("\nSummarize this extracted page text in 4-8 compact sentences. Avoid filler and do not invent facts.\n\n")
-	b.WriteString(text)
-	return b.String()
-}
-
-func normalizeWebSummaryOutput(text string, maxTokens int) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return ""
-	}
-	if maxTokens <= 0 {
-		maxTokens = 700
-	}
-	maxChars := max(400, min(webDigestChars, maxTokens*4))
-	out, _ := truncateRunesWithMarker(text, maxChars)
-	return strings.TrimSpace(out)
-}
-
-func applyWebModelSummaryToPage(page *compactPage, summary webModelSummary) {
-	page.Summary = summary.Text
-	page.SummaryMode = "model"
-	page.SummarizerProvider = summary.Provider
-	page.SummarizerModel = summary.Model
-	page.WebsumInputTokens = summary.InputTokens
-	page.WebsumOutputTokens = summary.OutputTokens
-	page.WebsumCacheHit = summary.CacheHit
-	page.WebsumCost = summary.CostUSD
-	page.WebsumModel = summary.Model
-	page.WebsumError = ""
-	if strings.TrimSpace(page.Text) == "" {
-		page.OutputClass = "model_summary"
-	}
-	page.SummaryChars = webSummaryChars(page.Summary, page.KeyPoints, page.Extract)
-	page.EstimatedTextTokens = estimateTokens(compactPageInlineText(*page))
-	page.EstimatedTokensSaved = maxInt(0, page.OriginalTextTokens-page.EstimatedTextTokens)
-}
-
-func applyWebModelSummaryToCrawlPage(page *compactCrawlPage, summary webModelSummary) {
-	page.Summary = summary.Text
-	page.SummaryMode = "model"
-	page.SummarizerProvider = summary.Provider
-	page.SummarizerModel = summary.Model
-	page.WebsumInputTokens = summary.InputTokens
-	page.WebsumOutputTokens = summary.OutputTokens
-	page.WebsumCacheHit = summary.CacheHit
-	page.WebsumCost = summary.CostUSD
-	page.WebsumModel = summary.Model
-	page.WebsumError = ""
-	if strings.TrimSpace(page.Text) == "" {
-		page.OutputClass = "model_summary"
-	}
-	page.SummaryChars = webSummaryChars(page.Summary, page.KeyPoints, page.Extract)
-	page.EstimatedTextTokens = estimateTokens(compactCrawlPageInlineText(*page))
-	page.EstimatedTokensSaved = maxInt(0, page.OriginalTextTokens-page.EstimatedTextTokens)
-}
-
-func (r *Registry) compactCrawlResult(ctx context.Context, pages []crawlPage, opts webFetchOptions) (compactCrawlOutput, string, error) {
-	compactPages := compactCrawlPages(pages, opts)
-	for i := range compactPages {
-		if i < len(pages) && pages[i].Error == "" {
-			r.applyModelSummaryToCrawlPage(ctx, &compactPages[i], pages[i], opts)
-		}
-	}
-	artifact := renderCrawlArtifact(pages)
-	ref, err := storeWebOutput("web_crawl", firstCrawlURL(pages), artifact)
-	var out compactCrawlOutput
-	out.Pages = compactPages
-	out.OutputClass = webOutputClass(opts.IncludeText || opts.FullText)
-	out.SummaryMode = "extractive"
-	out.OutputRef = ref
-	if err == nil && ref != "" {
-		for i := range out.Pages {
-			if out.Pages[i].Error == "" {
-				out.Pages[i].OutputRef = ref
-			}
-		}
-	}
-	allTinyDirect := len(out.Pages) > 0 && !opts.IncludeText && !opts.FullText
-	for _, page := range out.Pages {
-		if page.Error != "" || page.OutputClass != "tiny_direct_answer" {
-			allTinyDirect = false
-		}
-		out.RawBytesFetched += page.RawBytesFetched
-		out.SummaryChars += page.SummaryChars
-		out.WebsumInputTokens += page.WebsumInputTokens
-		out.WebsumOutputTokens += page.WebsumOutputTokens
-		out.WebsumCacheHit += page.WebsumCacheHit
-		out.WebsumCost += page.WebsumCost
-		if out.SummarizerProvider == "" && page.SummarizerProvider != "" {
-			out.SummarizerProvider = page.SummarizerProvider
-		}
-		if out.SummarizerModel == "" && page.SummarizerModel != "" {
-			out.SummarizerModel = page.SummarizerModel
-			out.WebsumModel = page.WebsumModel
-		}
-		if out.WebsumError == "" && page.WebsumError != "" {
-			out.WebsumError = page.WebsumError
-		}
-		if page.SummaryMode == "model" {
-			out.SummaryMode = "model"
-			if !opts.IncludeText && !opts.FullText {
-				out.OutputClass = "model_summary"
-			}
-		}
-		if page.MaxBytes > out.MaxBytesPerPage {
-			out.MaxBytesPerPage = page.MaxBytes
-		}
-		out.OriginalTextChars += page.OriginalTextChars
-		out.OriginalTextTokens += page.OriginalTextTokens
-		out.ReturnedTextChars += page.ReturnedTextChars
-		out.EstimatedTextTokens += page.EstimatedTextTokens
-		out.EstimatedTokensSaved += page.EstimatedTokensSaved
-		out.OutputTextTruncated = out.OutputTextTruncated || page.OutputTextTruncated
-	}
-	if allTinyDirect {
-		out.OutputClass = "tiny_direct_answer"
-		out.SummaryMode = "direct"
-		out.SummarizerProvider = "native"
-		out.SummarizerModel = "direct"
-		out.WebsumModel = "direct"
-	}
-	if out.OutputTextTruncated {
-		out.CompactNote = "full extracted crawl text is saved out-of-band in output_ref; inline response contains only digest/extract to protect context cost"
-	}
-	return out, ref, err
-}
-
-func crawlMetadata(out compactCrawlOutput) map[string]any {
-	savedTokens := maxInt(0, int(out.WebsumInputTokens-out.WebsumOutputTokens))
-	apiInput, apiOutput, apiTotal := websumAPITokens(out.SummaryMode, out.WebsumInputTokens, out.WebsumOutputTokens)
-	return map[string]any{
-		"output_class":                     out.OutputClass,
-		"summary_mode":                     out.SummaryMode,
-		"summary_chars":                    out.SummaryChars,
-		"summarizer_provider":              out.SummarizerProvider,
-		"summarizer_model":                 out.SummarizerModel,
-		"websum_input_tokens":              out.WebsumInputTokens,
-		"websum_output_tokens":             out.WebsumOutputTokens,
-		"websum_cost":                      out.WebsumCost,
-		"websum_cache_hit":                 out.WebsumCacheHit,
-		"websum_model":                     out.WebsumModel,
-		"websum_error":                     out.WebsumError,
-		"web_cache_hit":                    out.WebCacheHit,
-		"web_cache_miss":                   out.WebCacheKey != "" && !out.WebCacheHit,
-		"web_cache_key":                    out.WebCacheKey,
-		"web_cache_age_ms":                 out.WebCacheAgeMS,
-		"web_cache_ttl_ms":                 out.WebCacheTTLMS,
-		"pages":                            len(out.Pages),
-		"raw_bytes_fetched":                out.RawBytesFetched,
-		"max_bytes_per_page":               out.MaxBytesPerPage,
-		"original_text_chars":              out.OriginalTextChars,
-		"original_text_tokens":             out.OriginalTextTokens,
-		"returned_text_chars":              out.ReturnedTextChars,
-		"estimated_text_tokens":            out.EstimatedTextTokens,
-		"estimated_tokens_saved":           out.EstimatedTokensSaved,
-		"output_text_truncated":            out.OutputTextTruncated,
-		"output_ref":                       out.OutputRef,
-		"tool_summary_kind":                out.SummaryMode,
-		"tool_summary_input_tokens":        out.WebsumInputTokens,
-		"tool_summary_output_tokens":       out.WebsumOutputTokens,
-		"tool_summary_saved_tokens":        savedTokens,
-		"tool_summary_api_input_tokens":    apiInput,
-		"tool_summary_api_output_tokens":   apiOutput,
-		"tool_summary_api_total_tokens":    apiTotal,
-		"tool_summary_estimated_cost_usd":  out.WebsumCost,
-		"tool_summary_external_model_used": out.SummaryMode == "model",
-	}
-}
-
-func (page *compactPage) resetWebPhaseTimings() {
-	if page == nil {
-		return
-	}
-	page.WebCacheLookupMS = 0
-	page.WebHTTPFetchMS = 0
-	page.WebCompactMS = 0
-	page.WebSummaryMS = 0
-	page.WebOutputRefMS = 0
-	page.WebCacheSaveMS = 0
-	page.WebTotalMS = 0
-}
-
-func elapsedMillis(start time.Time) int64 {
-	if start.IsZero() {
-		return 0
-	}
-	return maxInt64(0, time.Since(start).Milliseconds())
-}
-
-func firstCrawlURL(pages []crawlPage) string {
-	for _, page := range pages {
-		if page.URL != "" {
-			return page.URL
-		}
-	}
-	return "crawl"
-}
-
-func compactInlineText(text, title, fullText, query string) string {
-	return strings.Join(nonEmptyStrings(
-		title,
-		summarizeText(title, fullText, webDigestChars),
-		strings.Join(keyPoints(fullText, query, 5, webKeyPointChars), "\n"),
-		extractSnippets(fullText, query, webExtractChars),
-		text,
-	), "\n")
-}
-
-func keyPoints(text, query string, maxPoints, maxChars int) []string {
-	if maxPoints <= 0 {
-		return nil
-	}
-	sentences := candidateSentences(text)
-	if len(sentences) == 0 {
-		return nil
-	}
-	ranked := rankSentences(sentences, query)
-	points := make([]string, 0, maxPoints)
-	seen := map[string]bool{}
-	for _, sentence := range ranked {
-		sentence = truncateRunes(oneLine(sentence), maxChars)
-		if sentence == "" || seen[strings.ToLower(sentence)] {
-			continue
-		}
-		seen[strings.ToLower(sentence)] = true
-		points = append(points, sentence)
-		if len(points) >= maxPoints {
-			break
-		}
-	}
-	return points
-}
-
-func extractSnippets(text, query string, maxChars int) string {
-	text = strings.TrimSpace(text)
-	if text == "" || maxChars <= 0 {
-		return ""
-	}
-	var selected []string
-	terms := queryTerms(query)
-	for _, sentence := range candidateSentences(text) {
-		if len(selected) >= 6 {
-			break
-		}
-		clean := oneLine(sentence)
-		if clean == "" {
-			continue
-		}
-		if len(terms) == 0 || textScore(clean, terms) > 0 {
-			selected = append(selected, clean)
-		}
-	}
-	if len(selected) == 0 {
-		for _, sentence := range candidateSentences(text) {
-			selected = append(selected, sentence)
-			if len(selected) >= 6 {
-				break
-			}
-		}
-	}
-	return truncateRunes(strings.Join(selected, "\n"), maxChars)
-}
-
-func candidateSentences(text string) []string {
-	var out []string
-	for _, paragraph := range splitParagraphs(text) {
-		for _, sentence := range splitSentences(paragraph) {
-			sentence = oneLine(sentence)
-			if len([]rune(sentence)) < 40 {
-				continue
-			}
-			out = append(out, sentence)
-			if len(out) >= 32 {
-				return out
-			}
-		}
-	}
-	if len(out) == 0 && strings.TrimSpace(text) != "" {
-		out = append(out, truncateRunes(oneLine(text), 320))
-	}
-	return out
-}
-
-func rankSentences(sentences []string, query string) []string {
-	type scored struct {
-		text  string
-		score int
-		index int
-	}
-	terms := queryTerms(query)
-	items := make([]scored, 0, len(sentences))
-	for i, sentence := range sentences {
-		items = append(items, scored{text: sentence, score: textScore(sentence, terms), index: i})
-	}
-	sort.SliceStable(items, func(i, j int) bool {
-		if items[i].score != items[j].score {
-			return items[i].score > items[j].score
-		}
-		return items[i].index < items[j].index
-	})
-	out := make([]string, 0, len(items))
-	for _, item := range items {
-		out = append(out, item.text)
-	}
-	return out
-}
-
-func queryTerms(query string) []string {
-	fields := strings.Fields(strings.ToLower(query))
-	terms := make([]string, 0, len(fields))
-	seen := map[string]bool{}
-	for _, term := range fields {
-		term = strings.Trim(term, `"'.,:;!?()[]{}<>`)
-		if len([]rune(term)) < 3 || seen[term] {
-			continue
-		}
-		seen[term] = true
-		terms = append(terms, term)
-	}
-	return terms
-}
-
-func textScore(text string, terms []string) int {
-	if len(terms) == 0 {
-		return 0
-	}
-	lower := strings.ToLower(text)
-	score := 0
-	for _, term := range terms {
-		score += strings.Count(lower, term)
-	}
-	return score
-}
-
-func splitParagraphs(text string) []string {
-	raw := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
-	var out []string
-	for _, paragraph := range raw {
-		paragraph = strings.TrimSpace(paragraph)
-		if paragraph != "" {
-			out = append(out, paragraph)
-		}
-	}
-	return out
-}
-
-func nonEmptyStrings(values ...string) []string {
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
-func renderFetchedPageArtifact(page fetchedPage) string {
-	var b strings.Builder
-	b.WriteString("url: " + page.URL + "\n")
-	if page.Title != "" {
-		b.WriteString("title: " + page.Title + "\n")
-	}
-	if page.ContentType != "" {
-		b.WriteString("content_type: " + page.ContentType + "\n")
-	}
-	if page.Status != 0 {
-		b.WriteString(fmt.Sprintf("status: %d\n", page.Status))
-	}
-	if page.Truncated {
-		b.WriteString("response_body_truncated: true\n")
-	}
-	b.WriteString("\n--- extracted text ---\n")
-	b.WriteString(strings.TrimSpace(page.Text))
-	b.WriteString("\n")
-	if len(page.Links) > 0 {
-		b.WriteString("\n--- links ---\n")
-		for _, link := range page.Links {
-			b.WriteString(link + "\n")
-		}
-	}
-	return b.String()
-}
-
-func renderCrawlArtifact(pages []crawlPage) string {
-	var b strings.Builder
-	for i, page := range pages {
-		if i > 0 {
-			b.WriteString("\n\n")
-		}
-		b.WriteString(fmt.Sprintf("=== page %d depth=%d ===\n", i+1, page.Depth))
-		b.WriteString("url: " + page.URL + "\n")
-		if page.Title != "" {
-			b.WriteString("title: " + page.Title + "\n")
-		}
-		if page.Error != "" {
-			b.WriteString("error: " + page.Error + "\n")
-			continue
-		}
-		b.WriteString("\n")
-		b.WriteString(strings.TrimSpace(page.Text))
-		b.WriteString("\n")
-	}
-	return b.String()
-}
-
-func storeWebOutput(toolName, source, content string) (string, error) {
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return "", nil
-	}
-	baseDir := filepath.Join(config.BillyHomeDir(), "tool-output")
-	if err := ensurePrivateToolDir(baseDir); err != nil {
-		return "", err
-	}
-	dir := filepath.Join(baseDir, time.Now().UTC().Format("20060102"))
-	if err := ensurePrivateToolDir(dir); err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256([]byte(content))
-	name := fmt.Sprintf("%s-%s-%s-%s.txt",
-		time.Now().UTC().Format("150405.000000000"),
-		safeArtifactName(toolName),
-		safeArtifactName(source),
-		hex.EncodeToString(sum[:4]),
-	)
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(content+"\n"), 0o600); err != nil {
-		return "", err
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return "", err
-	}
-	return path, nil
-}
-
-func ensurePrivateToolDir(path string) error {
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		return err
-	}
-	return os.Chmod(path, 0o700)
-}
-
-var unsafeArtifactNameRE = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
-
-func safeArtifactName(value string) string {
-	value = strings.TrimSpace(value)
-	if u, err := url.Parse(value); err == nil && u.Hostname() != "" {
-		value = u.Hostname() + u.EscapedPath()
-	}
-	value = unsafeArtifactNameRE.ReplaceAllString(value, "_")
-	value = strings.Trim(value, "._-")
-	if value == "" {
-		return "web"
-	}
-	if len(value) > 72 {
-		value = value[:72]
-	}
-	return value
-}
-
-func webTextBudget(opts webFetchOptions, fallbackChars, fallbackTokens, maxTokens int) (int, int) {
-	if !opts.IncludeText && !opts.FullText {
-		return 0, webInlineDefaultTokens
-	}
-	fallback := fallbackChars
-	if opts.FullText && opts.MaxChars <= 0 && opts.MaxTokens <= 0 {
-		fallback = webFullTextChars
-	}
-	charBudget := normalizedWebChars(opts.MaxChars, fallback)
-	tokenBudget := normalizedWebTokens(opts.MaxTokens, fallbackTokens, min(maxTokens, webInlineMaxTokens))
-	tokenChars := tokenBudget * 4
-	if tokenChars > 0 && tokenChars < charBudget {
-		charBudget = tokenChars
-	}
-	if charBudget > webHardTextChars {
-		charBudget = webHardTextChars
-	}
-	return charBudget, estimateTokensByChars(charBudget)
-}
-
-func webTotalTextBudget(maxTotalTokens, pageCount int) (int, int) {
-	if pageCount <= 0 {
-		return 0, 0
-	}
-	tokens := normalizedWebTokens(maxTotalTokens, webCrawlDefaultTotalToks, webCrawlMaxTotalToks)
-	return tokens * 4, tokens
-}
-
-func normalizedWebChars(value, fallback int) int {
-	if value <= 0 {
-		value = fallback
-	}
-	if value < 800 {
-		value = 800
-	}
-	if value > webHardTextChars {
-		value = webHardTextChars
-	}
-	return value
-}
-
-func normalizedWebTokens(value, fallback, maxTokens int) int {
-	if value <= 0 {
-		value = fallback
-	}
-	if value < 200 {
-		value = 200
-	}
-	if value > maxTokens {
-		value = maxTokens
-	}
-	return value
-}
-
-func compactWebText(text string, maxChars int, fullText bool) (string, bool) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return "", false
-	}
-	return truncateRunesWithMarker(text, maxChars)
-}
-
-func webCompactNote(truncated, includeText, fullText bool) string {
-	if !truncated {
-		return ""
-	}
-	if !includeText {
-		return "full extracted text is saved out-of-band in output_ref; inline response contains only digest/extract to protect context cost"
-	}
-	if fullText {
-		return "full_text was requested, but output is still capped by max_tokens/max_chars to protect context cost"
-	}
-	return "inline text is capped; use output_ref if exact source text is required"
-}
-
-func webOutputClass(inlineText bool) string {
-	if inlineText {
-		return "raw_excerpt"
-	}
-	return "extractive_summary"
-}
-
-func tinyDirectWebAnswer(text string, links []string, truncated, includeText bool, originalTokens int) bool {
-	if includeText || truncated || len(links) > 0 {
-		return false
-	}
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return false
-	}
-	return originalTokens > 0 && originalTokens <= webTinyDirectTokens && len([]rune(text)) <= webTinyDirectTokens*4
-}
-
-func webSummaryChars(summary string, keyPoints []string, extract string) int {
-	return len([]rune(strings.Join(nonEmptyStrings(summary, strings.Join(keyPoints, "\n"), extract), "\n")))
-}
-
-func compactPageInlineText(page compactPage) string {
-	return strings.Join(nonEmptyStrings(
-		page.Title,
-		page.Summary,
-		strings.Join(page.KeyPoints, "\n"),
-		page.Extract,
-		page.Text,
-	), "\n")
-}
-
-func compactCrawlPageInlineText(page compactCrawlPage) string {
-	return strings.Join(nonEmptyStrings(
-		page.Title,
-		page.Summary,
-		strings.Join(page.KeyPoints, "\n"),
-		page.Extract,
-		page.Text,
-	), "\n")
-}
-
-func webSummaryCostUSD(model string, inputTokens, outputTokens, cacheHitTokens, cacheMissTokens int64) float64 {
-	info := modelinfo.Lookup(model)
-	if info.Subscription {
-		return 0
-	}
-	pricing := info.Pricing
-	inputCost := float64(inputTokens) * pricing.InputPer1M / 1_000_000
-	if cacheHitTokens > 0 || cacheMissTokens > 0 {
-		inputCost = (float64(cacheHitTokens)*pricing.CacheHitPer1M + float64(cacheMissTokens)*pricing.CacheMissPer1M) / 1_000_000
-	}
-	outputCost := float64(outputTokens) * pricing.OutputPer1M / 1_000_000
-	return inputCost + outputCost
-}
-
-func webPageMetadata(page compactPage) map[string]any {
-	savedTokens := maxInt(0, int(page.WebsumInputTokens-page.WebsumOutputTokens))
-	apiInput, apiOutput, apiTotal := websumAPITokens(page.SummaryMode, page.WebsumInputTokens, page.WebsumOutputTokens)
-	return map[string]any{
-		"output_class":                     page.OutputClass,
-		"summary_mode":                     page.SummaryMode,
-		"summary_chars":                    page.SummaryChars,
-		"summarizer_provider":              page.SummarizerProvider,
-		"summarizer_model":                 page.SummarizerModel,
-		"websum_input_tokens":              page.WebsumInputTokens,
-		"websum_output_tokens":             page.WebsumOutputTokens,
-		"websum_cost":                      page.WebsumCost,
-		"websum_cache_hit":                 page.WebsumCacheHit,
-		"websum_model":                     page.WebsumModel,
-		"websum_error":                     page.WebsumError,
-		"web_cache_hit":                    page.WebCacheHit,
-		"web_cache_miss":                   page.WebCacheKey != "" && !page.WebCacheHit,
-		"web_cache_key":                    page.WebCacheKey,
-		"web_cache_age_ms":                 page.WebCacheAgeMS,
-		"web_cache_ttl_ms":                 page.WebCacheTTLMS,
-		"web_cache_lookup_ms":              page.WebCacheLookupMS,
-		"web_http_fetch_ms":                page.WebHTTPFetchMS,
-		"web_compact_ms":                   page.WebCompactMS,
-		"web_summary_ms":                   page.WebSummaryMS,
-		"web_output_ref_ms":                page.WebOutputRefMS,
-		"web_cache_save_ms":                page.WebCacheSaveMS,
-		"web_total_ms":                     page.WebTotalMS,
-		"raw_bytes_fetched":                page.RawBytesFetched,
-		"max_bytes":                        page.MaxBytes,
-		"original_text_chars":              page.OriginalTextChars,
-		"original_text_tokens":             page.OriginalTextTokens,
-		"returned_text_chars":              page.ReturnedTextChars,
-		"estimated_text_tokens":            page.EstimatedTextTokens,
-		"estimated_tokens_saved":           page.EstimatedTokensSaved,
-		"budget_text_chars":                page.BudgetTextChars,
-		"budget_text_tokens":               page.BudgetTextTokens,
-		"output_text_truncated":            page.OutputTextTruncated,
-		"response_body_truncated":          page.Truncated,
-		"output_ref":                       page.OutputRef,
-		"tool_summary_kind":                page.SummaryMode,
-		"tool_summary_input_tokens":        page.WebsumInputTokens,
-		"tool_summary_output_tokens":       page.WebsumOutputTokens,
-		"tool_summary_saved_tokens":        savedTokens,
-		"tool_summary_api_input_tokens":    apiInput,
-		"tool_summary_api_output_tokens":   apiOutput,
-		"tool_summary_api_total_tokens":    apiTotal,
-		"tool_summary_estimated_cost_usd":  page.WebsumCost,
-		"tool_summary_external_model_used": page.SummaryMode == "model",
-	}
-}
-
-func websumAPITokens(mode string, inputTokens, outputTokens int64) (int64, int64, int64) {
-	if mode != "model" {
-		return 0, 0, 0
-	}
-	return inputTokens, outputTokens, inputTokens + outputTokens
-}
-
-func estimateTokens(text string) int {
-	return estimateTokensByChars(len([]rune(text)))
-}
-
-func estimateTokensByChars(chars int) int {
-	if chars <= 0 {
-		return 0
-	}
-	return (chars + 3) / 4
-}
-
-func summarizeText(title, text string, maxChars int) string {
-	text = oneLine(text)
-	if text == "" {
-		return strings.TrimSpace(title)
-	}
-	var parts []string
-	if title = strings.TrimSpace(title); title != "" {
-		parts = append(parts, title)
-	}
-	sentences := splitSentences(text)
-	for _, sentence := range sentences {
-		sentence = strings.TrimSpace(sentence)
-		if sentence == "" {
-			continue
-		}
-		candidate := strings.Join(append(append([]string{}, parts...), sentence), " — ")
-		if len([]rune(candidate)) > maxChars {
-			break
-		}
-		parts = append(parts, sentence)
-		if len(parts) >= 4 {
-			break
-		}
-	}
-	if len(parts) == 0 {
-		return truncate(text, maxChars)
-	}
-	return truncate(strings.Join(parts, " — "), maxChars)
-}
-
-func splitSentences(text string) []string {
-	var out []string
-	start := 0
-	for i, r := range text {
-		if r != '.' && r != '!' && r != '?' && r != '。' && r != '…' {
-			continue
-		}
-		if i+1 <= start {
-			continue
-		}
-		out = append(out, strings.TrimSpace(text[start:i+len(string(r))]))
-		start = i + len(string(r))
-		if len(out) >= 8 {
-			break
-		}
-	}
-	if len(out) == 0 {
-		return []string{truncate(text, 320)}
-	}
-	return out
-}
-
-func oneLine(text string) string {
-	return strings.Join(strings.Fields(text), " ")
-}
-
-func truncateRunesWithMarker(text string, maxRunes int) (string, bool) {
-	runes := []rune(text)
-	if len(runes) <= maxRunes {
-		return text, false
-	}
-	if maxRunes < 32 {
-		maxRunes = 32
-	}
-	return string(runes[:maxRunes]) + "\n...[truncated; call web_fetch with full_text=true only if exact full page text is required]", true
-}
-
-func truncateRunes(text string, maxRunes int) string {
-	runes := []rune(text)
-	if len(runes) <= maxRunes {
-		return text
-	}
-	return string(runes[:maxRunes])
-}
-
-func mcpServerFromToolName(name string) string {
-	name = strings.TrimPrefix(name, "mcp__")
-	server, _, ok := strings.Cut(name, "__")
-	if !ok {
-		return ""
-	}
-	return server
-}
-
-func normalizeMCPServerFilter(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "" {
-		return ""
-	}
-	if isParilkaAlias(value) {
-		return "telegram_parilka"
-	}
-	return sanitizeMCPServerName(value)
-}
-
-func displayMCPServerName(value string) string {
-	if value == "telegram_parilka" {
-		return "telegram-parilka"
-	}
-	return value
-}
-
-func isParilkaAlias(value string) bool {
-	value = strings.ToLower(strings.TrimSpace(value))
-	return strings.Contains(value, "parilka") ||
-		strings.Contains(value, "парил")
-}
-
-func sanitizeMCPServerName(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	value = mcpServerUnsafeRE.ReplaceAllString(value, "_")
-	return strings.Trim(value, "_")
-}
-
-func searchDuckDuckGoLite(ctx context.Context, query string, limit int) ([]searchResult, error) {
-	values := url.Values{"q": []string{query}}
-	searchURL := "https://lite.duckduckgo.com/lite/?" + values.Encode()
-	body, _, _, err := httpGet(ctx, searchURL, maxWebBytes)
-	if err != nil {
-		return nil, err
-	}
-	return parseSearchResults(searchURL, string(body), limit), nil
-}
-
-func fetchPage(ctx context.Context, rawURL string, maxBytes int) (fetchedPage, error) {
-	body, finalURL, contentType, err := httpGet(ctx, rawURL, maxBytes+1)
-	if err != nil {
-		return fetchedPage{}, err
-	}
-	rawBytesFetched := len(body)
-	truncated := false
-	if len(body) > maxBytes {
-		truncated = true
-		body = body[:maxBytes]
-	}
-	textBody := string(body)
-	page := fetchedPage{
-		URL:             finalURL,
-		Status:          http.StatusOK,
-		ContentType:     contentType,
-		RawBytesFetched: rawBytesFetched,
-		MaxBytes:        maxBytes,
-		Truncated:       truncated,
-	}
-	if isHTML(contentType, textBody) {
-		page.Title = extractTitle(textBody)
-		page.Text = truncate(cleanHTMLText(textBody), maxBytes)
-		page.Links = extractLinks(finalURL, textBody, 50)
-		return page, nil
-	}
-	if !isTextual(contentType) {
-		return fetchedPage{}, fmt.Errorf("refusing non-text response content-type %q", contentType)
-	}
-	page.Text = truncate(textBody, maxBytes)
-	return page, nil
-}
-
-func normalizedCrawlMaxPages(maxPages int) int {
-	if maxPages <= 0 || maxPages > 10 {
-		return 3
-	}
-	return maxPages
-}
-
-func normalizedCrawlMaxDepth(maxDepth int) int {
-	if maxDepth < 0 || maxDepth > 2 {
-		return 1
-	}
-	return maxDepth
-}
-
-func (r *Registry) crawl(ctx context.Context, rawURL string, maxPages, maxDepth int, sameHost bool, maxBytesPerPage int) ([]crawlPage, error) {
-	maxPages = normalizedCrawlMaxPages(maxPages)
-	maxDepth = normalizedCrawlMaxDepth(maxDepth)
-	start, err := validatePublicHTTPURL(ctx, rawURL)
-	if err != nil {
-		return nil, err
-	}
-	startHost := strings.ToLower(start.Hostname())
-	queue := []crawlItem{{URL: start.String(), Depth: 0}}
-	seen := map[string]bool{}
-	var pages []crawlPage
-	for len(queue) > 0 && len(pages) < maxPages {
-		item := queue[0]
-		queue = queue[1:]
-		if seen[item.URL] {
-			continue
-		}
-		seen[item.URL] = true
-		page, err := fetchPage(ctx, item.URL, maxBytesPerPage)
-		out := crawlPage{URL: item.URL, Depth: item.Depth}
-		if err != nil {
-			out.Error = err.Error()
-			pages = append(pages, out)
-			continue
-		}
-		out.Title = page.Title
-		out.Text = page.Text
-		out.RawBytesFetched = page.RawBytesFetched
-		out.MaxBytes = page.MaxBytes
-		out.Truncated = page.Truncated
-		pages = append(pages, out)
-		if item.Depth >= maxDepth {
-			continue
-		}
-		for _, link := range page.Links {
-			u, err := url.Parse(link)
-			if err != nil {
-				continue
-			}
-			if sameHost && strings.ToLower(u.Hostname()) != startHost {
-				continue
-			}
-			if !seen[u.String()] {
-				queue = append(queue, crawlItem{URL: u.String(), Depth: item.Depth + 1})
-			}
-		}
-	}
-	return pages, nil
-}
-
-func httpGet(ctx context.Context, rawURL string, maxBytes int) ([]byte, string, string, error) {
-	u, err := validatePublicHTTPURL(ctx, rawURL)
-	if err != nil {
-		return nil, "", "", err
-	}
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return fmt.Errorf("too many redirects")
-			}
-			_, err := validatePublicHTTPURL(req.Context(), req.URL.String())
-			return err
-		},
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return nil, "", "", err
-	}
-	req.Header.Set("User-Agent", "fast-agent-harness-go/0.1 (+https://localhost)")
-	req.Header.Set("Accept", "text/html,text/plain,application/json,application/xml;q=0.9,*/*;q=0.1")
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, "", "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, "", "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(limited), 1000))
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxBytes)))
-	if err != nil {
-		return nil, "", "", err
-	}
-	return body, resp.Request.URL.String(), resp.Header.Get("Content-Type"), nil
-}
-
-func validatePublicHTTPURL(ctx context.Context, rawURL string) (*url.URL, error) {
-	u, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil {
-		return nil, err
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("only http and https URLs are allowed")
-	}
-	host := u.Hostname()
-	if host == "" {
-		return nil, fmt.Errorf("URL host required")
-	}
-	if err := validatePublicHost(ctx, host); err != nil {
-		return nil, err
-	}
-	return u, nil
-}
-
-func validatePublicHost(ctx context.Context, host string) error {
-	host = strings.TrimSuffix(strings.ToLower(host), ".")
-	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
-		return fmt.Errorf("refusing localhost URL")
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if !isPublicIP(ip) {
-			return fmt.Errorf("refusing non-public IP %s", ip)
-		}
-		return nil
-	}
-	lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	addrs, err := net.DefaultResolver.LookupIPAddr(lookupCtx, host)
-	if err != nil {
-		return err
-	}
-	if len(addrs) == 0 {
-		return fmt.Errorf("host resolved to no addresses")
-	}
-	for _, addr := range addrs {
-		if !isPublicIP(addr.IP) {
-			return fmt.Errorf("refusing host %s resolved to non-public IP %s", host, addr.IP)
-		}
-	}
-	return nil
-}
-
-func isPublicIP(ip net.IP) bool {
-	return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast())
-}
-
-var (
-	mcpServerUnsafeRE = regexp.MustCompile(`[^a-z0-9_]+`)
-	anchorRE          = regexp.MustCompile(`(?is)<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)</a>`)
-	brRE              = regexp.MustCompile(`(?i)<br\s*/?>|</p>|</div>|</li>|</h[1-6]>`)
-	scriptRE          = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
-	styleRE           = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
-	noscriptRE        = regexp.MustCompile(`(?is)<noscript[^>]*>.*?</noscript>`)
-	tagRE             = regexp.MustCompile(`(?s)<[^>]+>`)
-	spaceRE           = regexp.MustCompile(`[ \t\r\f\v]+`)
-	blankRE           = regexp.MustCompile(`\n{3,}`)
-	titleRE           = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
-)
-
-func parseSearchResults(baseURL, body string, limit int) []searchResult {
-	matches := anchorRE.FindAllStringSubmatch(body, -1)
-	seen := map[string]bool{}
-	var out []searchResult
-	for _, match := range matches {
-		if len(out) >= limit {
-			break
-		}
-		title := cleanInlineText(match[2])
-		link := normalizeLink(baseURL, html.UnescapeString(match[1]))
-		link = unwrapDuckDuckGoURL(link)
-		if title == "" || link == "" || seen[link] {
-			continue
-		}
-		u, err := url.Parse(link)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-			continue
-		}
-		if strings.Contains(strings.ToLower(u.Hostname()), "duckduckgo.com") {
-			continue
-		}
-		seen[link] = true
-		out = append(out, searchResult{Title: title, URL: link})
-	}
-	return out
-}
-
-func normalizeLink(baseURL, rawLink string) string {
-	base, err := url.Parse(baseURL)
-	if err != nil {
-		return ""
-	}
-	ref, err := url.Parse(strings.TrimSpace(rawLink))
-	if err != nil {
-		return ""
-	}
-	return base.ResolveReference(ref).String()
-}
-
-func unwrapDuckDuckGoURL(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return ""
-	}
-	if strings.Contains(strings.ToLower(u.Hostname()), "duckduckgo.com") {
-		if uddg := u.Query().Get("uddg"); uddg != "" {
-			return uddg
-		}
-	}
-	return rawURL
-}
-
-func extractLinks(baseURL, body string, limit int) []string {
-	matches := anchorRE.FindAllStringSubmatch(body, -1)
-	seen := map[string]bool{}
-	var out []string
-	for _, match := range matches {
-		if len(out) >= limit {
-			break
-		}
-		link := normalizeLink(baseURL, html.UnescapeString(match[1]))
-		u, err := url.Parse(link)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-			continue
-		}
-		u.Fragment = ""
-		link = u.String()
-		if !seen[link] {
-			seen[link] = true
-			out = append(out, link)
-		}
-	}
-	return out
-}
-
-func extractTitle(body string) string {
-	match := titleRE.FindStringSubmatch(body)
-	if len(match) < 2 {
-		return ""
-	}
-	return cleanInlineText(match[1])
-}
-
-func cleanHTMLText(body string) string {
-	body = scriptRE.ReplaceAllString(body, " ")
-	body = styleRE.ReplaceAllString(body, " ")
-	body = noscriptRE.ReplaceAllString(body, " ")
-	body = brRE.ReplaceAllString(body, "\n")
-	body = tagRE.ReplaceAllString(body, " ")
-	body = html.UnescapeString(body)
-	body = spaceRE.ReplaceAllString(body, " ")
-	lines := strings.Split(body, "\n")
-	cleaned := make([]string, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			cleaned = append(cleaned, line)
-		}
-	}
-	return strings.TrimSpace(blankRE.ReplaceAllString(strings.Join(cleaned, "\n"), "\n\n"))
-}
-
-func cleanInlineText(body string) string {
-	body = tagRE.ReplaceAllString(body, " ")
-	body = html.UnescapeString(body)
-	body = spaceRE.ReplaceAllString(body, " ")
-	return strings.TrimSpace(body)
-}
-
-func isHTML(contentType, body string) bool {
-	contentType = strings.ToLower(contentType)
-	if strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/xhtml") {
-		return true
-	}
-	return strings.Contains(strings.ToLower(body[:min(len(body), 512)]), "<html")
-}
-
-func isTextual(contentType string) bool {
-	contentType = strings.ToLower(contentType)
-	return strings.Contains(contentType, "text/") ||
-		strings.Contains(contentType, "json") ||
-		strings.Contains(contentType, "xml") ||
-		strings.Contains(contentType, "yaml") ||
-		strings.Contains(contentType, "csv")
-}
-
-func boundedBytes(n int) int {
-	if n <= 0 {
-		return defaultWebBytes
-	}
-	if n > maxWebBytes {
-		return maxWebBytes
-	}
-	return n
 }
 
 func raw(s string) json.RawMessage { return json.RawMessage(s) }

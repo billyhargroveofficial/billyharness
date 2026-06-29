@@ -219,11 +219,7 @@ func (c *Config) LoadDefaultMCPServers() error {
 	}
 	files := c.MCPConfigFiles
 	if len(files) == 0 {
-		path, err := EnsureDefaultMCPConfigFile()
-		if err != nil {
-			return err
-		}
-		files = []string{path}
+		files = DefaultMCPConfigFiles()
 	}
 	servers, err := loadMCPServers(files, c.MCPAllowedServers)
 	if err != nil {

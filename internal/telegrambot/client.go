@@ -181,12 +181,12 @@ func (c *Client) postWithRetry(ctx context.Context, chatID int64, method string,
 		return err
 	}
 	c.setBackoff(chatID, botErr.RetryAfter+250*time.Millisecond)
-	timer := time.NewTimer(botErr.RetryAfter + 250*time.Millisecond)
+	timer := newTelegramTimer(botErr.RetryAfter + 250*time.Millisecond)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-timer.C:
+	case <-timer.C():
 		return c.post(ctx, chatID, method, payload, out)
 	}
 }
@@ -239,7 +239,7 @@ func (c *Client) post(ctx context.Context, chatID int64, method string, payload 
 }
 
 func (c *Client) waitRate(ctx context.Context, chatID int64) error {
-	now := time.Now()
+	now := telegramNow()
 	c.mu.Lock()
 	scheduled := now
 	if last, ok := c.lastCall[chatID]; ok {
@@ -257,15 +257,15 @@ func (c *Client) waitRate(ctx context.Context, chatID int64) error {
 	}
 	c.lastCall[chatID] = scheduled
 	c.mu.Unlock()
-	wait := time.Until(scheduled)
+	wait := scheduled.Sub(telegramNow())
 	if wait > 0 {
-		timer := time.NewTimer(wait)
+		timer := newTelegramTimer(wait)
 		defer timer.Stop()
 		select {
 		case <-ctx.Done():
 			c.releaseRateReservation(chatID, scheduled)
 			return ctx.Err()
-		case <-timer.C:
+		case <-timer.C():
 		}
 	}
 	return nil
@@ -289,7 +289,7 @@ func (c *Client) setBackoff(chatID int64, interval time.Duration) {
 	if interval > 10*time.Second {
 		interval = 10 * time.Second
 	}
-	until := time.Now().Add(interval)
+	until := telegramNow().Add(interval)
 	c.mu.Lock()
 	if until.After(c.backoffUntil[chatID]) {
 		c.backoffUntil[chatID] = until

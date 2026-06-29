@@ -438,7 +438,13 @@ func applyRunConfig(cfg config.Config, rc RunConfig) config.Config {
 }
 
 func runProfileHash(cfg config.Config) string {
-	return runstate.NewSnapshot(cfg, agent.InitialMessages(cfg), nil).ProfileInstructionHash
+	return runstate.NewSnapshot(runstate.SnapshotInput{
+		Provider:   cfg.ProviderBinding(),
+		Profile:    cfg.ProfileSelection(),
+		Runtime:    cfg.RuntimeLimits(),
+		ToolPolicy: cfg.ToolPolicySettings(),
+		MCP:        cfg.MCPSettings(),
+	}, agent.InitialMessages(cfg), nil).ProfileInstructionHash
 }
 
 func benchConfigSnapshot(cfg config.Config) map[string]any {
@@ -609,7 +615,7 @@ func runTask(parent context.Context, cfg config.Config, rc RunConfig, runID stri
 		result.WallTimeMS = time.Since(start).Milliseconds()
 		return result
 	}
-	registry, err := tools.NewRegistryWithMCP(ctx, taskCfg)
+	registry, err := tools.NewRegistryWithMCP(ctx, taskCfg, tools.WithWebSummarizer(provider.NewWebSummarizerFromProjections(taskCfg.ProviderBinding(), taskCfg.ToolPolicySettings())))
 	if err != nil {
 		result.Outcome = "crash"
 		result.Error = err.Error()
@@ -795,7 +801,7 @@ func taskProvider(cfg config.Config, rc RunConfig, task Task) (provider.Provider
 	if rc.Mock && rounds > 0 {
 		return newScriptedLoopProvider(rounds, task.ScriptedToolName, task.ScriptedToolArgs), nil
 	}
-	return provider.New(cfg)
+	return provider.NewFromBinding(cfg.ProviderBinding())
 }
 
 func toolResultIsError(value any) bool {

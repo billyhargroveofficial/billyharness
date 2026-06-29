@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
@@ -356,6 +357,45 @@ func TestRendererFinalRichMarkdownSplitsOversizedTableByRows(t *testing.T) {
 	}
 }
 
+func TestRichStreamUsesSeparateLiveAndFinalLimits(t *testing.T) {
+	r := NewRenderer()
+	r.Apply(protocol.Event{Type: protocol.EventAssistantDelta, Data: "## Live preview\n\n" + strings.Repeat("rich stream payload ", 300)})
+	r.Apply(protocol.Event{Type: protocol.EventRunCompleted})
+
+	stream := RichStream{LiveLimit: 700, FinalLimit: 1600}
+	preview := stream.LivePreview(r, "deepseek-v4-flash", "high")
+	if preview == "" {
+		t.Fatal("live rich preview is empty")
+	}
+	if got := telegramUTF16Len(preview); got > stream.LiveLimit {
+		t.Fatalf("live preview length = %d, want <= %d", got, stream.LiveLimit)
+	}
+	final := stream.FinalChunks(r, "deepseek-v4-flash", "high")
+	if len(final) < 2 {
+		t.Fatalf("final chunks = %d, want split under smaller final limit", len(final))
+	}
+	for _, chunk := range final {
+		if got := telegramUTF16Len(chunk); got > stream.FinalLimit {
+			t.Fatalf("final chunk length = %d, want <= %d", got, stream.FinalLimit)
+		}
+	}
+	if !strings.Contains(preview, "## Live preview") || !strings.Contains(final[0], "## Live preview") {
+		t.Fatalf("rich markdown heading missing preview=%q final=%q", preview, final[0])
+	}
+}
+
+func TestRichStreamLivePreviewIsOptionalWithoutAssistantContent(t *testing.T) {
+	r := NewRenderer()
+	stream := RichStream{LiveLimit: 700, FinalLimit: 1600}
+	if preview := stream.LivePreview(r, "deepseek-v4-flash", "high"); preview != "" {
+		t.Fatalf("preview = %q, want empty before assistant content", preview)
+	}
+	final := stream.FinalChunks(r, "deepseek-v4-flash", "high")
+	if len(final) != 1 || !strings.Contains(final[0], "Working...") {
+		t.Fatalf("final fallback chunks = %#v", final)
+	}
+}
+
 func TestToolProgressDeduplicatesToolLines(t *testing.T) {
 	progress := NewToolProgress()
 	event := RenderEvent{Kind: "tool", Title: "Tool", Body: "Searched web: Moscow weather"}
@@ -383,13 +423,97 @@ func TestStreamPlainTextEmbedsToolProgress(t *testing.T) {
 	}
 
 	text := renderer.StreamPlainText("deepseek-v4-flash", "high", progress)
-	for _, want := range []string{"⚡ Billyharness · Running", "Looking it up...", "Tools running", "• 🌐 web_search Moscow weather"} {
+	for _, want := range []string{"Billyharness · Running", "Looking it up...", "Tools running", "• 🌐 web_search Moscow weather"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("stream text missing %q:\n%s", want, text)
 		}
 	}
 	if strings.Contains(text, "<b>") || strings.Contains(text, "&lt;") {
 		t.Fatalf("stream text should stay plain, got:\n%s", text)
+	}
+}
+
+func TestRendererSeparatesAssistantContentAcrossModelTurns(t *testing.T) {
+	renderer := NewRenderer()
+	renderer.Apply(protocol.Event{Type: protocol.EventModelCallStarted, TurnID: "turn-001"})
+	renderer.Apply(protocol.Event{Type: protocol.EventAssistantDelta, TurnID: "turn-001", Data: "first turn."})
+	renderer.Apply(protocol.Event{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{ID: "call_1", Name: "time_now", Arguments: []byte(`{}`)}})
+	renderer.Apply(protocol.Event{Type: protocol.EventModelCallStarted, TurnID: "turn-002"})
+	renderer.Apply(protocol.Event{Type: protocol.EventAssistantDelta, TurnID: "turn-002", Data: "Second turn."})
+
+	content := renderer.Content.String()
+	if !strings.Contains(content, "first turn.\n\nSecond turn.") {
+		t.Fatalf("assistant turns should be separated, got %q", content)
+	}
+	if strings.Contains(content, "turn.Second") {
+		t.Fatalf("assistant turns were glued together: %q", content)
+	}
+}
+
+func TestRendererSeparatesAssistantContentAcrossToolBoundaries(t *testing.T) {
+	renderer := NewRenderer()
+	progress := NewToolProgress()
+	events := []protocol.Event{
+		{Type: protocol.EventModelCallStarted, TurnID: "turn-001"},
+		{Type: protocol.EventAssistantDelta, TurnID: "turn-001", Data: "before tool."},
+		{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{ID: "call_search", Name: "web_search", Arguments: []byte(`{"query":"weather"}`)}},
+		{Type: protocol.EventAssistantDelta, TurnID: "turn-001", Data: "after first tool."},
+		{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{ID: "call_fetch", Name: "web_fetch", Arguments: []byte(`{"url":"https://example.com"}`)}},
+		{Type: protocol.EventAssistantDelta, TurnID: "turn-001", Data: "after second tool."},
+	}
+	for _, event := range events {
+		for _, rendered := range renderer.Apply(event) {
+			if rendered.Kind == "tool" {
+				progress.Add(rendered)
+			}
+		}
+	}
+
+	content := renderer.Content.String()
+	wantText := "before tool.\n\nafter first tool.\n\nafter second tool."
+	if content != wantText {
+		t.Fatalf("assistant content = %q, want %q", content, wantText)
+	}
+	live := renderer.StreamPlainText("deepseek-v4-flash", "high", progress)
+	final := strings.Join(renderer.FinalChunks("deepseek-v4-flash", "high"), "\n")
+	for _, body := range []string{live, final} {
+		if !strings.Contains(body, "before tool.\n\nafter first tool.\n\nafter second tool.") {
+			t.Fatalf("assistant text not separated in output:\n%s", body)
+		}
+		for _, wantTool := range []string{"web_search", "web_fetch"} {
+			if !strings.Contains(body, wantTool) && body == live {
+				t.Fatalf("live progress missing tool %q:\n%s", wantTool, body)
+			}
+		}
+	}
+}
+
+func TestRendererUsesProjectedAssistantTextForFinalAndLiveMessages(t *testing.T) {
+	renderer := NewRenderer()
+	renderer.Apply(protocol.Event{Type: protocol.EventAssistantDelta, Data: "projected answer"})
+	renderer.Content.Reset()
+
+	final := strings.Join(renderer.FinalChunks("deepseek-v4-flash", "high"), "\n")
+	if !strings.Contains(final, "projected answer") {
+		t.Fatalf("final message should use projected assistant text:\n%s", final)
+	}
+	live := renderer.StreamPlainText("deepseek-v4-flash", "high", NewToolProgress())
+	if !strings.Contains(live, "projected answer") {
+		t.Fatalf("live message should use projected assistant text:\n%s", live)
+	}
+}
+
+func TestStreamPlainTextShowsLastEventHeartbeat(t *testing.T) {
+	renderer := NewRenderer()
+	renderer.Content.WriteString("Writing...")
+	renderer.LastEventAt = time.Now().Add(-17 * time.Second)
+	renderer.LastEventType = protocol.EventAssistantDelta
+
+	text := renderer.StreamPlainTextPulse("deepseek-v4-flash", "high", NewToolProgress(), 3)
+	for _, want := range []string{"Billyharness · Running", "tokens ", " ago", "Writing..."} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("stream text missing %q:\n%s", want, text)
+		}
 	}
 }
 
@@ -401,10 +525,10 @@ func TestStreamPlainTextKeepsToolsVisibleWhenContentIsLong(t *testing.T) {
 	_ = progress.Add(RenderEvent{Kind: "tool", Title: "Tool", Body: "🌐 web_fetch example.com/forecast", Key: "fetch"})
 
 	text := renderer.StreamPlainText("deepseek-v4-flash", "high", progress)
-	if got := telegramUTF16Len(text); got > telegramLimit {
-		t.Fatalf("stream text exceeds telegram limit: %d", got)
+	if got := telegramUTF16Len(text); got > telegramLiveProgressLimit {
+		t.Fatalf("stream text exceeds live progress limit: %d", got)
 	}
-	for _, want := range []string{"…", "fresh tail", "Tools running", "🌐 web_fetch example.com/forecast"} {
+	for _, want := range []string{"live tail", "fresh tail", "Tools running", "🌐 web_fetch example.com/forecast"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("stream text missing %q:\n%s", want, text)
 		}
@@ -424,8 +548,8 @@ func TestStreamPlainTextTruncatesFromStartWhenToolProgressIsHuge(t *testing.T) {
 	}
 
 	text := renderer.StreamPlainText("deepseek-v4-flash", "high", progress)
-	if got := telegramUTF16Len(text); got > telegramLimit {
-		t.Fatalf("stream text exceeds telegram limit: %d", got)
+	if got := telegramUTF16Len(text); got > telegramLiveProgressLimit {
+		t.Fatalf("stream text exceeds live progress limit: %d", got)
 	}
 	if !strings.Contains(text, "…[truncated]") {
 		t.Fatalf("stream text should mark truncated progress:\n%s", text)

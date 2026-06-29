@@ -25,10 +25,13 @@ const (
 
 type ProviderError struct {
 	Provider   string
+	ModelID    string
 	Kind       ErrorKind
 	Status     int
 	Message    string
 	RequestID  string
+	Attempts   int
+	Retries    int
 	RetryAfter time.Duration
 	Err        error
 }

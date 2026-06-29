@@ -65,7 +65,7 @@ func TestDeepSeekBodyThinkingHigh(t *testing.T) {
 func TestIsCodexProviderReroutesOSeriesModels(t *testing.T) {
 	for _, model := range []string{"gpt-5.5", "o1-preview", "o3-mini", "o4-mini"} {
 		cfg := config.Config{Provider: "deepseek", Model: model}
-		if !isCodexProvider(cfg) {
+		if !isCodexBinding(cfg.ProviderBinding()) {
 			t.Fatalf("model %q should route to Codex provider", model)
 		}
 	}
@@ -80,14 +80,15 @@ func TestNewDeepSeekProviderUsesCredentialsManager(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prov, err := New(config.Config{
+	cfg := config.Config{
 		Provider:          "deepseek",
 		Model:             "deepseek-v4-flash",
 		BaseURL:           "https://api.deepseek.com",
 		APIKeyEnv:         "CUSTOM_DEEPSEEK_KEY",
 		RequestTimeout:    time.Second,
 		StreamIdleTimeout: time.Second,
-	})
+	}
+	prov, err := NewFromBinding(cfg.ProviderBinding())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,6 +98,106 @@ func TestNewDeepSeekProviderUsesCredentialsManager(t *testing.T) {
 	}
 	if deepseek.APIKey != "sk-provider-value" {
 		t.Fatalf("APIKey = %q", deepseek.APIKey)
+	}
+}
+
+func TestNewFromBindingDeepSeekProviderUsesProjection(t *testing.T) {
+	t.Setenv("BINDING_DEEPSEEK_KEY", "sk-binding-value")
+
+	prov, err := NewFromBinding(config.ProviderBinding{
+		Provider: config.ProviderSelection{
+			Provider: "deepseek",
+			BaseURL:  "https://api.deepseek.example",
+		},
+		Model: config.ModelSelection{
+			Model:           "deepseek-v4-flash",
+			Thinking:        "disabled",
+			ReasoningEffort: "low",
+			MaxTokens:       512,
+		},
+		Auth: config.AuthSettings{
+			APIKeyEnv: "BINDING_DEEPSEEK_KEY",
+		},
+		Limits: config.RuntimeLimits{
+			RequestTimeout:     time.Second,
+			StreamIdleTimeout:  2 * time.Second,
+			ProviderMaxRetries: 3,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deepseek, ok := prov.(*DeepSeek)
+	if !ok {
+		t.Fatalf("provider = %T, want *DeepSeek", prov)
+	}
+	if deepseek.BaseURL != "https://api.deepseek.example" ||
+		deepseek.APIKey != "sk-binding-value" ||
+		deepseek.Model != "deepseek-v4-flash" ||
+		deepseek.Thinking != "disabled" ||
+		deepseek.ReasoningEffort != "low" ||
+		deepseek.MaxTokens != 512 ||
+		deepseek.RequestTimeout != time.Second ||
+		deepseek.StreamIdleTimeout != 2*time.Second ||
+		deepseek.MaxRetries != 3 {
+		t.Fatalf("deepseek provider = %#v", deepseek)
+	}
+}
+
+func TestProviderStreamRunnerClosesEventsBeforeErrs(t *testing.T) {
+	events := make(chan Event)
+	errs := make(chan error)
+	wantErr := errors.New("provider boom")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runProviderStream(events, errs, func() error {
+			return wantErr
+		})
+	}()
+
+	select {
+	case _, ok := <-events:
+		if ok {
+			t.Fatal("event channel yielded an event")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for events to close")
+	}
+	select {
+	case err, ok := <-errs:
+		if !ok || !errors.Is(err, wantErr) {
+			t.Fatalf("err = %v ok=%v, want %v", err, ok, wantErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for terminal error")
+	}
+	if _, ok := <-errs; ok {
+		t.Fatal("error channel yielded more than one value")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("stream runner did not return")
+	}
+}
+
+func TestProviderStreamRunnerClosesErrsWithoutValueOnSuccess(t *testing.T) {
+	events := make(chan Event, 1)
+	errs := make(chan error)
+	go runProviderStream(events, errs, func() error {
+		events <- Event{Kind: EventDone}
+		return nil
+	})
+
+	if event, ok := <-events; !ok || event.Kind != EventDone {
+		t.Fatalf("event = %#v ok=%v", event, ok)
+	}
+	if _, ok := <-events; ok {
+		t.Fatal("events channel remained open")
+	}
+	if err, ok := <-errs; ok || err != nil {
+		t.Fatalf("err = %v ok=%v, want closed channel", err, ok)
 	}
 }
 
@@ -385,6 +486,7 @@ func TestRetryAfterParsingAndDelay(t *testing.T) {
 
 func TestDeepSeekHTTPErrorIsTypedAndRedacted(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("x-request-id", "deepseek-error-request")
 		http.Error(w, "bad secret-token", http.StatusBadRequest)
 	}))
 	t.Cleanup(server.Close)
@@ -396,8 +498,9 @@ func TestDeepSeekHTTPErrorIsTypedAndRedacted(t *testing.T) {
 		Client:         server.Client(),
 	}
 	events, errs := d.Stream(context.Background(), Request{
-		Model:    "deepseek-v4-flash",
-		Messages: []protocol.Message{{Role: protocol.RoleUser, Content: "ping"}},
+		RequestID: "local-deepseek-request",
+		Model:     "deepseek-v4-flash",
+		Messages:  []protocol.Message{{Role: protocol.RoleUser, Content: "ping"}},
 	})
 	for range events {
 	}
@@ -411,6 +514,17 @@ func TestDeepSeekHTTPErrorIsTypedAndRedacted(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "secret-token") || !strings.Contains(err.Error(), "[redacted]") {
 		t.Fatalf("error redaction failed: %v", err)
+	}
+	metadata, ok := RequestMetadataFromError(err)
+	if !ok ||
+		metadata.RequestID != "local-deepseek-request" ||
+		metadata.ProviderID != "deepseek" ||
+		metadata.ModelID != "deepseek-v4-flash" ||
+		metadata.ProviderRequestID != "deepseek-error-request" ||
+		metadata.Attempts != 1 ||
+		metadata.Retries != 0 ||
+		metadata.StatusCode != http.StatusBadRequest {
+		t.Fatalf("metadata = %#v ok=%v", metadata, ok)
 	}
 }
 
@@ -446,6 +560,24 @@ func TestToolAccumulatorParallelCallsAndGaps(t *testing.T) {
 	}
 	if calls[0].Name != "time_now" || calls[1].Name != "fs_read_file" {
 		t.Fatalf("calls = %#v", calls)
+	}
+}
+
+func TestToolAccumulatorSanitizesInvalidJSONArguments(t *testing.T) {
+	var acc ToolAccumulator
+	acc.Push(Event{Kind: EventToolCallDelta, ToolIndex: 0, ToolID: "call_bad", ToolName: "shell_exec", ArgsDelta: `{bad`})
+
+	calls, err := acc.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("calls = %#v", calls)
+	}
+	if string(calls[0].Arguments) != "{}" ||
+		calls[0].InvalidArguments != "{bad" ||
+		!strings.Contains(calls[0].InvalidArgumentError, "invalid JSON args") {
+		t.Fatalf("call = %#v", calls[0])
 	}
 }
 

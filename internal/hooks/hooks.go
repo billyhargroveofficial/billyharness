@@ -23,17 +23,24 @@ type Runner struct {
 	loadErr      error
 }
 
-func New(cfg config.Config) *Runner {
-	if !cfg.HooksEnabled {
+func New(settings config.HookSettings) *Runner {
+	if !settings.Enabled {
 		return &Runner{}
 	}
-	if len(cfg.Hooks) == 0 {
-		if err := cfg.LoadDefaultHooks(); err != nil {
+	hooks := settings.Hooks
+	if len(hooks) == 0 {
+		files := settings.ConfigFiles
+		if len(files) == 0 {
+			files = config.DefaultHookConfigFiles()
+		}
+		loaded, err := config.LoadHooks(files)
+		if err != nil {
 			return &Runner{loadErr: err}
 		}
+		hooks = loaded
 	}
 	hooksByEvent := map[string][]config.Hook{}
-	for _, hook := range cfg.Hooks {
+	for _, hook := range hooks {
 		if !hook.Enabled {
 			continue
 		}
@@ -55,11 +62,11 @@ func (r *Runner) Run(ctx context.Context, event string, payload map[string]any, 
 		emit = func(protocol.Event) {}
 	}
 	if r.loadErr != nil {
-		emit(protocol.Event{Type: protocol.EventHookFailed, Data: map[string]any{
-			"hook_event": event,
-			"status":     protocol.StepStatusFailed,
-			"error":      r.loadErr.Error(),
-			"phase":      "load",
+		emit(protocol.Event{Type: protocol.EventHookFailed, Data: protocol.HookEvent{
+			HookEvent: event,
+			Status:    protocol.StepStatusFailed,
+			Error:     r.loadErr.Error(),
+			Phase:     "load",
 		}})
 		return nil
 	}
@@ -109,53 +116,187 @@ func runOne(ctx context.Context, hook config.Hook, event string, payload map[str
 	err := cmd.Run()
 	duration := time.Since(started).Milliseconds()
 	data := hookEventData(hook, event, payload)
-	data["duration_ms"] = duration
+	data.DurationMS = int64Ptr(duration)
 	stdoutText, stdoutTruncated := hookOutput(stdout.String(), outputLimit, stdout.truncated)
 	stderrText, stderrTruncated := hookOutput(stderr.String(), outputLimit, stderr.truncated)
-	data["stdout"] = stdoutText
-	data["stderr"] = stderrText
-	data["stdout_truncated"] = stdoutTruncated
-	data["stderr_truncated"] = stderrTruncated
-	data["timeout_ms"] = timeout.Milliseconds()
-	data["exit_code"] = exitCode(err)
+	data.Stdout = stdoutText
+	data.Stderr = stderrText
+	data.StdoutTruncated = boolPtr(stdoutTruncated)
+	data.StderrTruncated = boolPtr(stderrTruncated)
+	data.TimeoutMS = int64Ptr(timeout.Milliseconds())
+	data.ExitCode = intPtr(exitCode(err))
 	if runCtx.Err() == context.DeadlineExceeded {
-		data["timed_out"] = true
+		data.TimedOut = boolPtr(true)
 	}
 	if err != nil {
-		data["status"] = protocol.StepStatusFailed
-		data["error"] = secrets.Redact(err.Error())
+		data.Status = protocol.StepStatusFailed
+		data.Error = secrets.Redact(err.Error())
 		emit(protocol.Event{Type: protocol.EventHookFailed, DurationMS: duration, Data: data})
 		return runResult{err: fmt.Errorf("hook %s/%s failed: %w", event, hook.Name, err)}
 	}
-	data["status"] = protocol.StepStatusCompleted
+	data.Status = protocol.StepStatusCompleted
 	emit(protocol.Event{Type: protocol.EventHookFinished, DurationMS: duration, Data: data})
 	return runResult{}
 }
 
-func hookEventData(hook config.Hook, event string, payload map[string]any) map[string]any {
-	data := map[string]any{
-		"hook_event": event,
-		"hook_name":  hook.Name,
-		"name":       hook.Name,
-		"command":    filepath.Base(hook.Command),
-		"fatal":      hook.Fatal,
-		"status":     protocol.StepStatusStarted,
+func hookEventData(hook config.Hook, event string, payload map[string]any) protocol.HookEvent {
+	data := protocol.HookEvent{
+		HookEvent: event,
+		HookName:  hook.Name,
+		Name:      hook.Name,
+		Command:   filepath.Base(hook.Command),
+		Fatal:     hook.Fatal,
+		Status:    protocol.StepStatusStarted,
 	}
 	if len(payload) > 0 {
-		data["payload"] = payload
+		data.Payload = payload
 	}
-	for _, key := range []string{
-		"turn_id", "step_id", "call_id", "attempt_id", "tool_name",
-		"request_id", "provider_id", "model_id", "provider_request_id", "attempts", "retries", "status_code",
-		"server_name", "transport", "connected", "state", "tool_count", "retry_count", "restart_count", "retry_backoff_ms",
-		"args_summary", "error_code", "is_error", "duration_ms", "output_bytes", "output_estimated_tokens",
-		"truncated", "output_ref", "permission_decision", "permission_source", "permission_reason",
-	} {
-		if value := payload[key]; value != nil && value != "" {
-			data[key] = value
-		}
-	}
+	data.TurnID = payloadString(payload, "turn_id")
+	data.StepID = payloadString(payload, "step_id")
+	data.CallID = payloadString(payload, "call_id")
+	data.AttemptID = payloadString(payload, "attempt_id")
+	data.ToolName = payloadString(payload, "tool_name")
+	data.RequestID = payloadString(payload, "request_id")
+	data.ProviderID = payloadString(payload, "provider_id")
+	data.ModelID = payloadString(payload, "model_id")
+	data.ProviderRequestID = payloadString(payload, "provider_request_id")
+	data.Attempts = payloadInt(payload, "attempts")
+	data.Retries = payloadInt(payload, "retries")
+	data.StatusCode = payloadInt(payload, "status_code")
+	data.ServerName = payloadString(payload, "server_name")
+	data.Transport = payloadString(payload, "transport")
+	data.Connected = payloadBool(payload, "connected")
+	data.State = payloadString(payload, "state")
+	data.ToolCount = payloadInt(payload, "tool_count")
+	data.RetryCount = payloadInt(payload, "retry_count")
+	data.RestartCount = payloadInt(payload, "restart_count")
+	data.RetryBackoffMS = payloadInt64(payload, "retry_backoff_ms")
+	data.ArgsSummary = payloadString(payload, "args_summary")
+	data.ErrorCode = payloadString(payload, "error_code")
+	data.IsError = payloadBool(payload, "is_error")
+	data.DurationMS = payloadInt64(payload, "duration_ms")
+	data.OutputBytes = payloadInt64(payload, "output_bytes")
+	data.OutputEstimatedTokens = payloadInt64(payload, "output_estimated_tokens")
+	data.Truncated = payloadBool(payload, "truncated")
+	data.OutputRef = payloadString(payload, "output_ref")
+	data.PermissionDecision = payloadString(payload, "permission_decision")
+	data.PermissionSource = payloadString(payload, "permission_source")
+	data.PermissionReason = payloadString(payload, "permission_reason")
 	return data
+}
+
+func payloadString(payload map[string]any, key string) string {
+	switch value := payload[key].(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case fmt.Stringer:
+		return strings.TrimSpace(value.String())
+	default:
+		return ""
+	}
+}
+
+func payloadBool(payload map[string]any, key string) *bool {
+	if value, ok := payload[key].(bool); ok {
+		return &value
+	}
+	return nil
+}
+
+func payloadInt(payload map[string]any, key string) *int {
+	switch value := payload[key].(type) {
+	case int:
+		return &value
+	case int8:
+		out := int(value)
+		return &out
+	case int16:
+		out := int(value)
+		return &out
+	case int32:
+		out := int(value)
+		return &out
+	case int64:
+		out := int(value)
+		return &out
+	case uint:
+		out := int(value)
+		return &out
+	case uint8:
+		out := int(value)
+		return &out
+	case uint16:
+		out := int(value)
+		return &out
+	case uint32:
+		out := int(value)
+		return &out
+	case uint64:
+		out := int(value)
+		return &out
+	case float64:
+		out := int(value)
+		return &out
+	case float32:
+		out := int(value)
+		return &out
+	default:
+		return nil
+	}
+}
+
+func payloadInt64(payload map[string]any, key string) *int64 {
+	switch value := payload[key].(type) {
+	case int:
+		out := int64(value)
+		return &out
+	case int8:
+		out := int64(value)
+		return &out
+	case int16:
+		out := int64(value)
+		return &out
+	case int32:
+		out := int64(value)
+		return &out
+	case int64:
+		return &value
+	case uint:
+		out := int64(value)
+		return &out
+	case uint8:
+		out := int64(value)
+		return &out
+	case uint16:
+		out := int64(value)
+		return &out
+	case uint32:
+		out := int64(value)
+		return &out
+	case uint64:
+		out := int64(value)
+		return &out
+	case float64:
+		out := int64(value)
+		return &out
+	case float32:
+		out := int64(value)
+		return &out
+	default:
+		return nil
+	}
+}
+
+func intPtr(value int) *int {
+	return &value
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func hookEnv(hook config.Hook, event string, payload map[string]any) []string {

@@ -50,13 +50,9 @@ type codexAuthSnapshot struct {
 func (c *Codex) Stream(ctx context.Context, req Request) (<-chan Event, <-chan error) {
 	events := newProviderEventChannel()
 	errs := make(chan error, 1)
-	go func() {
-		defer close(events)
-		defer close(errs)
-		if err := c.stream(ctx, req, events); err != nil {
-			errs <- err
-		}
-	}()
+	go runProviderStream(events, errs, func() error {
+		return c.stream(ctx, req, events)
+	})
 	return events, errs
 }
 
@@ -74,7 +70,7 @@ func (c *Codex) stream(ctx context.Context, req Request, events chan<- Event) er
 		ModelID:    req.Model,
 	})
 	if err != nil {
-		return err
+		return withRequestMetadata(err, meta)
 	}
 	if respCancel != nil {
 		defer respCancel()
@@ -102,6 +98,18 @@ func (c *Codex) doResponsesWithRetry(ctx context.Context, body []byte, meta Requ
 			meta.StatusCode = resp.StatusCode
 			meta.ProviderRequestID = firstHeader(resp.Header, "x-request-id", "request-id", "openai-request-id")
 			return resp, respCancel, meta, nil
+		}
+		meta.Attempts = attempts
+		meta.Retries = attempts - 1
+		if meta.Retries < retriesUsed {
+			meta.Retries = retriesUsed
+		}
+		meta.StatusCode = 0
+		meta.ProviderRequestID = ""
+		var providerErr *ProviderError
+		if errors.As(err, &providerErr) {
+			meta.StatusCode = providerErr.Status
+			meta.ProviderRequestID = providerErr.RequestID
 		}
 		refreshed, refreshErr := c.refreshAfterUnauthorized(ctx, err, refreshedUnauthorized)
 		if refreshErr != nil {
@@ -230,7 +238,7 @@ func (c *Codex) refreshAfterUnauthorized(ctx context.Context, err error, already
 
 func (c *Codex) refreshAuthLocked(ctx context.Context) error {
 	refreshCtx, finishSetup, cancelRefresh := newRequestSetupContext(ctx, c.RequestTimeout)
-	err := c.Auth.refresh(refreshCtx, config.Config{
+	err := c.Auth.refresh(refreshCtx, config.AuthSettings{
 		CodexRefreshURL: c.CodexRefreshURL,
 		CodexClientID:   c.CodexClientID,
 	}, c.Client)

@@ -2,15 +2,11 @@ package agent
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -19,867 +15,98 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	runtimehooks "github.com/billyhargroveofficial/billyharness/internal/hooks"
-	"github.com/billyhargroveofficial/billyharness/internal/instructions"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
-	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/runstate"
+	"github.com/billyhargroveofficial/billyharness/internal/tooloutput"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
 type Agent struct {
-	cfg      config.Config
-	provider provider.Provider
-	tools    *tools.Registry
+	providerBinding config.ProviderBinding
+	profile         config.ProfileSelection
+	runtime         config.RuntimeLimits
+	toolPolicy      config.ToolPolicySettings
+	mcpSettings     config.MCPSettings
+	hookSettings    config.HookSettings
+	instructions    config.InstructionSettings
+	provider        provider.Provider
+	tools           *tools.Registry
+}
+
+type Settings struct {
+	ProviderBinding config.ProviderBinding
+	Profile         config.ProfileSelection
+	Runtime         config.RuntimeLimits
+	ToolPolicy      config.ToolPolicySettings
+	MCP             config.MCPSettings
+	Hooks           config.HookSettings
+	Instructions    config.InstructionSettings
+}
+
+func SettingsFromConfig(cfg config.Config) Settings {
+	return Settings{
+		ProviderBinding: cfg.ProviderBinding(),
+		Profile:         cfg.ProfileSelection(),
+		Runtime:         cfg.RuntimeLimits(),
+		ToolPolicy:      cfg.ToolPolicySettings(),
+		MCP:             cfg.MCPSettings(),
+		Hooks:           cfg.HookSettings(),
+		Instructions:    cfg.InstructionSettings(),
+	}
 }
 
 func New(cfg config.Config, provider provider.Provider, registry *tools.Registry) *Agent {
-	return &Agent{cfg: cfg, provider: provider, tools: registry}
+	return NewFromSettings(SettingsFromConfig(cfg), provider, registry)
 }
 
-func (a *Agent) Run(ctx context.Context, prompt string, emit func(protocol.Event)) error {
-	messages := InitialMessages(a.cfg)
-	messages = append(messages, protocol.Message{Role: protocol.RoleUser, Content: prompt})
-	_, err := a.RunMessages(ctx, messages, emit)
-	return err
-}
-
-func InitialMessages(cfgs ...config.Config) []protocol.Message {
-	messages := []protocol.Message{{Role: protocol.RoleSystem, Content: systemPrompt()}}
-	if len(cfgs) > 0 {
-		if msg, ok := instructions.ProfileMessage(cfgs[0]); ok {
-			messages = append(messages, msg)
-		}
-		if msg, ok := instructions.Message(cfgs[0]); ok {
-			messages = append(messages, msg)
-		}
-	}
-	return messages
-}
-
-func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
-	if emit == nil {
-		emit = func(protocol.Event) {}
-	}
-	runID := newAgentRunID()
-	submission := runstate.Submission{ID: newAgentSubmissionID(), CreatedAt: time.Now().UTC()}
-	run := runstate.Run{ID: runID, SubmissionID: submission.ID, Status: "started", StartedAt: submission.CreatedAt}
-	emit = protocol.NewEventEnricherWithEnvelope(protocol.EventEnvelope{
-		SubmissionID: submission.ID,
-		RunID:        run.ID,
-		Source:       protocol.EventSourceAgent,
-	}, emit).Emit
-	emit(protocol.Event{Type: protocol.EventRunStarted, Data: map[string]any{
-		"submission_id": run.SubmissionID,
-		"run_id":        run.ID,
-		"status":        run.Status,
-	}})
-	hookRunner := runtimehooks.New(a.cfg)
-	if err := hookRunner.Run(ctx, "session_start", map[string]any{
-		"submission_id": run.SubmissionID,
-		"run_id":        run.ID,
-		"status":        run.Status,
-	}, emit); err != nil {
-		emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
-		return messages, err
-	}
-	cleanupMCPStatusHook := a.installMCPStatusHook(ctx, hookRunner, run, emit)
-	defer cleanupMCPStatusHook()
-	messages = a.withMCPInstructions(messages)
-	var lastPromptTokens int64
-	emittedContextThresholds := map[int]bool{}
-	emitContextThresholdEvents(messages, a.cfg, 0, "initial", emittedContextThresholds, emit)
-	for round := 0; round < a.cfg.MaxToolRounds; round++ {
-		roundNum := round + 1
-		turnID := agentTurnID(roundNum)
-		turnStarted := time.Now()
-		emitContextThresholdEvents(messages, a.cfg, roundNum, "before_turn", emittedContextThresholds, emit)
-		var compacted bool
-		var compaction *compactionReport
-		messages, compaction, compacted = a.compactMessages(ctx, messages, lastPromptTokens)
-		if compacted {
-			lastPromptTokens = 0
-			emit(protocol.Event{Type: protocol.EventContextCompacted, Data: compaction})
-		}
-		toolSpecs := a.tools.Specs()
-		turnSnapshot := runstate.NewSnapshot(a.cfg, messages, toolSpecs)
-		emit(protocol.Event{Type: protocol.EventTurnStarted, Data: protocol.TurnEvent{
-			TurnID:       turnID,
-			Round:        roundNum,
-			Status:       protocol.TurnStatusStarted,
-			Model:        a.cfg.Model,
-			MessageCount: len(messages),
-			Metadata:     turnSnapshot.Metadata(),
-		}})
-		modelStepID := agentStepID(turnID, protocol.StepKindModelCall, 1)
-		requestID := agentRequestID(turnID, roundNum)
-		modelCallBase := a.modelCallMetadata(requestID, roundNum, len(messages), len(toolSpecs), turnSnapshot)
-		modelStarted := time.Now()
-		emit(protocol.Event{Type: protocol.EventStepStarted, Data: protocol.StepEvent{
-			TurnID:       turnID,
-			StepID:       modelStepID,
-			Round:        roundNum,
-			Kind:         protocol.StepKindModelCall,
-			Status:       protocol.StepStatusStarted,
-			Name:         a.cfg.Model,
-			MessageCount: len(messages),
-			Metadata:     copyMap(modelCallBase),
-		}})
-		emit(protocol.Event{
-			Type:   protocol.EventModelCallStarted,
-			TurnID: turnID,
-			StepID: modelStepID,
-			Data:   modelCallEventData(modelCallBase, protocol.StepStatusStarted, -1, -1, provider.Usage{}, provider.RequestMetadata{}, ""),
-		})
-		events, errs := a.provider.Stream(ctx, provider.Request{
-			RequestID: requestID,
-			Model:     a.cfg.Model,
-			Messages:  messages,
-			Tools:     toolSpecs,
-		})
-		var content string
-		var reasoning string
-		var firstDeltaAt time.Time
-		var lastUsage provider.Usage
-		var requestMeta provider.RequestMetadata
-		var providerHookErr error
-		var acc provider.ToolAccumulator
-		for event := range events {
-			switch event.Kind {
-			case provider.EventContent:
-				if firstDeltaAt.IsZero() {
-					firstDeltaAt = time.Now()
-				}
-				content += event.Text
-				emit(protocol.Event{
-					Type:   protocol.EventAssistantDelta,
-					TurnID: turnID,
-					StepID: modelStepID,
-					Data:   event.Text,
-				})
-			case provider.EventReasoning:
-				if firstDeltaAt.IsZero() {
-					firstDeltaAt = time.Now()
-				}
-				reasoning += event.Text
-				emit(protocol.Event{
-					Type:   protocol.EventAssistantReasoning,
-					TurnID: turnID,
-					StepID: modelStepID,
-					Data:   event.Text,
-				})
-			case provider.EventToolCallDelta:
-				acc.Push(event)
-			case provider.EventUsage:
-				if event.Usage.InputTokens > 0 {
-					lastPromptTokens = event.Usage.InputTokens
-				}
-				lastUsage = event.Usage
-				emit(protocol.Event{
-					Type:   protocol.EventProviderUsageUpdate,
-					TurnID: turnID,
-					StepID: modelStepID,
-					Data:   event.Usage,
-				})
-			case provider.EventRequestMetadata:
-				requestMeta = event.Request
-				if event.Request.Retries > 0 {
-					providerHookErr = joinHookError(providerHookErr, hookRunner.Run(ctx, "provider_retry", map[string]any{
-						"turn_id":             turnID,
-						"step_id":             modelStepID,
-						"request_id":          event.Request.RequestID,
-						"provider_id":         event.Request.ProviderID,
-						"model_id":            event.Request.ModelID,
-						"provider_request_id": event.Request.ProviderRequestID,
-						"attempts":            event.Request.Attempts,
-						"retries":             event.Request.Retries,
-						"status_code":         event.Request.StatusCode,
-					}, emit))
-				}
-			case provider.EventDone:
-			}
-		}
-		if err := <-errs; err != nil {
-			emit(protocol.Event{
-				Type:   protocol.EventModelCallFinished,
-				TurnID: turnID,
-				StepID: modelStepID,
-				Data:   modelCallEventData(modelCallBase, protocol.StepStatusFailed, durationMS(modelStarted), firstDeltaLatencyMS(modelStarted, firstDeltaAt), lastUsage, requestMeta, err.Error()),
-			})
-			emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
-				TurnID:     turnID,
-				StepID:     modelStepID,
-				Round:      roundNum,
-				Kind:       protocol.StepKindModelCall,
-				Status:     protocol.StepStatusFailed,
-				Name:       a.cfg.Model,
-				DurationMS: durationMS(modelStarted),
-				Error:      err.Error(),
-			}})
-			emit(protocol.Event{Type: protocol.EventTurnCompleted, Data: protocol.TurnEvent{
-				TurnID:     turnID,
-				Round:      roundNum,
-				Status:     protocol.TurnStatusFailed,
-				StopReason: protocol.TurnStopError,
-				Model:      a.cfg.Model,
-				DurationMS: durationMS(turnStarted),
-				Error:      err.Error(),
-			}})
-			err = joinHookError(err, hookRunner.Run(ctx, "session_done", map[string]any{
-				"run_id":  run.ID,
-				"status":  protocol.StepStatusFailed,
-				"error":   err.Error(),
-				"turn_id": turnID,
-			}, emit))
-			emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
-			return messages, err
-		}
-		if providerHookErr != nil {
-			err := providerHookErr
-			emit(protocol.Event{
-				Type:   protocol.EventModelCallFinished,
-				TurnID: turnID,
-				StepID: modelStepID,
-				Data:   modelCallEventData(modelCallBase, protocol.StepStatusFailed, durationMS(modelStarted), firstDeltaLatencyMS(modelStarted, firstDeltaAt), lastUsage, requestMeta, err.Error()),
-			})
-			emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
-				TurnID:     turnID,
-				StepID:     modelStepID,
-				Round:      roundNum,
-				Kind:       protocol.StepKindModelCall,
-				Status:     protocol.StepStatusFailed,
-				Name:       a.cfg.Model,
-				DurationMS: durationMS(modelStarted),
-				Error:      err.Error(),
-			}})
-			emit(protocol.Event{Type: protocol.EventTurnCompleted, Data: protocol.TurnEvent{
-				TurnID:     turnID,
-				Round:      roundNum,
-				Status:     protocol.TurnStatusFailed,
-				StopReason: protocol.TurnStopError,
-				Model:      a.cfg.Model,
-				DurationMS: durationMS(turnStarted),
-				Error:      err.Error(),
-			}})
-			err = joinHookError(err, hookRunner.Run(ctx, "session_done", map[string]any{
-				"run_id":  run.ID,
-				"status":  protocol.StepStatusFailed,
-				"error":   err.Error(),
-				"turn_id": turnID,
-			}, emit))
-			emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
-			return messages, err
-		}
-		emit(protocol.Event{
-			Type:   protocol.EventModelCallFinished,
-			TurnID: turnID,
-			StepID: modelStepID,
-			Data:   modelCallEventData(modelCallBase, protocol.StepStatusCompleted, durationMS(modelStarted), firstDeltaLatencyMS(modelStarted, firstDeltaAt), lastUsage, requestMeta, ""),
-		})
-		calls, err := acc.Finish()
-		if err != nil {
-			emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
-				TurnID:     turnID,
-				StepID:     modelStepID,
-				Round:      roundNum,
-				Kind:       protocol.StepKindModelCall,
-				Status:     protocol.StepStatusFailed,
-				Name:       a.cfg.Model,
-				DurationMS: durationMS(modelStarted),
-				Error:      err.Error(),
-			}})
-			emit(protocol.Event{Type: protocol.EventTurnCompleted, Data: protocol.TurnEvent{
-				TurnID:     turnID,
-				Round:      roundNum,
-				Status:     protocol.TurnStatusFailed,
-				StopReason: protocol.TurnStopError,
-				Model:      a.cfg.Model,
-				DurationMS: durationMS(turnStarted),
-				Error:      err.Error(),
-			}})
-			err = joinHookError(err, hookRunner.Run(ctx, "session_done", map[string]any{
-				"run_id":  run.ID,
-				"status":  protocol.StepStatusFailed,
-				"error":   err.Error(),
-				"turn_id": turnID,
-			}, emit))
-			emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
-			return messages, err
-		}
-		modelMetadata := map[string]any{
-			"content_chars":   len(content),
-			"reasoning_chars": len(reasoning),
-			"tool_call_count": len(calls),
-		}
-		for key, value := range modelCallEventData(modelCallBase, protocol.StepStatusCompleted, durationMS(modelStarted), firstDeltaLatencyMS(modelStarted, firstDeltaAt), lastUsage, requestMeta, "") {
-			modelMetadata[key] = value
-		}
-		if !firstDeltaAt.IsZero() {
-			modelMetadata["first_delta_ms"] = elapsedMS(modelStarted, firstDeltaAt)
-		}
-		emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
-			TurnID:     turnID,
-			StepID:     modelStepID,
-			Round:      roundNum,
-			Kind:       protocol.StepKindModelCall,
-			Status:     protocol.StepStatusCompleted,
-			Name:       a.cfg.Model,
-			DurationMS: durationMS(modelStarted),
-			Metadata:   modelMetadata,
-		}})
-		if len(calls) == 0 {
-			messages = append(messages, protocol.Message{
-				Role:             protocol.RoleAssistant,
-				Content:          content,
-				ReasoningContent: optionalReasoning(a.cfg, reasoning),
-			})
-			emitContextThresholdEvents(messages, a.cfg, roundNum, "after_final_answer", emittedContextThresholds, emit)
-			emit(protocol.Event{Type: protocol.EventTurnCompleted, Data: protocol.TurnEvent{
-				TurnID:       turnID,
-				Round:        roundNum,
-				Status:       protocol.TurnStatusCompleted,
-				StopReason:   protocol.TurnStopFinalAnswer,
-				Model:        a.cfg.Model,
-				MessageCount: len(messages),
-				DurationMS:   durationMS(turnStarted),
-			}})
-			if err := hookRunner.Run(ctx, "session_done", map[string]any{
-				"run_id":        run.ID,
-				"status":        protocol.StepStatusCompleted,
-				"turn_id":       turnID,
-				"message_count": len(messages),
-			}, emit); err != nil {
-				emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
-				return messages, err
-			}
-			emit(protocol.Event{Type: protocol.EventRunCompleted})
-			return messages, nil
-		}
-		messages = append(messages, protocol.Message{
-			Role:             protocol.RoleAssistant,
-			Content:          content,
-			ReasoningContent: optionalReasoning(a.cfg, reasoning),
-			ToolCalls:        calls,
-		})
-		results := a.executeToolCalls(ctx, hookRunner, turnID, roundNum, calls, emit)
-		for _, result := range results {
-			messages = append(messages, protocol.Message{
-				Role:       protocol.RoleTool,
-				Content:    result.Result.Content,
-				ToolCallID: result.Call.ID,
-				Name:       result.Call.Name,
-			})
-		}
-		emitContextThresholdEvents(messages, a.cfg, roundNum, "after_tool_results", emittedContextThresholds, emit)
-		emit(protocol.Event{Type: protocol.EventTurnCompleted, Data: protocol.TurnEvent{
-			TurnID:        turnID,
-			Round:         roundNum,
-			Status:        protocol.TurnStatusCompleted,
-			StopReason:    protocol.TurnStopToolResults,
-			Model:         a.cfg.Model,
-			MessageCount:  len(messages),
-			ToolCallCount: len(calls),
-			DurationMS:    durationMS(turnStarted),
-		}})
-	}
-	err := fmt.Errorf("exceeded max tool rounds: %d", a.cfg.MaxToolRounds)
-	err = joinHookError(err, hookRunner.Run(ctx, "session_done", map[string]any{
-		"run_id": run.ID,
-		"status": protocol.StepStatusFailed,
-		"error":  err.Error(),
-	}, emit))
-	emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
-	return messages, err
-}
-
-type toolExecutionResult struct {
-	Index      int
-	Call       protocol.ToolCall
-	Result     protocol.ToolResult
-	DurationMS int64
-	AttemptID  string
-}
-
-func (a *Agent) executeToolCalls(ctx context.Context, hookRunner *runtimehooks.Runner, turnID string, round int, calls []protocol.ToolCall, emit func(protocol.Event)) []toolExecutionResult {
-	results := make([]toolExecutionResult, len(calls))
-	orchestrator := a.newToolOrchestrator(emit, hookRunner)
-	for _, call := range calls {
-		orchestrator.Request(call)
-	}
-	for i := 0; i < len(calls); {
-		if !a.canRunToolParallel(calls[i]) {
-			results[i] = a.executeOneTool(ctx, orchestrator, turnID, round, i, calls[i], false, "", 0, 0, emit)
-			i++
-			continue
-		}
-		j := i + 1
-		for j < len(calls) && a.canRunToolParallel(calls[j]) {
-			j++
-		}
-		a.executeParallelToolBatch(ctx, orchestrator, turnID, round, calls, i, j, results, emit)
-		i = j
-	}
-	return results
-}
-
-type toolOrchestrator struct {
-	agent     *Agent
-	emit      func(protocol.Event)
-	hooks     *runtimehooks.Runner
-	decisions map[string]toolPermissionDecision
-}
-
-type toolPermissionDecision struct {
-	CallID           string
-	Name             string
-	Risk             protocol.Risk
-	KnownRisk        bool
-	RequiresApproval bool
-	Decision         string
-	Source           string
-	Reason           string
-}
-
-const (
-	toolPhasePrepare            = "prepare"
-	toolPhasePermissionDecision = "permission_decision"
-	toolPhaseAttemptStarted     = "attempt_started"
-	toolPhaseExecuting          = "executing"
-	toolPhaseAttemptFinished    = "attempt_finished"
-	toolPhaseRetryDecision      = "retry_decision"
-	toolPhaseFinalize           = "finalize"
-	toolPhaseCancelAbort        = "cancel_abort"
-
-	toolProgressStatusSkipped = "skipped"
-	toolProgressStatusAborted = "aborted"
-)
-
-func (a *Agent) newToolOrchestrator(emit func(protocol.Event), hookRunner *runtimehooks.Runner) *toolOrchestrator {
-	return &toolOrchestrator{
-		agent:     a,
-		emit:      emit,
-		hooks:     hookRunner,
-		decisions: map[string]toolPermissionDecision{},
+func NewFromSettings(settings Settings, provider provider.Provider, registry *tools.Registry) *Agent {
+	return &Agent{
+		providerBinding: settings.ProviderBinding,
+		profile:         settings.Profile,
+		runtime:         settings.Runtime,
+		toolPolicy:      settings.ToolPolicy,
+		mcpSettings:     settings.MCP,
+		hookSettings:    settings.Hooks,
+		instructions:    settings.Instructions,
+		provider:        provider,
+		tools:           registry,
 	}
 }
 
-func (o *toolOrchestrator) Request(call protocol.ToolCall) {
-	if o == nil || o.emit == nil {
-		return
+func (a *Agent) snapshotInput() runstate.SnapshotInput {
+	if a == nil {
+		return runstate.SnapshotInput{}
 	}
-	o.emit(protocol.Event{Type: protocol.EventToolCallRequested, CallID: call.ID, Data: call})
-	o.EmitProgress(call, "", toolPhasePrepare, protocol.StepStatusStarted, map[string]any{
-		"args_summary": summarizeToolArgs(call.Arguments),
-	})
-	decision := o.permissionDecision(call)
-	o.decisions[call.ID] = decision
-	o.emit(protocol.Event{Type: protocol.EventToolPermissionRequested, Data: decision.requestEventData()})
-	o.emit(protocol.Event{Type: protocol.EventToolPermissionDecided, Data: decision.decisionEventData()})
-	o.EmitProgress(call, "", toolPhasePermissionDecision, decision.Decision, decision.progressMetadata())
-	if o.agent != nil {
-		o.agent.emitToolAudit(call, o.emit)
+	return runstate.SnapshotInput{
+		Provider:   a.providerBinding,
+		Profile:    a.profile,
+		Runtime:    a.runtime,
+		ToolPolicy: a.toolPolicy,
+		MCP:        a.mcpSettings,
 	}
 }
 
-func (o *toolOrchestrator) EmitAttemptStarted(call protocol.ToolCall, attemptID string) {
-	if o == nil || o.emit == nil {
-		return
+func (a *Agent) modelID() string {
+	if a == nil {
+		return ""
 	}
-	o.EmitProgress(call, attemptID, toolPhaseAttemptStarted, protocol.StepStatusStarted, nil)
-	o.emit(protocol.Event{
-		Type:      protocol.EventToolCallStarted,
-		CallID:    call.ID,
-		AttemptID: attemptID,
-		Data:      call.Name,
-	})
+	return a.providerBinding.Model.Model
 }
 
-func (o *toolOrchestrator) Execute(ctx context.Context, turnID string, index int, call protocol.ToolCall, attemptID string) toolExecutionResult {
-	started := time.Now()
-	decision := o.decision(call)
-	executingStatus := protocol.StepStatusStarted
-	if decision.Decision == "deny" {
-		executingStatus = toolProgressStatusSkipped
+func (a *Agent) providerID() string {
+	if a == nil {
+		return ""
 	}
-	o.EmitProgress(call, attemptID, toolPhaseExecuting, executingStatus, decision.progressMetadata())
-	var out protocol.ToolResult
-	stepID := agentStepID(turnID, protocol.StepKindToolCall, index+1)
-	beforeHookErr := o.runHook(ctx, "before_tool", o.toolHookPayload(turnID, stepID, call, attemptID, map[string]any{
-		"args_summary":        summarizeToolArgs(call.Arguments),
-		"permission_decision": decision.Decision,
-		"permission_source":   decision.Source,
-		"permission_reason":   decision.Reason,
-		"requires_approval":   decision.RequiresApproval,
-		"risk":                decision.Risk,
-		"known_risk":          decision.KnownRisk,
-		"started_at":          started.UTC().Format(time.RFC3339Nano),
-	}))
-	if beforeHookErr != nil {
-		out = protocol.ToolResult{
-			CallID:    call.ID,
-			Name:      call.Name,
-			Content:   beforeHookErr.Error(),
-			IsError:   true,
-			ErrorCode: "hook_failed",
-			Metadata:  map[string]any{"hook_event": "before_tool"},
-		}
-	} else if decision.Decision == "deny" {
-		out = protocol.ToolResult{
-			CallID:    call.ID,
-			Name:      call.Name,
-			Content:   dangerousToolDisabledMessage(),
-			IsError:   true,
-			ErrorCode: "permission_denied",
-			Metadata:  map[string]any{},
-		}
-	} else if o == nil || o.agent == nil || o.agent.tools == nil {
-		out = protocol.ToolResult{
-			CallID:    call.ID,
-			Name:      call.Name,
-			Content:   "tool registry unavailable",
-			IsError:   true,
-			ErrorCode: "tool_registry_unavailable",
-			Metadata:  map[string]any{},
-		}
-	} else {
-		result, err := o.agent.tools.Call(ctx, call)
-		out = protocol.ToolResult{
-			CallID:    call.ID,
-			Name:      call.Name,
-			Content:   result.Content,
-			IsError:   result.IsError,
-			ErrorCode: result.ErrorCode,
-			Metadata:  result.Metadata,
-			Truncated: result.Truncated,
-			OutputRef: result.OutputRef,
-		}
-		if err != nil {
-			out.IsError = true
-			if out.ErrorCode == "" {
-				if ctx.Err() != nil {
-					out.ErrorCode = "tool_aborted"
-				} else {
-					out.ErrorCode = "tool_error"
-				}
-			}
-			if out.Content == "" {
-				out.Content = err.Error()
-			}
-		}
-		o.agent.compactToolResult(index, call, &out)
-	}
-	ensureToolMetadata(&out)
-	ended := time.Now()
-	duration := ended.Sub(started).Milliseconds()
-	out.Metadata["tool_name"] = call.Name
-	out.Metadata["args_summary"] = summarizeToolArgs(call.Arguments)
-	out.Metadata["attempt_id"] = attemptID
-	out.Metadata["permission_decision"] = decision.Decision
-	out.Metadata["permission_source"] = decision.Source
-	out.Metadata["permission_reason"] = decision.Reason
-	out.Metadata["started_at"] = started.UTC().Format(time.RFC3339Nano)
-	out.Metadata["finished_at"] = ended.UTC().Format(time.RFC3339Nano)
-	out.Metadata["duration_ms"] = duration
-	if decision.KnownRisk {
-		out.Metadata["risk"] = decision.Risk
-	}
-	out.Metadata["output_bytes"] = len(out.Content)
-	out.Metadata["output_estimated_tokens"] = estimateMessagesTokens([]protocol.Message{{Role: protocol.RoleTool, Content: out.Content}})
-	out.Metadata["truncated"] = out.Truncated
-	if out.OutputRef != "" {
-		annotateOutputRefMetadata(out.OutputRef, out.Metadata)
-	}
-	if beforeHookErr == nil {
-		afterHookErr := o.runHook(ctx, "after_tool", o.toolHookPayload(turnID, stepID, call, attemptID, map[string]any{
-			"status":                  toolResultProgressStatus(out),
-			"error_code":              out.ErrorCode,
-			"is_error":                out.IsError,
-			"duration_ms":             duration,
-			"output_bytes":            out.Metadata["output_bytes"],
-			"output_estimated_tokens": out.Metadata["output_estimated_tokens"],
-			"truncated":               out.Truncated,
-			"output_ref":              out.OutputRef,
-			"permission_decision":     decision.Decision,
-			"permission_source":       decision.Source,
-			"permission_reason":       decision.Reason,
-		}))
-		if afterHookErr != nil {
-			out.IsError = true
-			out.ErrorCode = "hook_failed"
-			out.Content = afterHookErr.Error()
-			out.Metadata["hook_event"] = "after_tool"
-			out.Metadata["hook_error"] = afterHookErr.Error()
-			out.Metadata["output_bytes"] = len(out.Content)
-			out.Metadata["output_estimated_tokens"] = estimateMessagesTokens([]protocol.Message{{Role: protocol.RoleTool, Content: out.Content}})
-		}
-	}
-	progressStatus := toolResultProgressStatus(out)
-	if out.ErrorCode == "tool_aborted" {
-		o.EmitProgress(call, attemptID, toolPhaseCancelAbort, toolProgressStatusAborted, map[string]any{
-			"error_code":  out.ErrorCode,
-			"duration_ms": duration,
-		})
-	}
-	o.EmitProgress(call, attemptID, toolPhaseAttemptFinished, progressStatus, map[string]any{
-		"duration_ms":             duration,
-		"error_code":              out.ErrorCode,
-		"output_bytes":            out.Metadata["output_bytes"],
-		"output_estimated_tokens": out.Metadata["output_estimated_tokens"],
-		"truncated":               out.Truncated,
-		"permission_decision":     decision.Decision,
-		"permission_source":       decision.Source,
-		"permission_reason":       decision.Reason,
-		"output_ref":              out.OutputRef,
-		"rate_limit_wait_ms":      out.Metadata["rate_limit_wait_ms"],
-	})
-	return toolExecutionResult{Index: index, Call: call, Result: out, DurationMS: duration, AttemptID: attemptID}
+	return a.providerBinding.Provider.Provider
 }
 
-func (o *toolOrchestrator) AbortBeforeExecute(index int, call protocol.ToolCall, attemptID string, err error) toolExecutionResult {
-	if err == nil {
-		err = context.Canceled
+func (a *Agent) reasoningEffort() string {
+	if a == nil {
+		return ""
 	}
-	out := protocol.ToolResult{
-		CallID:    call.ID,
-		Name:      call.Name,
-		Content:   err.Error(),
-		IsError:   true,
-		ErrorCode: "tool_aborted",
-		Metadata:  map[string]any{},
-	}
-	decision := o.decision(call)
-	out.Metadata["tool_name"] = call.Name
-	out.Metadata["args_summary"] = summarizeToolArgs(call.Arguments)
-	out.Metadata["attempt_id"] = attemptID
-	out.Metadata["permission_decision"] = decision.Decision
-	out.Metadata["permission_source"] = decision.Source
-	out.Metadata["permission_reason"] = decision.Reason
-	if decision.KnownRisk {
-		out.Metadata["risk"] = decision.Risk
-	}
-	out.Metadata["output_bytes"] = len(out.Content)
-	out.Metadata["output_estimated_tokens"] = estimateMessagesTokens([]protocol.Message{{Role: protocol.RoleTool, Content: out.Content}})
-	out.Metadata["truncated"] = false
-	o.EmitProgress(call, attemptID, toolPhaseCancelAbort, toolProgressStatusAborted, map[string]any{
-		"error_code":              out.ErrorCode,
-		"output_bytes":            out.Metadata["output_bytes"],
-		"output_estimated_tokens": out.Metadata["output_estimated_tokens"],
-		"permission_decision":     decision.Decision,
-		"permission_source":       decision.Source,
-		"permission_reason":       decision.Reason,
-	})
-	o.EmitProgress(call, attemptID, toolPhaseAttemptFinished, toolProgressStatusAborted, map[string]any{
-		"error_code":              out.ErrorCode,
-		"output_bytes":            out.Metadata["output_bytes"],
-		"output_estimated_tokens": out.Metadata["output_estimated_tokens"],
-		"permission_decision":     decision.Decision,
-		"permission_source":       decision.Source,
-		"permission_reason":       decision.Reason,
-	})
-	return toolExecutionResult{Index: index, Call: call, Result: out, AttemptID: attemptID}
-}
-
-func (o *toolOrchestrator) EmitAttemptFinished(result toolExecutionResult) {
-	if o == nil || o.emit == nil {
-		return
-	}
-	progressStatus := toolResultProgressStatus(result.Result)
-	if result.Result.OutputRef != "" {
-		data := map[string]any{
-			"call_id":    result.Call.ID,
-			"name":       result.Call.Name,
-			"attempt_id": result.AttemptID,
-			"output_ref": result.Result.OutputRef,
-			"truncated":  result.Result.Truncated,
-		}
-		for _, key := range []string{
-			"output_ref_id",
-			"output_ref_bytes",
-			"output_ref_sha256",
-			"output_ref_permissions",
-			"output_ref_plaintext",
-		} {
-			if value := result.Result.Metadata[key]; value != nil {
-				data[key] = value
-			}
-		}
-		o.emit(protocol.Event{Type: protocol.EventToolOutputRefCreated, Data: data})
-	}
-	if result.Result.IsError {
-		eventType := protocol.EventToolCallFailed
-		if result.Result.ErrorCode == "tool_aborted" {
-			eventType = protocol.EventToolCallAborted
-		}
-		o.emit(protocol.Event{
-			Type:      eventType,
-			CallID:    result.Call.ID,
-			AttemptID: result.AttemptID,
-			Data:      result.Result,
-		})
-	}
-	o.EmitProgress(result.Call, result.AttemptID, toolPhaseRetryDecision, toolProgressStatusSkipped, map[string]any{
-		"reason": "retries_not_configured",
-	})
-	o.emit(protocol.Event{
-		Type:      protocol.EventToolCallFinished,
-		CallID:    result.Call.ID,
-		AttemptID: result.AttemptID,
-		Data:      result.Result,
-	})
-	o.EmitProgress(result.Call, result.AttemptID, toolPhaseFinalize, progressStatus, map[string]any{
-		"duration_ms": result.DurationMS,
-		"error_code":  result.Result.ErrorCode,
-		"truncated":   result.Result.Truncated,
-		"output_ref":  result.Result.OutputRef,
-	})
-}
-
-func (o *toolOrchestrator) EmitProgress(call protocol.ToolCall, attemptID, phase, status string, metadata map[string]any) {
-	if o == nil || o.emit == nil {
-		return
-	}
-	progress := protocol.ToolProgressEvent{
-		CallID:    call.ID,
-		Name:      call.Name,
-		AttemptID: attemptID,
-		Phase:     phase,
-		Status:    status,
-		Metadata:  cleanProgressMetadata(metadata),
-	}
-	o.emit(protocol.Event{
-		Type:      protocol.EventToolCallProgress,
-		CallID:    call.ID,
-		AttemptID: attemptID,
-		Data:      progress,
-	})
-}
-
-func (o *toolOrchestrator) runHook(ctx context.Context, event string, payload map[string]any) error {
-	if o == nil || o.hooks == nil {
-		return nil
-	}
-	return o.hooks.Run(ctx, event, payload, o.emit)
-}
-
-func (o *toolOrchestrator) toolHookPayload(turnID, stepID string, call protocol.ToolCall, attemptID string, extra map[string]any) map[string]any {
-	payload := map[string]any{
-		"turn_id":    turnID,
-		"step_id":    stepID,
-		"call_id":    call.ID,
-		"attempt_id": attemptID,
-		"tool_name":  call.Name,
-	}
-	for key, value := range extra {
-		if value != nil && value != "" {
-			payload[key] = value
-		}
-	}
-	return payload
-}
-
-func (o *toolOrchestrator) StepMetadata(call protocol.ToolCall, attemptID string, base map[string]any) map[string]any {
-	metadata := map[string]any{}
-	for key, value := range base {
-		metadata[key] = value
-	}
-	decision := o.decision(call)
-	metadata["attempt_id"] = attemptID
-	metadata["permission_decision"] = decision.Decision
-	metadata["permission_source"] = decision.Source
-	metadata["permission_reason"] = decision.Reason
-	if decision.KnownRisk {
-		metadata["risk"] = decision.Risk
-	}
-	return metadata
-}
-
-func (o *toolOrchestrator) decision(call protocol.ToolCall) toolPermissionDecision {
-	if o != nil {
-		if decision, ok := o.decisions[call.ID]; ok {
-			return decision
-		}
-		return o.permissionDecision(call)
-	}
-	return toolPermissionDecision{
-		CallID:   call.ID,
-		Name:     call.Name,
-		Decision: "allow",
-		Source:   "auto",
-		Reason:   "no_orchestrator",
-	}
-}
-
-func (o *toolOrchestrator) permissionDecision(call protocol.ToolCall) toolPermissionDecision {
-	decision := toolPermissionDecision{
-		CallID:   call.ID,
-		Name:     call.Name,
-		Decision: "allow",
-		Source:   "auto",
-		Reason:   "safe_or_existing_policy",
-	}
-	if o == nil || o.agent == nil || o.agent.tools == nil {
-		decision.Reason = "tool_registry_unavailable"
-		return decision
-	}
-	risk, ok := o.agent.tools.Risk(call.Name)
-	if !ok {
-		decision.Reason = "unknown_tool_checked_at_execution"
-		return decision
-	}
-	decision.Risk = risk
-	decision.KnownRisk = true
-	switch risk {
-	case protocol.RiskWrite, protocol.RiskExecute:
-		decision.RequiresApproval = true
-		if !o.agent.cfg.AutoApproveDangerous {
-			decision.Decision = "deny"
-			decision.Source = "config"
-			decision.Reason = "dangerous_tools_disabled"
-			return decision
-		}
-		decision.Source = "config"
-		decision.Reason = "auto_approve_dangerous"
-	case protocol.RiskExternal:
-		decision.RequiresApproval = true
-		decision.Reason = "external_tool_allowed_by_existing_policy"
-	default:
-		decision.Reason = "safe_tool"
-	}
-	return decision
-}
-
-func (d toolPermissionDecision) requestEventData() map[string]any {
-	data := map[string]any{
-		"call_id":           d.CallID,
-		"name":              d.Name,
-		"requires_approval": d.RequiresApproval,
-	}
-	if d.KnownRisk {
-		data["risk"] = d.Risk
-	}
-	return data
-}
-
-func (d toolPermissionDecision) decisionEventData() map[string]any {
-	data := d.requestEventData()
-	data["decision"] = d.Decision
-	data["source"] = d.Source
-	data["reason"] = d.Reason
-	return data
-}
-
-func (d toolPermissionDecision) progressMetadata() map[string]any {
-	data := map[string]any{
-		"permission_decision": d.Decision,
-		"permission_source":   d.Source,
-		"permission_reason":   d.Reason,
-		"requires_approval":   d.RequiresApproval,
-	}
-	if d.KnownRisk {
-		data["risk"] = d.Risk
-	}
-	return data
+	return a.providerBinding.Model.ReasoningEffort
 }
 
 func cleanProgressMetadata(metadata map[string]any) map[string]any {
@@ -913,6 +140,29 @@ func ensureToolMetadata(out *protocol.ToolResult) {
 	if out.Metadata == nil {
 		out.Metadata = map[string]any{}
 	}
+}
+
+func summarizeToolCallArgs(call protocol.ToolCall) string {
+	if call.InvalidArgumentError != "" {
+		return compactText("invalid_json_args: "+call.InvalidArguments, 240)
+	}
+	return summarizeToolArgs(call.Arguments)
+}
+
+func invalidToolArgumentsMessage(call protocol.ToolCall) string {
+	detail := strings.TrimSpace(call.InvalidArgumentError)
+	if detail == "" {
+		detail = "invalid JSON arguments"
+	}
+	args := compactText(call.InvalidArguments, 500)
+	if args == "" {
+		args = "<empty>"
+	}
+	return fmt.Sprintf(
+		"Tool call was not executed because its arguments were not valid JSON. %s. Original arguments: %s. Retry this tool call with a valid JSON object that matches the tool schema.",
+		detail,
+		args,
+	)
 }
 
 func summarizeToolArgs(raw json.RawMessage) string {
@@ -1006,25 +256,7 @@ func strconvQuote(text string) string {
 }
 
 func annotateOutputRefMetadata(ref string, metadata map[string]any) {
-	if strings.TrimSpace(ref) == "" || metadata == nil {
-		return
-	}
-	metadata["output_ref"] = ref
-	metadata["output_ref_id"] = filepath.Base(ref)
-	file, err := os.Open(ref)
-	if err != nil {
-		metadata["output_ref_hash_error"] = err.Error()
-		return
-	}
-	defer file.Close()
-	hash := sha256.New()
-	bytes, err := io.Copy(hash, file)
-	if err != nil {
-		metadata["output_ref_hash_error"] = err.Error()
-		return
-	}
-	metadata["output_ref_bytes"] = bytes
-	metadata["output_ref_sha256"] = hex.EncodeToString(hash.Sum(nil))
+	_ = tooloutput.AddMetadataForPath(metadata, ref)
 }
 
 func minInt(a, b int) int {
@@ -1104,7 +336,7 @@ func mcpStatusHookPayload(run runstate.Run, status mcpclient.ServerStatus) map[s
 }
 
 func dangerousToolDisabledMessage() string {
-	return "tool disabled; set FAST_AGENT_AUTO_APPROVE_DANGEROUS=true or unset FAST_AGENT_AUTO_APPROVE_DANGEROUS to enable write/execute tools"
+	return tools.DangerousToolDisabledMessage()
 }
 
 func (a *Agent) emitToolAudit(call protocol.ToolCall, emit func(protocol.Event)) {
@@ -1124,12 +356,12 @@ func (a *Agent) emitToolAudit(call protocol.ToolCall, emit func(protocol.Event))
 		"call_id":       call.ID,
 		"name":          call.Name,
 		"risk":          risk,
-		"auto_approved": a.cfg.AutoApproveDangerous,
+		"auto_approved": a.toolPolicy.AutoApproveDangerous,
 	}})
 }
 
 func (a *Agent) executeParallelToolBatch(ctx context.Context, orchestrator *toolOrchestrator, turnID string, round int, calls []protocol.ToolCall, start, end int, results []toolExecutionResult, emit func(protocol.Event)) {
-	limit := a.cfg.MaxParallelTools
+	limit := a.runtime.MaxParallelTools
 	if limit <= 1 || end-start == 1 {
 		for i := start; i < end; i++ {
 			results[i] = a.executeOneTool(ctx, orchestrator, turnID, round, i, calls[i], false, "", 0, 0, emit)
@@ -1292,6 +524,10 @@ func emitToolStepStarted(emit func(protocol.Event), turnID string, round, index 
 
 func (a *Agent) toolStepMetadata(call protocol.ToolCall, parallel bool, batchSize int) map[string]any {
 	metadata := map[string]any{}
+	if call.InvalidArgumentError != "" {
+		metadata["invalid_argument_error"] = call.InvalidArgumentError
+		metadata["args_summary"] = summarizeToolCallArgs(call)
+	}
 	var risk protocol.Risk
 	var ok bool
 	var parallelMeta tools.ParallelMetadata
@@ -1320,7 +556,7 @@ func (a *Agent) toolStepMetadata(call protocol.ToolCall, parallel bool, batchSiz
 	switch {
 	case parallel:
 		metadata["parallel_decision"] = "parallel_batch"
-	case a == nil || a.cfg.MaxParallelTools <= 1:
+	case a == nil || a.runtime.MaxParallelTools <= 1:
 		metadata["parallel_decision"] = "parallel_disabled"
 	case !hasParallelMeta:
 		metadata["parallel_decision"] = "unknown_tool_serial"
@@ -1392,72 +628,142 @@ func newAgentRunID() string {
 func (a *Agent) modelCallMetadata(requestID string, round, messageCount, toolCount int, snapshot runstate.Snapshot) map[string]any {
 	metadata := snapshot.Metadata()
 	if metadata["provider_id"] == nil {
-		metadata["provider_id"] = modelinfo.ProviderForModel(a.cfg.Model, a.cfg.Provider)
+		metadata["provider_id"] = a.providerID()
 	}
 	if metadata["model_id"] == nil {
-		metadata["model_id"] = a.cfg.Model
+		metadata["model_id"] = a.modelID()
 	}
 	metadata["request_id"] = requestID
 	metadata["round"] = round
 	metadata["message_count"] = messageCount
 	metadata["tool_count"] = toolCount
-	if a.cfg.ReasoningEffort != "" {
-		metadata["reasoning"] = a.cfg.ReasoningEffort
+	if reasoning := a.reasoningEffort(); reasoning != "" {
+		metadata["reasoning"] = reasoning
 	}
 	return metadata
 }
 
-func modelCallEventData(base map[string]any, status string, totalLatencyMS, firstDeltaMS int64, usage provider.Usage, meta provider.RequestMetadata, errText string) map[string]any {
-	data := copyMap(base)
-	data["status"] = status
+func modelCallEventData(base map[string]any, status string, totalLatencyMS, firstDeltaMS int64, usage provider.Usage, meta provider.RequestMetadata, errText string) protocol.ModelCallEvent {
+	data := protocol.ModelCallEvent{
+		RequestID:               metadataString(base, "request_id"),
+		Round:                   int(metadataInt64(base, "round")),
+		MessageCount:            int(metadataInt64(base, "message_count")),
+		ToolCount:               int(metadataInt64(base, "tool_count")),
+		ProviderID:              metadataString(base, "provider_id"),
+		ModelID:                 metadataString(base, "model_id"),
+		Reasoning:               metadataString(base, "reasoning"),
+		ReasoningMode:           metadataString(base, "reasoning_mode"),
+		ContextBudgetTokens:     metadataInt64(base, "context_budget_tokens"),
+		ToolSnapshotHash:        metadataString(base, "tool_snapshot_hash"),
+		MCPStatusSnapshotHash:   metadataString(base, "mcp_status_snapshot_hash"),
+		ProfileInstructionHash:  metadataString(base, "profile_instruction_hash"),
+		DangerousPermissionMode: metadataString(base, "dangerous_permission_mode"),
+		Status:                  status,
+		Retries:                 meta.Retries,
+	}
 	if meta.RequestID != "" {
-		data["request_id"] = meta.RequestID
+		data.RequestID = meta.RequestID
 	}
 	if meta.ProviderID != "" {
-		data["provider_id"] = meta.ProviderID
+		data.ProviderID = meta.ProviderID
 	}
 	if meta.ModelID != "" {
-		data["model_id"] = meta.ModelID
+		data.ModelID = meta.ModelID
 	}
 	if meta.ProviderRequestID != "" {
-		data["provider_request_id"] = meta.ProviderRequestID
+		data.ProviderRequestID = meta.ProviderRequestID
 	}
 	if meta.Attempts > 0 {
-		data["attempts"] = meta.Attempts
-	}
-	if meta.Retries > 0 {
-		data["retries"] = meta.Retries
-	} else {
-		data["retries"] = 0
+		data.Attempts = meta.Attempts
 	}
 	if meta.StatusCode > 0 {
-		data["status_code"] = meta.StatusCode
+		data.StatusCode = meta.StatusCode
 	}
 	if totalLatencyMS >= 0 {
-		data["total_latency_ms"] = totalLatencyMS
+		data.TotalLatencyMS = int64Ptr(totalLatencyMS)
 	}
 	if firstDeltaMS >= 0 {
-		data["first_delta_ms"] = firstDeltaMS
+		data.FirstDeltaMS = int64Ptr(firstDeltaMS)
 	}
 	if usage.InputTokens > 0 {
-		data["input_tokens"] = usage.InputTokens
+		data.InputTokens = usage.InputTokens
 	}
 	if usage.OutputTokens > 0 {
-		data["output_tokens"] = usage.OutputTokens
+		data.OutputTokens = usage.OutputTokens
 	}
 	if usage.CacheHitTokens > 0 {
-		data["cache_hit_tokens"] = usage.CacheHitTokens
+		data.CacheHitTokens = usage.CacheHitTokens
 	}
 	if usage.CacheMissTokens > 0 {
-		data["cache_miss_tokens"] = usage.CacheMissTokens
+		data.CacheMissTokens = usage.CacheMissTokens
 	}
 	if usage.ReasoningTokens > 0 {
-		data["reasoning_tokens"] = usage.ReasoningTokens
+		data.ReasoningTokens = usage.ReasoningTokens
 	}
 	if errText != "" {
-		data["error"] = errText
+		data.Error = errText
 	}
 	return data
+}
+
+func modelCallEventMetadata(data protocol.ModelCallEvent) map[string]any {
+	metadata := map[string]any{
+		"request_id":                data.RequestID,
+		"round":                     data.Round,
+		"message_count":             data.MessageCount,
+		"tool_count":                data.ToolCount,
+		"provider_id":               data.ProviderID,
+		"model_id":                  data.ModelID,
+		"dangerous_permission_mode": data.DangerousPermissionMode,
+		"status":                    data.Status,
+		"retries":                   data.Retries,
+	}
+	addStringMetadata(metadata, "reasoning", data.Reasoning)
+	addStringMetadata(metadata, "reasoning_mode", data.ReasoningMode)
+	addInt64Metadata(metadata, "context_budget_tokens", data.ContextBudgetTokens)
+	addStringMetadata(metadata, "tool_snapshot_hash", data.ToolSnapshotHash)
+	addStringMetadata(metadata, "mcp_status_snapshot_hash", data.MCPStatusSnapshotHash)
+	addStringMetadata(metadata, "profile_instruction_hash", data.ProfileInstructionHash)
+	addStringMetadata(metadata, "provider_request_id", data.ProviderRequestID)
+	addIntMetadata(metadata, "attempts", data.Attempts)
+	addIntMetadata(metadata, "status_code", data.StatusCode)
+	addOptionalInt64Metadata(metadata, "total_latency_ms", data.TotalLatencyMS)
+	addOptionalInt64Metadata(metadata, "first_delta_ms", data.FirstDeltaMS)
+	addInt64Metadata(metadata, "input_tokens", data.InputTokens)
+	addInt64Metadata(metadata, "output_tokens", data.OutputTokens)
+	addInt64Metadata(metadata, "cache_hit_tokens", data.CacheHitTokens)
+	addInt64Metadata(metadata, "cache_miss_tokens", data.CacheMissTokens)
+	addInt64Metadata(metadata, "reasoning_tokens", data.ReasoningTokens)
+	addStringMetadata(metadata, "error", data.Error)
+	return metadata
+}
+
+func addStringMetadata(metadata map[string]any, key, value string) {
+	if value != "" {
+		metadata[key] = value
+	}
+}
+
+func addIntMetadata(metadata map[string]any, key string, value int) {
+	if value > 0 {
+		metadata[key] = value
+	}
+}
+
+func addInt64Metadata(metadata map[string]any, key string, value int64) {
+	if value > 0 {
+		metadata[key] = value
+	}
+}
+
+func addOptionalInt64Metadata(metadata map[string]any, key string, value *int64) {
+	if value != nil {
+		metadata[key] = *value
+	}
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
 }
 
 func copyMap(src map[string]any) map[string]any {
@@ -1493,12 +799,13 @@ func (a *Agent) compactToolResult(index int, call protocol.ToolCall, out *protoc
 	if a == nil || out == nil || out.Content == "" || out.Truncated {
 		return
 	}
-	limit := a.cfg.MaxToolOutputBytes
+	limit := a.toolPolicy.MaxToolOutputBytes
 	if limit <= 0 || len(out.Content) <= limit {
 		return
 	}
 	full := out.Content
-	ref, err := storeManagedToolOutput(index, call, full)
+	refInfo, err := storeManagedToolOutput(index, call, full)
+	ref := refInfo.Path
 	preview := trimUTF8Bytes(full, limit)
 	if preview == "" {
 		preview = "[tool output omitted]"
@@ -1517,58 +824,15 @@ func (a *Agent) compactToolResult(index int, call protocol.ToolCall, out *protoc
 	out.Metadata["original_output_bytes"] = len(full)
 	out.Metadata["returned_output_bytes"] = len(out.Content)
 	if ref != "" {
-		out.Metadata["output_ref"] = ref
-		out.Metadata["output_ref_plaintext"] = true
-		out.Metadata["output_ref_permissions"] = "0600"
+		refInfo.AddMetadata(out.Metadata)
 	}
 }
 
-func storeManagedToolOutput(index int, call protocol.ToolCall, content string) (string, error) {
-	baseDir := filepath.Join(config.BillyHomeDir(), "tool-output")
-	if err := ensurePrivateDir(baseDir); err != nil {
-		return "", err
-	}
-	dir := filepath.Join(baseDir, time.Now().UTC().Format("20060102"))
-	if err := ensurePrivateDir(dir); err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256([]byte(content))
-	name := fmt.Sprintf("%s-%02d-%s-%s-%s.txt",
-		time.Now().UTC().Format("150405.000000000"),
-		index+1,
-		safeOutputName(call.Name),
-		safeOutputName(call.ID),
-		hex.EncodeToString(sum[:4]),
-	)
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		return "", err
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return "", err
-	}
-	return path, nil
-}
-
-func ensurePrivateDir(path string) error {
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		return err
-	}
-	return os.Chmod(path, 0o700)
-}
-
-var unsafeOutputNameRE = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
-
-func safeOutputName(value string) string {
-	value = unsafeOutputNameRE.ReplaceAllString(strings.TrimSpace(value), "_")
-	value = strings.Trim(value, "._-")
-	if value == "" {
-		return "tool"
-	}
-	if len(value) > 64 {
-		value = value[:64]
-	}
-	return value
+func storeManagedToolOutput(index int, call protocol.ToolCall, content string) (tooloutput.Ref, error) {
+	return tooloutput.Store(tooloutput.StoreRequest{
+		Parts:   []string{fmt.Sprintf("%02d", index+1), call.Name, call.ID},
+		Content: content,
+	})
 }
 
 func trimUTF8Bytes(text string, maxBytes int) string {
@@ -1586,56 +850,7 @@ func trimUTF8Bytes(text string, maxBytes int) string {
 }
 
 func (a *Agent) canRunToolParallel(call protocol.ToolCall) bool {
-	return a != nil && a.tools != nil && a.cfg.MaxParallelTools > 1 && a.tools.CanRunParallel(call.Name)
-}
-
-func (a *Agent) withMCPInstructions(messages []protocol.Message) []protocol.Message {
-	if a == nil || a.tools == nil {
-		return messages
-	}
-	instructions := a.tools.Instructions()
-	if len(instructions) == 0 || hasMCPInstructions(messages) {
-		return messages
-	}
-	content := "# MCP server instructions\n\n" + strings.Join(instructions, "\n\n")
-	insertAt := protectedPrefixEnd(messages)
-	next := make([]protocol.Message, 0, len(messages)+1)
-	next = append(next, messages[:insertAt]...)
-	next = append(next, protocol.Message{Role: protocol.RoleUser, Content: content})
-	next = append(next, messages[insertAt:]...)
-	return next
-}
-
-func hasMCPInstructions(messages []protocol.Message) bool {
-	for _, msg := range messages {
-		if msg.Role == protocol.RoleUser && strings.HasPrefix(msg.Content, "# MCP server instructions") {
-			return true
-		}
-	}
-	return false
-}
-
-func systemPrompt() string {
-	return strings.Join([]string{
-		"You are a fast coding and research agent. Use tools when useful. Keep final answers concise. Never reveal secrets.",
-		"",
-		"Format final answers with simple Markdown that remains readable in a terminal TUI and Telegram rich messages.",
-		"Supported Markdown: short paragraphs, headings, bullet lists, numbered lists, blockquotes, inline code, fenced code blocks, bold, italic, plain links, simple pipe tables, and LaTeX math.",
-		"Use LaTeX for mathematical formulas: prefer inline $...$ for short formulas and display $$...$$ for important formulas. Do not put math formulas in code fences.",
-		"Do not use HTML, images, Mermaid diagrams, footnotes, task-list checkboxes, or other Markdown extensions unless the user explicitly asks for them.",
-		"Prefer fenced code blocks with a language tag for code, logs, and commands.",
-		"Keep non-math formatting simple enough to remain readable when ANSI styling is unavailable.",
-		"Connected MCP servers are exposed lazily through mcp_list_tools and mcp_call; use them only when the user asks for those external services.",
-		"If the user mentions Parilka, парилка, парилке, or asks what is happening there, treat it as the Telegram Parilka chat. Use mcp_list_tools with server \"telegram-parilka\" and then mcp_call. Do not search the filesystem or run shell commands for Parilka chat context.",
-		"Native web_fetch, web_extract, and web_crawl return compact digests plus output_ref files for full extracted text. Prefer the digest/extract fields. Read output_ref only when exact quotes, exact source text, or deeper evidence is necessary. Do not request include_text/full_text unless the user explicitly needs exact source text.",
-	}, "\n")
-}
-
-func optionalReasoning(cfg config.Config, reasoning string) string {
-	if cfg.StoreReasoningContent {
-		return reasoning
-	}
-	return ""
+	return a != nil && a.tools != nil && a.runtime.MaxParallelTools > 1 && a.tools.CanRunParallel(call.Name)
 }
 
 func PrettyEvent(event protocol.Event) string {

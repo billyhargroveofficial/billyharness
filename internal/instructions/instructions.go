@@ -45,12 +45,12 @@ type Profile struct {
 	Text string
 }
 
-func Load(cfg config.Config) Loaded {
+func Load(settings config.InstructionSettings) Loaded {
 	var parts []instructionPart
 	if text, path := loadGlobalInstructions(); text != "" {
 		parts = append(parts, instructionPart{text: text, source: Source{Path: path, Scope: "global"}})
 	}
-	project := loadProjectInstructions(cfg)
+	project := loadProjectInstructions(settings)
 	parts = append(parts, project.parts...)
 	return Loaded{
 		Text:      joinParts(parts),
@@ -59,8 +59,8 @@ func Load(cfg config.Config) Loaded {
 	}
 }
 
-func Message(cfg config.Config) (protocol.Message, bool) {
-	loaded := Load(cfg)
+func Message(settings config.InstructionSettings) (protocol.Message, bool) {
+	loaded := Load(settings)
 	if strings.TrimSpace(loaded.Text) == "" {
 		return protocol.Message{}, false
 	}
@@ -70,8 +70,8 @@ func Message(cfg config.Config) (protocol.Message, bool) {
 	}, true
 }
 
-func ProfileMessage(cfg config.Config) (protocol.Message, bool) {
-	profile, ok := LoadProfile(cfg)
+func ProfileMessage(settings config.InstructionSettings) (protocol.Message, bool) {
+	profile, ok := LoadProfile(settings)
 	if !ok {
 		return protocol.Message{}, false
 	}
@@ -81,11 +81,11 @@ func ProfileMessage(cfg config.Config) (protocol.Message, bool) {
 	}, true
 }
 
-func LoadProfile(cfg config.Config) (Profile, bool) {
-	if strings.TrimSpace(cfg.Profile) == "" {
+func LoadProfile(settings config.InstructionSettings) (Profile, bool) {
+	if strings.TrimSpace(settings.Profile.Profile) == "" {
 		return Profile{}, false
 	}
-	name := config.NormalizeProfileName(cfg.Profile)
+	name := config.NormalizeProfileName(settings.Profile.Profile)
 	path, err := config.EnsureDefaultProfileFile(name)
 	if err != nil || strings.TrimSpace(path) == "" {
 		return Profile{}, false
@@ -152,15 +152,15 @@ func loadGlobalInstructions() (string, string) {
 	return "", ""
 }
 
-func loadProjectInstructions(cfg config.Config) projectLoad {
-	cwd := instructionCWD(cfg)
-	if cwd == "" || cfg.ProjectDocMaxBytes == 0 {
+func loadProjectInstructions(settings config.InstructionSettings) projectLoad {
+	cwd := instructionCWD(settings)
+	if cwd == "" || settings.ProjectDocMaxBytes == 0 {
 		return projectLoad{}
 	}
 	root := projectRoot(cwd)
 	dirs := searchDirs(root, cwd)
-	candidates := baseCandidates(cfg.ProjectDocFallbacks)
-	remaining := cfg.ProjectDocMaxBytes
+	candidates := baseCandidates(settings.ProjectDocFallbacks)
+	remaining := settings.ProjectDocMaxBytes
 	var parts []instructionPart
 	for _, dir := range dirs {
 		if remaining <= 0 {
@@ -195,8 +195,8 @@ func loadProjectInstructions(cfg config.Config) projectLoad {
 	return projectLoad{parts: parts, directory: cwd}
 }
 
-func instructionCWD(cfg config.Config) string {
-	for _, root := range cfg.WorkspaceRoots {
+func instructionCWD(settings config.InstructionSettings) string {
+	for _, root := range settings.WorkspaceRoots {
 		root = strings.TrimSpace(root)
 		if root == "" {
 			continue

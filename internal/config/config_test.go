@@ -170,6 +170,30 @@ func TestEnsureDefaultProfileFileCreatesBillySoul(t *testing.T) {
 	}
 }
 
+func TestResolveDoesNotCreateDefaultProfileFiles(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+
+	resolved, err := Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resolved.Config.DisableSpark || resolved.Config.Profile != "billy" {
+		t.Fatalf("default billy profile settings = %#v", resolved.Config)
+	}
+	if value, ok := resolved.Value("profile_tool_policy"); !ok || value.Value != "solo-full-access" {
+		t.Fatalf("missing built-in profile metadata: %#v", resolved.Values)
+	}
+	for _, path := range []string{
+		filepath.Join(root, "profiles", "billy", "profile.toml"),
+		filepath.Join(root, "profiles", "billy", "SOUL.md"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("Resolve should not create %s (err=%v)", path, err)
+		}
+	}
+}
+
 func TestProfileMetadataAppliesRuntimeDefaults(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", root)
@@ -561,6 +585,25 @@ url = "https://example.com/mcp"
 	}
 	if len(cfg.MCPServers) != 1 || cfg.MCPServers[0].Name != "github" {
 		t.Fatalf("servers = %#v", cfg.MCPServers)
+	}
+}
+
+func TestLoadDefaultMCPServersDoesNotCreateDefaultConfig(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	cfg := Config{
+		MCPEnabled:        true,
+		MCPAllowedServers: []string{"github"},
+	}
+
+	if err := cfg.LoadDefaultMCPServers(); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.MCPConfigFiles) != 0 || len(cfg.MCPServers) != 0 {
+		t.Fatalf("default MCP load should be empty without a config file: %#v", cfg)
+	}
+	if _, err := os.Stat(filepath.Join(root, "mcp.config.toml")); !os.IsNotExist(err) {
+		t.Fatalf("LoadDefaultMCPServers should not create default MCP config (err=%v)", err)
 	}
 }
 

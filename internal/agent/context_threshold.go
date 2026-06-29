@@ -9,13 +9,13 @@ var contextThresholdPercents = []int{50, 70, 85, 95}
 
 func emitContextThresholdEvents(
 	messages []protocol.Message,
-	cfg config.Config,
+	limits config.RuntimeLimits,
 	round int,
 	stage string,
 	emitted map[int]bool,
 	emit func(protocol.Event),
 ) {
-	if cfg.ContextWindowTokens <= 0 || emit == nil {
+	if limits.ContextWindowTokens <= 0 || emit == nil {
 		return
 	}
 	if emitted == nil {
@@ -29,12 +29,12 @@ func emitContextThresholdEvents(
 		if emitted[percent] {
 			continue
 		}
-		threshold := contextThresholdTokens(cfg.ContextWindowTokens, percent)
+		threshold := contextThresholdTokens(limits.ContextWindowTokens, percent)
 		if threshold <= 0 || estimated < threshold {
 			continue
 		}
 		emitted[percent] = true
-		remaining := cfg.ContextWindowTokens - estimated
+		remaining := limits.ContextWindowTokens - estimated
 		if remaining < 0 {
 			remaining = 0
 		}
@@ -43,7 +43,7 @@ func emitContextThresholdEvents(
 			Data: protocol.ContextThresholdEvent{
 				Percent:             percent,
 				EstimatedTokens:     estimated,
-				ContextWindowTokens: cfg.ContextWindowTokens,
+				ContextWindowTokens: limits.ContextWindowTokens,
 				ThresholdTokens:     threshold,
 				RemainingTokens:     remaining,
 				MessageCount:        len(messages),

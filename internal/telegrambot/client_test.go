@@ -4,36 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/billyhargroveofficial/billyharness/internal/testkit"
 )
 
 func TestClientSendMessageUsesThreadAndParseMode(t *testing.T) {
 	var captured map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/bottoken/sendMessage" {
-			t.Fatalf("path = %q", r.URL.Path)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
-			t.Fatal(err)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"ok": true,
-			"result": map[string]any{
-				"message_id": 42,
-				"chat":       map[string]any{"id": -100},
-			},
-		})
-	}))
-	t.Cleanup(server.Close)
-
-	client := NewClient(ClientOptions{BaseURL: server.URL, Token: "token", MinInterval: time.Nanosecond})
+	client := newTelegramAPIClient(t, "token", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			captured = payload
+			writeTelegramResult(w, SentMessage{MessageID: 42, Chat: Chat{ID: -100}})
+		},
+	})
 	msg, err := client.SendMessage(context.Background(), -100, "<b>hi</b>", "HTML", 7)
 	if err != nil {
 		t.Fatal(err)
@@ -48,38 +36,26 @@ func TestClientSendMessageUsesThreadAndParseMode(t *testing.T) {
 
 func TestClientFallsBackWhenParseModeFails(t *testing.T) {
 	var calls int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&calls, 1)
-		var payload map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatal(err)
-		}
-		if n == 1 {
-			if payload["parse_mode"] != "HTML" {
-				t.Fatalf("first payload missing parse mode: %#v", payload)
+	client := newTelegramAPIClient(t, "token", map[string]telegramAPIHandler{
+		"editMessageText": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			n := atomic.AddInt32(&calls, 1)
+			if n == 1 {
+				if payload["parse_mode"] != "HTML" {
+					t.Fatalf("first payload missing parse mode: %#v", payload)
+				}
+				writeTelegramError(w, http.StatusBadRequest, "Bad Request: can't parse entities")
+				return
 			}
-			w.WriteHeader(http.StatusBadRequest)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"ok":          false,
-				"error_code":  400,
-				"description": "Bad Request: can't parse entities",
-			})
-			return
-		}
-		if _, ok := payload["parse_mode"]; ok {
-			t.Fatalf("fallback payload kept parse mode: %#v", payload)
-		}
-		if payload["text"] != "broken" {
-			t.Fatalf("fallback text = %#v, want plain text", payload["text"])
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"ok":     true,
-			"result": true,
-		})
-	}))
-	t.Cleanup(server.Close)
+			if _, ok := payload["parse_mode"]; ok {
+				t.Fatalf("fallback payload kept parse mode: %#v", payload)
+			}
+			if payload["text"] != "broken" {
+				t.Fatalf("fallback text = %#v, want plain text", payload["text"])
+			}
+			writeTelegramResult(w, true)
+		},
+	})
 
-	client := NewClient(ClientOptions{BaseURL: server.URL, Token: "token", MinInterval: time.Nanosecond})
 	if err := client.EditMessageText(context.Background(), 10, 20, "<b>broken", "HTML"); err != nil {
 		t.Fatal(err)
 	}
@@ -90,18 +66,13 @@ func TestClientFallsBackWhenParseModeFails(t *testing.T) {
 
 func TestClientDoesNotFallbackWhenEditErrorIsNotParseError(t *testing.T) {
 	var calls int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&calls, 1)
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"ok":          false,
-			"error_code":  400,
-			"description": "Bad Request: message is not modified",
-		})
-	}))
-	t.Cleanup(server.Close)
+	client := newTelegramAPIClient(t, "token", map[string]telegramAPIHandler{
+		"editMessageText": func(w http.ResponseWriter, _ *http.Request, _ map[string]any) {
+			atomic.AddInt32(&calls, 1)
+			writeTelegramError(w, http.StatusBadRequest, "Bad Request: message is not modified")
+		},
+	})
 
-	client := NewClient(ClientOptions{BaseURL: server.URL, Token: "token", MinInterval: time.Nanosecond})
 	err := client.EditMessageText(context.Background(), 10, 20, "<b>same</b>", "HTML")
 	if err == nil || !strings.Contains(err.Error(), "message is not modified") {
 		t.Fatalf("err = %v", err)
@@ -117,7 +88,7 @@ func TestClientTransportErrorRedactsBotToken(t *testing.T) {
 		BaseURL:     "https://api.telegram.test",
 		Token:       token,
 		MinInterval: time.Nanosecond,
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		HTTPClient: &http.Client{Transport: testkit.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
 			return nil, fmt.Errorf("dial failed for %s", req.URL.String())
 		})},
 	})
@@ -133,22 +104,16 @@ func TestClientTransportErrorRedactsBotToken(t *testing.T) {
 func TestClientSerializesSameChatRateLimitReservations(t *testing.T) {
 	var mu sync.Mutex
 	var seen []time.Time
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		seen = append(seen, time.Now())
-		mu.Unlock()
-		_, _ = io.Copy(io.Discard, r.Body)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"ok": true,
-			"result": map[string]any{
-				"message_id": 1,
-				"chat":       map[string]any{"id": 10},
-			},
-		})
-	}))
-	t.Cleanup(server.Close)
+	client := newTelegramAPIClient(t, "token", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, _ map[string]any) {
+			mu.Lock()
+			seen = append(seen, time.Now())
+			mu.Unlock()
+			writeTelegramResult(w, SentMessage{MessageID: 1, Chat: Chat{ID: 10}})
+		},
+	})
 
-	client := NewClient(ClientOptions{BaseURL: server.URL, Token: "token", MinInterval: 20 * time.Millisecond})
+	client.minInterval = 20 * time.Millisecond
 	var wg sync.WaitGroup
 	for i := 0; i < 3; i++ {
 		wg.Add(1)
@@ -174,26 +139,76 @@ func TestClientSerializesSameChatRateLimitReservations(t *testing.T) {
 	}
 }
 
+func TestClientRetryAfterUsesFakeTimer(t *testing.T) {
+	fakeClock := newFakeClock()
+	timers := &fakeTelegramTimerFactory{}
+	oldNow := telegramNow
+	oldTimer := newTelegramTimer
+	telegramNow = fakeClock.Now
+	newTelegramTimer = timers.NewTimer
+	t.Cleanup(func() {
+		telegramNow = oldNow
+		newTelegramTimer = oldTimer
+	})
+
+	var mu sync.Mutex
+	requests := 0
+	client := newTelegramAPIClient(t, "token", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, _ map[string]any) {
+			mu.Lock()
+			requests++
+			count := requests
+			mu.Unlock()
+			if count == 1 {
+				w.WriteHeader(http.StatusTooManyRequests)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"ok":          false,
+					"error_code":  http.StatusTooManyRequests,
+					"description": "Too Many Requests",
+					"parameters":  map[string]any{"retry_after": 2},
+				})
+				return
+			}
+			writeTelegramResult(w, SentMessage{MessageID: 1, Chat: Chat{ID: 10}})
+		},
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.SendMessage(context.Background(), 10, "hello", "", 0)
+		done <- err
+	}()
+
+	retryTimer := timers.WaitTimer(t, 0)
+	if retryTimer.duration != 2250*time.Millisecond {
+		t.Fatalf("retry timer = %s, want 2.25s", retryTimer.duration)
+	}
+	fakeClock.Advance(retryTimer.duration)
+	retryTimer.Fire(fakeClock.Now())
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("send failed after retry: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for retry")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+}
+
 func TestClientSendRichMessageMarkdown(t *testing.T) {
 	var captured map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/bottoken/sendRichMessage" {
-			t.Fatalf("path = %q", r.URL.Path)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
-			t.Fatal(err)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"ok": true,
-			"result": map[string]any{
-				"message_id": 99,
-				"chat":       map[string]any{"id": -100},
-			},
-		})
-	}))
-	t.Cleanup(server.Close)
-
-	client := NewClient(ClientOptions{BaseURL: server.URL, Token: "token", MinInterval: time.Nanosecond})
+	client := newTelegramAPIClient(t, "token", map[string]telegramAPIHandler{
+		"sendRichMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			captured = payload
+			writeTelegramResult(w, SentMessage{MessageID: 99, Chat: Chat{ID: -100}})
+		},
+	})
 	msg, err := client.SendRichMessageMarkdown(context.Background(), -100, "## Title\n\n| A | B |\n|---|---|", 5)
 	if err != nil {
 		t.Fatal(err)
@@ -210,32 +225,14 @@ func TestClientSendRichMessageMarkdown(t *testing.T) {
 	}
 }
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return fn(req)
-}
-
 func TestClientEditMessageRichMarkdown(t *testing.T) {
 	var captured map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/bottoken/editMessageText" {
-			t.Fatalf("path = %q", r.URL.Path)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
-			t.Fatal(err)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"ok": true,
-			"result": map[string]any{
-				"message_id": 77,
-				"chat":       map[string]any{"id": -100},
-			},
-		})
-	}))
-	t.Cleanup(server.Close)
-
-	client := NewClient(ClientOptions{BaseURL: server.URL, Token: "token", MinInterval: time.Nanosecond})
+	client := newTelegramAPIClient(t, "token", map[string]telegramAPIHandler{
+		"editMessageText": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			captured = payload
+			writeTelegramResult(w, SentMessage{MessageID: 77, Chat: Chat{ID: -100}})
+		},
+	})
 	if err := client.EditMessageRichMarkdown(context.Background(), -100, 77, "**done**"); err != nil {
 		t.Fatal(err)
 	}
@@ -247,18 +244,12 @@ func TestClientEditMessageRichMarkdown(t *testing.T) {
 
 func TestClientDeleteMessage(t *testing.T) {
 	var captured map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/bottoken/deleteMessage" {
-			t.Fatalf("path = %q", r.URL.Path)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
-			t.Fatal(err)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": true})
-	}))
-	t.Cleanup(server.Close)
-
-	client := NewClient(ClientOptions{BaseURL: server.URL, Token: "token", MinInterval: time.Nanosecond})
+	client := newTelegramAPIClient(t, "token", map[string]telegramAPIHandler{
+		"deleteMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			captured = payload
+			writeTelegramResult(w, true)
+		},
+	})
 	if err := client.DeleteMessage(context.Background(), -100, 77); err != nil {
 		t.Fatal(err)
 	}

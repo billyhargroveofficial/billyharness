@@ -6,29 +6,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
 )
 
-type SessionStatus struct {
-	ID              string    `json:"id"`
-	Created         time.Time `json:"created"`
-	Running         bool      `json:"running"`
-	RunSeq          int64     `json:"run_seq"`
-	StartedAt       time.Time `json:"started_at,omitempty"`
-	FinishedAt      time.Time `json:"finished_at,omitempty"`
-	LastEvent       string    `json:"last_event,omitempty"`
-	LastEventAt     time.Time `json:"last_event_at,omitempty"`
-	Model           string    `json:"model,omitempty"`
-	Provider        string    `json:"provider,omitempty"`
-	Profile         string    `json:"profile,omitempty"`
-	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
-	MessageCount    int       `json:"message_count"`
-	ModelCalls      int       `json:"model_calls"`
-	ToolCalls       int       `json:"tool_calls"`
-	DroppedEvents   int64     `json:"dropped_events,omitempty"`
-	LastError       string    `json:"last_error,omitempty"`
-}
+type SessionStatus = gatewayapi.SessionStatus
 
 type eventHub struct {
 	mu          sync.Mutex
@@ -39,18 +22,24 @@ type eventHub struct {
 const eventHubSubscriberBuffer = 256
 
 func newGatewaySession(id string, created time.Time, messages []protocol.Message) *Session {
+	return newGatewaySessionWithOwner(id, created, messages, gatewayapi.SessionOwner{})
+}
+
+func newGatewaySessionWithOwner(id string, created time.Time, messages []protocol.Message, owner gatewayapi.SessionOwner) *Session {
 	if created.IsZero() {
 		created = time.Now().UTC()
 	}
 	session := &Session{
 		ID:      id,
 		Created: created,
+		Owner:   normalizeSessionOwner(owner),
 		Thread:  sessionpkg.New(messages),
 		events:  newEventHub(),
 	}
 	session.status = SessionStatus{
 		ID:           id,
 		Created:      created,
+		Owner:        session.Owner,
 		MessageCount: len(messages),
 	}
 	return session
@@ -115,13 +104,20 @@ func (s *Session) ensureRuntime() {
 	if s.events == nil {
 		s.events = newEventHub()
 	}
+	if s.terminalRunIDs == nil {
+		s.terminalRunIDs = map[string]struct{}{}
+	}
 	if s.status.ID == "" {
 		s.status = SessionStatus{
 			ID:           s.ID,
 			Created:      s.Created,
+			Owner:        s.Owner,
 			Running:      s.Thread != nil && s.Thread.Running(),
 			MessageCount: len(s.messages()),
 		}
+	}
+	if s.status.Owner == (gatewayapi.SessionOwner{}) {
+		s.status.Owner = s.Owner
 	}
 }
 
@@ -144,7 +140,29 @@ func (s *Session) Status() SessionStatus {
 	status.Running = s.Thread != nil && s.Thread.Running()
 	status.MessageCount = len(s.messages())
 	status.DroppedEvents = hub.Dropped()
+	status.Owner = s.Owner
 	return status
+}
+
+func (s *Session) restoreStatus(status SessionStatus) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.ensureRuntime()
+	if status.ID == "" {
+		status.ID = s.ID
+	}
+	if status.Created.IsZero() {
+		status.Created = s.Created
+	}
+	if status.Owner == (gatewayapi.SessionOwner{}) {
+		status.Owner = s.Owner
+	}
+	status.Running = s.Thread != nil && s.Thread.Running()
+	status.MessageCount = len(s.messages())
+	s.status = status
+	s.mu.Unlock()
 }
 
 func (s *Session) Subscribe() (<-chan protocol.Event, func()) {
@@ -162,9 +180,21 @@ func (s *Session) abortActiveRun(reason string) bool {
 	if strings.TrimSpace(reason) == "" {
 		reason = "gateway session aborted"
 	}
-	s.observeRunEvent(protocol.Event{Type: protocol.EventRunFailed, Data: reason})
+	if runID := s.activeRunIDSnapshot(); runID != "" {
+		s.observeRunEvent(protocol.Event{Type: protocol.EventRunFailed, RunID: runID, Data: reason})
+	}
 	s.Thread.Cancel()
 	return true
+}
+
+func (s *Session) activeRunIDSnapshot() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureRuntime()
+	return s.activeRunID
 }
 
 func (s *Session) beginRunStatus(req RunRequest) {
@@ -173,6 +203,7 @@ func (s *Session) beginRunStatus(req RunRequest) {
 	s.ensureRuntime()
 	s.status.ID = s.ID
 	s.status.Created = s.Created
+	s.status.Owner = s.Owner
 	s.status.Running = true
 	s.status.RunSeq++
 	s.status.StartedAt = now
@@ -196,18 +227,44 @@ func (s *Session) beginRunStatus(req RunRequest) {
 	hub.Publish(event)
 }
 
-func (s *Session) observeRunEvent(event protocol.Event) {
+func (s *Session) observeRunEvent(event protocol.Event) (protocol.Event, bool) {
 	if s == nil {
-		return
+		return event, true
 	}
 	if event.Type == protocol.EventRunStarted {
-		s.publish(event)
-		return
+		s.mu.Lock()
+		s.ensureRuntime()
+		if strings.TrimSpace(event.RunID) != "" {
+			s.activeRunID = event.RunID
+		}
+		s.mu.Unlock()
+		return s.publish(event), true
 	}
 	now := time.Now().UTC()
 	var statusEvent *protocol.Event
+	terminalDuplicate := false
 	s.mu.Lock()
 	s.ensureRuntime()
+	if isTerminalRunEvent(event.Type) {
+		if strings.TrimSpace(event.RunID) == "" && strings.TrimSpace(s.activeRunID) != "" {
+			event.RunID = s.activeRunID
+		}
+		runID := strings.TrimSpace(event.RunID)
+		if runID != "" {
+			if _, seen := s.terminalRunIDs[runID]; seen {
+				terminalDuplicate = true
+			} else {
+				s.terminalRunIDs[runID] = struct{}{}
+				if s.activeRunID == runID {
+					s.activeRunID = ""
+				}
+			}
+		}
+	}
+	if terminalDuplicate {
+		s.mu.Unlock()
+		return event, false
+	}
 	s.status.LastEvent = string(event.Type)
 	s.status.LastEventAt = now
 	switch event.Type {
@@ -238,15 +295,20 @@ func (s *Session) observeRunEvent(event protocol.Event) {
 		storedStatus := s.recordEvent(*statusEvent)
 		hub.Publish(storedStatus)
 	}
+	return event, true
 }
 
-func (s *Session) publish(event protocol.Event) {
+func (s *Session) publish(event protocol.Event) protocol.Event {
+	if s == nil {
+		return event
+	}
 	s.mu.Lock()
 	s.ensureRuntime()
 	hub := s.events
 	s.mu.Unlock()
 	event = s.recordEvent(event)
 	hub.Publish(event)
+	return event
 }
 
 func (s *Session) recordEvent(event protocol.Event) protocol.Event {

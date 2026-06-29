@@ -1,7 +1,6 @@
 package trace
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/eventlog"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -119,7 +119,7 @@ func (w *EventWriter) Record(taskID string, event protocol.Event) (EventRecord, 
 	})
 	event.Seq = w.seq
 	event.RunID = w.runID
-	if err := protocol.ValidateEventEnvelope(event); err != nil {
+	if err := eventlog.ValidateEnvelope(event); err != nil {
 		return EventRecord{}, err
 	}
 	value := any(event)
@@ -283,37 +283,37 @@ type ReplayTimelineItem struct {
 }
 
 func ReplayEvents(path string) (ReplaySummary, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return ReplaySummary{}, err
-	}
-	defer file.Close()
-
 	summary := ReplaySummary{
 		EventTypes: map[string]int{},
 		Tasks:      map[string]int{},
 	}
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	var expectedSeq int64 = 1
-	lineNo := 0
-	for scanner.Scan() {
-		lineNo++
-		var record EventRecord
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			return summary, fmt.Errorf("%s:%d invalid event record: %w", path, lineNo, err)
+	validator := eventlog.NewRecordValidator(eventlog.RecordValidatorOptions{
+		SchemaVersion:    CurrentManifestVersion,
+		ScopeName:        "run_id",
+		ValidateEnvelope: true,
+	})
+	lifecycle := eventlog.NewLifecycleValidator()
+	err := eventlog.ReplayJSONL[EventRecord](path, eventlog.JSONLOptions{}, func(item eventlog.JSONLRecord[EventRecord]) error {
+		record := item.Value
+		event, ok, err := protocolEventFromRecord(record.Event)
+		if err != nil {
+			return eventlog.NewCorruptionError(path, item.Line, item.RecordNo, "", err)
 		}
-		if record.SchemaVersion != 0 && record.SchemaVersion != CurrentManifestVersion {
-			return summary, fmt.Errorf("%s:%d unsupported schema_version %d", path, lineNo, record.SchemaVersion)
+		recordNo := validator.NextSeq()
+		if err := validator.Validate(eventlog.Record{
+			SchemaVersion: record.SchemaVersion,
+			Seq:           record.Seq,
+			ScopeID:       record.RunID,
+			EventType:     record.EventType,
+			Event:         event,
+			HasEvent:      ok,
+		}); err != nil {
+			return eventlog.NewCorruptionError(path, item.Line, recordNo, "", err)
 		}
-		if record.Seq != expectedSeq {
-			return summary, fmt.Errorf("%s:%d sequence gap: got %d want %d", path, lineNo, record.Seq, expectedSeq)
-		}
+
 		if summary.RunID == "" {
-			summary.RunID = record.RunID
-			summary.FirstSeq = record.Seq
-		} else if record.RunID != summary.RunID {
-			return summary, fmt.Errorf("%s:%d run_id changed from %q to %q", path, lineNo, summary.RunID, record.RunID)
+			summary.RunID = validator.ScopeID()
+			summary.FirstSeq = validator.FirstSeq()
 		}
 		summary.LastSeq = record.Seq
 		summary.Records++
@@ -326,24 +326,20 @@ func ReplayEvents(path string) (ReplaySummary, error) {
 		summary.PayloadRefs += len(record.PayloadRefs)
 		bytes, err := verifyPayloadRefs(path, record.PayloadRefs)
 		if err != nil {
-			return summary, fmt.Errorf("%s:%d %w", path, lineNo, err)
+			return eventlog.NewCorruptionError(path, item.Line, item.RecordNo, "", err)
 		}
 		summary.PayloadBytes += bytes
-		event, ok, err := protocolEventFromRecord(record.Event)
-		if err != nil {
-			return summary, fmt.Errorf("%s:%d %w", path, lineNo, err)
-		}
 		if ok {
-			if err := protocol.ValidateEventEnvelope(event); err != nil {
-				return summary, fmt.Errorf("%s:%d invalid event envelope: %w", path, lineNo, err)
+			if err := lifecycle.Observe(event); err != nil {
+				return eventlog.NewCorruptionError(path, item.Line, item.RecordNo, "lifecycle", err)
 			}
 		}
 		if err := summary.observe(record, event, ok); err != nil {
-			return summary, fmt.Errorf("%s:%d %w", path, lineNo, err)
+			return eventlog.NewCorruptionError(path, item.Line, item.RecordNo, "", err)
 		}
-		expectedSeq++
-	}
-	if err := scanner.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return summary, err
 	}
 	return summary, nil

@@ -19,9 +19,10 @@ Work protocol for runtime changes:
 1. Map the change to a checkbox in the master TODO.
 2. Add or update focused tests.
 3. Run the relevant package tests, then `go test -count=1 ./...` for broad runtime changes.
-4. Rebuild `bin/fast-agent-harness` when CLI, gateway, agent, provider, tool, TUI, or Telegram code changes.
-5. Restart `billyharness-gateway.service` and `billyharness-telegram.service` when deployed runtime behavior changes.
-6. Commit and push coherent verified slices.
+4. Run `GO_BIN=/root/.local/go/bin/go ./scripts/verify-deps.sh` when `go.mod` or `go.sum` changes.
+5. Rebuild `bin/fast-agent-harness` when CLI, gateway, agent, provider, tool, TUI, or Telegram code changes.
+6. Restart `billyharness-gateway.service` and `billyharness-telegram.service` when deployed runtime behavior changes.
+7. Commit and push coherent verified slices.
 
 Project health:
 
@@ -126,9 +127,15 @@ They do not return API keys, access tokens, or refresh tokens.
 Billyharness uses its own MCP config at `$BILLYHARNESS_HOME/mcp.config.toml`.
 Default allowed servers are `telegram`, `telegram-parilka`, `github`, and `context7`.
 
-MCP tools are exposed lazily through `mcp_list_tools` and `mcp_call`, so large external tool inventories do
-not inflate every model request.
-Use `tool_search` with `query`, `server`, `namespace`, `risk`, and capped `include_schema` when the model needs a specific native or MCP tool.
+The model-visible tool specs, including `/v1/tools`, are the stable gateway
+tools: native tools plus `tool_search`, `mcp_list_tools`, and `mcp_call`.
+Dynamic MCP tools are exposed lazily through `tool_search`/`mcp_list_tools`
+and called through `mcp_call`, so large external inventories do not inflate
+every model request.
+Use `tool_search` with `query`, `server`, `namespace`, `risk`, and capped
+`include_schema` when the model needs a specific native or MCP tool. Discovery
+responses include `model_visible_tools.kind=static_gateway_tools` and
+`mcp_catalog.kind=dynamic_mcp_catalog` to make the boundary explicit.
 
 ## Hooks
 

@@ -186,6 +186,40 @@ func TestCancelStopsActiveRun(t *testing.T) {
 	if s.Cancel() {
 		t.Fatal("cancel returned true with no active run")
 	}
+	messages := s.Messages()
+	if len(messages) != 1 || messages[0].Content != "system" {
+		t.Fatalf("cancelled run should not persist its prompt, messages=%#v", messages)
+	}
+}
+
+func TestCancelDropsPromptWhenRunnerReturnsNilAfterContextCancelled(t *testing.T) {
+	s := New([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	started := make(chan struct{})
+	runner := RunnerFunc(func(ctx context.Context, messages []protocol.Message, _ func(protocol.Event)) ([]protocol.Message, error) {
+		close(started)
+		<-ctx.Done()
+		return append(messages, protocol.Message{Role: protocol.RoleAssistant, Content: "late old answer"}), nil
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- s.Run(context.Background(), runner, "old prompt", nil)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("run did not start")
+	}
+	if !s.Cancel() {
+		t.Fatal("cancel returned false for active run")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("runner returned nil after cancellation, got err=%v", err)
+	}
+	messages := s.Messages()
+	if len(messages) != 1 || messages[0].Content != "system" {
+		t.Fatalf("late nil cancelled run should not persist prompt/answer, messages=%#v", messages)
+	}
 }
 
 func TestMessagesReturnsDeepCopy(t *testing.T) {

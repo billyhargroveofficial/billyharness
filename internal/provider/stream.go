@@ -17,6 +17,18 @@ func newProviderEventChannel() chan Event {
 	return make(chan Event, providerEventBuffer)
 }
 
+func runProviderStream(events chan Event, errs chan error, run func() error) {
+	var streamErr error
+	defer func() {
+		if streamErr != nil {
+			errs <- streamErr
+		}
+		close(errs)
+	}()
+	defer close(events)
+	streamErr = run()
+}
+
 func newRequestSetupContext(ctx context.Context, timeout time.Duration) (context.Context, func() bool, context.CancelFunc) {
 	reqCtx, cancel := context.WithCancel(ctx)
 	var timer *time.Timer

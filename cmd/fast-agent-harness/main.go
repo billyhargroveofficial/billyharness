@@ -71,6 +71,8 @@ func run() error {
 		return printTools()
 	case "doctor", "health":
 		return doctorCmd(os.Args[2:])
+	case "hygiene":
+		return hygieneCmd(os.Args[2:])
 	default:
 		usage()
 		return fmt.Errorf("unknown command %q", os.Args[1])
@@ -111,11 +113,11 @@ func runOnce(args []string) error {
 		cfg.Profile = config.NormalizeProfileName(*profile)
 	}
 	cfg.ApplyModelProviderDefaults()
-	prov, err := provider.New(cfg)
+	prov, err := provider.NewFromBinding(cfg.ProviderBinding())
 	if err != nil {
 		return err
 	}
-	registry, err := tools.NewRegistryWithMCP(context.Background(), cfg)
+	registry, err := newToolRegistry(context.Background(), cfg)
 	if err != nil {
 		return err
 	}
@@ -149,11 +151,11 @@ func chat(args []string) error {
 		cfg.Profile = config.NormalizeProfileName(*profile)
 	}
 	cfg.ApplyModelProviderDefaults()
-	prov, err := provider.New(cfg)
+	prov, err := provider.NewFromBinding(cfg.ProviderBinding())
 	if err != nil {
 		return err
 	}
-	registry, err := tools.NewRegistryWithMCP(context.Background(), cfg)
+	registry, err := newToolRegistry(context.Background(), cfg)
 	if err != nil {
 		return err
 	}
@@ -446,7 +448,7 @@ func serve(args []string) error {
 	}
 	ctx, stop := processContext()
 	defer stop()
-	registry, err := tools.NewRegistryWithMCP(ctx, cfg)
+	registry, err := newToolRegistry(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -478,7 +480,7 @@ func mcp(args []string) error {
 		return err
 	}
 	cfg := config.Default()
-	registry := tools.NewRegistry(cfg)
+	registry := newToolRegistryNoMCP(cfg)
 	server := mcpserver.New(registry)
 	return server.Serve(context.Background(), os.Stdin, os.Stdout)
 }
@@ -511,22 +513,25 @@ func configInspectCommand(args []string, stdout io.Writer) error {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(struct {
-			Config   map[string]any         `json:"config"`
-			Values   []config.ResolvedValue `json:"values"`
-			Warnings []string               `json:"warnings,omitempty"`
+			Config      map[string]any            `json:"config"`
+			Values      []config.ResolvedValue    `json:"values"`
+			Diagnostics config.DiagnosticSnapshot `json:"diagnostics"`
+			Warnings    []string                  `json:"warnings,omitempty"`
 		}{
-			Config:   resolved.SanitizedConfig(),
-			Values:   resolved.SanitizedValues(),
-			Warnings: resolved.Warnings,
+			Config:      resolved.SanitizedConfig(),
+			Values:      resolved.SanitizedValues(),
+			Diagnostics: resolved.Config.DiagnosticSnapshot(),
+			Warnings:    resolved.Warnings,
 		})
 	}
+	providerAuth := resolved.Config.ProviderAuthSnapshot()
 	fmt.Fprintf(stdout, "billyharness config inspect\n")
 	fmt.Fprintf(stdout, "provider=%s model=%s profile=%s reasoning=%s/%s gateway=%s\n",
-		resolved.Config.Provider,
-		resolved.Config.Model,
-		resolved.Config.Profile,
-		resolved.Config.Thinking,
-		resolved.Config.ReasoningEffort,
+		providerAuth.Provider,
+		providerAuth.Model,
+		providerAuth.Profile,
+		providerAuth.Thinking,
+		providerAuth.ReasoningEffort,
 		resolved.Config.GatewayAddr,
 	)
 	fmt.Fprintf(stdout, "%-34s  %-28s  %-26s  %s\n", "key", "value", "source", "source key/path")
@@ -986,7 +991,7 @@ func terminalEmitter(noReasoning bool) func(protocol.Event) {
 
 func printTools() error {
 	cfg := config.Default()
-	registry, err := tools.NewRegistryWithMCP(context.Background(), cfg)
+	registry, err := newToolRegistry(context.Background(), cfg)
 	if err != nil {
 		return err
 	}
@@ -1018,4 +1023,13 @@ func usage() {
 	fmt.Println("  bench terminal-bench import -dataset tb-dataset [-out tasks.jsonl]")
 	fmt.Println("  tools")
 	fmt.Println("  doctor|health [-json] [-strict] [-build=true] [-services=true] [-gateway=true]")
+	fmt.Println("  hygiene [-json] [-strict] [-repo DIR]")
+}
+
+func newToolRegistry(ctx context.Context, cfg config.Config) (*tools.Registry, error) {
+	return tools.NewRegistryWithMCP(ctx, cfg, tools.WithWebSummarizer(provider.NewWebSummarizerFromProjections(cfg.ProviderBinding(), cfg.ToolPolicySettings())))
+}
+
+func newToolRegistryNoMCP(cfg config.Config) *tools.Registry {
+	return tools.NewRegistry(cfg, tools.WithWebSummarizer(provider.NewWebSummarizerFromProjections(cfg.ProviderBinding(), cfg.ToolPolicySettings())))
 }

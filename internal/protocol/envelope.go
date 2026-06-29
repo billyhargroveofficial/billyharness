@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,6 +35,7 @@ type EventEnvelope struct {
 }
 
 type EventEnricher struct {
+	mu     sync.Mutex
 	seq    int64
 	env    EventEnvelope
 	emit   func(Event)
@@ -63,6 +65,8 @@ func (e *EventEnricher) Emit(event Event) {
 	if e == nil || e.emit == nil {
 		return
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.seq++
 	env := e.env
 	env.Seq = e.seq
@@ -192,6 +196,12 @@ func enrichEventIDsFromData(event *Event) {
 		if data != nil {
 			copyStepEnvelope(event, *data)
 		}
+	case ModelCallEvent:
+		copyModelCallEnvelope(event, data)
+	case *ModelCallEvent:
+		if data != nil {
+			copyModelCallEnvelope(event, *data)
+		}
 	case ToolCall:
 		if event.CallID == "" {
 			event.CallID = data.ID
@@ -211,6 +221,24 @@ func enrichEventIDsFromData(event *Event) {
 	case *ToolProgressEvent:
 		if data != nil {
 			copyToolProgressEnvelope(event, *data)
+		}
+	case ToolPermissionEvent:
+		copyToolPermissionEnvelope(event, data)
+	case *ToolPermissionEvent:
+		if data != nil {
+			copyToolPermissionEnvelope(event, *data)
+		}
+	case ToolOutputRefEvent:
+		copyToolOutputRefEnvelope(event, data)
+	case *ToolOutputRefEvent:
+		if data != nil {
+			copyToolOutputRefEnvelope(event, *data)
+		}
+	case HookEvent:
+		copyHookEnvelope(event, data)
+	case *HookEvent:
+		if data != nil {
+			copyHookEnvelope(event, *data)
 		}
 	case map[string]any:
 		copyMapEnvelope(event, data)
@@ -250,6 +278,15 @@ func copyStepEnvelope(event *Event, step StepEvent) {
 	copyMapEnvelope(event, step.Metadata)
 }
 
+func copyModelCallEnvelope(event *Event, model ModelCallEvent) {
+	if event.ProfileHash == "" {
+		event.ProfileHash = model.ProfileInstructionHash
+	}
+	if event.DurationMS == 0 && model.TotalLatencyMS != nil {
+		event.DurationMS = *model.TotalLatencyMS
+	}
+}
+
 func copyToolResultEnvelope(event *Event, result ToolResult) {
 	if event.CallID == "" {
 		event.CallID = result.CallID
@@ -265,6 +302,39 @@ func copyToolProgressEnvelope(event *Event, progress ToolProgressEvent) {
 		event.AttemptID = progress.AttemptID
 	}
 	copyMapEnvelope(event, progress.Metadata)
+}
+
+func copyToolPermissionEnvelope(event *Event, permission ToolPermissionEvent) {
+	if event.CallID == "" {
+		event.CallID = permission.CallID
+	}
+}
+
+func copyToolOutputRefEnvelope(event *Event, ref ToolOutputRefEvent) {
+	if event.CallID == "" {
+		event.CallID = ref.CallID
+	}
+	if event.AttemptID == "" {
+		event.AttemptID = ref.AttemptID
+	}
+}
+
+func copyHookEnvelope(event *Event, hook HookEvent) {
+	if event.TurnID == "" {
+		event.TurnID = hook.TurnID
+	}
+	if event.StepID == "" {
+		event.StepID = hook.StepID
+	}
+	if event.CallID == "" {
+		event.CallID = hook.CallID
+	}
+	if event.AttemptID == "" {
+		event.AttemptID = hook.AttemptID
+	}
+	if event.DurationMS == 0 && hook.DurationMS != nil {
+		event.DurationMS = *hook.DurationMS
+	}
 }
 
 func copyRawEnvelope(event *Event, raw json.RawMessage) {
@@ -300,7 +370,7 @@ func copyMapEnvelope(event *Event, m map[string]any) {
 		event.AttemptID = stringValue(m, "attempt_id")
 	}
 	if event.ParentStepID == "" {
-		event.ParentStepID = firstStringValue(m, "parent_step_id", "batch_id")
+		event.ParentStepID = stringValue(m, "parent_step_id")
 	}
 	if event.ProfileHash == "" {
 		event.ProfileHash = firstStringValue(m, "profile_hash", "profile_instruction_hash")

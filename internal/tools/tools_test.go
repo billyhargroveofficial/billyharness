@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,7 +14,8 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
-	"github.com/billyhargroveofficial/billyharness/internal/provider"
+	"github.com/billyhargroveofficial/billyharness/internal/tooloutput"
+	"github.com/billyhargroveofficial/billyharness/internal/webtools"
 )
 
 func TestParseSearchResultsUnwrapsDuckDuckGoRedirects(t *testing.T) {
@@ -107,10 +109,47 @@ func TestDangerousToolsCanBeDisabled(t *testing.T) {
 		{Name: "fs_write_file", Arguments: rawArgs(map[string]any{"path": "x.txt", "content": "x"})},
 		{Name: "fs_make_dir", Arguments: rawArgs(map[string]any{"path": "dir"})},
 		{Name: "shell_exec", Arguments: rawArgs(map[string]any{"argv": []string{"sh", "-c", "true"}})},
+		{Name: "web_cache_clear", Arguments: rawArgs(map[string]any{})},
 	} {
 		if _, err := registry.Call(context.Background(), call); err == nil || !strings.Contains(err.Error(), "disabled") {
 			t.Fatalf("%s expected disabled error, got %v", call.Name, err)
 		}
+	}
+}
+
+func TestRegistryPolicyDeniesRiskBeforeHandlerRuns(t *testing.T) {
+	cfg := config.Default()
+	cfg.AutoApproveDangerous = false
+	registry := NewRegistry(cfg)
+	var called bool
+	if err := registry.Register(Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "dangerous_custom",
+			Description: "Dangerous test tool.",
+			Parameters:  raw(`{"type":"object","properties":{},"additionalProperties":false}`),
+			Risk:        protocol.RiskExecute,
+		},
+		Handler: func(context.Context, json.RawMessage) (Result, error) {
+			called = true
+			return Result{Content: "ran"}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := registry.Call(context.Background(), protocol.ToolCall{Name: "dangerous_custom"})
+	if err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("expected disabled error, got result=%#v err=%v", result, err)
+	}
+	if called {
+		t.Fatal("handler ran despite denied policy")
+	}
+	if !result.IsError || result.ErrorCode != "permission_denied" ||
+		result.Metadata["permission_decision"] != "deny" ||
+		result.Metadata["permission_source"] != "config" ||
+		result.Metadata["permission_reason"] != "dangerous_tools_disabled" ||
+		result.Metadata["risk"] != protocol.RiskExecute {
+		t.Fatalf("result = %#v", result)
 	}
 }
 
@@ -389,7 +428,7 @@ func TestValidatePublicHTTPURLRejectsLocalAndPrivateTargets(t *testing.T) {
 		"http://10.0.0.1/",
 		"file:///etc/passwd",
 	} {
-		if _, err := validatePublicHTTPURL(context.Background(), rawURL); err == nil {
+		if _, err := webtools.ValidatePublicHTTPURL(context.Background(), rawURL, nil); err == nil {
 			t.Fatalf("validatePublicHTTPURL(%q) returned nil error", rawURL)
 		}
 	}
@@ -454,18 +493,11 @@ func TestWebCompactionDefaultsStaySmall(t *testing.T) {
 }
 
 func TestTinyDirectWebAnswerAvoidsSummaryBloatAndModelSummarizer(t *testing.T) {
-	oldProvider := newWebSummaryProvider
-	newWebSummaryProvider = func(config.Config) (provider.Provider, error) {
-		t.Fatalf("tiny direct answer should not call model summarizer")
-		return scriptedProvider{}, nil
-	}
-	t.Cleanup(func() { newWebSummaryProvider = oldProvider })
-
 	cfg := config.Default()
 	cfg.WebSummaryMode = "model"
 	cfg.WebSummaryProvider = "mock"
 	cfg.WebSummaryModel = "mock-summarizer"
-	registry := NewRegistry(cfg)
+	registry := NewRegistry(cfg, WithWebSummarizer(fatalSummarizer{t: t}))
 	page := fetchedPage{
 		URL:             "https://wttr.in/Moscow?format=3",
 		Status:          200,
@@ -597,6 +629,14 @@ func TestWebCompactionStoresFullTextOutOfBand(t *testing.T) {
 		anyInt64(meta["tool_summary_saved_tokens"]) <= 0 {
 		t.Fatalf("summary token metadata should show compression: %#v", meta)
 	}
+	if meta[tooloutput.MetadataOutputRef] != ref ||
+		meta[tooloutput.MetadataOutputRefID] == "" ||
+		anyInt64(meta[tooloutput.MetadataOutputRefBytes]) <= 0 ||
+		meta[tooloutput.MetadataOutputRefSHA256] == "" ||
+		meta[tooloutput.MetadataOutputRefPermissions] != "0600" ||
+		meta[tooloutput.MetadataOutputRefPlaintext] != true {
+		t.Fatalf("output ref metadata missing shared fields: %#v", meta)
+	}
 	bytes, err := os.ReadFile(ref)
 	if err != nil {
 		t.Fatal(err)
@@ -607,6 +647,164 @@ func TestWebCompactionStoresFullTextOutOfBand(t *testing.T) {
 	assertMode(t, filepath.Join(config.BillyHomeDir(), "tool-output"), 0o700)
 	assertMode(t, filepath.Dir(ref), 0o700)
 	assertMode(t, ref, 0o600)
+}
+
+func TestWebOutputMetadataReportsMissingArtifact(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.txt")
+	meta := webPageMetadata(compactPage{
+		URL:                  "https://example.com/missing",
+		OutputClass:          "extractive_summary",
+		SummaryMode:          "extractive",
+		SummaryChars:         10,
+		SummarizerProvider:   "native",
+		SummarizerModel:      "extractive",
+		EstimatedTextTokens:  10,
+		EstimatedTokensSaved: 5,
+		OutputRef:            missing,
+	})
+	if meta[tooloutput.MetadataOutputRef] != missing {
+		t.Fatalf("metadata should preserve missing output_ref path: %#v", meta)
+	}
+	if meta[tooloutput.MetadataOutputRefHashError] == "" {
+		t.Fatalf("metadata should report missing output_ref stat error: %#v", meta)
+	}
+}
+
+func TestWebToolGoldenJSONContracts(t *testing.T) {
+	note := "full extracted text is saved out-of-band in output_ref; inline response contains only digest/extract to protect context cost"
+	assertGoldenJSON(t, "web_fetch", compactPage{
+		URL:                  "https://example.com/fetch",
+		OutputClass:          "extractive_summary",
+		SummaryMode:          "extractive",
+		Summary:              "Fetch summary",
+		SummaryChars:         13,
+		SummarizerProvider:   "native",
+		SummarizerModel:      "extractive",
+		KeyPoints:            []string{"Point one"},
+		Extract:              "Evidence line.",
+		OutputRef:            "/tmp/tool-output/fetch.txt",
+		OriginalTextTokens:   42,
+		EstimatedTextTokens:  8,
+		EstimatedTokensSaved: 34,
+		OutputTextTruncated:  true,
+		CompactNote:          note,
+	}, `{
+  "url": "https://example.com/fetch",
+  "output_class": "extractive_summary",
+  "summary_mode": "extractive",
+  "summary": "Fetch summary",
+  "summary_chars": 13,
+  "summarizer_provider": "native",
+  "summarizer_model": "extractive",
+  "web_cache_hit": false,
+  "key_points": [
+    "Point one"
+  ],
+  "extract": "Evidence line.",
+  "output_ref": "/tmp/tool-output/fetch.txt",
+  "original_text_tokens": 42,
+  "estimated_text_tokens": 8,
+  "estimated_tokens_saved": 34,
+  "output_text_truncated": true,
+  "compact_note": "full extracted text is saved out-of-band in output_ref; inline response contains only digest/extract to protect context cost"
+}`)
+	assertGoldenJSON(t, "web_extract", compactPage{
+		URL:                  "https://example.com/extract",
+		OutputClass:          "raw_excerpt",
+		SummaryMode:          "extractive",
+		Summary:              "Extract summary",
+		SummaryChars:         15,
+		SummarizerProvider:   "native",
+		SummarizerModel:      "extractive",
+		Extract:              "Focused evidence.",
+		Text:                 "Short exact excerpt.",
+		OutputRef:            "/tmp/tool-output/extract.txt",
+		ReturnedTextChars:    20,
+		EstimatedTextTokens:  6,
+		EstimatedTokensSaved: 30,
+		BudgetTextChars:      800,
+		BudgetTextTokens:     200,
+		OutputTextTruncated:  true,
+		CompactNote:          "inline text is capped; use output_ref if exact source text is required",
+	}, `{
+  "url": "https://example.com/extract",
+  "output_class": "raw_excerpt",
+  "summary_mode": "extractive",
+  "summary": "Extract summary",
+  "summary_chars": 15,
+  "summarizer_provider": "native",
+  "summarizer_model": "extractive",
+  "web_cache_hit": false,
+  "extract": "Focused evidence.",
+  "text": "Short exact excerpt.",
+  "output_ref": "/tmp/tool-output/extract.txt",
+  "returned_text_chars": 20,
+  "estimated_text_tokens": 6,
+  "estimated_tokens_saved": 30,
+  "budget_text_chars": 800,
+  "budget_text_tokens": 200,
+  "output_text_truncated": true,
+  "compact_note": "inline text is capped; use output_ref if exact source text is required"
+}`)
+	assertGoldenJSON(t, "web_crawl", compactCrawlOutput{
+		Pages: []compactCrawlPage{{
+			URL:                  "https://example.com/",
+			OutputClass:          "extractive_summary",
+			SummaryMode:          "extractive",
+			Summary:              "Crawl summary",
+			SummaryChars:         13,
+			SummarizerProvider:   "native",
+			SummarizerModel:      "extractive",
+			Extract:              "Crawl evidence.",
+			OutputRef:            "/tmp/tool-output/crawl.txt",
+			OriginalTextTokens:   20,
+			EstimatedTextTokens:  5,
+			EstimatedTokensSaved: 15,
+			OutputTextTruncated:  true,
+		}},
+		OutputClass:          "extractive_summary",
+		SummaryMode:          "extractive",
+		SummaryChars:         13,
+		SummarizerProvider:   "native",
+		SummarizerModel:      "extractive",
+		OutputRef:            "/tmp/tool-output/crawl.txt",
+		OriginalTextTokens:   20,
+		EstimatedTextTokens:  5,
+		EstimatedTokensSaved: 15,
+		OutputTextTruncated:  true,
+		CompactNote:          note,
+	}, `{
+  "pages": [
+    {
+      "url": "https://example.com/",
+      "depth": 0,
+      "output_class": "extractive_summary",
+      "summary_mode": "extractive",
+      "summary": "Crawl summary",
+      "summary_chars": 13,
+      "summarizer_provider": "native",
+      "summarizer_model": "extractive",
+      "extract": "Crawl evidence.",
+      "output_ref": "/tmp/tool-output/crawl.txt",
+      "original_text_tokens": 20,
+      "estimated_text_tokens": 5,
+      "estimated_tokens_saved": 15,
+      "output_text_truncated": true
+    }
+  ],
+  "output_class": "extractive_summary",
+  "summary_mode": "extractive",
+  "summary_chars": 13,
+  "summarizer_provider": "native",
+  "summarizer_model": "extractive",
+  "web_cache_hit": false,
+  "output_ref": "/tmp/tool-output/crawl.txt",
+  "original_text_tokens": 20,
+  "estimated_text_tokens": 5,
+  "estimated_tokens_saved": 15,
+  "output_text_truncated": true,
+  "compact_note": "full extracted text is saved out-of-band in output_ref; inline response contains only digest/extract to protect context cost"
+}`)
 }
 
 func TestWebIncludeTextMarksRawExcerptOutputClass(t *testing.T) {
@@ -672,17 +870,24 @@ func TestWebPageMetadataIncludesPhaseTimings(t *testing.T) {
 }
 
 func TestModelWebSummarizerRunsOutsideMainLoopAndRecordsMetrics(t *testing.T) {
-	oldProvider := newWebSummaryProvider
-	newWebSummaryProvider = func(cfg config.Config) (provider.Provider, error) {
-		if cfg.Provider != "mock" || cfg.Model != "mock-summarizer" || cfg.Thinking != "disabled" {
-			t.Fatalf("summary cfg = provider:%q model:%q thinking:%q", cfg.Provider, cfg.Model, cfg.Thinking)
-		}
-		return scriptedProvider{
-			content: "Model summary keeps the important facts and leaves the raw tail out.",
-			usage:   provider.Usage{InputTokens: 900, OutputTokens: 40, CacheHitTokens: 300, CacheMissTokens: 600},
-		}, nil
+	summarizer := scriptedSummarizer{
+		check: func(req webtools.SummaryRequest) {
+			if req.Provider != "mock" || req.Model != "mock-summarizer" || req.MaxInputTokens != 300 || req.MaxOutputTokens != 80 {
+				t.Fatalf("summary request = %#v", req)
+			}
+			if !strings.Contains(req.Source.Text, "RAW_TAIL_ONLY_IN_REF") || req.Source.URL != "https://example.com/model" {
+				t.Fatalf("summary source = %#v", req.Source)
+			}
+		},
+		result: webtools.SummaryResult{
+			Text:         "Model summary keeps the important facts and leaves the raw tail out.",
+			Provider:     "mock",
+			Model:        "mock-summarizer",
+			InputTokens:  900,
+			OutputTokens: 40,
+			CacheHit:     300,
+		},
 	}
-	t.Cleanup(func() { newWebSummaryProvider = oldProvider })
 
 	cfg := config.Default()
 	cfg.WebSummaryMode = "model"
@@ -690,7 +895,7 @@ func TestModelWebSummarizerRunsOutsideMainLoopAndRecordsMetrics(t *testing.T) {
 	cfg.WebSummaryModel = "mock-summarizer"
 	cfg.WebSummaryMaxInputTokens = 300
 	cfg.WebSummaryMaxOutputTokens = 80
-	registry := NewRegistry(cfg)
+	registry := NewRegistry(cfg, WithWebSummarizer(summarizer))
 	raw := strings.Repeat("Raw page evidence should stay outside context. ", 200) + "RAW_TAIL_ONLY_IN_REF"
 	page := fetchedPage{
 		URL:             "https://example.com/model",
@@ -727,17 +932,11 @@ func TestModelWebSummarizerRunsOutsideMainLoopAndRecordsMetrics(t *testing.T) {
 }
 
 func TestModelWebSummarizerFallsBackToExtractiveOnProviderError(t *testing.T) {
-	oldProvider := newWebSummaryProvider
-	newWebSummaryProvider = func(config.Config) (provider.Provider, error) {
-		return failingProvider{}, nil
-	}
-	t.Cleanup(func() { newWebSummaryProvider = oldProvider })
-
 	cfg := config.Default()
 	cfg.WebSummaryMode = "model"
 	cfg.WebSummaryProvider = "mock"
 	cfg.WebSummaryModel = "mock-summarizer"
-	registry := NewRegistry(cfg)
+	registry := NewRegistry(cfg, WithWebSummarizer(failingSummarizer{}))
 	page := fetchedPage{
 		URL:   "https://example.com/fallback",
 		Title: "Fallback",
@@ -751,6 +950,81 @@ func TestModelWebSummarizerFallsBackToExtractiveOnProviderError(t *testing.T) {
 	}
 	if !strings.Contains(compact.WebsumError, "summary failed") {
 		t.Fatalf("fallback missing error: %#v", compact)
+	}
+}
+
+func TestModelWebSummaryServiceMetadataTimeoutAndConcurrency(t *testing.T) {
+	cfg := config.Default()
+	cfg.WebSummaryMode = "model"
+	cfg.WebSummaryProvider = "mock"
+	cfg.WebSummaryModel = "mock-summarizer"
+	cfg.WebSummaryTimeout = 500 * time.Millisecond
+	summarizer := &blockingSummarizer{
+		entered: make(chan webtools.SummaryRequest),
+		release: make(chan struct{}),
+		result:  webtools.SummaryResult{Text: "bounded summary", Provider: "mock", Model: "mock-summarizer", InputTokens: 10, OutputTokens: 2},
+	}
+	registry := NewRegistry(cfg, WithWebSummarizer(summarizer))
+	registry.webSummarySlots = make(chan struct{}, 1)
+	source := webtools.SummarySource{URL: "https://example.com/summary", Title: "Summary", Text: strings.Repeat("evidence ", 100)}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := registry.modelWebSummary(context.Background(), source)
+		firstDone <- err
+	}()
+	req := <-summarizer.entered
+	if req.RequestID == "" || req.ToolName != "web_summary" || req.AllowTools {
+		t.Fatalf("summary request metadata/no-tools contract = %#v", req)
+	}
+	if req.Timeout != 500*time.Millisecond || req.Provider != "mock" || req.Model != "mock-summarizer" {
+		t.Fatalf("summary request settings = %#v", req)
+	}
+
+	secondDone := make(chan error, 1)
+	secondCtx, cancelSecond := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelSecond()
+	go func() {
+		_, err := registry.modelWebSummary(secondCtx, source)
+		secondDone <- err
+	}()
+	select {
+	case err := <-secondDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("second summary err = %v, want deadline exceeded", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("second summary did not time out while waiting for concurrency slot")
+	}
+
+	close(summarizer.release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first summary err = %v", err)
+	}
+}
+
+func TestWebSummaryExtractiveModeDoesNotNeedSummarizer(t *testing.T) {
+	cfg := config.Default()
+	cfg.WebSummaryMode = "extractive"
+	registry := NewRegistry(cfg, WithWebSummarizer(fatalSummarizer{t: t}))
+	page := fetchedPage{
+		URL:   "https://example.com/extractive",
+		Title: "Extractive",
+		Text:  strings.Repeat("Extractive page sentence with useful details. ", 100),
+	}
+	compact := compactFetchedPage(page, webFetchOptions{})
+	originalSummary := compact.Summary
+	registry.applyModelSummaryToPage(context.Background(), &compact, page, webFetchOptions{})
+	if compact.Summary != originalSummary || compact.SummaryMode != "extractive" || compact.WebsumError != "" {
+		t.Fatalf("extractive summary should not need summarizer: %#v", compact)
+	}
+
+	cfg.WebSummaryMode = "model"
+	registry = NewRegistry(cfg)
+	compact = compactFetchedPage(page, webFetchOptions{})
+	registry.applyModelSummaryToPage(context.Background(), &compact, page, webFetchOptions{})
+	if compact.SummaryMode != "extractive" || !strings.Contains(compact.WebsumError, "web model summarizer unavailable") {
+		t.Fatalf("model mode without summarizer should fall back: %#v", compact)
 	}
 }
 
@@ -788,6 +1062,11 @@ func TestWebCacheStoresAndClearsCompactOutputs(t *testing.T) {
 		Summary:             "cached summary",
 		EstimatedTextTokens: 17,
 	}
+	pageRef, err := storeWebOutput("web_fetch", page.URL, "cached full page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page.OutputRef = pageRef
 	if err := registry.saveWebPageCache(key, page); err != nil {
 		t.Fatal(err)
 	}
@@ -795,15 +1074,26 @@ func TestWebCacheStoresAndClearsCompactOutputs(t *testing.T) {
 	if !hit || !cached.WebCacheHit || cached.WebCacheKey != key || cached.WebCacheTTLMS != int64(time.Hour/time.Millisecond) {
 		t.Fatalf("cached page = %#v hit=%v", cached, hit)
 	}
+	if err := os.Remove(pageRef); err != nil {
+		t.Fatal(err)
+	}
+	if _, hit := registry.loadWebPageCache(key); hit {
+		t.Fatal("page cache should miss after output ref is deleted")
+	}
 
 	crawlKey, ok := registry.webCacheKey(ctx, "web_crawl", "http://93.184.216.34/", webFetchOptions{}, map[string]any{"max_pages": 1})
 	if !ok {
 		t.Fatalf("crawl cache key missing")
 	}
+	crawlRef, err := storeWebOutput("web_crawl", "http://93.184.216.34/", "cached full crawl")
+	if err != nil {
+		t.Fatal(err)
+	}
 	crawl := compactCrawlOutput{
 		Pages:       []compactCrawlPage{{URL: "http://93.184.216.34/", Summary: "cached crawl"}},
 		OutputClass: "extractive_summary",
 		SummaryMode: "extractive",
+		OutputRef:   crawlRef,
 	}
 	if err := registry.saveWebCrawlCache(crawlKey, crawl); err != nil {
 		t.Fatal(err)
@@ -811,6 +1101,12 @@ func TestWebCacheStoresAndClearsCompactOutputs(t *testing.T) {
 	cachedCrawl, hit := registry.loadWebCrawlCache(crawlKey)
 	if !hit || !cachedCrawl.WebCacheHit || len(cachedCrawl.Pages) != 1 || !cachedCrawl.Pages[0].WebCacheHit {
 		t.Fatalf("cached crawl = %#v hit=%v", cachedCrawl, hit)
+	}
+	if err := os.Remove(crawlRef); err != nil {
+		t.Fatal(err)
+	}
+	if _, hit := registry.loadWebCrawlCache(crawlKey); hit {
+		t.Fatal("crawl cache should miss after output ref is deleted")
 	}
 
 	status, err := registry.Call(ctx, protocol.ToolCall{Name: "web_cache_status", Arguments: rawArgs(map[string]any{})})
@@ -915,6 +1211,11 @@ func TestLazyMCPGatewayHidesRawSpecsAndCanCallTool(t *testing.T) {
 	if !hasSpec(registry.Specs(), "mcp_list_tools") || !hasSpec(registry.Specs(), "mcp_call") || !hasSpec(registry.Specs(), "tool_search") {
 		t.Fatalf("lazy MCP tools missing: %#v", registry.Specs())
 	}
+	if !specDescriptionContains(registry.Specs(), "tool_search", "static model-visible gateway tools") ||
+		!specDescriptionContains(registry.Specs(), "mcp_list_tools", "not direct model-visible specs") ||
+		!specDescriptionContains(registry.Specs(), "mcp_call", "dynamic MCP catalog tool") {
+		t.Fatalf("MCP gateway tool descriptions should name static gateway specs vs dynamic MCP catalog: %#v", registry.Specs())
+	}
 
 	direct, err := registry.Call(context.Background(), protocol.ToolCall{
 		Name:      "mcp__fake__echo",
@@ -936,6 +1237,24 @@ func TestLazyMCPGatewayHidesRawSpecsAndCanCallTool(t *testing.T) {
 	}
 	if !strings.Contains(list.Content, "mcp__fake__echo") || strings.Contains(list.Content, "input_schema") {
 		t.Fatalf("unexpected list output: %s", list.Content)
+	}
+	for _, want := range []string{
+		`"model_visible_tools"`,
+		`"kind": "static_gateway_tools"`,
+		`"includes_dynamic_mcp_tools": false`,
+		`"mcp_catalog"`,
+		`"kind": "dynamic_mcp_catalog"`,
+		`"model_visible": false`,
+	} {
+		if !strings.Contains(list.Content, want) {
+			t.Fatalf("mcp_list_tools missing catalog clarity field %q:\n%s", want, list.Content)
+		}
+	}
+	if list.Metadata["model_visible_tool_catalog_kind"] != "static_gateway_tools" ||
+		list.Metadata["model_visible_includes_dynamic_mcp_tools"] != false ||
+		list.Metadata["mcp_catalog_kind"] != "dynamic_mcp_catalog" ||
+		list.Metadata["mcp_catalog_model_visible"] != false {
+		t.Fatalf("mcp_list_tools metadata missing catalog clarity: %#v", list.Metadata)
 	}
 
 	parilkaByServer, err := registry.Call(context.Background(), protocol.ToolCall{
@@ -1082,6 +1401,12 @@ func TestToolSearchFindsNativeAndMCPTools(t *testing.T) {
 		`"risk": "read_only"`,
 		`"call_tool": "fs_read_file"`,
 		`"metrics"`,
+		`"model_visible_tools"`,
+		`"kind": "static_gateway_tools"`,
+		`"includes_dynamic_mcp_tools": false`,
+		`"mcp_catalog"`,
+		`"kind": "dynamic_mcp_catalog"`,
+		`"model_visible": false`,
 	} {
 		if !strings.Contains(native.Content, want) {
 			t.Fatalf("native tool_search missing %q in:\n%s", want, native.Content)
@@ -1089,6 +1414,12 @@ func TestToolSearchFindsNativeAndMCPTools(t *testing.T) {
 	}
 	if nativeResp.Metrics.DiscoveryCalls != 1 || nativeResp.Metrics.Returned == 0 || nativeResp.Metrics.ScannedNative == 0 {
 		t.Fatalf("native metrics = %#v", nativeResp.Metrics)
+	}
+	if native.Metadata["model_visible_tool_catalog_kind"] != "static_gateway_tools" ||
+		native.Metadata["model_visible_includes_dynamic_mcp_tools"] != false ||
+		native.Metadata["mcp_catalog_kind"] != "dynamic_mcp_catalog" ||
+		native.Metadata["mcp_catalog_model_visible"] != false {
+		t.Fatalf("native tool_search metadata missing catalog clarity: %#v", native.Metadata)
 	}
 
 	filteredNative, err := registry.Call(context.Background(), protocol.ToolCall{
@@ -1151,6 +1482,12 @@ func TestToolSearchFindsNativeAndMCPTools(t *testing.T) {
 		`"call_tool": "mcp_call"`,
 		`"call_name": "mcp__github__search_repositories"`,
 		`"input_schema"`,
+		`"model_visible_tools"`,
+		`"kind": "static_gateway_tools"`,
+		`"includes_dynamic_mcp_tools": false`,
+		`"mcp_catalog"`,
+		`"kind": "dynamic_mcp_catalog"`,
+		`"model_visible": false`,
 	} {
 		if !strings.Contains(mcp.Content, want) {
 			t.Fatalf("mcp tool_search missing %q in:\n%s", want, mcp.Content)
@@ -1160,6 +1497,12 @@ func TestToolSearchFindsNativeAndMCPTools(t *testing.T) {
 		mcpResp.Metrics.SchemaIncluded != 1 || mcpResp.Metrics.SchemaTokens == 0 ||
 		mcpResp.Metrics.SchemaBudgetTokens != 200 {
 		t.Fatalf("mcp metrics = %#v", mcpResp.Metrics)
+	}
+	if mcp.Metadata["model_visible_tool_catalog_kind"] != "static_gateway_tools" ||
+		mcp.Metadata["model_visible_includes_dynamic_mcp_tools"] != false ||
+		mcp.Metadata["mcp_catalog_kind"] != "dynamic_mcp_catalog" ||
+		mcp.Metadata["mcp_catalog_model_visible"] != false {
+		t.Fatalf("mcp tool_search metadata missing catalog clarity: %#v", mcp.Metadata)
 	}
 
 	overBudget, err := registry.Call(context.Background(), protocol.ToolCall{
@@ -1298,10 +1641,22 @@ func TestMCPGatewayListsServerStatusesAndValidatesStdioCalls(t *testing.T) {
 		`"input_schema"`,
 		`"metrics"`,
 		`"schema_included": 1`,
+		`"model_visible_tools"`,
+		`"kind": "static_gateway_tools"`,
+		`"includes_dynamic_mcp_tools": false`,
+		`"mcp_catalog"`,
+		`"kind": "dynamic_mcp_catalog"`,
+		`"model_visible": false`,
 	} {
 		if !strings.Contains(list.Content, want) {
 			t.Fatalf("mcp_list_tools missing %q in:\n%s", want, list.Content)
 		}
+	}
+	if list.Metadata["model_visible_tool_catalog_kind"] != "static_gateway_tools" ||
+		list.Metadata["model_visible_includes_dynamic_mcp_tools"] != false ||
+		list.Metadata["mcp_catalog_kind"] != "dynamic_mcp_catalog" ||
+		list.Metadata["mcp_catalog_model_visible"] != false {
+		t.Fatalf("mcp_list_tools metadata missing catalog clarity: %#v", list.Metadata)
 	}
 
 	invalid, err := registry.Call(context.Background(), protocol.ToolCall{
@@ -1400,6 +1755,253 @@ func TestMCPGatewayReconnectsCrashedStdioServer(t *testing.T) {
 	}
 }
 
+func TestMCPGatewayRefreshesCatalogAfterReconnect(t *testing.T) {
+	root := t.TempDir()
+	phaseFile := filepath.Join(root, "tools-catalog-reconnect.phase")
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.MCPEnabled = true
+	cfg.MCPServers = []config.MCPServer{{
+		Name:           "fake",
+		Command:        os.Args[0],
+		Args:           []string{"-test.run=TestToolsFakeStdioMCPServer"},
+		Env:            map[string]string{"BILLYHARNESS_TOOLS_MCP_HELPER": "1", "BILLYHARNESS_TOOLS_MCP_MODE": "close_once_then_new_tool", "BILLYHARNESS_TOOLS_MCP_PHASE_FILE": phaseFile},
+		CWD:            root,
+		Enabled:        true,
+		Required:       true,
+		StartupTimeout: 2 * time.Second,
+		ToolTimeout:    2 * time.Second,
+		EnabledTools:   []string{"echo", "new_echo"},
+	}}
+	registry, err := NewRegistryWithMCP(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+
+	initial, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "mcp_list_tools",
+		Arguments: rawArgs(map[string]any{"server": "fake"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(initial.Content, `"name": "mcp__fake__echo"`) || strings.Contains(initial.Content, `"name": "mcp__fake__new_echo"`) {
+		t.Fatalf("initial catalog = %s", initial.Content)
+	}
+
+	crashed, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_call",
+		Arguments: rawArgs(map[string]any{
+			"name":      "mcp__fake__echo",
+			"arguments": map[string]any{"text": "first"},
+		}),
+	})
+	if err == nil || !strings.Contains(err.Error(), "transport") {
+		t.Fatalf("expected transport crash, got result=%#v err=%v", crashed, err)
+	}
+
+	list, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "mcp_list_tools",
+		Arguments: rawArgs(map[string]any{"server": "fake"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(list.Content, `"name": "mcp__fake__new_echo"`) ||
+		strings.Contains(list.Content, `"name": "mcp__fake__echo"`) {
+		t.Fatalf("reconnected list did not reflect new catalog:\n%s", list.Content)
+	}
+
+	search, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "tool_search",
+		Arguments: rawArgs(map[string]any{
+			"server": "fake",
+			"query":  "new echo",
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(search.Content, `"name": "mcp__fake__new_echo"`) ||
+		strings.Contains(search.Content, `"name": "mcp__fake__echo"`) {
+		t.Fatalf("tool_search did not reflect new catalog:\n%s", search.Content)
+	}
+
+	newCall, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_call",
+		Arguments: rawArgs(map[string]any{
+			"name":      "mcp__fake__new_echo",
+			"arguments": map[string]any{"text": "second"},
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newCall.Content != "new: second" {
+		t.Fatalf("new mcp_call content = %q", newCall.Content)
+	}
+
+	oldCall, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_call",
+		Arguments: rawArgs(map[string]any{
+			"name":      "mcp__fake__echo",
+			"arguments": map[string]any{"text": "old"},
+		}),
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown MCP tool mcp__fake__echo") {
+		t.Fatalf("old mcp_call should fail validation after catalog refresh, got result=%#v err=%v", oldCall, err)
+	}
+}
+
+func TestRegistrySubscribesToMCPCatalogChanges(t *testing.T) {
+	root := t.TempDir()
+	phaseFile := filepath.Join(root, "tools-catalog-listener.phase")
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.MCPEnabled = true
+	cfg.MCPServers = []config.MCPServer{{
+		Name:           "fake",
+		Command:        os.Args[0],
+		Args:           []string{"-test.run=TestToolsFakeStdioMCPServer"},
+		Env:            map[string]string{"BILLYHARNESS_TOOLS_MCP_HELPER": "1", "BILLYHARNESS_TOOLS_MCP_MODE": "close_once_then_new_tool", "BILLYHARNESS_TOOLS_MCP_PHASE_FILE": phaseFile},
+		CWD:            root,
+		Enabled:        true,
+		Required:       true,
+		StartupTimeout: 2 * time.Second,
+		ToolTimeout:    2 * time.Second,
+		EnabledTools:   []string{"echo", "new_echo"},
+	}}
+	registry, err := NewRegistryWithMCP(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	initialCatalog := registry.mcpCatalogSnapshot()
+	if initialCatalog.Version == 0 || initialCatalog.Stale || initialCatalog.ToolCount != 1 {
+		t.Fatalf("initial catalog = %#v", initialCatalog)
+	}
+	echo, ok := registry.mcpToolsSnapshot()["mcp__fake__echo"]
+	if !ok {
+		t.Fatal("initial echo tool missing")
+	}
+
+	crashed, err := echo.Handler(context.Background(), json.RawMessage(`{"text":"first"}`))
+	if err == nil || !strings.Contains(err.Error(), "transport") {
+		t.Fatalf("expected fake MCP transport crash, got result=%#v err=%v", crashed, err)
+	}
+	registry.manager.Refresh(context.Background())
+
+	results := registry.searchTools("new echo", "fake", "", "", 10, false, 0)
+	if len(results.Items) != 1 || results.Items[0].Name != "mcp__fake__new_echo" {
+		t.Fatalf("registry search did not observe subscribed catalog change: %#v", results.Items)
+	}
+	if _, oldOK := registry.mcpToolsSnapshot()["mcp__fake__echo"]; oldOK {
+		t.Fatal("old MCP tool remained in registry mirror after catalog listener sync")
+	}
+	catalog := registry.mcpCatalogSnapshot()
+	if catalog.Stale || catalog.Version <= initialCatalog.Version || catalog.ToolCount != 1 {
+		t.Fatalf("catalog after listener sync = %#v, initial=%#v", catalog, initialCatalog)
+	}
+
+	search, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "tool_search",
+		Arguments: rawArgs(map[string]any{
+			"server": "fake",
+			"query":  "new echo",
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"model_visible_tools"`, `"kind": "static_gateway_tools"`, `"mcp_catalog"`, `"kind": "dynamic_mcp_catalog"`, `"model_visible": false`, `"version":`, `"stale": false`, `"tool_count": 1`} {
+		if !strings.Contains(search.Content, want) {
+			t.Fatalf("tool_search missing catalog field %q:\n%s", want, search.Content)
+		}
+	}
+	if search.Metadata["mcp_catalog_version"] == nil ||
+		search.Metadata["mcp_catalog_tool_count"] != 1 ||
+		search.Metadata["mcp_catalog_stale"] != false ||
+		search.Metadata["mcp_catalog_kind"] != "dynamic_mcp_catalog" ||
+		search.Metadata["mcp_catalog_model_visible"] != false ||
+		search.Metadata["model_visible_tool_catalog_kind"] != "static_gateway_tools" ||
+		search.Metadata["model_visible_includes_dynamic_mcp_tools"] != false {
+		t.Fatalf("tool_search metadata missing catalog state: %#v", search.Metadata)
+	}
+}
+
+func TestMCPGatewayRefreshesCatalogAfterOptionalStartupFailure(t *testing.T) {
+	root := t.TempDir()
+	phaseFile := filepath.Join(root, "tools-startup-reconnect.phase")
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.MCPEnabled = true
+	cfg.MCPServers = []config.MCPServer{{
+		Name:           "fake",
+		Command:        os.Args[0],
+		Args:           []string{"-test.run=TestToolsFakeStdioMCPServer"},
+		Env:            map[string]string{"BILLYHARNESS_TOOLS_MCP_HELPER": "1", "BILLYHARNESS_TOOLS_MCP_MODE": "bad_list_once_then_new_tool", "BILLYHARNESS_TOOLS_MCP_PHASE_FILE": phaseFile},
+		CWD:            root,
+		Enabled:        true,
+		StartupTimeout: 2 * time.Second,
+		ToolTimeout:    2 * time.Second,
+		EnabledTools:   []string{"new_echo"},
+	}}
+	registry, err := NewRegistryWithMCP(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	if !hasSpec(registry.Specs(), "mcp_list_tools") || !hasSpec(registry.Specs(), "mcp_call") || !hasSpec(registry.Specs(), "tool_search") {
+		t.Fatalf("MCP gateway tools should be present after optional startup failure: %#v", registry.Specs())
+	}
+
+	list, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "mcp_list_tools",
+		Arguments: rawArgs(map[string]any{"server": "fake"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"name": "mcp__fake__new_echo"`,
+		`"connected": true`,
+		`"retry_count": 1`,
+	} {
+		if !strings.Contains(list.Content, want) {
+			t.Fatalf("mcp_list_tools missing %q after reconnect:\n%s", want, list.Content)
+		}
+	}
+
+	search, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "tool_search",
+		Arguments: rawArgs(map[string]any{
+			"server": "fake",
+			"query":  "new echo",
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(search.Content, `"name": "mcp__fake__new_echo"`) {
+		t.Fatalf("tool_search did not see reconnected catalog:\n%s", search.Content)
+	}
+
+	called, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_call",
+		Arguments: rawArgs(map[string]any{
+			"name":      "mcp__fake__new_echo",
+			"arguments": map[string]any{"text": "later"},
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called.Content != "new: later" {
+		t.Fatalf("mcp_call content after reconnect = %q", called.Content)
+	}
+}
+
 func TestToolsFakeStdioMCPServer(t *testing.T) {
 	if os.Getenv("BILLYHARNESS_TOOLS_MCP_HELPER") != "1" {
 		return
@@ -1428,9 +2030,20 @@ func TestToolsFakeStdioMCPServer(t *testing.T) {
 				"instructions":    "Use echo for MCP gateway tests.",
 			}})
 		case "tools/list":
+			name := "echo"
+			description := "Echo text"
+			if mode == "bad_list_once_then_new_tool" && !toolsMCPPhaseExists() {
+				writeToolsMCPPhase()
+				_, _ = os.Stdout.Write([]byte("{not json\n"))
+				os.Exit(0)
+			}
+			if (mode == "close_once_then_new_tool" || mode == "bad_list_once_then_new_tool") && toolsMCPPhaseExists() {
+				name = "new_echo"
+				description = "New echo text"
+			}
 			_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"tools": []map[string]any{{
-				"name":        "echo",
-				"description": "Echo text",
+				"name":        name,
+				"description": description,
 				"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"text": map[string]any{"type": "string"}}, "required": []string{"text"}, "additionalProperties": false},
 			}}}})
 		case "tools/call":
@@ -1439,11 +2052,22 @@ func TestToolsFakeStdioMCPServer(t *testing.T) {
 				Arguments map[string]any `json:"arguments"`
 			}
 			_ = json.Unmarshal(req.Params, &call)
+			if call.Name == "new_echo" && (mode == "close_once_then_new_tool" || mode == "bad_list_once_then_new_tool") && toolsMCPPhaseExists() {
+				_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{
+					"content": []map[string]any{{"type": "text", "text": "new: " + fmt.Sprint(call.Arguments["text"])}},
+					"isError": false,
+				}})
+				continue
+			}
 			if call.Name != "echo" {
 				_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{"code": -32602, "message": "unknown tool"}})
 				continue
 			}
-			if mode == "close_once_then_echo" && !toolsMCPPhaseExists() {
+			if (mode == "close_once_then_new_tool" || mode == "bad_list_once_then_new_tool") && toolsMCPPhaseExists() {
+				_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{"code": -32602, "message": "unknown tool"}})
+				continue
+			}
+			if (mode == "close_once_then_echo" || mode == "close_once_then_new_tool") && !toolsMCPPhaseExists() {
 				writeToolsMCPPhase()
 				os.Exit(0)
 			}
@@ -1483,6 +2107,15 @@ func hasSpec(specs []protocol.ToolSpec, name string) bool {
 	return false
 }
 
+func specDescriptionContains(specs []protocol.ToolSpec, name, want string) bool {
+	for _, spec := range specs {
+		if spec.Name == name {
+			return strings.Contains(spec.Description, want)
+		}
+	}
+	return false
+}
+
 func writeSkill(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -1501,56 +2134,62 @@ func rawArgs(value any) json.RawMessage {
 	return bytes
 }
 
-type scriptedProvider struct {
-	content string
-	usage   provider.Usage
+func assertGoldenJSON(t *testing.T, name string, value any, want string) {
+	t.Helper()
+	body, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(body); got != want {
+		t.Fatalf("%s JSON mismatch\n got:\n%s\nwant:\n%s", name, got, want)
+	}
 }
 
-func (p scriptedProvider) Stream(ctx context.Context, _ provider.Request) (<-chan provider.Event, <-chan error) {
-	events := make(chan provider.Event, 3)
-	errs := make(chan error, 1)
-	go func() {
-		defer close(events)
-		defer close(errs)
-		select {
-		case events <- provider.Event{Kind: provider.EventContent, Text: p.content}:
-		case <-ctx.Done():
-			errs <- ctx.Err()
-			return
-		}
-		if p.usage.InputTokens > 0 || p.usage.OutputTokens > 0 {
-			select {
-			case events <- provider.Event{Kind: provider.EventUsage, Usage: p.usage}:
-			case <-ctx.Done():
-				errs <- ctx.Err()
-				return
-			}
-		}
-		select {
-		case events <- provider.Event{Kind: provider.EventDone}:
-		case <-ctx.Done():
-			errs <- ctx.Err()
-			return
-		}
-	}()
-	return events, errs
+type fatalSummarizer struct {
+	t *testing.T
 }
 
-type failingProvider struct{}
+func (s fatalSummarizer) SummarizeWeb(context.Context, webtools.SummaryRequest) (webtools.SummaryResult, error) {
+	s.t.Fatalf("summarizer should not be called")
+	return webtools.SummaryResult{}, nil
+}
 
-func (failingProvider) Stream(ctx context.Context, _ provider.Request) (<-chan provider.Event, <-chan error) {
-	events := make(chan provider.Event)
-	errs := make(chan error, 1)
-	go func() {
-		defer close(events)
-		defer close(errs)
-		select {
-		case errs <- fmt.Errorf("summary failed"):
-		case <-ctx.Done():
-			errs <- ctx.Err()
-		}
-	}()
-	return events, errs
+type scriptedSummarizer struct {
+	check  func(webtools.SummaryRequest)
+	result webtools.SummaryResult
+}
+
+func (s scriptedSummarizer) SummarizeWeb(_ context.Context, req webtools.SummaryRequest) (webtools.SummaryResult, error) {
+	if s.check != nil {
+		s.check(req)
+	}
+	return s.result, nil
+}
+
+type blockingSummarizer struct {
+	entered chan webtools.SummaryRequest
+	release chan struct{}
+	result  webtools.SummaryResult
+}
+
+func (s *blockingSummarizer) SummarizeWeb(ctx context.Context, req webtools.SummaryRequest) (webtools.SummaryResult, error) {
+	select {
+	case s.entered <- req:
+	case <-ctx.Done():
+		return webtools.SummaryResult{}, ctx.Err()
+	}
+	select {
+	case <-s.release:
+		return s.result, nil
+	case <-ctx.Done():
+		return webtools.SummaryResult{}, ctx.Err()
+	}
+}
+
+type failingSummarizer struct{}
+
+func (failingSummarizer) SummarizeWeb(context.Context, webtools.SummaryRequest) (webtools.SummaryResult, error) {
+	return webtools.SummaryResult{}, fmt.Errorf("summary failed")
 }
 
 func anyInt64(value any) int64 {

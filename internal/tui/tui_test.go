@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -16,10 +17,16 @@ import (
 	tea "charm.land/bubbletea/v2"
 	xansi "github.com/charmbracelet/x/ansi"
 
+	"github.com/billyhargroveofficial/billyharness/internal/clientux"
+	uxprojector "github.com/billyhargroveofficial/billyharness/internal/clientux/projector"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
-	"github.com/billyhargroveofficial/billyharness/internal/gateway"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/testkit"
+	tuirender "github.com/billyhargroveofficial/billyharness/internal/tui/render"
+	tuiselection "github.com/billyhargroveofficial/billyharness/internal/tui/selection"
+	"github.com/billyhargroveofficial/billyharness/internal/tui/transcript"
 )
 
 func TestDefaultsToDarkTheme(t *testing.T) {
@@ -117,6 +124,16 @@ func TestActionRegistryBacksSlashCommandsAndHelp(t *testing.T) {
 		if action.id == "" || action.title == "" || action.category == "" {
 			t.Fatalf("action for %q missing registry metadata: %#v", action.slash, action)
 		}
+		def, ok := clientux.ActionDefinitionByID(action.id)
+		if !ok {
+			t.Fatalf("action %q missing shared client UX definition", action.id)
+		}
+		if action.title != def.Title || action.category != def.Category || action.slash != def.Slash || action.slashArgs != def.SlashArgs || action.summary != def.Summary {
+			t.Fatalf("action %q not hydrated from shared definition: %#v vs %#v", action.id, action, def)
+		}
+		if !reflect.DeepEqual(action.slashAliases, def.SlashAliases) || !reflect.DeepEqual(action.telegramAliases, def.TelegramAliases) {
+			t.Fatalf("action %q aliases not hydrated from shared definition: %#v vs %#v", action.id, action, def)
+		}
 		if action.run == nil {
 			t.Fatalf("action for %q missing runner", action.slash)
 		}
@@ -135,6 +152,36 @@ func TestActionRegistryBacksSlashCommandsAndHelp(t *testing.T) {
 		if !strings.Contains(help, action.slash) {
 			t.Fatalf("helpText missing %q:\n%s", action.slash, help)
 		}
+	}
+}
+
+func TestActionRegistryBacksKeybindingsAndHelp(t *testing.T) {
+	help := helpText()
+	for _, action := range actionRegistry() {
+		keys := actionKeybindings(action)
+		if len(keys) == 0 {
+			continue
+		}
+		if action.id == "" || action.title == "" || action.category == "" {
+			t.Fatalf("key action missing registry metadata: %#v", action)
+		}
+		if action.keyRun == nil {
+			t.Fatalf("key action %q missing runner", action.id)
+		}
+		for _, key := range keys {
+			if !strings.Contains(help, key) {
+				t.Fatalf("helpText missing keybinding %q:\n%s", key, help)
+			}
+		}
+	}
+
+	action, ok := actionForKey(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
+	if !ok || action.id != "palette.open" {
+		t.Fatalf("ctrl+k action = %#v ok=%t", action, ok)
+	}
+	action, ok = actionForKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !ok || action.id != "message.send" {
+		t.Fatalf("enter action = %#v ok=%t", action, ok)
 	}
 }
 
@@ -157,7 +204,7 @@ func TestSemanticCopyTextUsesRawTranscriptFields(t *testing.T) {
 	m.addBlock("user", "USER", "hello")
 	m.addBlock("assistant", "ASSISTANT", "answer **raw**")
 	m.addBlock("tool", "Done Read README.md", "rendered output")
-	m.blocks[2].rawCopy = "raw tool output"
+	m.blocks[2].RawCopy = "raw tool output"
 	m.selected = 2
 	m.textarea.SetValue("/model flash")
 
@@ -232,8 +279,8 @@ func TestTUISelectsCodexProviderForGPTModels(t *testing.T) {
 	if got := m.currentProvider(); got != "openai-codex" {
 		t.Fatalf("currentProvider = %q", got)
 	}
-	if got := m.currentConfig().Provider; got != "openai-codex" {
-		t.Fatalf("currentConfig.Provider = %q", got)
+	if got := m.providerBinding.Provider.Provider; got != "openai-codex" {
+		t.Fatalf("providerBinding.Provider = %q", got)
 	}
 	if got := m.costText(); got != "cost subscription" {
 		t.Fatalf("costText = %q", got)
@@ -250,22 +297,27 @@ func TestTUISelectsCodexProviderForGPTModels(t *testing.T) {
 
 func TestRunGatewaySendsSelectedProviderModelAndReasoning(t *testing.T) {
 	var captured map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1/sessions/session-1/run":
-			if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
-				t.Fatal(err)
-			}
-			_ = json.NewEncoder(w).Encode(protocol.Event{Type: protocol.EventAssistantDelta, Data: "ok"})
-		case "/v1/sessions/session-1":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"messages": []protocol.Message{{Role: protocol.RoleUser, Content: "ping"}, {Role: protocol.RoleAssistant, Content: "ok"}},
-			})
-		default:
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-	}))
-	t.Cleanup(server.Close)
+	server := testkit.NewRouteServer(t,
+		testkit.Route{
+			Method: http.MethodPost,
+			Path:   "/v1/sessions/session-1/run",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				if !testkit.DecodeJSON(t, r, &captured) {
+					return
+				}
+				testkit.WriteJSONLines(t, w, protocol.Event{Type: protocol.EventAssistantDelta, Data: "ok"})
+			},
+		},
+		testkit.Route{
+			Method: http.MethodGet,
+			Path:   "/v1/sessions/session-1",
+			Handler: func(w http.ResponseWriter, _ *http.Request) {
+				testkit.WriteJSON(t, w, map[string]any{
+					"messages": []protocol.Message{{Role: protocol.RoleUser, Content: "ping"}, {Role: protocol.RoleAssistant, Content: "ok"}},
+				})
+			},
+		},
+	)
 
 	m := newTestModel(t)
 	m.gatewayURL = server.URL
@@ -300,6 +352,37 @@ func TestRunGatewaySendsSelectedProviderModelAndReasoning(t *testing.T) {
 	}
 }
 
+func TestCreateGatewaySessionSendsTUIOwnerMetadata(t *testing.T) {
+	var captured gatewayapi.CreateSessionRequest
+	server := testkit.NewRouteServer(t, testkit.Route{
+		Method: http.MethodPost,
+		Path:   "/v1/sessions",
+		Handler: func(w http.ResponseWriter, r *http.Request) {
+			if !testkit.DecodeJSON(t, r, &captured) {
+				return
+			}
+			testkit.WriteJSON(t, w, gatewayapi.SessionResponse{ID: "session-1"})
+		},
+	})
+
+	m := newTestModel(t)
+	m.gatewayURL = server.URL
+	if ok, _ := m.handleSlashCommand("/model pro"); !ok {
+		t.Fatal("/model pro failed")
+	}
+	msg := m.createSessionCmd()()
+	ready, ok := msg.(sessionReadyMsg)
+	if !ok || ready.id != "session-1" {
+		t.Fatalf("createSessionCmd msg = %#v", msg)
+	}
+	if captured.Profile != "billy" || captured.Owner.ClientType != "tui" ||
+		captured.Owner.TUIChatID != m.localChatID ||
+		captured.Owner.Profile != "billy" ||
+		captured.Owner.Model != "deepseek-v4-pro" {
+		t.Fatalf("captured owner request = %#v", captured)
+	}
+}
+
 func TestTUITracksGatewayEventSeq(t *testing.T) {
 	m := newTestModel(t)
 	m.applyEvent(protocol.Event{Seq: 5, Type: protocol.EventRunStarted})
@@ -309,29 +392,55 @@ func TestTUITracksGatewayEventSeq(t *testing.T) {
 	}
 }
 
+func TestTUIDropsReplayEventsAtOrBeforeCursor(t *testing.T) {
+	m := newTestModel(t)
+	m.lastGatewayEventSeq = 7
+
+	m.applyEvent(protocol.Event{Seq: 7, Type: protocol.EventModelCallStarted})
+	m.applyEvent(protocol.Event{Seq: 6, Type: protocol.EventModelCallStarted})
+	if m.modelCalls != 0 {
+		t.Fatalf("modelCalls after stale events = %d, want 0", m.modelCalls)
+	}
+
+	m.applyEvent(protocol.Event{Seq: 8, Type: protocol.EventModelCallStarted})
+	if m.modelCalls != 1 {
+		t.Fatalf("modelCalls after fresh event = %d, want 1", m.modelCalls)
+	}
+	if got := m.lastGatewayEventSeq; got != 8 {
+		t.Fatalf("lastGatewayEventSeq = %d, want 8", got)
+	}
+}
+
 func TestReplayGatewayEventsCmdFetchesAfterSeq(t *testing.T) {
 	var sawReplay bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1/sessions/session-1/events":
-			if got := r.URL.Query().Get("after_seq"); got != "7" {
-				t.Fatalf("after_seq = %q, want 7", got)
-			}
-			if got := r.URL.Query().Get("follow"); got != "false" {
-				t.Fatalf("follow = %q, want false", got)
-			}
-			sawReplay = true
-			_ = json.NewEncoder(w).Encode(protocol.Event{Seq: 8, Type: protocol.EventRunStarted})
-			_ = json.NewEncoder(w).Encode(protocol.Event{Seq: 9, Type: protocol.EventAssistantDelta, Data: "replayed"})
-		case "/v1/sessions/session-1":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"messages": []protocol.Message{{Role: protocol.RoleAssistant, Content: "replayed"}},
-			})
-		default:
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-	}))
-	t.Cleanup(server.Close)
+	server := testkit.NewRouteServer(t,
+		testkit.Route{
+			Method: http.MethodGet,
+			Path:   "/v1/sessions/session-1/events",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				if got := r.URL.Query().Get("after_seq"); got != "7" {
+					t.Fatalf("after_seq = %q, want 7", got)
+				}
+				if got := r.URL.Query().Get("follow"); got != "false" {
+					t.Fatalf("follow = %q, want false", got)
+				}
+				sawReplay = true
+				testkit.WriteJSONLines(t, w,
+					protocol.Event{Seq: 8, Type: protocol.EventRunStarted},
+					protocol.Event{Seq: 9, Type: protocol.EventAssistantDelta, Data: "replayed"},
+				)
+			},
+		},
+		testkit.Route{
+			Method: http.MethodGet,
+			Path:   "/v1/sessions/session-1",
+			Handler: func(w http.ResponseWriter, _ *http.Request) {
+				testkit.WriteJSON(t, w, map[string]any{
+					"messages": []protocol.Message{{Role: protocol.RoleAssistant, Content: "replayed"}},
+				})
+			},
+		},
+	)
 
 	m := newTestModel(t)
 	m.gatewayURL = server.URL
@@ -361,6 +470,7 @@ func TestReplayGatewayEventsCmdFetchesAfterSeq(t *testing.T) {
 func TestProfileSlashCommandStartsNewProfileChat(t *testing.T) {
 	m := newTestModel(t)
 	oldChat := m.localChatID
+	seedStaleChatRuntimeState(&m)
 	handled, cmd := m.handleSlashCommand("/profile Billy/Profile")
 	if !handled {
 		t.Fatal("/profile failed")
@@ -374,6 +484,7 @@ func TestProfileSlashCommandStartsNewProfileChat(t *testing.T) {
 	if m.localChatID == oldChat {
 		t.Fatalf("profile switch should start a new chat")
 	}
+	assertFreshChatRuntimeState(t, m)
 	if len(m.messages) != 1 {
 		t.Fatalf("custom missing profile should fall back to base system only, got %#v", m.messages)
 	}
@@ -384,6 +495,24 @@ func TestProfileSlashCommandStartsNewProfileChat(t *testing.T) {
 	}
 	if len(m.messages) != 2 || !strings.Contains(m.messages[1].Content, "# Billyharness profile: billy") {
 		t.Fatalf("billy profile not injected: %#v", m.messages)
+	}
+}
+
+func TestNewChatClearsGatewayAndAccountingState(t *testing.T) {
+	m := newTestModel(t)
+	oldChat := m.localChatID
+	initialMessages := append([]protocol.Message(nil), m.messages...)
+	seedStaleChatRuntimeState(&m)
+
+	if cmd := m.newChat(); cmd != nil {
+		t.Fatalf("newChat returned unexpected command: %#v", cmd)
+	}
+	if m.localChatID == oldChat {
+		t.Fatalf("new chat reused old chat id %q", oldChat)
+	}
+	assertFreshChatRuntimeState(t, m)
+	if !reflect.DeepEqual(m.messages, initialMessages) {
+		t.Fatalf("new chat messages = %#v, want initial %#v", m.messages, initialMessages)
 	}
 }
 
@@ -449,7 +578,7 @@ func TestHiddenReasoningIsPreserved(t *testing.T) {
 	if !handled {
 		t.Fatalf("/thinking off returned false")
 	}
-	m.appendToOpenBlock("reasoning", "THINKING", "hidden reasoning", protocol.EventAssistantReasoning)
+	m.applyEvent(protocol.Event{Type: protocol.EventAssistantReasoning, Data: "hidden reasoning"})
 	if len(m.blocks) != 1 {
 		t.Fatalf("reasoning block was not preserved")
 	}
@@ -536,8 +665,8 @@ func TestToolViewErrorsOnlyShowsFailedTools(t *testing.T) {
 func TestToolAndThinkingBlocksRenderWithoutSelectionMarkersOrIndent(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 100
-	tool := stripANSITest(m.renderBlock(0, block{kind: "tool", title: "TOOL shell", content: "result"}))
-	thinking := stripANSITest(m.renderBlock(1, block{kind: "reasoning", title: "THINKING", content: "thought"}))
+	tool := stripANSITest(m.renderBlock(0, transcript.Cell{Kind: "tool", Title: "TOOL shell", Content: "result"}))
+	thinking := stripANSITest(m.renderBlock(1, transcript.Cell{Kind: "reasoning", Title: "THINKING", Content: "thought"}))
 	for _, rendered := range []string{tool, thinking} {
 		if strings.Contains(rendered, ">") {
 			t.Fatalf("block should not render selection marker: %q", rendered)
@@ -600,7 +729,7 @@ func TestToolBlocksAreOneLineByDefault(t *testing.T) {
 	if !strings.Contains(expanded, "result line") {
 		t.Fatalf("Ctrl+E toggle should expand selected collapsed tool block: %q", expanded)
 	}
-	if !m.blocks[0].collapseSet || m.blocks[0].collapsed {
+	if !m.blocks[0].CollapseSet || m.blocks[0].Collapsed {
 		t.Fatalf("toggle should persist expanded state on the tool cell: %#v", m.blocks[0])
 	}
 }
@@ -613,7 +742,7 @@ func TestCollapsedStatePersistsWithSavedBlocks(t *testing.T) {
 	m.setBlockCollapsed(0, true)
 
 	decoded := decodeBlocks(encodeBlocks(m.blocks))
-	if len(decoded) != 1 || !decoded[0].collapseSet || !decoded[0].collapsed {
+	if len(decoded) != 1 || !decoded[0].CollapseSet || !decoded[0].Collapsed {
 		t.Fatalf("decoded collapsed state = %#v", decoded)
 	}
 	m.blocks = decoded
@@ -624,7 +753,7 @@ func TestCollapsedStatePersistsWithSavedBlocks(t *testing.T) {
 		t.Fatalf("render should use persisted block collapsed state without map fallback: %q", rendered)
 	}
 	m.toggleSelectedBlock()
-	if !m.blocks[0].collapseSet || m.blocks[0].collapsed {
+	if !m.blocks[0].CollapseSet || m.blocks[0].Collapsed {
 		t.Fatalf("toggle should persist expanded state after decode: %#v", m.blocks[0])
 	}
 }
@@ -718,6 +847,43 @@ func TestContextGatheringToolsGroupInCollapsedView(t *testing.T) {
 	}
 }
 
+func TestContextToolGroupingUsesStructuredToolName(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	for i, name := range []string{"web_search", "web_fetch"} {
+		callID := fmt.Sprintf("call-%d", i)
+		m.applyEvent(protocol.Event{
+			Type:   protocol.EventToolCallRequested,
+			TurnID: "turn-context",
+			Data: protocol.ToolCall{
+				ID:        callID,
+				Name:      name,
+				Arguments: json.RawMessage(`{"query":"title-proof","url":"https://example.com"}`),
+			},
+		})
+	}
+	for i := range m.blocks {
+		if m.blocks[i].CellType == cellTypeToolCall {
+			m.blocks[i].Title = "opaque display text"
+		}
+	}
+
+	summaries := m.contextToolSummaries("turn-context")
+	if len(summaries) != 2 {
+		t.Fatalf("summaries = %#v", summaries)
+	}
+	for _, summary := range summaries {
+		if summary.category != "web" {
+			t.Fatalf("summary should use structured tool name, got %#v", summary)
+		}
+	}
+	m.upsertContextToolGroup("turn-context")
+	rendered := stripANSITest(m.renderBlock(len(m.blocks)-1, m.blocks[len(m.blocks)-1]))
+	if !strings.Contains(rendered, "web 2") {
+		t.Fatalf("group summary should classify by tool name despite opaque titles: %q", rendered)
+	}
+}
+
 func TestToolViewCurrentShowsOnlyLatestTurnTools(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 120
@@ -783,40 +949,40 @@ func TestToolResultsUpdateMatchingBlockByCallIDOutOfOrder(t *testing.T) {
 	if len(m.blocks) != 2 {
 		t.Fatalf("blocks = %d, want 2", len(m.blocks))
 	}
-	if !strings.Contains(m.blocks[0].content, "alpha") || strings.Contains(m.blocks[0].content, "beta") {
-		t.Fatalf("call-a block content = %q", m.blocks[0].content)
+	if !strings.Contains(m.blocks[0].Content, "alpha") || strings.Contains(m.blocks[0].Content, "beta") {
+		t.Fatalf("call-a block content = %q", m.blocks[0].Content)
 	}
-	if !strings.Contains(m.blocks[1].content, "beta") || strings.Contains(m.blocks[1].content, "alpha") {
-		t.Fatalf("call-b block content = %q", m.blocks[1].content)
+	if !strings.Contains(m.blocks[1].Content, "beta") || strings.Contains(m.blocks[1].Content, "alpha") {
+		t.Fatalf("call-b block content = %q", m.blocks[1].Content)
 	}
-	if m.blocks[0].callID != "call-a" || m.blocks[1].callID != "call-b" {
-		t.Fatalf("call ids = %q %q", m.blocks[0].callID, m.blocks[1].callID)
+	if m.blocks[0].CallID != "call-a" || m.blocks[1].CallID != "call-b" {
+		t.Fatalf("call ids = %q %q", m.blocks[0].CallID, m.blocks[1].CallID)
 	}
 }
 
 func TestTranscriptBlocksCarryTypedCellMetadata(t *testing.T) {
 	m := newTestModel(t)
 	m.addBlock("user", "USER", "hello")
-	if m.blocks[0].cellType != cellTypeUser || m.blocks[0].id == "" || m.blocks[0].renderCacheKey == "" || m.blocks[0].rawCopy != "hello" {
+	if m.blocks[0].CellType != cellTypeUser || m.blocks[0].ID == "" || m.blocks[0].RenderCacheKey == "" || m.blocks[0].RawCopy != "hello" {
 		t.Fatalf("user cell = %#v", m.blocks[0])
 	}
 
 	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: "draft"})
 	assistantIndex := len(m.blocks) - 1
-	streamKey := m.blocks[assistantIndex].renderCacheKey
-	if m.blocks[assistantIndex].cellType != cellTypeAssistantStream || !m.blocks[assistantIndex].live {
+	streamKey := m.blocks[assistantIndex].RenderCacheKey
+	if m.blocks[assistantIndex].CellType != cellTypeAssistantStream || !m.blocks[assistantIndex].Live {
 		t.Fatalf("assistant stream cell = %#v", m.blocks[assistantIndex])
 	}
 	m.applyEvent(protocol.Event{Type: protocol.EventRunCompleted})
-	if m.blocks[assistantIndex].cellType != cellTypeAssistantFinal || m.blocks[assistantIndex].live || m.blocks[assistantIndex].renderCacheKey == streamKey {
+	if m.blocks[assistantIndex].CellType != cellTypeAssistantFinal || m.blocks[assistantIndex].Live || m.blocks[assistantIndex].RenderCacheKey == streamKey {
 		t.Fatalf("assistant final cell = %#v", m.blocks[assistantIndex])
 	}
-	if got := m.blocks[len(m.blocks)-1].cellType; got != cellTypeRunSummary {
+	if got := m.blocks[len(m.blocks)-1].CellType; got != cellTypeRunSummary {
 		t.Fatalf("run summary cellType = %q", got)
 	}
 
 	m.applyEvent(protocol.Event{Type: protocol.EventAssistantReasoning, Data: "hidden"})
-	if got := m.blocks[len(m.blocks)-1].cellType; got != cellTypeThinking {
+	if got := m.blocks[len(m.blocks)-1].CellType; got != cellTypeThinking {
 		t.Fatalf("thinking cellType = %q", got)
 	}
 
@@ -831,7 +997,7 @@ func TestTranscriptBlocksCarryTypedCellMetadata(t *testing.T) {
 		},
 	})
 	toolCell := m.blocks[len(m.blocks)-1]
-	if toolCell.cellType != cellTypeToolCall || toolCell.turnID != "turn-001" || toolCell.stepID != "turn-001:tool-call-001" || toolCell.callID != "call-1" {
+	if toolCell.CellType != cellTypeToolCall || toolCell.TurnID != "turn-001" || toolCell.StepID != "turn-001:tool-call-001" || toolCell.CallID != "call-1" || toolCell.ToolName != "fs_read_file" {
 		t.Fatalf("tool cell = %#v", toolCell)
 	}
 
@@ -847,7 +1013,7 @@ func TestTranscriptBlocksCarryTypedCellMetadata(t *testing.T) {
 	}})
 	batchIndex := len(m.blocks) - 1
 	batchCell := m.blocks[batchIndex]
-	if batchCell.cellType != cellTypeToolBatch || batchCell.stepID != "turn-001:tool-batch-001" || batchCell.turnID != "turn-001" {
+	if batchCell.CellType != cellTypeToolBatch || batchCell.StepID != "turn-001:tool-batch-001" || batchCell.TurnID != "turn-001" {
 		t.Fatalf("tool batch cell = %#v", batchCell)
 	}
 	if rendered := stripANSITest(m.renderBlock(batchIndex, batchCell)); !strings.Contains(rendered, "Tool batch running") || !strings.Contains(rendered, "2 tools") {
@@ -868,52 +1034,194 @@ func TestTranscriptBlocksCarryTypedCellMetadata(t *testing.T) {
 		t.Fatalf("completed batch should update existing cell, blocks=%d batchIndex=%d", len(m.blocks), batchIndex)
 	}
 	batchCell = m.blocks[batchIndex]
-	if batchCell.cellType != cellTypeToolBatch || !strings.Contains(batchCell.title, "Tool batch done") || !strings.Contains(batchCell.title, "0s") {
+	if batchCell.CellType != cellTypeToolBatch || !strings.Contains(batchCell.Title, "Tool batch done") || !strings.Contains(batchCell.Title, "0s") {
 		t.Fatalf("completed tool batch cell = %#v", batchCell)
 	}
 
 	m.applyEvent(protocol.Event{Type: protocol.EventContextCompacted, Data: map[string]any{"reason": "threshold"}})
-	if got := m.blocks[len(m.blocks)-1].cellType; got != cellTypeCompaction {
+	if got := m.blocks[len(m.blocks)-1].CellType; got != cellTypeCompaction {
 		t.Fatalf("compaction cellType = %q", got)
 	}
 	m.addInfoBlock("MCP", "connected")
-	if got := m.blocks[len(m.blocks)-1].cellType; got != cellTypeMCPStatus {
+	if got := m.blocks[len(m.blocks)-1].CellType; got != cellTypeMCPStatus {
 		t.Fatalf("mcp cellType = %q", got)
 	}
 	m.addBlock("error", "ERROR", "boom")
-	if got := m.blocks[len(m.blocks)-1].cellType; got != cellTypeError {
+	if got := m.blocks[len(m.blocks)-1].CellType; got != cellTypeError {
 		t.Fatalf("error cellType = %q", got)
 	}
 
 	decoded := decodeBlocks(encodeBlocks(m.blocks))
 	m.blocks = decoded
 	m.ensureBlockMetadata()
+	foundToolName := false
 	for i, block := range m.blocks {
-		if block.id == "" || block.cellType == "" || block.renderCacheKey == "" || block.rawCopy == "" {
+		if block.ID == "" || block.CellType == "" || block.RenderCacheKey == "" || block.RawCopy == "" {
 			t.Fatalf("decoded block[%d] missing metadata: %#v", i, block)
+		}
+		if block.CallID == "call-1" && block.ToolName == "fs_read_file" {
+			foundToolName = true
+		}
+	}
+	if !foundToolName {
+		t.Fatalf("decoded blocks lost structured tool name: %#v", m.blocks)
+	}
+}
+
+func TestTUITranscriptProjectionMatchesTranscriptProjector(t *testing.T) {
+	events := []protocol.Event{
+		{Type: protocol.EventAssistantDelta, Data: "hello "},
+		{Type: protocol.EventAssistantDelta, Data: "world"},
+		{Type: protocol.EventAssistantReasoning, Data: "private"},
+		{Type: protocol.EventToolAudit, Data: map[string]any{
+			"name":          "shell_exec",
+			"risk":          string(protocol.RiskExecute),
+			"auto_approved": true,
+		}},
+		{Type: protocol.EventToolCallRequested, TurnID: "turn-001", StepID: "turn-001:tool-call-001", Data: protocol.ToolCall{
+			ID:        "call-1",
+			Name:      "fs_read_file",
+			Arguments: json.RawMessage(`{"path":"README.md"}`),
+		}},
+		{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
+			CallID:  "call-1",
+			Name:    "fs_read_file",
+			Content: "alpha",
+		}},
+		{Type: protocol.EventStepStarted, Data: protocol.StepEvent{
+			TurnID:        "turn-001",
+			StepID:        "turn-001:tool-batch-001",
+			Kind:          protocol.StepKindToolBatch,
+			Status:        protocol.StepStatusStarted,
+			BatchID:       "turn-001:tool-batch-001",
+			BatchSize:     2,
+			Parallel:      true,
+			ParallelLimit: 2,
+		}},
+		{Type: protocol.EventStepCompleted, Data: map[string]any{
+			"turn_id":        "turn-001",
+			"step_id":        "turn-001:tool-batch-001",
+			"kind":           protocol.StepKindToolBatch,
+			"status":         protocol.StepStatusCompleted,
+			"batch_id":       "turn-001:tool-batch-001",
+			"batch_size":     2,
+			"parallel":       true,
+			"parallel_limit": 2,
+			"duration_ms":    37,
+		}},
+		{Type: protocol.EventContextCompacted, Data: map[string]any{
+			"compaction_id":           "compact-1",
+			"reason":                  "threshold",
+			"trigger_source":          "after_tool_results",
+			"before_estimated_tokens": int64(805000),
+			"after_estimated_tokens":  int64(210000),
+		}},
+		{Type: protocol.EventContextThreshold, Data: protocol.ContextThresholdEvent{
+			Percent:             70,
+			EstimatedTokens:     705000,
+			ContextWindowTokens: 1000000,
+			ThresholdTokens:     700000,
+			RemainingTokens:     295000,
+			MessageCount:        44,
+			Round:               3,
+			Stage:               "after_tool_results",
+		}},
+		{Type: protocol.EventRunCompleted},
+	}
+
+	m := newTestModel(t)
+	p := transcript.NewProjector()
+	for _, event := range events {
+		p.Apply(event)
+		m.applyEvent(event)
+	}
+
+	got := nonSummaryTranscriptCells(m.blocks)
+	want := p.Cells()
+	if len(got) != len(want) {
+		t.Fatalf("projected cells = %d, want %d\ngot: %#v\nwant: %#v", len(got), len(want), got, want)
+	}
+	for i := range want {
+		if got[i].Kind != want[i].Kind ||
+			got[i].CellType != want[i].CellType ||
+			got[i].Title != want[i].Title ||
+			got[i].Content != want[i].Content ||
+			got[i].Live != want[i].Live ||
+			got[i].EventType != want[i].EventType ||
+			got[i].TurnID != want[i].TurnID ||
+			got[i].StepID != want[i].StepID ||
+			got[i].CallID != want[i].CallID ||
+			got[i].ToolName != want[i].ToolName {
+			t.Fatalf("cell[%d]\ngot:  %#v\nwant: %#v", i, got[i], want[i])
 		}
 	}
 }
 
-func TestTranscriptCellsCarryRichTerminalTextCache(t *testing.T) {
+func TestTUITranscriptProjectorPersistsAndRehydratesAfterManualBlocks(t *testing.T) {
+	m := newTestModel(t)
+	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: "hello"})
+	first := m.transcriptProjector
+	if first == nil {
+		t.Fatal("transcript projector is nil after projected event")
+	}
+
+	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: " world"})
+	if m.transcriptProjector != first {
+		t.Fatal("transcript projector should be reused across projected events")
+	}
+	if len(m.blocks) != 1 || m.blocks[0].Content != "hello world" {
+		t.Fatalf("assistant projection = %#v", m.blocks)
+	}
+
+	m.addInfoBlock("STATUS", "manual block")
+	if !m.transcriptStale {
+		t.Fatal("manual block insertion should mark transcript projector stale")
+	}
+	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: "again"})
+	if m.transcriptProjector == first {
+		t.Fatal("stale transcript projector should be rehydrated before next projected event")
+	}
+	if len(m.blocks) != 3 || m.blocks[1].Title != "STATUS" || m.blocks[2].Content != "again" {
+		t.Fatalf("rehydrated projection should preserve manual block and append new assistant cell: %#v", m.blocks)
+	}
+}
+
+func nonSummaryTranscriptCells(cells []transcript.Cell) []transcript.Cell {
+	out := make([]transcript.Cell, 0, len(cells))
+	for _, cell := range cells {
+		if cell.CellType == transcript.CellTypeRunSummary {
+			continue
+		}
+		out = append(out, cell)
+	}
+	return out
+}
+
+func TestTranscriptCellsUseModelRichTerminalTextCache(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 100
 	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: "A **bold** answer\n"})
 	m.applyEvent(protocol.Event{Type: protocol.EventRunCompleted})
 	m.reflow(true)
 
-	if len(m.blocks) == 0 || m.blocks[0].richTerminalText == "" || m.blocks[0].richTerminalCacheKey == "" {
-		t.Fatalf("expected rich terminal cache on first cell: %#v", m.blocks)
+	if len(m.blocks) == 0 {
+		t.Fatalf("expected transcript blocks: %#v", m.blocks)
 	}
-	firstRender := m.blocks[0].richTerminalText
-	firstKey := m.blocks[0].richTerminalCacheKey
+	cache := m.richBlockCache(m.blocks[0])
+	if cache.Text == "" || cache.Key == "" {
+		t.Fatalf("expected model-owned rich terminal cache on first cell: %#v", cache)
+	}
+	firstRender := cache.Text
+	firstKey := cache.Key
 	m.reflow(true)
-	if m.blocks[0].richTerminalText != firstRender || m.blocks[0].richTerminalCacheKey != firstKey {
+	cache = m.richBlockCache(m.blocks[0])
+	if cache.Text != firstRender || cache.Key != firstKey {
 		t.Fatalf("rich terminal cache should be stable across identical reflow")
 	}
 	m.width = 60
 	m.reflow(true)
-	if m.blocks[0].richTerminalCacheKey == firstKey {
+	cache = m.richBlockCache(m.blocks[0])
+	if cache.Key == firstKey {
 		t.Fatalf("rich terminal cache key should include width")
 	}
 
@@ -921,8 +1229,31 @@ func TestTranscriptCellsCarryRichTerminalTextCache(t *testing.T) {
 	if len(decoded) == 0 {
 		t.Fatal("decoded blocks empty")
 	}
-	if decoded[0].richTerminalText != "" || decoded[0].richTerminalCacheKey != "" {
-		t.Fatalf("rich terminal cache must remain UI-only, decoded=%#v", decoded[0])
+	if decoded[0].ID != m.blocks[0].ID || decoded[0].Content != m.blocks[0].Content {
+		t.Fatalf("decode should preserve transcript data without cache fields: decoded=%#v block=%#v", decoded[0], m.blocks[0])
+	}
+	if len(m.richRenderCache) == 0 {
+		t.Fatal("model-owned rich terminal cache should remain outside persisted blocks")
+	}
+}
+
+func TestRenderBlockCachedReturnsCacheWithoutMutatingModel(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: "A **bold** answer\n"})
+	m.applyEvent(protocol.Event{Type: protocol.EventRunCompleted})
+
+	rendered, cache := m.renderBlockCached(0)
+	if rendered == "" || cache.Text == "" || cache.Key == "" {
+		t.Fatalf("rendered=%q cache=%#v, want rendered text and cache", rendered, cache)
+	}
+	if got := m.richBlockCache(m.blocks[0]); got != (tuirender.CellCache{}) {
+		t.Fatalf("renderBlockCached should not mutate model cache map: %#v", got)
+	}
+
+	m.reflow(true)
+	if got := m.richBlockCache(m.blocks[0]); got != cache {
+		t.Fatalf("reflow should explicitly apply cache %#v, got=%#v", cache, got)
 	}
 }
 
@@ -938,12 +1269,36 @@ func TestResizeWithoutWidthChangeDoesNotReflowTranscript(t *testing.T) {
 		t.Fatal("expected initial viewport content")
 	}
 
-	m.blocks[0].richTerminalText = "bad cached render"
+	cache := m.richBlockCache(m.blocks[0])
+	cache.Text = "bad cached render"
+	m.setRichBlockCache(m.blocks[0], cache)
 	m.textarea.SetValue("typing should only resize input")
 	m.resize(false)
 
 	if m.viewportContent != original {
 		t.Fatalf("resize without width change should not rebuild transcript: %q", m.viewportContent)
+	}
+}
+
+func TestPrintableInputDoesNotReflowTranscript(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.height = 32
+	m.resize(true)
+	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: "cached transcript"})
+	m.reflow(true)
+	original := m.viewportContent
+	if original == "" {
+		t.Fatal("expected initial viewport content")
+	}
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	updated := next.(Model)
+	if updated.viewportContent != original {
+		t.Fatalf("printable keypress should not rebuild transcript: %q", updated.viewportContent)
+	}
+	if updated.textarea.Value() != "x" {
+		t.Fatalf("textarea value = %q, want typed input", updated.textarea.Value())
 	}
 }
 
@@ -953,11 +1308,11 @@ func TestRunSummaryCellUpdatesByRunLifecycle(t *testing.T) {
 	m.modelCalls = 4
 	m.toolCalls = 7
 	m.applyEvent(protocol.Event{Type: protocol.EventRunStarted})
-	if len(m.blocks) != 1 || m.blocks[0].cellType != cellTypeRunSummary {
+	if len(m.blocks) != 1 || m.blocks[0].CellType != cellTypeRunSummary {
 		t.Fatalf("run start should create one summary cell: %#v", m.blocks)
 	}
-	if !strings.Contains(m.blocks[0].title, "Run running") {
-		t.Fatalf("run start title = %q", m.blocks[0].title)
+	if !strings.Contains(m.blocks[0].Title, "Run running") {
+		t.Fatalf("run start title = %q", m.blocks[0].Title)
 	}
 	m.applyEvent(protocol.Event{Type: protocol.EventModelCallStarted})
 	m.applyEvent(protocol.Event{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{ID: "call-1", Name: "fs_read_file"}})
@@ -967,20 +1322,20 @@ func TestRunSummaryCellUpdatesByRunLifecycle(t *testing.T) {
 		t.Fatalf("run completion should update summary cell, got %d summaries: %#v", summaries, m.blocks)
 	}
 	summary := m.blocks[0]
-	if !strings.Contains(summary.title, "Run done") {
-		t.Fatalf("run completion title = %q", summary.title)
+	if !strings.Contains(summary.Title, "Run done") {
+		t.Fatalf("run completion title = %q", summary.Title)
 	}
 	for _, want := range []string{"agent turns: 1 / session 5", "tools: 1 / session 8", "context:"} {
-		if !strings.Contains(summary.content, want) {
-			t.Fatalf("run summary missing %q:\n%s", want, summary.content)
+		if !strings.Contains(summary.Content, want) {
+			t.Fatalf("run summary missing %q:\n%s", want, summary.Content)
 		}
 	}
 }
 
-func countCells(blocks []block, cellType string) int {
+func countCells(blocks []transcript.Cell, cellType transcript.CellType) int {
 	var count int
 	for _, block := range blocks {
-		if block.cellType == cellType {
+		if block.CellType == cellType {
 			count++
 		}
 	}
@@ -1009,11 +1364,11 @@ func TestToolAuditUpdatesMatchingBlockByCallID(t *testing.T) {
 		},
 	})
 
-	if !strings.Contains(m.blocks[0].content, "audit: write fs_write_file auto-approved") {
-		t.Fatalf("call-a block content = %q", m.blocks[0].content)
+	if !strings.Contains(m.blocks[0].Content, "audit: write fs_write_file auto-approved") {
+		t.Fatalf("call-a block content = %q", m.blocks[0].Content)
 	}
-	if strings.Contains(m.blocks[1].content, "audit:") {
-		t.Fatalf("call-b should not receive call-a audit: %q", m.blocks[1].content)
+	if strings.Contains(m.blocks[1].Content, "audit:") {
+		t.Fatalf("call-b should not receive call-a audit: %q", m.blocks[1].Content)
 	}
 }
 
@@ -1043,8 +1398,8 @@ func TestToolBlocksCompactLongWebFetchURL(t *testing.T) {
 func TestUserAndAssistantBlocksRenderWithoutRoleLabels(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 100
-	user := m.renderBlock(0, block{kind: "user", title: "USER", content: "hello"})
-	assistant := m.renderBlock(1, block{kind: "assistant", title: "ASSISTANT", content: "world"})
+	user := m.renderBlock(0, transcript.Cell{Kind: "user", Title: "USER", Content: "hello"})
+	assistant := m.renderBlock(1, transcript.Cell{Kind: "assistant", Title: "ASSISTANT", Content: "world"})
 	if strings.Contains(strings.ToLower(user), "user") {
 		t.Fatalf("user block should not render role label: %q", user)
 	}
@@ -1059,7 +1414,7 @@ func TestUserAndAssistantBlocksRenderWithoutRoleLabels(t *testing.T) {
 func TestAssistantBlockRendersTerminalSafeMarkdown(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 100
-	rendered := stripANSITest(m.renderBlock(0, block{kind: "assistant", title: "ASSISTANT", content: strings.Join([]string{
+	rendered := stripANSITest(m.renderBlock(0, transcript.Cell{Kind: "assistant", Title: "ASSISTANT", Content: strings.Join([]string{
 		"# Summary",
 		"",
 		"- **fast** path with `code`",
@@ -1089,7 +1444,7 @@ func TestAssistantBlockRendersTerminalSafeMarkdown(t *testing.T) {
 func TestMarkdownTableDoesNotLeakInlineDelimitersWhenTruncated(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 48
-	rendered := stripANSITest(m.renderBlock(0, block{kind: "assistant", title: "ASSISTANT", content: strings.Join([]string{
+	rendered := stripANSITest(m.renderBlock(0, transcript.Cell{Kind: "assistant", Title: "ASSISTANT", Content: strings.Join([]string{
 		"| Параметр | Значение |",
 		"| --- | --- |",
 		"| 🌡 **Температура с очень длинным описанием** | +21 °C |",
@@ -1117,7 +1472,7 @@ func TestLiveAssistantMarkdownKeepsUnstableTailRawUntilCompleted(t *testing.T) {
 		"| --- | ---: |",
 		"| **Billy** | `10` |",
 	}, "\n")})
-	if len(m.blocks) != 1 || !m.blocks[0].live {
+	if len(m.blocks) != 1 || !m.blocks[0].Live {
 		t.Fatalf("assistant block should be live: %#v", m.blocks)
 	}
 
@@ -1127,7 +1482,7 @@ func TestLiveAssistantMarkdownKeepsUnstableTailRawUntilCompleted(t *testing.T) {
 	}
 
 	m.applyEvent(protocol.Event{Type: protocol.EventRunCompleted})
-	if m.blocks[0].live {
+	if m.blocks[0].Live {
 		t.Fatalf("assistant block should be finalized")
 	}
 	final := stripANSITest(m.renderBlock(0, m.blocks[0]))
@@ -1138,31 +1493,6 @@ func TestLiveAssistantMarkdownKeepsUnstableTailRawUntilCompleted(t *testing.T) {
 		if strings.Contains(final, leak) {
 			t.Fatalf("final markdown syntax %q leaked: %q", leak, final)
 		}
-	}
-}
-
-func TestStreamingMarkdownStateSplitsRawStableTailAndHoldback(t *testing.T) {
-	code := "Intro\n```go\nfmt.Println(1)\n"
-	codeState := newStreamingMarkdownState(code, true)
-	if codeState.rawMarkdown != code || codeState.stableCommitted != "Intro\n" ||
-		codeState.mutableLiveTail != "```go\nfmt.Println(1)\n" ||
-		codeState.holdbackKind != markdownHoldbackCodeFence ||
-		codeState.finalCanonical {
-		t.Fatalf("code state = %#v", codeState)
-	}
-
-	table := "Scores\n| Name | Value |\n| --- | --- |\n| Billy | 10 |\n"
-	tableState := newStreamingMarkdownState(table, true)
-	if tableState.rawMarkdown != table || tableState.stableCommitted != "Scores\n" ||
-		!strings.Contains(tableState.mutableLiveTail, "| Billy | 10 |") ||
-		tableState.holdbackKind != markdownHoldbackTable ||
-		tableState.finalCanonical {
-		t.Fatalf("table state = %#v", tableState)
-	}
-
-	final := newStreamingMarkdownState(table, false)
-	if !final.finalCanonical || final.stableCommitted != table || final.mutableLiveTail != "" || final.holdbackKind != "" {
-		t.Fatalf("final state = %#v", final)
 	}
 }
 
@@ -1180,10 +1510,10 @@ func TestAssistantDeltasUpdateSingleLiveBlock(t *testing.T) {
 	if len(m.blocks) != 1 {
 		t.Fatalf("assistant deltas should update one block, got %#v", m.blocks)
 	}
-	if !m.blocks[0].live {
+	if !m.blocks[0].Live {
 		t.Fatalf("assistant block should remain live")
 	}
-	if got := m.blocks[0].content; got != "Intro\nThis is **bold**\n" {
+	if got := m.blocks[0].Content; got != "Intro\nThis is **bold**\n" {
 		t.Fatalf("assistant content = %q", got)
 	}
 	rendered := stripANSITest(m.renderBlock(0, m.blocks[0]))
@@ -1258,7 +1588,7 @@ func TestToolAuditRendersCompactBlock(t *testing.T) {
 		"auto_approved": true,
 	}})
 
-	if len(m.blocks) != 1 || m.blocks[0].kind != "audit" {
+	if len(m.blocks) != 1 || m.blocks[0].Kind != "audit" {
 		t.Fatalf("expected audit block, got %#v", m.blocks)
 	}
 	rendered := stripANSITest(m.renderBlock(0, m.blocks[0]))
@@ -1287,7 +1617,7 @@ func TestToolAuditDoesNotSplitToolResult(t *testing.T) {
 		Content: "/root/billyharness\n",
 	}})
 
-	if len(m.blocks) != 1 || m.blocks[0].kind != "tool" {
+	if len(m.blocks) != 1 || m.blocks[0].Kind != "tool" {
 		t.Fatalf("tool audit/result should stay in one block: %#v", m.blocks)
 	}
 	rendered := stripANSITest(m.renderBlock(0, m.blocks[0]))
@@ -1301,7 +1631,7 @@ func TestToolAuditDoesNotSplitToolResult(t *testing.T) {
 func TestUnsupportedMarkdownImageIsOmitted(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 100
-	rendered := stripANSITest(m.renderBlock(0, block{kind: "assistant", title: "ASSISTANT", content: "![secret diagram](https://example.com/image.png)"}))
+	rendered := stripANSITest(m.renderBlock(0, transcript.Cell{Kind: "assistant", Title: "ASSISTANT", Content: "![secret diagram](https://example.com/image.png)"}))
 	if strings.Contains(rendered, "https://example.com/image.png") {
 		t.Fatalf("image URL should not render as supported markdown: %q", rendered)
 	}
@@ -1383,8 +1713,8 @@ func TestTranscriptSelectionText(t *testing.T) {
 	m.height = 24
 	m.addBlock("assistant", "ASSISTANT", "alpha\nbeta\ngamma")
 	m.resize(true)
-	m.selectStart = selectionPoint{row: 0, col: 1}
-	m.selectEnd = selectionPoint{row: 1, col: 4}
+	m.selection.Start = tuiselection.Point{Row: 0, Col: 1}
+	m.selection.End = tuiselection.Point{Row: 1, Col: 4}
 	got := stripANSITest(m.selectedTranscriptText())
 	if !strings.Contains(got, "lpha") || !strings.Contains(got, "bet") {
 		t.Fatalf("selected text = %q", got)
@@ -1401,11 +1731,11 @@ func TestTranscriptSelectionClampKeepsRightEdgeExclusive(t *testing.T) {
 	m.viewport.SetHeight(1)
 	m.viewportContent = "abc"
 	m.viewport.SetContent("abc")
-	m.selectStart = selectionPoint{row: 0, col: 0}
-	m.selectEnd = m.selectionPointFromMouseClamped(999, 0)
+	m.selection.Start = tuiselection.Point{Row: 0, Col: 0}
+	m.selection.End = m.selectionPointFromMouseClamped(999, 0)
 
-	if m.selectEnd.col != 3 {
-		t.Fatalf("end col = %d, want exclusive right edge 3", m.selectEnd.col)
+	if m.selection.End.Col != 3 {
+		t.Fatalf("end col = %d, want exclusive right edge 3", m.selection.End.Col)
 	}
 	if got := m.selectedTranscriptText(); got != "abc" {
 		t.Fatalf("selected text = %q, want abc", got)
@@ -1419,8 +1749,8 @@ func TestTranscriptSelectionIsVisiblyHighlighted(t *testing.T) {
 	m.addBlock("assistant", "ASSISTANT", "alpha\nbeta\ngamma")
 	m.resize(true)
 	base := m.viewport.View()
-	m.selectStart = selectionPoint{row: 0, col: 1}
-	m.selectEnd = selectionPoint{row: 0, col: 4}
+	m.selection.Start = tuiselection.Point{Row: 0, Col: 1}
+	m.selection.End = tuiselection.Point{Row: 0, Col: 4}
 	m.applySelectionHighlight()
 	highlighted := m.viewport.View()
 	if highlighted == base {
@@ -1450,8 +1780,8 @@ func TestTranscriptSelectionHighlightBothThemes(t *testing.T) {
 				t.Fatalf("rendered line missing alpha: %q", visible)
 			}
 			startCol := xansi.StringWidth(visible[:startByte])
-			m.selectStart = selectionPoint{row: 0, col: startCol}
-			m.selectEnd = selectionPoint{row: 0, col: startCol + len("alpha")}
+			m.selection.Start = tuiselection.Point{Row: 0, Col: startCol}
+			m.selection.End = tuiselection.Point{Row: 0, Col: startCol + len("alpha")}
 
 			highlighted := m.selectionHighlightedContent()
 			if got := selectionBackgroundText(highlighted); got != "alpha" {
@@ -1487,8 +1817,8 @@ func TestTranscriptSelectionCopiesRenderedTableCellWithoutMarkdownDecorations(t 
 	if targetRow < 0 {
 		t.Fatalf("rendered table missing target cell: %q", stripANSITest(m.viewport.GetContent()))
 	}
-	m.selectStart = selectionPoint{row: targetRow, col: targetCol}
-	m.selectEnd = selectionPoint{row: targetRow, col: targetCol + len("Temperature")}
+	m.selection.Start = tuiselection.Point{Row: targetRow, Col: targetCol}
+	m.selection.End = tuiselection.Point{Row: targetRow, Col: targetCol + len("Temperature")}
 
 	if got := m.selectedTranscriptText(); got != "Temperature" {
 		t.Fatalf("selected table cell = %q, want Temperature", got)
@@ -1502,6 +1832,36 @@ func TestTranscriptSelectionCopiesRenderedTableCellWithoutMarkdownDecorations(t 
 	}
 }
 
+func TestTranscriptSelectionCannotCopyHiddenThinkingOrTools(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.height = 24
+	m.addBlock("assistant", "ASSISTANT", "visible answer")
+	m.addBlock("reasoning", "THINKING", "secret reasoning")
+	m.addBlock("tool", "TOOL", "secret tool output")
+	m.addBlock("assistant", "ASSISTANT", "visible tail")
+	m.thinkView = "hidden"
+	m.toolView = "hidden"
+	m.reflow(true)
+
+	m.selection.Start = tuiselection.Point{Row: 0, Col: 0}
+	m.selection.End = tuiselection.Point{Row: 99, Col: 999}
+	selected := m.selectedTranscriptText()
+	for _, want := range []string{"visible answer", "visible tail"} {
+		if !strings.Contains(selected, want) {
+			t.Fatalf("selection should include visible text %q, got %q", want, selected)
+		}
+	}
+	for _, hidden := range []string{"secret reasoning", "secret tool output"} {
+		if strings.Contains(selected, hidden) {
+			t.Fatalf("selection leaked hidden content %q in %q", hidden, selected)
+		}
+		if strings.Contains(stripANSITest(m.selectionHighlightedContent()), hidden) {
+			t.Fatalf("highlight leaked hidden content %q", hidden)
+		}
+	}
+}
+
 func TestReflowPreservesSelectionHighlightDuringLiveUpdate(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 80
@@ -1509,8 +1869,8 @@ func TestReflowPreservesSelectionHighlightDuringLiveUpdate(t *testing.T) {
 	m.addBlock("assistant", "ASSISTANT", "alpha\nbeta\ngamma")
 	m.resize(true)
 	target := "bet"
-	m.selectStart = selectionPoint{row: 1, col: 1}
-	m.selectEnd = selectionPoint{row: 1, col: 1 + len(target)}
+	m.selection.Start = tuiselection.Point{Row: 1, Col: 1}
+	m.selection.End = tuiselection.Point{Row: 1, Col: 1 + len(target)}
 	m.applySelectionHighlight()
 
 	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: "\ndelta"})
@@ -1545,8 +1905,8 @@ func TestTranscriptSelectionHighlightsCorrectStyledLine(t *testing.T) {
 		t.Fatalf("rendered transcript should contain beta, content=%q", stripANSITest(base))
 	}
 
-	m.selectStart = selectionPoint{row: betaRow, col: betaCol}
-	m.selectEnd = selectionPoint{row: betaRow, col: betaCol + 3}
+	m.selection.Start = tuiselection.Point{Row: betaRow, Col: betaCol}
+	m.selection.End = tuiselection.Point{Row: betaRow, Col: betaCol + 3}
 	m.applySelectionHighlight()
 
 	highlighted := m.viewport.GetContent()
@@ -1581,8 +1941,8 @@ func TestTranscriptSelectionHighlightMatchesSelectedGraphemes(t *testing.T) {
 	m.viewport.SetWidth(m.width)
 	m.viewport.SetHeight(m.height)
 	m.viewport.SetContent(line)
-	m.selectStart = selectionPoint{row: 0, col: startCol}
-	m.selectEnd = selectionPoint{row: 0, col: endCol}
+	m.selection.Start = tuiselection.Point{Row: 0, Col: startCol}
+	m.selection.End = tuiselection.Point{Row: 0, Col: endCol}
 
 	if got := m.selectedTranscriptText(); got != target {
 		t.Fatalf("selected text = %q, want %q", got, target)
@@ -1623,7 +1983,7 @@ func TestCommandPaletteOpensSlashRegistry(t *testing.T) {
 
 	next, _ = updated.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	updated = next.(Model)
-	if len(updated.blocks) == 0 || updated.blocks[len(updated.blocks)-1].title != "HELP" {
+	if len(updated.blocks) == 0 || updated.blocks[len(updated.blocks)-1].Title != "HELP" {
 		t.Fatalf("Enter on default command should run /help, blocks=%#v", updated.blocks)
 	}
 }
@@ -1814,12 +2174,12 @@ func TestStatusCommandShowsDetailedStatusBlock(t *testing.T) {
 	if !handled || cmd != nil {
 		t.Fatalf("/status handled=%v cmd=%v, want handled without async command", handled, cmd)
 	}
-	if len(m.blocks) != 1 || m.blocks[0].title != "STATUS" {
+	if len(m.blocks) != 1 || m.blocks[0].Title != "STATUS" {
 		t.Fatalf("/status should add one STATUS block, got %#v", m.blocks)
 	}
 	for _, want := range []string{"provider:", "model:", "profile:", "context:", "calls:"} {
-		if !strings.Contains(m.blocks[0].content, want) {
-			t.Fatalf("/status block missing %q:\n%s", want, m.blocks[0].content)
+		if !strings.Contains(m.blocks[0].Content, want) {
+			t.Fatalf("/status block missing %q:\n%s", want, m.blocks[0].Content)
 		}
 	}
 }
@@ -1973,27 +2333,76 @@ func TestProviderUsageUpdateDeduplicatesCumulativeSnapshots(t *testing.T) {
 	}
 }
 
+func TestTUIAccountingMatchesClientUXProjector(t *testing.T) {
+	events := []protocol.Event{
+		{Type: protocol.EventRunStarted},
+		{Type: protocol.EventModelCallStarted},
+		{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
+			"input_tokens":      100,
+			"output_tokens":     20,
+			"cache_hit_tokens":  40,
+			"cache_miss_tokens": 60,
+			"reasoning_tokens":  5,
+		}},
+		{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
+			"input_tokens":      125,
+			"output_tokens":     25,
+			"cache_hit_tokens":  50,
+			"cache_miss_tokens": 75,
+			"reasoning_tokens":  7,
+		}},
+		{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{ID: "call-1", Name: "web_fetch"}},
+		{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
+			CallID:  "call-1",
+			Name:    "web_fetch",
+			Content: "ok",
+			Metadata: map[string]any{
+				"tool_summary_input_tokens":      int64(30),
+				"tool_summary_output_tokens":     int64(8),
+				"tool_summary_api_input_tokens":  int64(40),
+				"tool_summary_api_output_tokens": int64(10),
+			},
+		}},
+		{Type: protocol.EventRunCompleted},
+	}
+
+	m := newTestModel(t)
+	p := uxprojector.New()
+	for _, event := range events {
+		p.Apply(event)
+		m.applyEvent(event)
+	}
+	snapshot := p.Snapshot()
+	if m.modelCalls != snapshot.ModelCalls || m.toolCalls != snapshot.ToolCalls {
+		t.Fatalf("counts = model:%d tools:%d, projector model:%d tools:%d",
+			m.modelCalls, m.toolCalls, snapshot.ModelCalls, snapshot.ToolCalls)
+	}
+	if m.inputTok != snapshot.InputTokens || m.outputTok != snapshot.OutputTokens ||
+		m.cacheHitTok != snapshot.CacheHitTokens || m.cacheMissTok != snapshot.CacheMissTokens ||
+		m.reasoningTok != snapshot.ReasoningTokens {
+		t.Fatalf("usage = in:%d out:%d hit:%d miss:%d reasoning:%d, projector=%#v",
+			m.inputTok, m.outputTok, m.cacheHitTok, m.cacheMissTok, m.reasoningTok, snapshot)
+	}
+	if m.contextTokens() != snapshot.LastInputTokens+snapshot.LastOutputTokens {
+		t.Fatalf("context tokens = %d, projector last context = %d",
+			m.contextTokens(), snapshot.LastInputTokens+snapshot.LastOutputTokens)
+	}
+	if m.toolSummaryInTok != snapshot.ToolSummaryInputTokens ||
+		m.toolSummaryOutTok != snapshot.ToolSummaryOutputTokens ||
+		m.toolSummaryAPITok != snapshot.ToolSummaryAPITokens {
+		t.Fatalf("tool summary = in:%d out:%d api:%d, projector=%#v",
+			m.toolSummaryInTok, m.toolSummaryOutTok, m.toolSummaryAPITok, snapshot)
+	}
+	if m.status != "completed" || snapshot.RunState != uxprojector.RunStateCompleted {
+		t.Fatalf("terminal state = tui:%q projector:%q", m.status, snapshot.RunState)
+	}
+}
+
 func TestLightThemeStatusLineUsesThemeBackground(t *testing.T) {
 	styles := newThemeStyles(tuiThemes["light"])
 	rendered := styles.status.Render("status")
 	if !strings.Contains(rendered, "48;2;221;232;215") {
 		t.Fatalf("light status should use theme status bg, rendered=%q", rendered)
-	}
-}
-
-func TestMarkdownTableRowKeepsEscapedAndCodePipesInCells(t *testing.T) {
-	cells, ok := parseMarkdownTableRow("| `a\\|b` | escaped \\| literal | plain |")
-	if !ok {
-		t.Fatal("expected markdown table row")
-	}
-	want := []string{"`a|b`", "escaped | literal", "plain"}
-	if len(cells) != len(want) {
-		t.Fatalf("cells = %#v, want %#v", cells, want)
-	}
-	for i := range want {
-		if cells[i] != want[i] {
-			t.Fatalf("cells = %#v, want %#v", cells, want)
-		}
 	}
 }
 
@@ -2186,7 +2595,7 @@ func TestContextCommandShowsGatewayContextReport(t *testing.T) {
 		if r.URL.Path != "/v1/sessions/session-1/context" {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
-		_ = json.NewEncoder(w).Encode(gateway.SessionContextResponse{
+		_ = json.NewEncoder(w).Encode(gatewayapi.SessionContextResponse{
 			ID:                   "session-1",
 			MessageCount:         4,
 			EstimatedTokens:      580000,
@@ -2194,15 +2603,15 @@ func TestContextCommandShowsGatewayContextReport(t *testing.T) {
 			ContextCompactTokens: 600000,
 			PercentUsed:          58,
 			Estimator:            "chars_div_4",
-			Sources: []gateway.ContextSource{
+			Sources: []gatewayapi.ContextSource{
 				{Source: "web_summaries", MessageCount: 2, EstimatedTokens: 320000, Percent: 55.2},
 				{Source: "user_messages", MessageCount: 1, EstimatedTokens: 1000, Percent: 0.2},
 			},
-			Thresholds: []gateway.ContextThreshold{
+			Thresholds: []gatewayapi.ContextThreshold{
 				{Percent: 50, Tokens: 500000, Crossed: true},
 				{Percent: 70, Tokens: 700000, RemainingTokens: 120000},
 			},
-			TopContributors: []gateway.ContextContributor{
+			TopContributors: []gatewayapi.ContextContributor{
 				{Index: 2, Role: "tool", Source: "web_summaries", Name: "web_fetch", EstimatedTokens: 320000, Preview: "summary"},
 			},
 		})
@@ -2244,12 +2653,12 @@ func TestContextThresholdEventRendersContextBlock(t *testing.T) {
 		t.Fatal("expected context threshold block")
 	}
 	block := m.blocks[len(m.blocks)-1]
-	if block.title != "CONTEXT" || block.eventType != protocol.EventContextThreshold {
+	if block.Title != "CONTEXT" || block.EventType != protocol.EventContextThreshold {
 		t.Fatalf("block = %#v", block)
 	}
 	for _, want := range []string{"threshold: 70%", "active: 705k / 1.0m", "remaining window: 295k", "stage: after_tool_results"} {
-		if !strings.Contains(block.content, want) {
-			t.Fatalf("context threshold block missing %q:\n%s", want, block.content)
+		if !strings.Contains(block.Content, want) {
+			t.Fatalf("context threshold block missing %q:\n%s", want, block.Content)
 		}
 	}
 }
@@ -2326,7 +2735,7 @@ func TestChatCommands(t *testing.T) {
 	if !handled {
 		t.Fatalf("/resume should be handled")
 	}
-	if len(m.blocks) == 0 || !strings.Contains(m.blocks[len(m.blocks)-1].content, shortID(original)) {
+	if len(m.blocks) == 0 || !strings.Contains(m.blocks[len(m.blocks)-1].Content, shortID(original)) {
 		t.Fatalf("/resume should list saved chats")
 	}
 }
@@ -2341,6 +2750,62 @@ func newTestModel(t testModelHelper) Model {
 	t.Helper()
 	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
 	return NewModel(config.Default(), Options{})
+}
+
+func seedStaleChatRuntimeState(m *Model) {
+	m.sessionID = "stale-gateway-session"
+	m.lastGatewayEventSeq = 42
+	m.modelCalls = 3
+	m.toolCalls = 4
+	m.inputTok = 100
+	m.outputTok = 25
+	m.cacheHitTok = 7
+	m.cacheMissTok = 8
+	m.reasoningTok = 9
+	m.lastInputTok = 10
+	m.lastOutputTok = 11
+	m.lastCacheHitTok = 12
+	m.lastCacheMissTok = 13
+	m.toolSummaryInTok = 14
+	m.toolSummaryOutTok = 15
+	m.toolSummaryAPITok = 16
+	m.followOutput = false
+	m.messages = append(m.messages, protocol.Message{Role: protocol.RoleUser, Content: "stale prompt"})
+	m.addBlock("assistant", "ASSISTANT", "stale answer")
+}
+
+func assertFreshChatRuntimeState(t testing.TB, m Model) {
+	t.Helper()
+	if m.sessionID != "" {
+		t.Fatalf("sessionID = %q, want empty", m.sessionID)
+	}
+	if m.lastGatewayEventSeq != 0 {
+		t.Fatalf("lastGatewayEventSeq = %d, want 0", m.lastGatewayEventSeq)
+	}
+	if !m.followOutput {
+		t.Fatalf("followOutput = false, want true")
+	}
+	if len(m.blocks) != 0 {
+		t.Fatalf("blocks length = %d, want 0", len(m.blocks))
+	}
+	if m.modelCalls != 0 || m.toolCalls != 0 {
+		t.Fatalf("calls = model %d tool %d, want 0/0", m.modelCalls, m.toolCalls)
+	}
+	if m.inputTok != 0 || m.outputTok != 0 || m.cacheHitTok != 0 || m.cacheMissTok != 0 || m.reasoningTok != 0 {
+		t.Fatalf("lifetime tokens = input %d output %d hit %d miss %d reasoning %d, want all 0",
+			m.inputTok, m.outputTok, m.cacheHitTok, m.cacheMissTok, m.reasoningTok)
+	}
+	if m.lastInputTok != 0 || m.lastOutputTok != 0 || m.lastCacheHitTok != 0 || m.lastCacheMissTok != 0 {
+		t.Fatalf("last tokens = input %d output %d hit %d miss %d, want all 0",
+			m.lastInputTok, m.lastOutputTok, m.lastCacheHitTok, m.lastCacheMissTok)
+	}
+	if m.toolSummaryInTok != 0 || m.toolSummaryOutTok != 0 || m.toolSummaryAPITok != 0 {
+		t.Fatalf("tool summary tokens = in %d out %d api %d, want all 0",
+			m.toolSummaryInTok, m.toolSummaryOutTok, m.toolSummaryAPITok)
+	}
+	if m.uxProjector == nil {
+		t.Fatalf("uxProjector is nil")
+	}
 }
 
 func BenchmarkTUIReflowLongTranscriptCached(b *testing.B) {

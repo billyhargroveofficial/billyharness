@@ -46,16 +46,13 @@ func EnsureDefaultProfileMetadataFile(profile string) (string, error) {
 
 func LoadProfileMetadata(profile string) (ProfileMetadata, string, bool, error) {
 	name := NormalizeProfileName(profile)
-	path, err := EnsureDefaultProfileMetadataFile(name)
-	if err != nil {
-		return ProfileMetadata{}, path, false, err
-	}
-	if strings.TrimSpace(path) == "" {
-		return ProfileMetadata{}, path, false, nil
-	}
+	path := DefaultProfileMetadataFile(name)
 	var meta ProfileMetadata
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
+			if meta, ok := builtInProfileMetadata(name); ok {
+				return meta, "", true, nil
+			}
 			return ProfileMetadata{}, path, false, nil
 		}
 		return ProfileMetadata{}, path, false, err
@@ -72,6 +69,28 @@ func LoadProfileMetadata(profile string) (ProfileMetadata, string, bool, error) 
 	meta.InstructionFragments = cleanStringList(meta.InstructionFragments)
 	meta.CostBudgetHints = cleanStringList(meta.CostBudgetHints)
 	return meta, path, true, nil
+}
+
+func builtInProfileMetadata(profile string) (ProfileMetadata, bool) {
+	name := NormalizeProfileName(profile)
+	if name != DefaultProfileName {
+		return ProfileMetadata{}, false
+	}
+	disableSpark := true
+	return ProfileMetadata{
+		Name:                 DefaultProfileName,
+		Provider:             "deepseek",
+		Model:                "deepseek-v4-flash",
+		Thinking:             "enabled",
+		ReasoningEffort:      "high",
+		DisableSpark:         &disableSpark,
+		ContextWindowTokens:  1_000_000,
+		WebSummaryMode:       "extractive",
+		ToolPolicy:           "solo-full-access",
+		MCPAllowlist:         []string{"telegram", "telegram-parilka", "github", "context7"},
+		InstructionFragments: []string{"SOUL.md"},
+		CostBudgetHints:      []string{"Keep native extractive web summaries by default; use model web summaries only when explicitly enabled."},
+	}, true
 }
 
 func (c *Config) ApplyProfileMetadata() error {

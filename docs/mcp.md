@@ -59,7 +59,10 @@ States include `connected`, `reconnected`, `failed`, `crashed`, `restarting`, `d
 
 ## Tool Discovery
 
-MCP tools are discovered lazily. The model sees `tool_search`, `mcp_list_tools`, and `mcp_call`, not every connected MCP tool.
+MCP tools are discovered lazily. The model-visible specs are the static gateway
+tools from `/v1/tools`: native tools plus `tool_search`, `mcp_list_tools`, and
+`mcp_call`. Connected MCP tools are not injected as direct model-visible specs.
+They live in the dynamic MCP catalog and are called through `mcp_call`.
 
 Use `tool_search` to find native and MCP tools with compact call hints:
 
@@ -67,7 +70,18 @@ Use `tool_search` to find native and MCP tools with compact call hints:
 {"query":"repositories","server":"github","namespace":"mcp.github","risk":"external","include_schema":true,"max_schema_tokens":1200}
 ```
 
-Filters include `server`, `namespace`, `risk`, `query`, and `include_schema`. Schema output is capped by `max_schema_tokens`; over-budget schemas are omitted with `schema_omitted` instead of returning broken partial JSON. Responses include discovery metrics such as scanned native/MCP tools, returned matches, included schema count, omitted schema count, and estimated schema tokens.
+Use `mcp_list_tools` when you only want the dynamic MCP catalog. Both
+`tool_search` and `mcp_list_tools` responses include
+`model_visible_tools.kind=static_gateway_tools` and
+`mcp_catalog.kind=dynamic_mcp_catalog`; MCP catalog entries report
+`model_visible=false` and include the full `mcp__server__tool` name to pass to
+`mcp_call`.
+
+Filters include `server`, `namespace`, `risk`, `query`, and `include_schema`.
+Schema output is capped by `max_schema_tokens`; over-budget schemas are omitted
+with `schema_omitted` instead of returning broken partial JSON. Responses
+include discovery metrics such as scanned native/MCP tools, returned matches,
+included schema count, omitted schema count, and estimated schema tokens.
 
 ## Remote MCP
 

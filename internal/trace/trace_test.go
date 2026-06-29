@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/agent"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/eventlog"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
@@ -28,6 +30,20 @@ func TestEventWriterRecordsContiguousEventsAndPayloadRefs(t *testing.T) {
 		}),
 	)
 	if _, err := writer.Record("task-1", protocol.Event{Type: protocol.EventRunStarted}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Record("task-1", protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{ID: "call-1", Name: "fs_read_file"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Record("task-1", protocol.Event{
+		Type:      protocol.EventToolCallStarted,
+		CallID:    "call-1",
+		AttemptID: "turn-001:tool-call-001:attempt-001",
+		Data:      "fs_read_file",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := writer.Record("task-1", protocol.Event{
@@ -52,22 +68,22 @@ func TestEventWriterRecordsContiguousEventsAndPayloadRefs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Records != 2 || summary.FirstSeq != 1 || summary.LastSeq != 2 || summary.PayloadRefs != 1 || summary.PayloadBytes == 0 {
+	if summary.Records != 4 || summary.FirstSeq != 1 || summary.LastSeq != 4 || summary.PayloadRefs != 1 || summary.PayloadBytes == 0 {
 		t.Fatalf("summary = %#v", summary)
 	}
-	if summary.RunStarted != 1 || summary.ToolCallsFinished != 1 {
+	if summary.RunStarted != 1 || summary.ToolCallsStarted != 1 || summary.ToolCallsFinished != 1 {
 		t.Fatalf("event counters = %#v", summary)
 	}
 
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	var second EventRecord
-	if err := json.Unmarshal([]byte(lines[1]), &second); err != nil {
+	var fourth EventRecord
+	if err := json.Unmarshal([]byte(lines[3]), &fourth); err != nil {
 		t.Fatal(err)
 	}
-	if len(second.PayloadRefs) != 1 {
-		t.Fatalf("payload refs = %#v", second.PayloadRefs)
+	if len(fourth.PayloadRefs) != 1 {
+		t.Fatalf("payload refs = %#v", fourth.PayloadRefs)
 	}
-	if _, err := os.Stat(second.PayloadRefs[0].Path); err != nil {
+	if _, err := os.Stat(fourth.PayloadRefs[0].Path); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -161,6 +177,7 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 		{Type: protocol.EventContextCompacted},
 		{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:model-call-001", Round: 1, Kind: protocol.StepKindModelCall, Status: protocol.StepStatusCompleted, DurationMS: 11, Metadata: map[string]any{"first_delta_ms": 4}}},
 		{Type: protocol.EventStepStarted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:tool-batch-001", Round: 1, Kind: protocol.StepKindToolBatch, Status: protocol.StepStatusStarted, Parallel: true, BatchSize: 2}},
+		{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{ID: "call-1", Name: "time_now"}},
 		{Type: protocol.EventToolCallStarted, CallID: "call-1", AttemptID: "turn-001:tool-call-001:attempt-001", Data: "time_now"},
 		{Type: protocol.EventToolCallProgress, Data: protocol.ToolProgressEvent{
 			CallID:    "call-1",
@@ -224,6 +241,7 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 		string(protocol.EventContextCompacted),
 		string(protocol.EventStepCompleted),
 		string(protocol.EventStepStarted),
+		string(protocol.EventToolCallRequested),
 		string(protocol.EventToolCallStarted),
 		string(protocol.EventToolCallProgress),
 		string(protocol.EventToolCallFinished),
@@ -258,21 +276,25 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 		t.Fatalf("compaction timeline item = %#v", summary.Timeline[5])
 	}
 	if summary.Timeline[8].CallID != "call-1" ||
-		summary.Timeline[8].AttemptID != "turn-001:tool-call-001:attempt-001" ||
 		summary.Timeline[8].Name != "time_now" {
-		t.Fatalf("tool start timeline item = %#v", summary.Timeline[8])
+		t.Fatalf("tool request timeline item = %#v", summary.Timeline[8])
 	}
 	if summary.Timeline[9].CallID != "call-1" ||
 		summary.Timeline[9].AttemptID != "turn-001:tool-call-001:attempt-001" ||
-		summary.Timeline[9].Name != "time_now" ||
-		summary.Timeline[9].Phase != "executing" ||
-		summary.Timeline[9].Status != protocol.StepStatusStarted {
-		t.Fatalf("tool progress timeline item = %#v", summary.Timeline[9])
+		summary.Timeline[9].Name != "time_now" {
+		t.Fatalf("tool start timeline item = %#v", summary.Timeline[9])
 	}
 	if summary.Timeline[10].CallID != "call-1" ||
 		summary.Timeline[10].AttemptID != "turn-001:tool-call-001:attempt-001" ||
-		summary.Timeline[10].Name != "time_now" {
-		t.Fatalf("tool finish timeline item = %#v", summary.Timeline[10])
+		summary.Timeline[10].Name != "time_now" ||
+		summary.Timeline[10].Phase != "executing" ||
+		summary.Timeline[10].Status != protocol.StepStatusStarted {
+		t.Fatalf("tool progress timeline item = %#v", summary.Timeline[10])
+	}
+	if summary.Timeline[11].CallID != "call-1" ||
+		summary.Timeline[11].AttemptID != "turn-001:tool-call-001:attempt-001" ||
+		summary.Timeline[11].Name != "time_now" {
+		t.Fatalf("tool finish timeline item = %#v", summary.Timeline[11])
 	}
 
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
@@ -282,6 +304,41 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 	}
 	if turnRecord.ProfileHash != profileHash {
 		t.Fatalf("event record profile hash = %q, want %q", turnRecord.ProfileHash, profileHash)
+	}
+}
+
+func TestReplayEventsRejectsLifecycleViolation(t *testing.T) {
+	var out bytes.Buffer
+	writer := NewEventWriter("run-1", &out)
+	events := []protocol.Event{
+		{Type: protocol.EventRunStarted},
+		{
+			Type:      protocol.EventToolCallFinished,
+			CallID:    "call-1",
+			AttemptID: "attempt-1",
+			Data: protocol.ToolResult{
+				CallID:  "call-1",
+				Name:    "time_now",
+				Content: "ok",
+				Metadata: map[string]any{
+					"attempt_id": "attempt-1",
+				},
+			},
+		},
+	}
+	for _, event := range events {
+		if _, err := writer.Record("task-1", event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ReplayEvents(path)
+	if err == nil || !strings.Contains(err.Error(), "matching call_id") {
+		t.Fatalf("expected lifecycle call_id error, got %v", err)
 	}
 }
 
@@ -298,6 +355,13 @@ func TestReplayEventsRejectsSequenceGap(t *testing.T) {
 	_, err := ReplayEvents(path)
 	if err == nil || !strings.Contains(err.Error(), "sequence gap") {
 		t.Fatalf("expected sequence gap error, got %v", err)
+	}
+	var corrupt *eventlog.CorruptionError
+	if !errors.As(err, &corrupt) {
+		t.Fatalf("error %T does not expose CorruptionError", err)
+	}
+	if corrupt.Path != path || corrupt.Line != 2 || corrupt.RecordNo != 2 {
+		t.Fatalf("corruption error = %#v", corrupt)
 	}
 }
 

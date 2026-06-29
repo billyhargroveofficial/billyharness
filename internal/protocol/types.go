@@ -31,9 +31,11 @@ type Message struct {
 }
 
 type ToolCall struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
+	ID                   string          `json:"id"`
+	Name                 string          `json:"name"`
+	Arguments            json.RawMessage `json:"arguments"`
+	InvalidArguments     string          `json:"invalid_arguments,omitempty"`
+	InvalidArgumentError string          `json:"invalid_argument_error,omitempty"`
 }
 
 type ToolResult struct {
@@ -155,6 +157,35 @@ type StepEvent struct {
 	Metadata      map[string]any `json:"metadata,omitempty"`
 }
 
+type ModelCallEvent struct {
+	RequestID               string `json:"request_id"`
+	Round                   int    `json:"round,omitempty"`
+	MessageCount            int    `json:"message_count,omitempty"`
+	ToolCount               int    `json:"tool_count,omitempty"`
+	ProviderID              string `json:"provider_id,omitempty"`
+	ModelID                 string `json:"model_id,omitempty"`
+	Reasoning               string `json:"reasoning,omitempty"`
+	ReasoningMode           string `json:"reasoning_mode,omitempty"`
+	ContextBudgetTokens     int64  `json:"context_budget_tokens,omitempty"`
+	ToolSnapshotHash        string `json:"tool_snapshot_hash,omitempty"`
+	MCPStatusSnapshotHash   string `json:"mcp_status_snapshot_hash,omitempty"`
+	ProfileInstructionHash  string `json:"profile_instruction_hash,omitempty"`
+	DangerousPermissionMode string `json:"dangerous_permission_mode,omitempty"`
+	Status                  string `json:"status"`
+	ProviderRequestID       string `json:"provider_request_id,omitempty"`
+	Attempts                int    `json:"attempts,omitempty"`
+	Retries                 int    `json:"retries"`
+	StatusCode              int    `json:"status_code,omitempty"`
+	TotalLatencyMS          *int64 `json:"total_latency_ms,omitempty"`
+	FirstDeltaMS            *int64 `json:"first_delta_ms,omitempty"`
+	InputTokens             int64  `json:"input_tokens,omitempty"`
+	OutputTokens            int64  `json:"output_tokens,omitempty"`
+	CacheHitTokens          int64  `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens         int64  `json:"cache_miss_tokens,omitempty"`
+	ReasoningTokens         int64  `json:"reasoning_tokens,omitempty"`
+	Error                   string `json:"error,omitempty"`
+}
+
 type ToolProgressEvent struct {
 	CallID    string         `json:"call_id"`
 	Name      string         `json:"name,omitempty"`
@@ -163,6 +194,79 @@ type ToolProgressEvent struct {
 	Status    string         `json:"status"`
 	Message   string         `json:"message,omitempty"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
+}
+
+type ToolPermissionEvent struct {
+	CallID           string `json:"call_id"`
+	Name             string `json:"name,omitempty"`
+	Risk             Risk   `json:"risk,omitempty"`
+	RequiresApproval bool   `json:"requires_approval"`
+	Decision         string `json:"decision,omitempty"`
+	Source           string `json:"source,omitempty"`
+	Reason           string `json:"reason,omitempty"`
+}
+
+type ToolOutputRefEvent struct {
+	CallID               string `json:"call_id"`
+	Name                 string `json:"name,omitempty"`
+	AttemptID            string `json:"attempt_id"`
+	OutputRef            string `json:"output_ref"`
+	OutputRefID          string `json:"output_ref_id,omitempty"`
+	OutputRefBytes       int64  `json:"output_ref_bytes,omitempty"`
+	OutputRefSHA256      string `json:"output_ref_sha256,omitempty"`
+	OutputRefPermissions string `json:"output_ref_permissions,omitempty"`
+	OutputRefPlaintext   bool   `json:"output_ref_plaintext,omitempty"`
+	Truncated            bool   `json:"truncated"`
+}
+
+type HookEvent struct {
+	HookEvent             string         `json:"hook_event"`
+	HookName              string         `json:"hook_name,omitempty"`
+	Name                  string         `json:"name,omitempty"`
+	Command               string         `json:"command,omitempty"`
+	Fatal                 bool           `json:"fatal"`
+	Status                string         `json:"status"`
+	Payload               map[string]any `json:"payload,omitempty"`
+	Phase                 string         `json:"phase,omitempty"`
+	Error                 string         `json:"error,omitempty"`
+	DurationMS            *int64         `json:"duration_ms,omitempty"`
+	Stdout                string         `json:"stdout,omitempty"`
+	Stderr                string         `json:"stderr,omitempty"`
+	StdoutTruncated       *bool          `json:"stdout_truncated,omitempty"`
+	StderrTruncated       *bool          `json:"stderr_truncated,omitempty"`
+	TimeoutMS             *int64         `json:"timeout_ms,omitempty"`
+	ExitCode              *int           `json:"exit_code,omitempty"`
+	TimedOut              *bool          `json:"timed_out,omitempty"`
+	TurnID                string         `json:"turn_id,omitempty"`
+	StepID                string         `json:"step_id,omitempty"`
+	CallID                string         `json:"call_id,omitempty"`
+	AttemptID             string         `json:"attempt_id,omitempty"`
+	ToolName              string         `json:"tool_name,omitempty"`
+	RequestID             string         `json:"request_id,omitempty"`
+	ProviderID            string         `json:"provider_id,omitempty"`
+	ModelID               string         `json:"model_id,omitempty"`
+	ProviderRequestID     string         `json:"provider_request_id,omitempty"`
+	Attempts              *int           `json:"attempts,omitempty"`
+	Retries               *int           `json:"retries,omitempty"`
+	StatusCode            *int           `json:"status_code,omitempty"`
+	ServerName            string         `json:"server_name,omitempty"`
+	Transport             string         `json:"transport,omitempty"`
+	Connected             *bool          `json:"connected,omitempty"`
+	State                 string         `json:"state,omitempty"`
+	ToolCount             *int           `json:"tool_count,omitempty"`
+	RetryCount            *int           `json:"retry_count,omitempty"`
+	RestartCount          *int           `json:"restart_count,omitempty"`
+	RetryBackoffMS        *int64         `json:"retry_backoff_ms,omitempty"`
+	ArgsSummary           string         `json:"args_summary,omitempty"`
+	ErrorCode             string         `json:"error_code,omitempty"`
+	IsError               *bool          `json:"is_error,omitempty"`
+	OutputBytes           *int64         `json:"output_bytes,omitempty"`
+	OutputEstimatedTokens *int64         `json:"output_estimated_tokens,omitempty"`
+	Truncated             *bool          `json:"truncated,omitempty"`
+	OutputRef             string         `json:"output_ref,omitempty"`
+	PermissionDecision    string         `json:"permission_decision,omitempty"`
+	PermissionSource      string         `json:"permission_source,omitempty"`
+	PermissionReason      string         `json:"permission_reason,omitempty"`
 }
 
 type ContextThresholdEvent struct {

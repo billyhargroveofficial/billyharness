@@ -1,0 +1,189 @@
+package transcript
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+)
+
+func TestProjectorApplyStreamsAndFinalizesAssistantCells(t *testing.T) {
+	p := NewProjector()
+	p.Apply(protocol.Event{Type: protocol.EventAssistantDelta, Data: "hello "})
+	cells := p.Apply(protocol.Event{Type: protocol.EventAssistantDelta, Data: "world"})
+	if len(cells) != 1 {
+		t.Fatalf("cells = %d, want 1", len(cells))
+	}
+	if got := cells[0]; got.Kind != "assistant" || got.CellType != CellTypeAssistantStream || !got.Live || got.Content != "hello world" || got.RawCopy != "hello world" {
+		t.Fatalf("stream cell = %#v", got)
+	}
+
+	cells = p.Apply(protocol.Event{Type: protocol.EventRunCompleted})
+	if got := cells[0]; got.CellType != CellTypeAssistantFinal || got.Live {
+		t.Fatalf("final cell = %#v", got)
+	}
+}
+
+func TestProjectorApplyUpdatesToolCellsByCallID(t *testing.T) {
+	p := NewProjector()
+	p.Apply(protocol.Event{
+		Type:   protocol.EventToolCallRequested,
+		TurnID: "turn-1",
+		StepID: "step-1",
+		Data: protocol.ToolCall{
+			ID:        "call-a",
+			Name:      "fs_read_file",
+			Arguments: json.RawMessage(`{"path":"README.md"}`),
+		},
+	})
+	p.Apply(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{
+			ID:        "call-b",
+			Name:      "web_search",
+			Arguments: json.RawMessage(`{"query":"agent"}`),
+		},
+	})
+	cells := p.Apply(protocol.Event{
+		Type: protocol.EventToolCallFinished,
+		Data: protocol.ToolResult{
+			CallID:  "call-a",
+			Name:    "fs_read_file",
+			Content: "alpha",
+		},
+	})
+
+	if len(cells) != 2 {
+		t.Fatalf("cells = %d, want 2", len(cells))
+	}
+	if got := cells[0]; got.CallID != "call-a" || got.ToolName != "fs_read_file" || !strings.Contains(got.Title, "Done Read README.md") || !strings.Contains(got.Content, "alpha") {
+		t.Fatalf("call-a cell = %#v", got)
+	}
+	if got := cells[1]; got.CallID != "call-b" || strings.Contains(got.Content, "alpha") {
+		t.Fatalf("call-b cell = %#v", got)
+	}
+}
+
+func TestProjectorApplyUsesCompactToolAuditText(t *testing.T) {
+	p := NewProjector()
+	cells := p.Apply(protocol.Event{Type: protocol.EventToolAudit, Data: map[string]any{
+		"name":          "shell_exec",
+		"risk":          string(protocol.RiskExecute),
+		"auto_approved": true,
+	}})
+	if len(cells) != 1 {
+		t.Fatalf("cells = %d, want 1", len(cells))
+	}
+	if got := cells[0]; got.Kind != "audit" || got.CellType != CellTypeAuditSecurity || got.Title != "AUDIT" || got.Content != "execute shell_exec auto-approved" {
+		t.Fatalf("audit cell = %#v", got)
+	}
+
+	p = NewProjector()
+	p.Apply(protocol.Event{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{
+		ID:        "call-shell",
+		Name:      "shell_exec",
+		Arguments: json.RawMessage(`{"argv":["pwd"],"cwd":"/root/billyharness"}`),
+	}})
+	cells = p.Apply(protocol.Event{Type: protocol.EventToolAudit, Data: map[string]any{
+		"name":          "shell_exec",
+		"risk":          string(protocol.RiskExecute),
+		"auto_approved": true,
+	}})
+	if len(cells) != 1 || cells[0].Kind != "tool" || !strings.Contains(cells[0].Content, "audit: execute shell_exec auto-approved") {
+		t.Fatalf("tool audit cell = %#v", cells)
+	}
+}
+
+func TestProjectorApplyUpsertsToolBatchSteps(t *testing.T) {
+	p := NewProjector()
+	p.Apply(protocol.Event{Type: protocol.EventStepStarted, Data: protocol.StepEvent{
+		TurnID:        "turn-1",
+		StepID:        "batch-1",
+		Kind:          protocol.StepKindToolBatch,
+		Status:        protocol.StepStatusStarted,
+		BatchID:       "batch-1",
+		BatchSize:     2,
+		Parallel:      true,
+		ParallelLimit: 2,
+	}})
+	cells := p.Apply(protocol.Event{Type: protocol.EventStepCompleted, Data: map[string]any{
+		"turn_id":        "turn-1",
+		"step_id":        "batch-1",
+		"kind":           protocol.StepKindToolBatch,
+		"status":         protocol.StepStatusCompleted,
+		"batch_id":       "batch-1",
+		"batch_size":     2,
+		"parallel":       true,
+		"parallel_limit": 2,
+		"duration_ms":    37,
+	}})
+
+	if len(cells) != 1 {
+		t.Fatalf("cells = %d, want 1", len(cells))
+	}
+	if got := cells[0]; got.CellType != CellTypeToolBatch || got.StepID != "batch-1" || !strings.Contains(got.Title, "Tool batch done") || !strings.Contains(got.Title, "0s") {
+		t.Fatalf("batch cell = %#v", got)
+	}
+}
+
+func TestProjectorApplyContextDiagnosticCells(t *testing.T) {
+	p := NewProjector()
+	cells := p.Apply(protocol.Event{Type: protocol.EventContextCompacted, Data: map[string]any{
+		"compaction_id":           "compact-1",
+		"reason":                  "threshold",
+		"trigger_source":          "after_tool_results",
+		"before_estimated_tokens": int64(805000),
+		"after_estimated_tokens":  int64(210000),
+		"protected_prefix": map[string]any{
+			"messages":         2,
+			"chars":            400,
+			"estimated_tokens": int64(100),
+			"reasons": map[string]any{
+				"system": float64(1),
+			},
+		},
+	}})
+	if len(cells) != 1 {
+		t.Fatalf("cells = %d, want 1", len(cells))
+	}
+	if got := cells[0]; got.CellType != CellTypeCompaction || got.Title != "COMPACT" ||
+		!strings.Contains(got.Content, "id: compact-1") ||
+		!strings.Contains(got.Content, "reason: threshold (after_tool_results)") ||
+		!strings.Contains(got.Content, "context: before ~805k / after ~210k") {
+		t.Fatalf("compaction cell = %#v", got)
+	}
+
+	cells = p.Apply(protocol.Event{Type: protocol.EventContextThreshold, Data: protocol.ContextThresholdEvent{
+		Percent:             70,
+		EstimatedTokens:     705000,
+		ContextWindowTokens: 1000000,
+		ThresholdTokens:     700000,
+		RemainingTokens:     295000,
+		MessageCount:        44,
+		Round:               3,
+		Stage:               "after_tool_results",
+	}})
+	if len(cells) != 2 {
+		t.Fatalf("cells = %d, want 2", len(cells))
+	}
+	if got := cells[1]; got.CellType != CellTypeStatus || got.Title != "CONTEXT" ||
+		!strings.Contains(got.Content, "threshold: 70%") ||
+		!strings.Contains(got.Content, "active: 705k / 1.0m") ||
+		!strings.Contains(got.Content, "remaining window: 295k") ||
+		!strings.Contains(got.Content, "stage: after_tool_results") {
+		t.Fatalf("threshold cell = %#v", got)
+	}
+}
+
+func TestProjectorApplyRunSummaryUpsertsLatestSummary(t *testing.T) {
+	p := NewProjector()
+	p.ApplyRunSummary(RunSummary{EventType: protocol.EventRunStarted, State: "running", SessionModelCalls: 1})
+	cells := p.ApplyRunSummary(RunSummary{EventType: protocol.EventRunCompleted, State: "completed", SessionModelCalls: 2, SessionToolCalls: 3})
+	if len(cells) != 1 {
+		t.Fatalf("cells = %d, want 1", len(cells))
+	}
+	if got := cells[0]; got.CellType != CellTypeRunSummary || !strings.Contains(got.Title, "Run done") || !strings.Contains(got.Content, "agent turns: 0 / session 2") {
+		t.Fatalf("summary cell = %#v", got)
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/testkit"
 )
 
 func TestCodexStreamSendsResponsesHeadersAndParsesEvents(t *testing.T) {
@@ -173,7 +174,7 @@ func TestCodexStreamRefreshesExpiredTokenBeforeRequest(t *testing.T) {
 		case "/oauth/token":
 			refreshCalled = true
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"access_token":  testJWT(t, map[string]any{"exp": time.Now().Add(2 * time.Hour).Unix(), "refreshed": true}),
+				"access_token":  testkit.JWT(t, map[string]any{"exp": time.Now().Add(2 * time.Hour).Unix(), "refreshed": true}),
 				"refresh_token": "refresh-new",
 			})
 		case "/responses":
@@ -185,7 +186,7 @@ func TestCodexStreamRefreshesExpiredTokenBeforeRequest(t *testing.T) {
 		}
 	}))
 	t.Cleanup(server.Close)
-	expired := testJWT(t, map[string]any{"exp": time.Now().Add(-time.Hour).Unix()})
+	expired := testkit.JWT(t, map[string]any{"exp": time.Now().Add(-time.Hour).Unix()})
 	c := &Codex{
 		BaseURL:         server.URL,
 		RequestTimeout:  time.Second,
@@ -220,7 +221,7 @@ func TestCodexStreamRefreshesAfterUnauthorizedResponse(t *testing.T) {
 		case "/oauth/token":
 			refreshCalled = true
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"access_token":  testJWT(t, map[string]any{"exp": time.Now().Add(time.Hour).Unix()}),
+				"access_token":  testkit.JWT(t, map[string]any{"exp": time.Now().Add(time.Hour).Unix()}),
 				"refresh_token": "refresh-new",
 			})
 		case "/responses":
@@ -245,7 +246,7 @@ func TestCodexStreamRefreshesAfterUnauthorizedResponse(t *testing.T) {
 		CodexRefreshURL: server.URL + "/oauth/token",
 		CodexClientID:   "client-test",
 		Auth: &codexAuth{
-			AccessToken:  testJWT(t, map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "refreshed": false}),
+			AccessToken:  testkit.JWT(t, map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "refreshed": false}),
 			RefreshToken: "refresh-old",
 			ExpiresAt:    time.Now().Add(time.Hour),
 		},
@@ -278,8 +279,8 @@ func TestCodexStreamRefreshesAfterUnauthorizedResponse(t *testing.T) {
 }
 
 func TestCodexConcurrentStreamsRefreshExpiredTokenOnce(t *testing.T) {
-	expired := testJWT(t, map[string]any{"exp": time.Now().Add(-time.Hour).Unix()})
-	refreshed := testJWT(t, map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "refreshed": true})
+	expired := testkit.JWT(t, map[string]any{"exp": time.Now().Add(-time.Hour).Unix()})
+	refreshed := testkit.JWT(t, map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "refreshed": true})
 	var mu sync.Mutex
 	var refreshCalls int
 	var responseAuthorizations []string

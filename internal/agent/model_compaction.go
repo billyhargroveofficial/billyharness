@@ -4,17 +4,19 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 )
 
-var newCompactionSummaryProvider = provider.New
+var newCompactionSummaryProvider = provider.NewFromBinding
 
 func (a *Agent) compactMessages(ctx context.Context, messages []protocol.Message, observedPromptTokens int64) ([]protocol.Message, *compactionReport, bool) {
-	compactedMessages, report, compacted := compactMessages(messages, a.cfg, observedPromptTokens)
-	if !compacted || report == nil || config.NormalizeContextCompactStrategy(a.cfg.ContextCompactStrategy) != "model" {
+	compactedMessages, report, compacted := compactMessages(messages, a.runtime, observedPromptTokens)
+	if !compacted || report == nil || config.NormalizeContextCompactStrategy(a.runtime.ContextCompactStrategy) != "model" {
 		return compactedMessages, report, compacted
 	}
 	if err := a.applyModelCompactionSummary(ctx, compactedMessages, report); err != nil {
@@ -32,16 +34,16 @@ func (a *Agent) applyModelCompactionSummary(ctx context.Context, messages []prot
 	if source == "" {
 		return fmt.Errorf("empty deterministic compaction source")
 	}
-	cfg := a.compactionSummaryConfig()
-	prov, err := newCompactionSummaryProvider(cfg)
+	binding, maxOutputTokens, timeout := a.compactionSummaryBinding()
+	prov, err := newCompactionSummaryProvider(binding)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, cfg.WebSummaryTimeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	temp := 0.1
 	events, errs := prov.Stream(ctx, provider.Request{
-		Model: cfg.Model,
+		Model: binding.Model.Model,
 		Messages: []protocol.Message{
 			{
 				Role:    protocol.RoleSystem,
@@ -64,14 +66,14 @@ func (a *Agent) applyModelCompactionSummary(ctx context.Context, messages []prot
 	if err := <-errs; err != nil {
 		return err
 	}
-	text := compactModelSummaryText(b.String(), cfg.WebSummaryMaxOutputTokens)
+	text := compactModelSummaryText(b.String(), maxOutputTokens)
 	if text == "" {
 		return fmt.Errorf("model compaction summary was empty")
 	}
 	messages[report.ReplacementIndex].Content = buildModelCompactionSummary(report.CompactionID, text)
 	report.SummaryStrategy = "model"
-	report.SummaryProvider = cfg.Provider
-	report.SummaryModel = cfg.Model
+	report.SummaryProvider = binding.Provider.Provider
+	report.SummaryModel = binding.Model.Model
 	report.SummaryChars = len(messages[report.ReplacementIndex].Content)
 	report.SummaryEstimatedTokens = estimateMessagesTokens([]protocol.Message{messages[report.ReplacementIndex]})
 	report.AfterEstimatedTokens = estimateMessagesTokens(messages)
@@ -81,22 +83,39 @@ func (a *Agent) applyModelCompactionSummary(ctx context.Context, messages []prot
 	return nil
 }
 
-func (a *Agent) compactionSummaryConfig() config.Config {
-	cfg := a.cfg
-	cfg.Provider = cfg.ContextCompactSummaryProvider
-	cfg.Model = cfg.ContextCompactSummaryModel
-	if cfg.Model == "" {
-		cfg.Model = cfg.WebSummaryModel
+func (a *Agent) compactionSummaryBinding() (config.ProviderBinding, int, time.Duration) {
+	binding := a.providerBinding
+	model := modelinfo.NormalizeAlias(a.runtime.ContextCompactSummaryModel)
+	if model == "" {
+		model = modelinfo.NormalizeAlias(a.toolPolicy.WebSummaryModel)
 	}
-	if cfg.Provider == "" {
-		cfg.Provider = cfg.WebSummaryProvider
+	if binding.Model.DisableSpark && modelinfo.IsSparkModel(model) {
+		model = "gpt-5.4-mini"
 	}
-	cfg.Thinking = "disabled"
-	cfg.ReasoningEffort = "off"
-	cfg.MaxToolRounds = 0
-	cfg.ApplyModelProviderDefaults()
-	cfg.ApplyWebSummaryDefaults()
-	return cfg
+	providerID := modelinfo.NormalizeProvider(a.runtime.ContextCompactSummaryProvider)
+	if providerID == "" {
+		providerID = modelinfo.NormalizeProvider(a.toolPolicy.WebSummaryProvider)
+	}
+	if model == "" {
+		model = modelinfo.DefaultSummaryModel(binding.Model.Model, binding.Provider.Provider)
+	}
+	binding.Model.Model = model
+	binding.Provider.Provider = modelinfo.ProviderForModel(model, providerID)
+	binding.Model.Thinking = "disabled"
+	binding.Model.ReasoningEffort = "off"
+	maxOutputTokens := a.toolPolicy.WebSummaryMaxOutputTokens
+	if maxOutputTokens <= 0 {
+		maxOutputTokens = 700
+	}
+	timeout := a.toolPolicy.WebSummaryTimeout
+	if timeout <= 0 {
+		timeout = time.Minute
+	}
+	binding.Limits.RequestTimeout = timeout
+	if binding.Limits.StreamIdleTimeout <= 0 || binding.Limits.StreamIdleTimeout > timeout {
+		binding.Limits.StreamIdleTimeout = timeout
+	}
+	return binding, maxOutputTokens, timeout
 }
 
 func compactModelSummaryText(text string, maxTokens int) string {

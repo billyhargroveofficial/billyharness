@@ -1,7 +1,6 @@
 package telegrambot
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,7 +11,8 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
-	"github.com/billyhargroveofficial/billyharness/internal/gateway"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpstatus"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
@@ -20,7 +20,7 @@ import (
 type Harness interface {
 	CreateSession(context.Context, string) (string, error)
 	ReplaySessionEvents(context.Context, string, int64, func(protocol.Event)) error
-	RunSession(context.Context, string, gateway.RunRequest, func(protocol.Event)) error
+	RunSession(context.Context, string, gatewayapi.RunRequest, func(protocol.Event)) error
 	CancelSession(context.Context, string) (bool, error)
 	MCPStatus(context.Context) (string, error)
 	ConfigStatus(context.Context) (string, error)
@@ -37,7 +37,7 @@ type GatewayClient struct {
 
 func NewGatewayClient(baseURL string) *GatewayClient {
 	return &GatewayClient{
-		BaseURL: gateway.NormalizeBaseURL(baseURL),
+		BaseURL: gatewayclient.NormalizeBaseURL(baseURL),
 		Client:  &http.Client{Timeout: 0},
 	}
 }
@@ -47,129 +47,40 @@ func (c *GatewayClient) CreateSession(ctx context.Context, profile string) (stri
 }
 
 func (c *GatewayClient) CreateSessionFromMessages(ctx context.Context, profile string, messages []protocol.Message) (string, error) {
-	body, err := json.Marshal(gateway.CreateSessionRequest{Profile: profile, Messages: messages})
-	if err != nil {
-		return "", err
-	}
-	resp, err := gateway.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/sessions", bytes.NewReader(body))
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		gateway.SetAuthHeaderFromEnv(req)
-		return req, nil
-	})
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return "", fmt.Errorf("gateway create session HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	var out struct {
-		ID string `json:"id"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
-	}
-	if out.ID == "" {
-		return "", fmt.Errorf("gateway returned empty session id")
-	}
-	return out.ID, nil
+	return c.gatewayClient().CreateSessionFromMessages(ctx, profile, messages)
 }
 
-func (c *GatewayClient) ListSessions(ctx context.Context) ([]gateway.SessionSummary, error) {
-	var out gateway.SessionListResponse
-	if err := c.gatewayJSON(ctx, http.MethodGet, "/v1/sessions", nil, &out); err != nil {
-		return nil, err
-	}
-	return out.Sessions, nil
+func (c *GatewayClient) CreateSessionWithOwner(ctx context.Context, profile string, owner gatewayapi.SessionOwner) (string, error) {
+	return c.gatewayClient().CreateSessionWithOwner(ctx, profile, owner)
 }
 
-func (c *GatewayClient) GetSession(ctx context.Context, sessionID string) (gateway.SessionResponse, error) {
-	var out gateway.SessionResponse
-	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID))
-	if err := c.gatewayJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
-		return gateway.SessionResponse{}, err
-	}
-	return out, nil
+func (c *GatewayClient) CreateSessionFromMessagesWithOwner(ctx context.Context, profile string, messages []protocol.Message, owner gatewayapi.SessionOwner) (string, error) {
+	return c.gatewayClient().CreateSessionFromMessagesWithOwner(ctx, profile, messages, owner)
 }
 
-func (c *GatewayClient) RunSession(ctx context.Context, sessionID string, run gateway.RunRequest, emit func(protocol.Event)) error {
-	body, err := json.Marshal(run)
-	if err != nil {
-		return err
-	}
-	resp, err := gateway.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/sessions/"+sessionID+"/run", bytes.NewReader(body))
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		gateway.SetAuthHeaderFromEnv(req)
-		return req, nil
-	})
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("gateway run HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(limited)))
-	}
-	dec := json.NewDecoder(resp.Body)
-	for {
-		var event protocol.Event
-		if err := dec.Decode(&event); err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return err
-		}
-		emit(event)
-	}
+func (c *GatewayClient) ListSessions(ctx context.Context) ([]gatewayapi.SessionSummary, error) {
+	return c.gatewayClient().ListSessions(ctx)
+}
+
+func (c *GatewayClient) GetSession(ctx context.Context, sessionID string) (gatewayapi.SessionResponse, error) {
+	return c.gatewayClient().GetSession(ctx, sessionID)
+}
+
+func (c *GatewayClient) RunSession(ctx context.Context, sessionID string, run gatewayapi.RunRequest, emit func(protocol.Event)) error {
+	return c.gatewayClient().RunSession(ctx, sessionID, run, emit)
 }
 
 func (c *GatewayClient) ReplaySessionEvents(ctx context.Context, sessionID string, afterSeq int64, emit func(protocol.Event)) error {
-	path := fmt.Sprintf("/v1/sessions/%s/events?after_seq=%d&follow=false", url.PathEscape(sessionID), afterSeq)
-	resp, err := gateway.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
-		if err != nil {
-			return nil, err
-		}
-		gateway.SetAuthHeaderFromEnv(req)
-		return req, nil
-	})
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("gateway events HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(limited)))
-	}
-	dec := json.NewDecoder(resp.Body)
-	for {
-		var event protocol.Event
-		if err := dec.Decode(&event); err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return err
-		}
-		emit(event)
-	}
+	return c.gatewayClient().ReplaySessionEvents(ctx, sessionID, afterSeq, emit)
 }
 
 func (c *GatewayClient) MCPStatus(ctx context.Context) (string, error) {
-	resp, err := gateway.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
+	resp, err := gatewayclient.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/mcp", nil)
 		if err != nil {
 			return nil, err
 		}
-		gateway.SetAuthHeaderFromEnv(req)
+		gatewayclient.SetAuthHeaderFromEnv(req)
 		return req, nil
 	})
 	if err != nil {
@@ -188,12 +99,12 @@ func (c *GatewayClient) MCPStatus(ctx context.Context) (string, error) {
 }
 
 func (c *GatewayClient) ConfigStatus(ctx context.Context) (string, error) {
-	resp, err := gateway.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
+	resp, err := gatewayclient.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/config", nil)
 		if err != nil {
 			return nil, err
 		}
-		gateway.SetAuthHeaderFromEnv(req)
+		gatewayclient.SetAuthHeaderFromEnv(req)
 		return req, nil
 	})
 	if err != nil {
@@ -218,12 +129,12 @@ func (c *GatewayClient) ContextStatus(ctx context.Context, sessionID string) (st
 	if strings.TrimSpace(sessionID) == "" {
 		return "", fmt.Errorf("empty session id")
 	}
-	var out gateway.SessionContextResponse
+	var out gatewayapi.SessionContextResponse
 	path := "/v1/sessions/" + url.PathEscape(sessionID) + "/context"
 	if err := c.gatewayJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
 		return "", err
 	}
-	return gateway.FormatSessionContext(out), nil
+	return gatewayclient.FormatSessionContext(out), nil
 }
 
 func (c *GatewayClient) AuthStatus(ctx context.Context) (credentials.Status, error) {
@@ -235,7 +146,7 @@ func (c *GatewayClient) AuthStatus(ctx context.Context) (credentials.Status, err
 }
 
 func (c *GatewayClient) SaveDeepSeekAPIKey(ctx context.Context, apiKey string) (credentials.ProviderStatus, error) {
-	body, err := json.Marshal(gateway.DeepSeekAuthRequest{APIKey: apiKey})
+	body, err := json.Marshal(gatewayapi.DeepSeekAuthRequest{APIKey: apiKey})
 	if err != nil {
 		return credentials.ProviderStatus{}, err
 	}
@@ -259,59 +170,15 @@ func (c *GatewayClient) ImportCodexAuth(ctx context.Context) (credentials.Provid
 }
 
 func (c *GatewayClient) CancelSession(ctx context.Context, sessionID string) (bool, error) {
-	resp, err := gateway.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/sessions/"+sessionID+"/cancel", nil)
-		if err != nil {
-			return nil, err
-		}
-		gateway.SetAuthHeaderFromEnv(req)
-		return req, nil
-	})
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return false, fmt.Errorf("gateway cancel HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(limited)))
-	}
-	var out struct {
-		Cancelled bool `json:"cancelled"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return false, err
-	}
-	return out.Cancelled, nil
+	return c.gatewayClient().CancelSession(ctx, sessionID)
 }
 
 func (c *GatewayClient) gatewayJSON(ctx context.Context, method, path string, body []byte, out any) error {
-	resp, err := gateway.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
-		var reader io.Reader
-		if body != nil {
-			reader = bytes.NewReader(body)
-		}
-		req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, reader)
-		if err != nil {
-			return nil, err
-		}
-		if body != nil {
-			req.Header.Set("Content-Type", "application/json")
-		}
-		gateway.SetAuthHeaderFromEnv(req)
-		return req, nil
-	})
-	if err != nil {
-		return err
+	var payload any
+	if body != nil {
+		payload = json.RawMessage(body)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("gateway %s %s HTTP %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(limited)))
-	}
-	if out == nil {
-		return nil
-	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return c.gatewayClient().JSON(ctx, method, path, payload, out)
 }
 
 func (c *GatewayClient) client() *http.Client {
@@ -320,4 +187,8 @@ func (c *GatewayClient) client() *http.Client {
 	}
 	c.Client = &http.Client{Timeout: 0}
 	return c.Client
+}
+
+func (c *GatewayClient) gatewayClient() *gatewayclient.Client {
+	return &gatewayclient.Client{BaseURL: c.BaseURL, Client: c.client()}
 }

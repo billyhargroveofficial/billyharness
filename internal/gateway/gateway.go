@@ -21,8 +21,11 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/agent"
+	"github.com/billyhargroveofficial/billyharness/internal/clientux"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/runstate"
@@ -33,15 +36,23 @@ import (
 )
 
 type Server struct {
-	cfg       config.Config
-	agent     *agent.Agent
-	registry  *tools.Registry
-	auth      credentials.Manager
-	mux       *http.ServeMux
-	authToken string
-	sessions  map[string]*Session
-	store     *sessionStore
-	mu        sync.Mutex
+	providerAuth    config.ProviderAuthSnapshot
+	providerBinding config.ProviderBinding
+	profile         config.ProfileSelection
+	runtime         config.RuntimeLimits
+	toolPolicy      config.ToolPolicySettings
+	mcpSettings     config.MCPSettings
+	hookSettings    config.HookSettings
+	instructions    config.InstructionSettings
+	gatewayAddr     string
+	agent           *agent.Agent
+	registry        *tools.Registry
+	auth            credentials.Manager
+	mux             *http.ServeMux
+	authToken       string
+	sessions        map[string]*Session
+	store           *sessionStore
+	mu              sync.Mutex
 }
 
 type ServerOptions struct {
@@ -50,144 +61,45 @@ type ServerOptions struct {
 }
 
 type Session struct {
-	ID             string              `json:"id"`
-	Created        time.Time           `json:"created"`
-	Thread         *sessionpkg.Session `json:"-"`
+	ID             string                  `json:"id"`
+	Created        time.Time               `json:"created"`
+	Owner          gatewayapi.SessionOwner `json:"owner,omitempty"`
+	Thread         *sessionpkg.Session     `json:"-"`
 	events         *eventHub
 	eventRecorder  func(protocol.Event) protocol.Event
 	storeSnapshots sessionStoreSnapshots
+	activeRunID    string
+	terminalRunIDs map[string]struct{}
 	mu             sync.Mutex
 	status         SessionStatus
 }
 
-type RunRequest struct {
-	Prompt          string `json:"prompt"`
-	Provider        string `json:"provider,omitempty"`
-	Model           string `json:"model,omitempty"`
-	Profile         string `json:"profile,omitempty"`
-	Thinking        string `json:"thinking,omitempty"`
-	ReasoningEffort string `json:"reasoning_effort,omitempty"`
-	MaxToolRounds   int    `json:"max_tool_rounds,omitempty"`
-}
+type RunRequest = gatewayapi.RunRequest
+type CreateSessionRequest = gatewayapi.CreateSessionRequest
+type DeepSeekAuthRequest = gatewayapi.DeepSeekAuthRequest
+type CodexImportRequest = gatewayapi.CodexImportRequest
+type HealthResponse = gatewayapi.HealthResponse
+type ConfigStatusResponse = gatewayapi.ConfigStatusResponse
+type SessionListResponse = gatewayapi.SessionListResponse
+type SessionSummary = gatewayapi.SessionSummary
+type SessionResponse = gatewayapi.SessionResponse
+type SessionOwner = gatewayapi.SessionOwner
+type SessionContextResponse = gatewayapi.SessionContextResponse
+type ContextContributor = gatewayapi.ContextContributor
+type ContextSource = gatewayapi.ContextSource
+type ContextThreshold = gatewayapi.ContextThreshold
+type CancelSessionResponse = gatewayapi.CancelSessionResponse
+type BenchmarkListResponse = gatewayapi.BenchmarkListResponse
+type BenchmarkRunSummary = gatewayapi.BenchmarkRunSummary
 
-type CreateSessionRequest struct {
-	Messages []protocol.Message `json:"messages,omitempty"`
-	Profile  string             `json:"profile,omitempty"`
-}
-
-type DeepSeekAuthRequest struct {
-	APIKey string `json:"api_key"`
-}
-
-type CodexImportRequest struct {
-	SourcePath string          `json:"source_path,omitempty"`
-	AuthJSON   json.RawMessage `json:"auth_json,omitempty"`
-}
-
-type HealthResponse struct {
-	OK       bool   `json:"ok"`
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
-}
-
-type ConfigStatusResponse struct {
-	Config   map[string]any         `json:"config"`
-	Values   []config.ResolvedValue `json:"values"`
-	Warnings []string               `json:"warnings,omitempty"`
-}
-
-type SessionListResponse struct {
-	Sessions []SessionSummary `json:"sessions"`
-}
-
-type SessionSummary struct {
-	ID              string    `json:"id"`
-	Created         time.Time `json:"created"`
-	Running         bool      `json:"running"`
-	RunSeq          int64     `json:"run_seq"`
-	MessageCount    int       `json:"message_count"`
-	DroppedEvents   int64     `json:"dropped_events,omitempty"`
-	LastEvent       string    `json:"last_event,omitempty"`
-	LastEventAt     time.Time `json:"last_event_at,omitempty"`
-	Model           string    `json:"model,omitempty"`
-	Provider        string    `json:"provider,omitempty"`
-	Profile         string    `json:"profile,omitempty"`
-	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
-	LastError       string    `json:"last_error,omitempty"`
-}
-
-type SessionResponse struct {
-	ID           string             `json:"id"`
-	Created      time.Time          `json:"created"`
-	MessageCount int                `json:"message_count"`
-	Messages     []protocol.Message `json:"messages,omitempty"`
-	Running      bool               `json:"running"`
-	Status       SessionStatus      `json:"status"`
-}
-
-type SessionContextResponse struct {
-	ID                      string               `json:"id"`
-	MessageCount            int                  `json:"message_count"`
-	EstimatedTokens         int64                `json:"estimated_tokens"`
-	ContextWindowTokens     int64                `json:"context_window_tokens"`
-	ContextCompactTokens    int64                `json:"context_compact_tokens"`
-	PercentUsed             float64              `json:"percent_used"`
-	CompactThresholdPercent float64              `json:"compact_threshold_percent"`
-	OverCompactThreshold    bool                 `json:"over_compact_threshold"`
-	Estimator               string               `json:"estimator"`
-	Sources                 []ContextSource      `json:"sources,omitempty"`
-	Thresholds              []ContextThreshold   `json:"thresholds,omitempty"`
-	TopContributors         []ContextContributor `json:"top_contributors,omitempty"`
-}
-
-type ContextContributor struct {
-	Index           int    `json:"index"`
-	Role            string `json:"role"`
-	Source          string `json:"source,omitempty"`
-	Name            string `json:"name,omitempty"`
-	Chars           int    `json:"chars"`
-	EstimatedTokens int64  `json:"estimated_tokens"`
-	Preview         string `json:"preview,omitempty"`
-}
-
-type ContextSource struct {
-	Source          string  `json:"source"`
-	MessageCount    int     `json:"message_count"`
-	Chars           int     `json:"chars"`
-	EstimatedTokens int64   `json:"estimated_tokens"`
-	Percent         float64 `json:"percent"`
-}
-
-type ContextThreshold struct {
-	Percent         int   `json:"percent"`
-	Tokens          int64 `json:"tokens"`
-	Crossed         bool  `json:"crossed"`
-	RemainingTokens int64 `json:"remaining_tokens"`
-}
-
-type CancelSessionResponse struct {
-	Cancelled bool `json:"cancelled"`
-}
-
-type BenchmarkListResponse struct {
-	Dir  string                `json:"dir"`
-	Runs []BenchmarkRunSummary `json:"runs"`
-}
-
-type BenchmarkRunSummary struct {
-	RunID           string    `json:"run_id"`
-	CreatedAt       time.Time `json:"created_at"`
-	Harness         string    `json:"harness,omitempty"`
-	ProfileHash     string    `json:"profile_hash,omitempty"`
-	TasksPath       string    `json:"tasks_path,omitempty"`
-	TaskCount       int       `json:"task_count,omitempty"`
-	ManifestJSON    string    `json:"manifest_json"`
-	ResultsJSONL    string    `json:"results_jsonl,omitempty"`
-	EventsJSONL     string    `json:"events_jsonl,omitempty"`
-	PayloadsDir     string    `json:"payloads_dir,omitempty"`
-	ResultsPresent  bool      `json:"results_present"`
-	EventsPresent   bool      `json:"events_present"`
-	PayloadsPresent bool      `json:"payloads_present"`
+type runSettings struct {
+	provider     config.ProviderBinding
+	profile      config.ProfileSelection
+	runtime      config.RuntimeLimits
+	toolPolicy   config.ToolPolicySettings
+	mcp          config.MCPSettings
+	hooks        config.HookSettings
+	instructions config.InstructionSettings
 }
 
 func NewServer(cfg config.Config, prov provider.Provider, registry *tools.Registry) *Server {
@@ -196,12 +108,20 @@ func NewServer(cfg config.Config, prov provider.Provider, registry *tools.Regist
 
 func NewServerWithOptions(cfg config.Config, prov provider.Provider, registry *tools.Registry, opts ServerOptions) *Server {
 	s := &Server{
-		cfg:      cfg,
-		agent:    agent.New(cfg, prov, registry),
-		registry: registry,
-		auth:     credentials.NewManager(cfg),
-		mux:      http.NewServeMux(),
-		sessions: map[string]*Session{},
+		providerAuth:    cfg.ProviderAuthSnapshot(),
+		providerBinding: cfg.ProviderBinding(),
+		profile:         cfg.ProfileSelection(),
+		runtime:         cfg.RuntimeLimits(),
+		toolPolicy:      cfg.ToolPolicySettings(),
+		mcpSettings:     cfg.MCPSettings(),
+		hookSettings:    cfg.HookSettings(),
+		instructions:    cfg.InstructionSettings(),
+		gatewayAddr:     cfg.GatewayAddr,
+		agent:           agent.NewFromSettings(agent.SettingsFromConfig(cfg), prov, registry),
+		registry:        registry,
+		auth:            credentials.NewManagerFromAuthSettings(cfg.AuthSettings()),
+		mux:             http.NewServeMux(),
+		sessions:        map[string]*Session{},
 	}
 	if strings.TrimSpace(opts.SessionStoreDir) != "" {
 		s.store = newSessionStore(opts.SessionStoreDir)
@@ -307,8 +227,8 @@ func (s *Server) routes() {
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, HealthResponse{
 		OK:       true,
-		Provider: s.cfg.Provider,
-		Model:    s.cfg.Model,
+		Provider: s.providerAuth.Provider,
+		Model:    s.providerAuth.Model,
 	})
 }
 
@@ -326,15 +246,16 @@ func (s *Server) handleConfigStatus(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	resolved, err := config.Resolve(config.RuntimeDiffOverrides(base.Config, s.cfg, config.SourceGateway)...)
+	resolved, err := config.Resolve(config.RuntimeDiffOverridesFromSettings(base.Config, s.runtimeDiffSettings(), config.SourceGateway)...)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, ConfigStatusResponse{
-		Config:   resolved.SanitizedConfig(),
-		Values:   resolved.SanitizedValues(),
-		Warnings: resolved.Warnings,
+		Config:      resolved.SanitizedConfig(),
+		Values:      resolved.SanitizedValues(),
+		Diagnostics: resolved.Config.DiagnosticSnapshot(),
+		Warnings:    resolved.Warnings,
 	})
 }
 
@@ -400,11 +321,11 @@ func (s *Server) handleCodexImport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMCP(w http.ResponseWriter, _ *http.Request) {
-	cfg := s.registry.Config()
+	mcpSettings := s.registry.MCPSettings()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"config_files": cfg.MCPConfigFiles,
-		"allowed":      cfg.MCPAllowedServers,
-		"enabled":      cfg.MCPEnabled,
+		"config_files": mcpSettings.ConfigFiles,
+		"allowed":      mcpSettings.AllowedServers,
+		"enabled":      mcpSettings.Enabled,
 		"servers":      s.registry.MCPStatuses(),
 	})
 }
@@ -418,14 +339,23 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	messages := req.Messages
-	if len(messages) == 0 {
-		cfg := s.cfg
-		if strings.TrimSpace(req.Profile) != "" {
-			cfg.Profile = config.NormalizeProfileName(req.Profile)
-		}
-		messages = agent.InitialMessages(cfg)
+	profile := s.profile.Profile
+	if strings.TrimSpace(req.Profile) != "" {
+		profile = config.NormalizeProfileName(req.Profile)
 	}
-	session := newGatewaySession(newID(), time.Now().UTC(), messages)
+	if len(messages) == 0 {
+		instructions := s.instructions
+		instructions.Profile = config.ProfileSelection{Profile: profile}
+		messages = agent.InitialMessagesFromSettings(instructions)
+	}
+	owner := normalizeSessionOwner(req.Owner)
+	if owner.Profile == "" {
+		owner.Profile = profile
+	}
+	if owner.Model == "" {
+		owner.Model = s.providerBinding.Model.Model
+	}
+	session := newGatewaySessionWithOwner(newID(), time.Now().UTC(), messages, owner)
 	if err := s.saveSession(session); err != nil {
 		writeError(w, http.StatusInternalServerError, "session save failed: "+err.Error())
 		return
@@ -473,7 +403,7 @@ func (s *Server) handleSessionContextStatus(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, sessionContextResponse(s.cfg, session))
+	writeJSON(w, http.StatusOK, sessionContextResponse(s.runtime, session))
 }
 
 func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
@@ -600,7 +530,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	streamEvents(w, func(emit func(protocol.Event)) error {
-		a, err := s.agentFor(req)
+		settings, err := s.runSettingsForRequest(req)
+		if err != nil {
+			return err
+		}
+		a, err := s.agentForRunSettings(settings)
 		if err != nil {
 			return err
 		}
@@ -624,17 +558,22 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	streamEvents(w, func(emit func(protocol.Event)) error {
-		a, err := s.agentFor(req)
+		settings, err := s.runSettingsForRequest(req)
 		if err != nil {
 			return err
 		}
-		statusReq := s.statusRunRequest(req)
+		a, err := s.agentForRunSettings(settings)
+		if err != nil {
+			return err
+		}
+		statusReq := runRequestFromSettings(settings)
 		err = session.Thread.Run(r.Context(), sessionpkg.RunnerFunc(a.RunMessages), req.Prompt, func(event protocol.Event) {
 			if event.Type == protocol.EventRunStarted {
 				session.beginRunStatus(statusReq)
 			}
-			session.observeRunEvent(event)
-			emit(event)
+			if observed, ok := session.observeRunEvent(event); ok {
+				emit(observed)
+			}
 		})
 		if !errors.Is(err, sessionpkg.ErrBusy) {
 			if saveErr := s.saveSession(session); saveErr != nil {
@@ -696,6 +635,7 @@ func sessionResponse(session *Session, includeMessages bool) SessionResponse {
 		MessageCount: status.MessageCount,
 		Messages:     messages,
 		Running:      status.Running,
+		Owner:        status.Owner,
 		Status:       status,
 	}
 }
@@ -715,290 +655,21 @@ func sessionSummary(session *Session) SessionSummary {
 		Provider:        status.Provider,
 		Profile:         status.Profile,
 		ReasoningEffort: status.ReasoningEffort,
+		Owner:           status.Owner,
 		LastError:       status.LastError,
 	}
 }
 
-func sessionContextResponse(cfg config.Config, session *Session) SessionContextResponse {
-	return BuildContextResponse(cfg, session.ID, session.messages())
+func normalizeSessionOwner(owner gatewayapi.SessionOwner) gatewayapi.SessionOwner {
+	owner.ClientType = strings.ToLower(strings.TrimSpace(owner.ClientType))
+	owner.TUIChatID = strings.TrimSpace(owner.TUIChatID)
+	owner.Profile = strings.TrimSpace(owner.Profile)
+	owner.Model = strings.TrimSpace(owner.Model)
+	return owner
 }
 
-func BuildContextResponse(cfg config.Config, id string, messages []protocol.Message) SessionContextResponse {
-	estimatedTokens := estimateGatewayMessagesTokens(messages)
-	contextWindow := cfg.ContextWindowTokens
-	compactAt := int64(cfg.ContextCompactTokens)
-	var percentUsed float64
-	if contextWindow > 0 {
-		percentUsed = float64(estimatedTokens) / float64(contextWindow) * 100
-	}
-	var thresholdPercent float64
-	if contextWindow > 0 && compactAt > 0 {
-		thresholdPercent = float64(compactAt) / float64(contextWindow) * 100
-	}
-	sourceStats := map[string]*ContextSource{}
-	contributors := make([]ContextContributor, 0, len(messages))
-	for i, msg := range messages {
-		chars := gatewayMessageChars(msg)
-		if chars == 0 {
-			continue
-		}
-		source := gatewayContextSource(msg)
-		tokens := gatewayMessageTokens(msg)
-		for _, contribution := range gatewayContextSourceContributions(msg) {
-			stat := sourceStats[contribution.source]
-			if stat == nil {
-				stat = &ContextSource{Source: contribution.source}
-				sourceStats[contribution.source] = stat
-			}
-			stat.MessageCount++
-			stat.Chars += contribution.chars
-			stat.EstimatedTokens += int64((contribution.chars + 3) / 4)
-		}
-		contributors = append(contributors, ContextContributor{
-			Index:           i,
-			Role:            string(msg.Role),
-			Source:          source,
-			Name:            msg.Name,
-			Chars:           chars,
-			EstimatedTokens: tokens,
-			Preview:         previewGatewayMessage(gatewayMessagePreviewText(msg), 120),
-		})
-	}
-	sort.Slice(contributors, func(i, j int) bool {
-		if contributors[i].EstimatedTokens == contributors[j].EstimatedTokens {
-			return contributors[i].Index < contributors[j].Index
-		}
-		return contributors[i].EstimatedTokens > contributors[j].EstimatedTokens
-	})
-	if len(contributors) > 5 {
-		contributors = contributors[:5]
-	}
-	sources := make([]ContextSource, 0, len(sourceStats))
-	for _, stat := range sourceStats {
-		if estimatedTokens > 0 {
-			stat.Percent = float64(stat.EstimatedTokens) / float64(estimatedTokens) * 100
-		}
-		sources = append(sources, *stat)
-	}
-	sort.Slice(sources, func(i, j int) bool {
-		if sources[i].EstimatedTokens == sources[j].EstimatedTokens {
-			return sources[i].Source < sources[j].Source
-		}
-		return sources[i].EstimatedTokens > sources[j].EstimatedTokens
-	})
-	return SessionContextResponse{
-		ID:                      id,
-		MessageCount:            len(messages),
-		EstimatedTokens:         estimatedTokens,
-		ContextWindowTokens:     contextWindow,
-		ContextCompactTokens:    compactAt,
-		PercentUsed:             percentUsed,
-		CompactThresholdPercent: thresholdPercent,
-		OverCompactThreshold:    compactAt > 0 && estimatedTokens >= compactAt,
-		Estimator:               "chars_div_4",
-		Sources:                 sources,
-		Thresholds:              contextThresholds(estimatedTokens, contextWindow),
-		TopContributors:         contributors,
-	}
-}
-
-func contextThresholds(estimatedTokens, contextWindow int64) []ContextThreshold {
-	if contextWindow <= 0 {
-		return nil
-	}
-	thresholds := []int{50, 70, 85, 95}
-	out := make([]ContextThreshold, 0, len(thresholds))
-	for _, percent := range thresholds {
-		tokens := (contextWindow*int64(percent) + 99) / 100
-		remaining := tokens - estimatedTokens
-		if remaining < 0 {
-			remaining = 0
-		}
-		out = append(out, ContextThreshold{
-			Percent:         percent,
-			Tokens:          tokens,
-			Crossed:         estimatedTokens >= tokens,
-			RemainingTokens: remaining,
-		})
-	}
-	return out
-}
-
-func gatewayContextSource(msg protocol.Message) string {
-	switch msg.Role {
-	case protocol.RoleSystem:
-		if strings.HasPrefix(strings.TrimSpace(msg.Content), "Conversation summary (auto-compact)") {
-			return "compaction_summary"
-		}
-		return "system_instructions"
-	case protocol.RoleUser:
-		return "user_messages"
-	case protocol.RoleAssistant:
-		if len(msg.ToolCalls) > 0 {
-			return "assistant_tool_calls"
-		}
-		return "assistant_messages"
-	case protocol.RoleTool:
-		name := strings.ToLower(strings.TrimSpace(msg.Name))
-		switch {
-		case strings.HasPrefix(name, "web_"):
-			return "web_summaries"
-		case strings.HasPrefix(name, "mcp_") || strings.HasPrefix(name, "mcp "):
-			return "mcp_outputs"
-		default:
-			return "tool_outputs"
-		}
-	default:
-		return string(msg.Role)
-	}
-}
-
-type contextSourceContribution struct {
-	source string
-	chars  int
-}
-
-func gatewayContextSourceContributions(msg protocol.Message) []contextSourceContribution {
-	var out []contextSourceContribution
-	baseChars := gatewayMessageCharsWithoutReasoning(msg)
-	if baseChars > 0 {
-		out = append(out, contextSourceContribution{source: gatewayContextSource(msg), chars: baseChars})
-	}
-	if msg.ReasoningContent != "" {
-		out = append(out, contextSourceContribution{source: "reasoning_summaries", chars: len(msg.ReasoningContent)})
-	}
-	return out
-}
-
-func gatewayMessagePreviewText(msg protocol.Message) string {
-	if strings.TrimSpace(msg.Content) != "" {
-		return msg.Content
-	}
-	if len(msg.ToolCalls) == 0 {
-		return ""
-	}
-	var calls []string
-	for _, call := range msg.ToolCalls {
-		args := strings.TrimSpace(string(call.Arguments))
-		if args != "" {
-			calls = append(calls, call.Name+" "+args)
-		} else {
-			calls = append(calls, call.Name)
-		}
-	}
-	return strings.Join(calls, "; ")
-}
-
-func estimateGatewayMessagesTokens(messages []protocol.Message) int64 {
-	var tokens int64
-	for _, msg := range messages {
-		tokens += gatewayMessageTokens(msg)
-	}
-	return tokens
-}
-
-func gatewayMessageTokens(msg protocol.Message) int64 {
-	var tokens int64
-	for _, contribution := range gatewayContextSourceContributions(msg) {
-		tokens += int64((contribution.chars + 3) / 4)
-	}
-	return tokens
-}
-
-func gatewayMessageChars(msg protocol.Message) int {
-	chars := gatewayMessageCharsWithoutReasoning(msg)
-	if msg.ReasoningContent != "" {
-		chars += len(msg.ReasoningContent)
-	}
-	return chars
-}
-
-func gatewayMessageCharsWithoutReasoning(msg protocol.Message) int {
-	chars := len(msg.Content) + len(msg.Name) + len(msg.ToolCallID) + len(string(msg.Role))
-	for _, call := range msg.ToolCalls {
-		chars += len(call.ID) + len(call.Name) + len(call.Arguments)
-	}
-	return chars
-}
-
-func FormatSessionContext(resp SessionContextResponse) string {
-	var b strings.Builder
-	if resp.ID != "" {
-		fmt.Fprintf(&b, "session: %s\n", resp.ID)
-	}
-	fmt.Fprintf(&b, "messages: %d\n", resp.MessageCount)
-	if resp.ContextWindowTokens > 0 {
-		fmt.Fprintf(&b, "active context: %s / %s (%.1f%%)\n", compactContextNumber(resp.EstimatedTokens), compactContextNumber(resp.ContextWindowTokens), resp.PercentUsed)
-	} else {
-		fmt.Fprintf(&b, "active context: %s\n", compactContextNumber(resp.EstimatedTokens))
-	}
-	if resp.ContextCompactTokens > 0 {
-		state := "below"
-		if resp.OverCompactThreshold {
-			state = "over"
-		}
-		fmt.Fprintf(&b, "compact threshold: %s (%.1f%%, %s)\n", compactContextNumber(resp.ContextCompactTokens), resp.CompactThresholdPercent, state)
-	}
-	if len(resp.Thresholds) > 0 {
-		var parts []string
-		for _, threshold := range resp.Thresholds {
-			marker := "○"
-			if threshold.Crossed {
-				marker = "●"
-			}
-			parts = append(parts, fmt.Sprintf("%s%d%%", marker, threshold.Percent))
-		}
-		fmt.Fprintf(&b, "thresholds: %s\n", strings.Join(parts, " "))
-	}
-	if len(resp.Sources) > 0 {
-		b.WriteString("\nsources:\n")
-		for _, source := range resp.Sources {
-			fmt.Fprintf(&b, "  %s: %s (%.1f%%, %d msg)\n", source.Source, compactContextNumber(source.EstimatedTokens), source.Percent, source.MessageCount)
-		}
-	}
-	if len(resp.TopContributors) > 0 {
-		b.WriteString("\ntop contributors:\n")
-		for _, contributor := range resp.TopContributors {
-			name := contributor.Source
-			if contributor.Name != "" {
-				name += "/" + contributor.Name
-			}
-			preview := contributor.Preview
-			if preview == "" {
-				preview = "(no text)"
-			}
-			fmt.Fprintf(&b, "  #%d %s %s: %s - %s\n", contributor.Index, contributor.Role, name, compactContextNumber(contributor.EstimatedTokens), preview)
-		}
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-func compactContextNumber(value int64) string {
-	abs := value
-	if abs < 0 {
-		abs = -abs
-	}
-	switch {
-	case abs >= 1_000_000:
-		return fmt.Sprintf("%.2fM", float64(value)/1_000_000)
-	case abs >= 10_000:
-		return fmt.Sprintf("%.1fk", float64(value)/1_000)
-	case abs >= 1_000:
-		return fmt.Sprintf("%.1fk", float64(value)/1_000)
-	default:
-		return strconv.FormatInt(value, 10)
-	}
-}
-
-func previewGatewayMessage(content string, maxChars int) string {
-	content = strings.Join(strings.Fields(content), " ")
-	if maxChars <= 0 || len(content) <= maxChars {
-		return content
-	}
-	if maxChars <= 3 {
-		return content[:maxChars]
-	}
-	return content[:maxChars-3] + "..."
+func sessionContextResponse(limits config.RuntimeLimits, session *Session) SessionContextResponse {
+	return clientux.BuildContextResponse(limits, session.ID, session.messages())
 }
 
 func defaultBenchmarkRunsDir() string {
@@ -1156,81 +827,124 @@ func (s *Server) refreshSessionSnapshots(session *Session) {
 	if s == nil || session == nil {
 		return
 	}
-	cfg := s.sessionSnapshotConfig(session)
+	snapshot := s.sessionSnapshot(session)
 	var specs []protocol.ToolSpec
 	if s.registry != nil {
 		specs = s.registry.Specs()
 	}
-	runtimeSnapshot := runstate.NewSnapshot(cfg, session.messages(), specs)
+	runtimeSnapshot := runstate.NewSnapshot(runstate.SnapshotInput{
+		Provider:   snapshot.Provider,
+		Profile:    snapshot.Profile,
+		Runtime:    snapshot.Runtime,
+		ToolPolicy: snapshot.ToolPolicy,
+		MCP:        snapshot.MCP,
+	}, session.messages(), specs)
 	session.setStoreSnapshots(sessionStoreSnapshots{
-		Config:        sessionConfigSnapshot(cfg),
+		Config:        sessionConfigSnapshot(snapshot.ProviderAuth, snapshot.Runtime, snapshot.ToolPolicy, snapshot.MCP, snapshot.GatewayAddr),
 		ModelProvider: runtimeSnapshot.Metadata(),
-		MCP:           s.mcpSnapshot(cfg),
+		MCP:           s.mcpSnapshot(snapshot.MCP),
 	})
 }
 
-func (s *Server) sessionSnapshotConfig(session *Session) config.Config {
-	cfg := s.cfg
+type sessionSnapshotProjection struct {
+	ProviderAuth config.ProviderAuthSnapshot
+	Provider     config.ProviderBinding
+	Profile      config.ProfileSelection
+	Runtime      config.RuntimeLimits
+	ToolPolicy   config.ToolPolicySettings
+	MCP          config.MCPSettings
+	GatewayAddr  string
+}
+
+func (s *Server) sessionSnapshot(session *Session) sessionSnapshotProjection {
+	snapshot := sessionSnapshotProjection{
+		ProviderAuth: s.providerAuth,
+		Provider:     s.providerBinding,
+		Profile:      s.profile,
+		Runtime:      s.runtime,
+		ToolPolicy:   s.toolPolicy,
+		MCP:          s.mcpSettings,
+		GatewayAddr:  s.gatewayAddr,
+	}
 	if session == nil {
-		cfg.ApplyModelProviderDefaults()
-		return cfg
+		return normalizeSessionSnapshot(snapshot)
 	}
 	status := session.Status()
 	if strings.TrimSpace(status.Provider) != "" {
-		cfg.Provider = status.Provider
+		snapshot.Provider.Provider.Provider = status.Provider
 	}
 	if strings.TrimSpace(status.Model) != "" {
-		cfg.Model = status.Model
+		snapshot.Provider.Model.Model = status.Model
 	}
 	if strings.TrimSpace(status.Profile) != "" {
-		cfg.Profile = status.Profile
+		snapshot.Profile = config.ProfileSelection{Profile: config.NormalizeProfileName(status.Profile)}
 	}
 	if strings.TrimSpace(status.ReasoningEffort) != "" {
-		cfg.ReasoningEffort = status.ReasoningEffort
+		snapshot.Provider.Model.ReasoningEffort = status.ReasoningEffort
 	}
-	cfg.ApplyModelProviderDefaults()
-	return cfg
+	return normalizeSessionSnapshot(snapshot)
 }
 
-func sessionConfigSnapshot(cfg config.Config) map[string]any {
+func normalizeSessionSnapshot(snapshot sessionSnapshotProjection) sessionSnapshotProjection {
+	model := modelinfo.NormalizeAlias(snapshot.Provider.Model.Model)
+	if snapshot.Provider.Model.DisableSpark && modelinfo.IsSparkModel(model) {
+		model = "gpt-5.4-mini"
+	}
+	providerID := modelinfo.ProviderForModel(model, snapshot.Provider.Provider.Provider)
+	snapshot.Provider.Model.Model = model
+	snapshot.Provider.Provider.Provider = providerID
+	snapshot.ProviderAuth.Provider = providerID
+	snapshot.ProviderAuth.Model = model
+	snapshot.ProviderAuth.Profile = snapshot.Profile.Profile
+	snapshot.ProviderAuth.ReasoningEffort = snapshot.Provider.Model.ReasoningEffort
+	return snapshot
+}
+
+func sessionConfigSnapshot(providerAuth config.ProviderAuthSnapshot, limits config.RuntimeLimits, toolPolicy config.ToolPolicySettings, mcpSettings config.MCPSettings, gatewayAddr string) map[string]any {
 	return map[string]any{
-		"provider":                         cfg.Provider,
-		"model":                            cfg.Model,
-		"profile":                          cfg.Profile,
-		"thinking":                         cfg.Thinking,
-		"reasoning_effort":                 cfg.ReasoningEffort,
-		"disable_spark":                    cfg.DisableSpark,
-		"max_tokens":                       cfg.MaxTokens,
-		"max_tool_rounds":                  cfg.MaxToolRounds,
-		"max_parallel_tools":               cfg.MaxParallelTools,
-		"provider_max_retries":             cfg.ProviderMaxRetries,
-		"context_window_tokens":            cfg.ContextWindowTokens,
-		"context_compact_tokens":           cfg.ContextCompactTokens,
-		"context_compact_keep":             cfg.ContextCompactKeep,
-		"context_compact_max_chars":        cfg.ContextCompactMaxChars,
-		"context_compact_strategy":         cfg.ContextCompactStrategy,
-		"context_compact_summary_provider": cfg.ContextCompactSummaryProvider,
-		"context_compact_summary_model":    cfg.ContextCompactSummaryModel,
-		"web_summary_mode":                 cfg.WebSummaryMode,
-		"web_summary_provider":             cfg.WebSummaryProvider,
-		"web_summary_model":                cfg.WebSummaryModel,
-		"web_summary_max_input_tokens":     cfg.WebSummaryMaxInputTokens,
-		"web_summary_max_output_tokens":    cfg.WebSummaryMaxOutputTokens,
-		"web_cache_enabled":                cfg.WebCacheEnabled,
-		"web_cache_ttl_ms":                 cfg.WebCacheTTL.Milliseconds(),
-		"web_cache_max_bytes":              cfg.WebCacheMaxBytes,
-		"workspace_roots":                  append([]string(nil), cfg.WorkspaceRoots...),
-		"max_tool_output_bytes":            cfg.MaxToolOutputBytes,
-		"auto_approve_dangerous":           cfg.AutoApproveDangerous,
-		"store_reasoning_content":          cfg.StoreReasoningContent,
-		"gateway_addr":                     cfg.GatewayAddr,
-		"mcp_enabled":                      cfg.MCPEnabled,
-		"mcp_config_files":                 append([]string(nil), cfg.MCPConfigFiles...),
-		"mcp_allowed_servers":              append([]string(nil), cfg.MCPAllowedServers...),
+		"provider":                         providerAuth.Provider,
+		"model":                            providerAuth.Model,
+		"profile":                          providerAuth.Profile,
+		"thinking":                         providerAuth.Thinking,
+		"reasoning_effort":                 providerAuth.ReasoningEffort,
+		"disable_spark":                    providerAuth.DisableSpark,
+		"max_tokens":                       limits.MaxTokens,
+		"max_tool_rounds":                  limits.MaxToolRounds,
+		"max_parallel_tools":               limits.MaxParallelTools,
+		"provider_max_retries":             limits.ProviderMaxRetries,
+		"context_window_tokens":            limits.ContextWindowTokens,
+		"context_compact_tokens":           limits.ContextCompactTokens,
+		"context_compact_keep":             limits.ContextCompactKeep,
+		"context_compact_max_chars":        limits.ContextCompactMaxChars,
+		"context_compact_strategy":         limits.ContextCompactStrategy,
+		"context_compact_summary_provider": limits.ContextCompactSummaryProvider,
+		"context_compact_summary_model":    limits.ContextCompactSummaryModel,
+		"web_summary_mode":                 toolPolicy.WebSummaryMode,
+		"web_summary_provider":             toolPolicy.WebSummaryProvider,
+		"web_summary_model":                toolPolicy.WebSummaryModel,
+		"web_summary_max_input_tokens":     toolPolicy.WebSummaryMaxInputTokens,
+		"web_summary_max_output_tokens":    toolPolicy.WebSummaryMaxOutputTokens,
+		"web_cache_enabled":                toolPolicy.WebCacheEnabled,
+		"web_cache_ttl_ms":                 toolPolicy.WebCacheTTL.Milliseconds(),
+		"web_cache_max_bytes":              toolPolicy.WebCacheMaxBytes,
+		"workspace_roots":                  append([]string(nil), toolPolicy.WorkspaceRoots...),
+		"max_tool_output_bytes":            toolPolicy.MaxToolOutputBytes,
+		"auto_approve_dangerous":           toolPolicy.AutoApproveDangerous,
+		"store_reasoning_content":          toolPolicy.StoreReasoningContent,
+		"gateway_addr":                     gatewayAddr,
+		"mcp_enabled":                      mcpSettings.Enabled,
+		"mcp_config_files":                 append([]string(nil), mcpSettings.ConfigFiles...),
+		"mcp_allowed_servers":              append([]string(nil), mcpSettings.AllowedServers...),
 	}
 }
 
-func (s *Server) mcpSnapshot(cfg config.Config) map[string]any {
+func (s *Server) mcpSnapshot(mcpSettings config.MCPSettings) map[string]any {
+	if s != nil && s.registry != nil {
+		registrySettings := s.registry.MCPSettings()
+		if len(registrySettings.Servers) > 0 || len(registrySettings.ConfigFiles) > 0 {
+			mcpSettings = registrySettings
+		}
+	}
 	var runtimeStatuses []any
 	connected := 0
 	if s.registry != nil {
@@ -1242,13 +956,13 @@ func (s *Server) mcpSnapshot(cfg config.Config) map[string]any {
 		}
 	}
 	return map[string]any{
-		"enabled":        cfg.MCPEnabled,
-		"config_files":   append([]string(nil), cfg.MCPConfigFiles...),
-		"allowed":        append([]string(nil), cfg.MCPAllowedServers...),
-		"server_count":   len(cfg.MCPServers),
+		"enabled":        mcpSettings.Enabled,
+		"config_files":   append([]string(nil), mcpSettings.ConfigFiles...),
+		"allowed":        append([]string(nil), mcpSettings.AllowedServers...),
+		"server_count":   len(mcpSettings.Servers),
 		"status_count":   len(runtimeStatuses),
 		"connected":      connected,
-		"configured":     mcpServerSummaries(cfg.MCPServers),
+		"configured":     mcpServerSummaries(mcpSettings.Servers),
 		"runtime_status": runtimeStatuses,
 	}
 }
@@ -1274,66 +988,79 @@ func mcpServerSummaries(servers []config.MCPServer) []map[string]any {
 	return out
 }
 
-func (s *Server) agentFor(req RunRequest) (*agent.Agent, error) {
-	cfg := s.cfg
-	if strings.TrimSpace(req.Profile) != "" {
-		cfg.Profile = config.NormalizeProfileName(req.Profile)
-		if err := cfg.ApplyProfileMetadata(); err != nil {
-			return nil, err
-		}
+func (s *Server) runSettingsForRequest(req RunRequest) (runSettings, error) {
+	settings, err := config.RuntimeDiffSettingsWithRunOverrides(s.runtimeDiffSettings(), runOverrideSettingsFromRequest(req))
+	if err != nil {
+		return runSettings{}, err
 	}
-	if req.Provider != "" {
-		cfg.Provider = req.Provider
+	return runSettingsFromRuntimeDiffSettings(settings), nil
+}
+
+func (s *Server) runtimeDiffSettings() config.RuntimeDiffSettings {
+	return config.RuntimeDiffSettings{
+		Provider:    s.providerBinding,
+		Profile:     s.profile,
+		Runtime:     s.runtime,
+		ToolPolicy:  s.toolPolicy,
+		MCP:         s.mcpSettings,
+		Hooks:       s.hookSettings,
+		GatewayAddr: s.gatewayAddr,
 	}
-	if req.Model != "" {
-		cfg.Model = req.Model
+}
+
+func runSettingsFromRuntimeDiffSettings(settings config.RuntimeDiffSettings) runSettings {
+	instructions := config.InstructionSettings{
+		Profile:             settings.Profile,
+		WorkspaceRoots:      append([]string(nil), settings.ToolPolicy.WorkspaceRoots...),
+		ProjectDocMaxBytes:  settings.ToolPolicy.ProjectDocMaxBytes,
+		ProjectDocFallbacks: append([]string(nil), settings.ToolPolicy.ProjectDocFallbacks...),
 	}
-	cfg.ApplyModelProviderDefaults()
-	if req.Thinking != "" {
-		cfg.Thinking = req.Thinking
+	return runSettings{
+		provider:     settings.Provider,
+		profile:      settings.Profile,
+		runtime:      settings.Runtime,
+		toolPolicy:   settings.ToolPolicy,
+		mcp:          settings.MCP,
+		hooks:        settings.Hooks,
+		instructions: instructions,
 	}
-	if req.ReasoningEffort != "" {
-		cfg.ReasoningEffort = req.ReasoningEffort
-	}
-	if req.MaxToolRounds > 0 {
-		cfg.MaxToolRounds = req.MaxToolRounds
-	}
-	prov, err := provider.New(cfg)
+}
+
+func (s *Server) agentForRunSettings(settings runSettings) (*agent.Agent, error) {
+	prov, err := provider.NewFromBinding(settings.provider)
 	if err != nil {
 		return nil, err
 	}
-	return agent.New(cfg, prov, s.registry), nil
+	return agent.NewFromSettings(agent.Settings{
+		ProviderBinding: settings.provider,
+		Profile:         settings.profile,
+		Runtime:         settings.runtime,
+		ToolPolicy:      settings.toolPolicy,
+		MCP:             settings.mcp,
+		Hooks:           settings.hooks,
+		Instructions:    settings.instructions,
+	}, prov, s.registry), nil
 }
 
-func (s *Server) statusRunRequest(req RunRequest) RunRequest {
-	cfg := s.cfg
-	if strings.TrimSpace(req.Profile) != "" {
-		cfg.Profile = config.NormalizeProfileName(req.Profile)
-		_ = cfg.ApplyProfileMetadata()
-	}
-	if req.Provider != "" {
-		cfg.Provider = req.Provider
-	}
-	if req.Model != "" {
-		cfg.Model = req.Model
-	}
-	cfg.ApplyModelProviderDefaults()
-	if req.ReasoningEffort != "" {
-		cfg.ReasoningEffort = req.ReasoningEffort
-	}
-	if req.Thinking != "" {
-		cfg.Thinking = req.Thinking
-	}
-	if req.MaxToolRounds > 0 {
-		cfg.MaxToolRounds = req.MaxToolRounds
-	}
+func runRequestFromSettings(settings runSettings) RunRequest {
 	return RunRequest{
-		Provider:        cfg.Provider,
-		Model:           cfg.Model,
-		Profile:         cfg.Profile,
-		Thinking:        cfg.Thinking,
-		ReasoningEffort: cfg.ReasoningEffort,
-		MaxToolRounds:   cfg.MaxToolRounds,
+		Provider:        settings.provider.Provider.Provider,
+		Model:           settings.provider.Model.Model,
+		Profile:         settings.profile.Profile,
+		Thinking:        settings.provider.Model.Thinking,
+		ReasoningEffort: settings.provider.Model.ReasoningEffort,
+		MaxToolRounds:   settings.runtime.MaxToolRounds,
+	}
+}
+
+func runOverrideSettingsFromRequest(req RunRequest) config.RunOverrideSettings {
+	return config.RunOverrideSettings{
+		Provider:        req.Provider,
+		Model:           req.Model,
+		Profile:         req.Profile,
+		Thinking:        req.Thinking,
+		ReasoningEffort: req.ReasoningEffort,
+		MaxToolRounds:   req.MaxToolRounds,
 	}
 }
 
@@ -1342,20 +1069,28 @@ func streamEvents(w http.ResponseWriter, run func(func(protocol.Event)) error) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
+	terminalEmitted := false
 	emit := func(event protocol.Event) {
+		if isTerminalRunEvent(event.Type) {
+			terminalEmitted = true
+		}
 		_ = writeNDJSONEvent(w, flusher, event)
 	}
-	if err := run(emit); err != nil {
+	if err := run(emit); err != nil && !terminalEmitted {
 		emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
 	}
 }
 
+func isTerminalRunEvent(eventType protocol.EventType) bool {
+	return eventType == protocol.EventRunCompleted || eventType == protocol.EventRunFailed
+}
+
 func writeNDJSONEvent(w http.ResponseWriter, flusher http.Flusher, event protocol.Event) bool {
-	body, err := json.Marshal(event)
+	body, err := marshalRedactedJSON(event)
 	if err != nil {
 		return false
 	}
-	body = append([]byte(secrets.Redact(string(body))), '\n')
+	body = append(body, '\n')
 	if _, err := w.Write(body); err != nil {
 		return false
 	}
@@ -1366,15 +1101,49 @@ func writeNDJSONEvent(w http.ResponseWriter, flusher http.Flusher, event protoco
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
-	body, err := json.Marshal(value)
+	body, err := marshalRedactedJSON(value)
 	if err != nil {
 		http.Error(w, `{"error":"failed to encode JSON"}`, http.StatusInternalServerError)
 		return
 	}
-	body = append([]byte(secrets.Redact(string(body))), '\n')
+	body = append(body, '\n')
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
+}
+
+func marshalRedactedJSON(value any) ([]byte, error) {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var decoded any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return nil, err
+	}
+	redactJSONStrings(decoded)
+	return json.Marshal(decoded)
+}
+
+func redactJSONStrings(value any) {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, item := range v {
+			if text, ok := item.(string); ok {
+				v[key] = secrets.Redact(text)
+				continue
+			}
+			redactJSONStrings(item)
+		}
+	case []any:
+		for i, item := range v {
+			if text, ok := item.(string); ok {
+				v[i] = secrets.Redact(text)
+				continue
+			}
+			redactJSONStrings(item)
+		}
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

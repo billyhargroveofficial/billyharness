@@ -8,17 +8,16 @@ package provider
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/codexauth"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/secrets"
@@ -36,25 +35,25 @@ type codexAuth struct {
 	filePayload  map[string]any
 }
 
-func loadCodexAuth(ctx context.Context, cfg config.Config, client *http.Client) (*codexAuth, error) {
-	resolved := credentials.NewManager(cfg).ResolveCodexAuth()
+func loadCodexAuth(ctx context.Context, authSettings config.AuthSettings, client *http.Client) (*codexAuth, error) {
+	resolved := credentials.NewManagerFromAuthSettings(authSettings).ResolveCodexAuth()
 	if token := strings.TrimSpace(resolved.AccessToken.Value); token != "" {
 		auth := &codexAuth{
 			AccessToken: token,
 			AccountID:   strings.TrimSpace(resolved.AccountID.Value),
 		}
 		if strings.HasPrefix(auth.AccessToken, "at-") {
-			if err := auth.hydratePAT(ctx, cfg, client); err != nil {
+			if err := auth.hydratePAT(ctx, authSettings, client); err != nil {
 				return nil, err
 			}
 			return auth, nil
 		}
-		claims := jwtClaims(auth.AccessToken)
+		claims := codexauth.Claims(auth.AccessToken)
 		if auth.AccountID == "" {
-			auth.AccountID = accountIDFromClaims(claims)
+			auth.AccountID = codexauth.AccountIDFromClaims(claims)
 		}
-		auth.ExpiresAt = expirationFromClaims(claims)
-		auth.FedRAMP = fedRAMPFromClaims(claims)
+		auth.ExpiresAt = codexauth.ExpirationFromClaims(claims)
+		auth.FedRAMP = codexauth.FedRAMPFromClaims(claims)
 		return auth, nil
 	}
 
@@ -62,7 +61,7 @@ func loadCodexAuth(ctx context.Context, cfg config.Config, client *http.Client) 
 	if path == "" {
 		return nil, fmt.Errorf("missing %s or Codex auth file; run `codex login` or set FAST_AGENT_CODEX_AUTH_FILE", credentials.CodexAccessTokenEnv)
 	}
-	auth, err := readCodexAuthFile(ctx, cfg, client, path)
+	auth, err := readCodexAuthFile(ctx, authSettings, client, path)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +74,7 @@ func loadCodexAuth(ctx context.Context, cfg config.Config, client *http.Client) 
 	if auth.RefreshToken == "" {
 		return nil, fmt.Errorf("Codex access token is expired and %s has no refresh token", path)
 	}
-	if err := auth.refresh(ctx, cfg, client); err != nil {
+	if err := auth.refresh(ctx, authSettings, client); err != nil {
 		return nil, err
 	}
 	return auth, nil
@@ -94,16 +93,16 @@ func (a *codexAuth) needsRefresh(now time.Time) bool {
 	return now.After(a.ExpiresAt.Add(-5 * time.Minute))
 }
 
-func (a *codexAuth) refresh(ctx context.Context, cfg config.Config, client *http.Client) error {
+func (a *codexAuth) refresh(ctx context.Context, authSettings config.AuthSettings, client *http.Client) error {
 	body, err := json.Marshal(map[string]string{
-		"client_id":     cfg.CodexClientID,
+		"client_id":     authSettings.CodexClientID,
 		"grant_type":    "refresh_token",
 		"refresh_token": a.RefreshToken,
 	})
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.CodexRefreshURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, authSettings.CodexRefreshURL, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -133,23 +132,23 @@ func (a *codexAuth) refresh(ctx context.Context, cfg config.Config, client *http
 	if out.RefreshToken != "" {
 		a.RefreshToken = out.RefreshToken
 	}
-	claims := jwtClaims(a.AccessToken)
+	claims := codexauth.Claims(a.AccessToken)
 	if out.IDToken != "" {
-		idClaims := jwtClaims(out.IDToken)
-		if idAccount := accountIDFromClaims(idClaims); idAccount != "" {
+		idClaims := codexauth.Claims(out.IDToken)
+		if idAccount := codexauth.AccountIDFromClaims(idClaims); idAccount != "" {
 			a.AccountID = idAccount
 		}
-		if idFedRAMP := fedRAMPFromClaims(idClaims); idFedRAMP {
+		if idFedRAMP := codexauth.FedRAMPFromClaims(idClaims); idFedRAMP {
 			a.FedRAMP = true
 		}
 	}
 	if a.AccountID == "" {
-		a.AccountID = accountIDFromClaims(claims)
+		a.AccountID = codexauth.AccountIDFromClaims(claims)
 	}
 	if !a.FedRAMP {
-		a.FedRAMP = fedRAMPFromClaims(claims)
+		a.FedRAMP = codexauth.FedRAMPFromClaims(claims)
 	}
-	a.ExpiresAt = expirationFromClaims(claims)
+	a.ExpiresAt = codexauth.ExpirationFromClaims(claims)
 	if a.ExpiresAt.IsZero() && out.ExpiresIn > 0 {
 		a.ExpiresAt = time.Now().Add(time.Duration(out.ExpiresIn) * time.Second)
 	}
@@ -183,7 +182,7 @@ func (a *codexAuth) updateFilePayload(idToken string) {
 	a.filePayload["last_refresh"] = a.LastRefresh.Format(time.RFC3339)
 }
 
-func readCodexAuthFile(ctx context.Context, cfg config.Config, client *http.Client, path string) (*codexAuth, error) {
+func readCodexAuthFile(ctx context.Context, authSettings config.AuthSettings, client *http.Client, path string) (*codexAuth, error) {
 	body, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read Codex auth file %s: %w", path, err)
@@ -193,14 +192,14 @@ func readCodexAuthFile(ctx context.Context, cfg config.Config, client *http.Clie
 		return nil, fmt.Errorf("parse Codex auth file %s: %w", path, err)
 	}
 	auth := &codexAuth{AuthFile: path, filePayload: payload}
-	authMode := resolvedCodexAuthMode(payload)
+	authMode := codexauth.AuthMode(payload)
 	switch authMode {
 	case "apikey", "bedrockApiKey":
 		return nil, fmt.Errorf("Codex auth file %s uses %s; use FAST_AGENT_PROVIDER=deepseek/OpenAI API key path for API-key auth", path, authMode)
 	case "agentIdentity":
 		return nil, fmt.Errorf("Codex auth file %s uses agentIdentity; billyharness does not implement AgentAssertion signing yet", path)
 	}
-	if lastRefresh := stringField(payload, "last_refresh"); lastRefresh != "" {
+	if lastRefresh := codexauth.StringField(payload, "last_refresh"); lastRefresh != "" {
 		if parsed, err := time.Parse(time.RFC3339, lastRefresh); err == nil {
 			auth.LastRefresh = parsed
 		}
@@ -210,51 +209,35 @@ func readCodexAuthFile(ctx context.Context, cfg config.Config, client *http.Clie
 		auth.PAT = true
 	}
 	if tokens, _ := payload["tokens"].(map[string]any); tokens != nil {
-		auth.AccessToken = stringField(tokens, "access_token")
-		auth.RefreshToken = stringField(tokens, "refresh_token")
-		auth.AccountID = stringField(tokens, "account_id")
-		idClaims := jwtClaims(stringField(tokens, "id_token"))
+		auth.AccessToken = codexauth.StringField(tokens, "access_token")
+		auth.RefreshToken = codexauth.StringField(tokens, "refresh_token")
+		auth.AccountID = codexauth.StringField(tokens, "account_id")
+		idClaims := codexauth.Claims(codexauth.StringField(tokens, "id_token"))
 		if auth.AccountID == "" {
-			auth.AccountID = accountIDFromClaims(idClaims)
+			auth.AccountID = codexauth.AccountIDFromClaims(idClaims)
 		}
-		auth.FedRAMP = fedRAMPFromClaims(idClaims)
+		auth.FedRAMP = codexauth.FedRAMPFromClaims(idClaims)
 	}
 	if auth.PAT {
-		if err := auth.hydratePAT(ctx, cfg, client); err != nil {
+		if err := auth.hydratePAT(ctx, authSettings, client); err != nil {
 			return nil, err
 		}
 		return auth, nil
 	}
-	claims := jwtClaims(auth.AccessToken)
+	claims := codexauth.Claims(auth.AccessToken)
 	if auth.AccountID == "" {
-		auth.AccountID = accountIDFromClaims(claims)
+		auth.AccountID = codexauth.AccountIDFromClaims(claims)
 	}
 	if !auth.FedRAMP {
-		auth.FedRAMP = fedRAMPFromClaims(claims)
+		auth.FedRAMP = codexauth.FedRAMPFromClaims(claims)
 	}
-	auth.ExpiresAt = expirationFromClaims(claims)
+	auth.ExpiresAt = codexauth.ExpirationFromClaims(claims)
 	return auth, nil
 }
 
-func resolvedCodexAuthMode(payload map[string]any) string {
-	if mode := stringField(payload, "auth_mode"); mode != "" {
-		return mode
-	}
-	if token := stringField(payload, "personal_access_token"); token != "" {
-		return "personalAccessToken"
-	}
-	if _, ok := payload["bedrock_api_key"]; ok {
-		return "bedrockApiKey"
-	}
-	if key := stringField(payload, "OPENAI_API_KEY"); key != "" {
-		return "apikey"
-	}
-	return "chatgpt"
-}
-
-func (a *codexAuth) hydratePAT(ctx context.Context, cfg config.Config, client *http.Client) error {
+func (a *codexAuth) hydratePAT(ctx context.Context, authSettings config.AuthSettings, client *http.Client) error {
 	a.PAT = true
-	endpoint := strings.TrimRight(cfg.CodexAuthAPIBaseURL, "/") + "/v1/user-auth-credential/whoami"
+	endpoint := strings.TrimRight(authSettings.CodexAuthAPIBaseURL, "/") + "/v1/user-auth-credential/whoami"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
@@ -314,96 +297,6 @@ func writeCodexAuthFile(path string, payload map[string]any) error {
 	return os.Rename(tmpPath, path)
 }
 
-func codexAuthPath(cfg config.Config) string {
-	return credentials.NewManager(cfg).CodexAuthFilePath()
-}
-
-func jwtClaims(token string) map[string]any {
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 || parts[1] == "" {
-		return nil
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		raw, err = base64.URLEncoding.DecodeString(parts[1])
-	}
-	if err != nil {
-		return nil
-	}
-	var claims map[string]any
-	if err := json.Unmarshal(raw, &claims); err != nil {
-		return nil
-	}
-	return claims
-}
-
-func accountIDFromClaims(claims map[string]any) string {
-	if len(claims) == 0 {
-		return ""
-	}
-	for _, key := range []string{
-		"chatgpt_account_id",
-		"https://api.openai.com/auth.chatgpt_account_id",
-	} {
-		if value := stringField(claims, key); value != "" {
-			return value
-		}
-	}
-	if auth, _ := claims["https://api.openai.com/auth"].(map[string]any); auth != nil {
-		if value := stringField(auth, "chatgpt_account_id"); value != "" {
-			return value
-		}
-	}
-	if orgs, _ := claims["organizations"].([]any); len(orgs) > 0 {
-		if org, _ := orgs[0].(map[string]any); org != nil {
-			if value := stringField(org, "id"); value != "" {
-				return value
-			}
-		}
-	}
-	return ""
-}
-
-func fedRAMPFromClaims(claims map[string]any) bool {
-	if len(claims) == 0 {
-		return false
-	}
-	if value, ok := claims["chatgpt_account_is_fedramp"].(bool); ok {
-		return value
-	}
-	if auth, _ := claims["https://api.openai.com/auth"].(map[string]any); auth != nil {
-		if value, ok := auth["chatgpt_account_is_fedramp"].(bool); ok {
-			return value
-		}
-	}
-	return false
-}
-
-func expirationFromClaims(claims map[string]any) time.Time {
-	if len(claims) == 0 {
-		return time.Time{}
-	}
-	switch exp := claims["exp"].(type) {
-	case float64:
-		return time.Unix(int64(exp), 0)
-	case json.Number:
-		n, _ := exp.Int64()
-		if n > 0 {
-			return time.Unix(n, 0)
-		}
-	case string:
-		n, _ := strconv.ParseInt(exp, 10, 64)
-		if n > 0 {
-			return time.Unix(n, 0)
-		}
-	}
-	return time.Time{}
-}
-
-func stringField(m map[string]any, key string) string {
-	if m == nil {
-		return ""
-	}
-	value, _ := m[key].(string)
-	return strings.TrimSpace(value)
+func codexAuthPath(authSettings config.AuthSettings) string {
+	return credentials.NewManagerFromAuthSettings(authSettings).CodexAuthFilePath()
 }

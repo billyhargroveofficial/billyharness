@@ -126,6 +126,11 @@ func TestConfigInspectJSONDoesNotLeakDotenvSecrets(t *testing.T) {
 	if !strings.Contains(out.String(), `"model"`) || !strings.Contains(out.String(), `deepseek-v4-pro`) {
 		t.Fatalf("config inspect missing model: %s", out.String())
 	}
+	if !strings.Contains(out.String(), `"diagnostics"`) ||
+		!strings.Contains(out.String(), `"provider_auth"`) ||
+		!strings.Contains(out.String(), `"runtime_tool"`) {
+		t.Fatalf("config inspect missing diagnostics: %s", out.String())
+	}
 }
 
 func TestSessionsCommandListsAndInspectsStore(t *testing.T) {

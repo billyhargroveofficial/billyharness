@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/billyhargroveofficial/billyharness/internal/testkit"
 )
 
 func TestUnavailableHintIncludesRecoveryCommands(t *testing.T) {
@@ -28,7 +30,7 @@ func TestUnavailableHintIncludesRecoveryCommands(t *testing.T) {
 func TestDoWithReadyRetryWrapsConnectionRefused(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
-	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	client := &http.Client{Transport: testkit.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return nil, &url.Error{Op: "dial", URL: req.URL.String(), Err: syscall.ECONNREFUSED}
 	})}
 
@@ -46,10 +48,4 @@ func TestDoWithReadyRetryWrapsConnectionRefused(t *testing.T) {
 		!strings.Contains(err.Error(), "systemctl restart billyharness-gateway.service") {
 		t.Fatalf("error does not include recovery commands: %v", err)
 	}
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return fn(req)
 }

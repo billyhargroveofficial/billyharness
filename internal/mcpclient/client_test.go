@@ -439,6 +439,122 @@ func TestStdioCrashReconnectStatusLifecycle(t *testing.T) {
 	waitProcessGone(t, pidTwo)
 }
 
+func TestStdioReconnectRefreshesCatalogAndEmitsChange(t *testing.T) {
+	root := t.TempDir()
+	pidFile := filepath.Join(root, "catalog-reconnect.pid")
+	phaseFile := filepath.Join(root, "catalog-reconnect.phase")
+	manager, err := NewManager(context.Background(), config.Config{
+		WorkspaceRoots:     []string{root},
+		MaxToolOutputBytes: 64 * 1024,
+		MCPServers: []config.MCPServer{{
+			Name:           "fake",
+			Command:        os.Args[0],
+			Args:           []string{"-test.run=TestFakeStdioMCPServer"},
+			Env:            helperEnv("close_once_then_new_tool", map[string]string{"BILLYHARNESS_MCP_PID_FILE": pidFile, "BILLYHARNESS_MCP_PHASE_FILE": phaseFile}),
+			CWD:            root,
+			Enabled:        true,
+			StartupTimeout: 2 * time.Second,
+			ToolTimeout:    2 * time.Second,
+			EnabledTools:   []string{"echo", "new_echo"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	pidOne := readPID(t, pidFile)
+	echo := findTool(t, manager, "mcp__fake__echo")
+	changes := make(chan CatalogChange, 4)
+	cancel := manager.AddCatalogListener(func(change CatalogChange) {
+		changes <- change
+	})
+	defer cancel()
+
+	_, err = echo.Handler(context.Background(), json.RawMessage(`{"text":"first"}`))
+	if err == nil || !strings.Contains(err.Error(), "transport") {
+		t.Fatalf("first call err = %v", err)
+	}
+	waitProcessGone(t, pidOne)
+
+	_, err = echo.Handler(context.Background(), json.RawMessage(`{"text":"old"}`))
+	if err == nil || !strings.Contains(err.Error(), "unknown tool") {
+		t.Fatalf("old echo after reconnect err = %v", err)
+	}
+	change := waitCatalogChange(t, changes, func(change CatalogChange) bool {
+		return change.ToolCount == 1 && len(change.Collisions) == 0
+	})
+	if change.Version == 0 {
+		t.Fatalf("catalog change missing version: %#v", change)
+	}
+	if hasTool(manager, "mcp__fake__echo") {
+		t.Fatalf("old echo tool remained in catalog: %#v", manager.Tools())
+	}
+	newEcho := findTool(t, manager, "mcp__fake__new_echo")
+	text, err := newEcho.Handler(context.Background(), json.RawMessage(`{"text":"second"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "new: second" {
+		t.Fatalf("new echo = %q", text)
+	}
+}
+
+func TestStdioToolsListChangedNotificationRefreshesCatalog(t *testing.T) {
+	root := t.TempDir()
+	phaseFile := filepath.Join(root, "catalog-notification.phase")
+	manager, err := NewManager(context.Background(), config.Config{
+		WorkspaceRoots:     []string{root},
+		MaxToolOutputBytes: 64 * 1024,
+		MCPServers: []config.MCPServer{{
+			Name:           "fake",
+			Command:        os.Args[0],
+			Args:           []string{"-test.run=TestFakeStdioMCPServer"},
+			Env:            helperEnv("notify_list_changed", map[string]string{"BILLYHARNESS_MCP_PHASE_FILE": phaseFile}),
+			CWD:            root,
+			Enabled:        true,
+			StartupTimeout: 2 * time.Second,
+			ToolTimeout:    2 * time.Second,
+			EnabledTools:   []string{"echo", "new_echo"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	initialVersion := manager.CatalogSnapshot().Version
+	echo := findTool(t, manager, "mcp__fake__echo")
+	changes := make(chan CatalogChange, 4)
+	cancel := manager.AddCatalogListener(func(change CatalogChange) {
+		changes <- change
+	})
+	defer cancel()
+
+	text, err := echo.Handler(context.Background(), json.RawMessage(`{"text":"first"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "first" {
+		t.Fatalf("echo = %q", text)
+	}
+	change := waitCatalogChange(t, changes, func(change CatalogChange) bool {
+		return change.Version > initialVersion && change.ToolCount == 1
+	})
+	if len(change.Collisions) > 0 {
+		t.Fatalf("unexpected catalog collisions: %#v", change)
+	}
+	if hasTool(manager, "mcp__fake__echo") {
+		t.Fatalf("old echo tool remained after tools/list_changed: %#v", manager.Tools())
+	}
+	newEcho := findTool(t, manager, "mcp__fake__new_echo")
+	text, err = newEcho.Handler(context.Background(), json.RawMessage(`{"text":"second"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "new: second" {
+		t.Fatalf("new echo = %q", text)
+	}
+}
+
 func TestStdioReconnectFailureBackoffIsDeterministic(t *testing.T) {
 	root := t.TempDir()
 	pidFile := filepath.Join(root, "reconnect-fail.pid")
@@ -649,6 +765,15 @@ func findTool(t *testing.T, manager *Manager, name string) ExternalTool {
 	return ExternalTool{}
 }
 
+func hasTool(manager *Manager, name string) bool {
+	for _, tool := range manager.Tools() {
+		if tool.Spec.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func helperEnv(mode string, extra map[string]string) map[string]string {
 	env := map[string]string{
 		"BILLYHARNESS_MCP_HELPER": "1",
@@ -692,6 +817,23 @@ func readPIDChanged(t *testing.T, path string, old int) int {
 	}
 	t.Fatalf("pid file %s did not change from %d", path, old)
 	return 0
+}
+
+func waitCatalogChange(t *testing.T, changes <-chan CatalogChange, match func(CatalogChange) bool) CatalogChange {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	var last CatalogChange
+	for {
+		select {
+		case change := <-changes:
+			last = change
+			if match(change) {
+				return change
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for catalog change, last=%#v", last)
+		}
+	}
 }
 
 func waitMCPStatus(t *testing.T, manager *Manager, match func(ServerStatus) bool) ServerStatus {
@@ -758,9 +900,10 @@ func runFakeMCPServer() {
 		}
 		switch req.Method {
 		case "initialize":
+			listChanged := mode == "notify_list_changed"
 			_ = enc.Encode(response(req.ID, map[string]any{
 				"protocolVersion": protocolVersion,
-				"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
+				"capabilities":    map[string]any{"tools": map[string]any{"listChanged": listChanged}},
 				"serverInfo":      map[string]any{"name": "fake", "version": "1.0.0"},
 				"instructions":    "Use echo for smoke tests.",
 			}))
@@ -781,11 +924,27 @@ func runFakeMCPServer() {
 			_ = json.Unmarshal(req.Params, &call)
 			switch call.Name {
 			case "echo":
-				if (mode == "close_once_then_echo" || mode == "close_then_bad_reconnect" || mode == "close_then_slow_reconnect") && !phaseExists() {
+				if (mode == "close_once_then_new_tool" || mode == "notify_list_changed") && phaseExists() {
+					_ = enc.Encode(rpcErrorResponse(req.ID, -32602, "unknown tool"))
+					continue
+				}
+				if mode == "notify_list_changed" && !phaseExists() {
+					writePhase()
+					_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+					_ = enc.Encode(response(req.ID, toolResult(fmt.Sprint(call.Arguments["text"]), false)))
+					continue
+				}
+				if (mode == "close_once_then_echo" || mode == "close_once_then_new_tool" || mode == "close_then_bad_reconnect" || mode == "close_then_slow_reconnect") && !phaseExists() {
 					writePhase()
 					os.Exit(0)
 				}
 				_ = enc.Encode(response(req.ID, toolResult(fmt.Sprint(call.Arguments["text"]), false)))
+			case "new_echo":
+				if (mode != "close_once_then_new_tool" && mode != "notify_list_changed") || !phaseExists() {
+					_ = enc.Encode(rpcErrorResponse(req.ID, -32602, "unknown tool"))
+					continue
+				}
+				_ = enc.Encode(response(req.ID, toolResult("new: "+fmt.Sprint(call.Arguments["text"]), false)))
 			case "env":
 				body, _ := json.Marshal(map[string]string{
 					"allowed": os.Getenv("MCP_ALLOWED_FROM_PARENT"),
@@ -836,18 +995,24 @@ func writePhase() {
 
 func fakeToolsForMode(mode string) []map[string]any {
 	emptyObject := map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}
+	echoSchema := map[string]any{"type": "object", "properties": map[string]any{"text": map[string]any{"type": "string"}}, "required": []string{"text"}, "additionalProperties": false}
 	switch mode {
 	case "hang":
 		return []map[string]any{{"name": "hang", "description": "Never responds", "inputSchema": emptyObject}}
 	case "close_on_call":
 		return []map[string]any{{"name": "close", "description": "Close transport", "inputSchema": emptyObject}}
+	case "close_once_then_new_tool", "notify_list_changed":
+		if phaseExists() {
+			return []map[string]any{{"name": "new_echo", "description": "New echo text", "inputSchema": echoSchema}}
+		}
+		return []map[string]any{{"name": "echo", "description": "Echo text", "inputSchema": echoSchema}}
 	case "large":
 		return []map[string]any{{"name": "large", "description": "Large text", "inputSchema": emptyObject}}
 	case "huge_raw":
 		return []map[string]any{{"name": "huge_raw", "description": "Oversized raw response", "inputSchema": emptyObject}}
 	default:
 		return []map[string]any{
-			{"name": "echo", "description": "Echo text", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"text": map[string]any{"type": "string"}}, "required": []string{"text"}, "additionalProperties": false}},
+			{"name": "echo", "description": "Echo text", "inputSchema": echoSchema},
 			{"name": "env", "description": "Show selected env", "inputSchema": emptyObject},
 			{"name": "fail", "description": "Fail with secret", "inputSchema": emptyObject},
 		}

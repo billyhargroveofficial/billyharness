@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -69,6 +71,40 @@ func TestServeUnknownMethodReturnsJSONRPCError(t *testing.T) {
 	}
 }
 
+func TestServeDeniesDangerousToolWhenPolicyDisabled(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "out.txt")
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.AutoApproveDangerous = false
+	registry := tools.NewRegistry(cfg)
+	input := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fs_write_file","arguments":{"path":` + strconvQuote(target) + `,"content":"nope"}}}`,
+		"",
+	}, "\n")
+	var output bytes.Buffer
+	if err := New(registry).Serve(context.Background(), strings.NewReader(input), &output); err != nil {
+		t.Fatal(err)
+	}
+
+	responses := readResponses(t, output.String())
+	if len(responses) != 1 {
+		t.Fatalf("responses len = %d output=%s", len(responses), output.String())
+	}
+	result := responses[0]["result"].(map[string]any)
+	if result["isError"] != true {
+		t.Fatalf("isError = %#v result=%#v", result["isError"], result)
+	}
+	content := result["content"].([]any)
+	text := content[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "disabled") {
+		t.Fatalf("content = %q", text)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("file should not exist, stat err = %v", err)
+	}
+}
+
 func readResponses(t *testing.T, out string) []map[string]any {
 	t.Helper()
 	var responses []map[string]any
@@ -84,4 +120,9 @@ func readResponses(t *testing.T, out string) []map[string]any {
 		t.Fatal(err)
 	}
 	return responses
+}
+
+func strconvQuote(value string) string {
+	bytes, _ := json.Marshal(value)
+	return string(bytes)
 }

@@ -67,61 +67,118 @@ type Event struct {
 }
 
 type Provider interface {
+	// Stream starts an asynchronous provider response stream.
+	//
+	// Implementations send zero or more events, close the event channel, then
+	// expose at most one non-nil terminal error on errs before closing errs. On
+	// success, errs is closed without a value. Callers should drain events before
+	// reading errs, which lets streamed metadata and usage precede the terminal
+	// result. Setup failures that happen before metadata can be streamed should
+	// attach known request metadata to the terminal error.
 	Stream(ctx context.Context, req Request) (<-chan Event, <-chan error)
 }
 
-func New(cfg config.Config) (Provider, error) {
-	if cfg.Provider == "mock" {
+type requestMetadataError struct {
+	err      error
+	metadata RequestMetadata
+}
+
+func (e requestMetadataError) Error() string {
+	return e.err.Error()
+}
+
+func (e requestMetadataError) Unwrap() error {
+	return e.err
+}
+
+func (e requestMetadataError) RequestMetadata() RequestMetadata {
+	return e.metadata
+}
+
+func withRequestMetadata(err error, metadata RequestMetadata) error {
+	if err == nil || metadata == (RequestMetadata{}) {
+		return err
+	}
+	return requestMetadataError{err: err, metadata: metadata}
+}
+
+func RequestMetadataFromError(err error) (RequestMetadata, bool) {
+	type carrier interface {
+		RequestMetadata() RequestMetadata
+	}
+	var carried carrier
+	if errors.As(err, &carried) {
+		metadata := carried.RequestMetadata()
+		return metadata, metadata != (RequestMetadata{})
+	}
+	var providerErr *ProviderError
+	if errors.As(err, &providerErr) {
+		metadata := RequestMetadata{
+			ProviderID:        providerErr.Provider,
+			ModelID:           providerErr.ModelID,
+			ProviderRequestID: providerErr.RequestID,
+			Attempts:          providerErr.Attempts,
+			Retries:           providerErr.Retries,
+			StatusCode:        providerErr.Status,
+		}
+		return metadata, metadata != (RequestMetadata{})
+	}
+	return RequestMetadata{}, false
+}
+
+func NewFromBinding(binding config.ProviderBinding) (Provider, error) {
+	providerID := modelinfo.ProviderForModel(binding.Model.Model, binding.Provider.Provider)
+	if providerID == modelinfo.ProviderMock {
 		return Mock{}, nil
 	}
-	if isCodexProvider(cfg) {
+	if isCodexBinding(binding) {
 		client := &http.Client{Timeout: 0}
-		ctx, cancel := context.WithTimeout(context.Background(), cfg.RequestTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), binding.Limits.RequestTimeout)
 		defer cancel()
-		auth, err := loadCodexAuth(ctx, cfg, client)
+		auth, err := loadCodexAuth(ctx, binding.Auth, client)
 		if err != nil {
 			return nil, err
 		}
-		originator := cfg.CodexOriginator
+		originator := binding.Auth.CodexOriginator
 		if originator == "" {
 			originator = "billyharness"
 		}
 		return &Codex{
-			BaseURL:           strings.TrimRight(cfg.CodexBaseURL, "/"),
-			Model:             cfg.Model,
-			ReasoningEffort:   cfg.ReasoningEffort,
-			RequestTimeout:    cfg.RequestTimeout,
-			StreamIdleTimeout: cfg.StreamIdleTimeout,
+			BaseURL:           strings.TrimRight(binding.Provider.CodexBaseURL, "/"),
+			Model:             binding.Model.Model,
+			ReasoningEffort:   binding.Model.ReasoningEffort,
+			RequestTimeout:    binding.Limits.RequestTimeout,
+			StreamIdleTimeout: binding.Limits.StreamIdleTimeout,
 			Originator:        originator,
 			UserAgent:         originator + "/0.1.0",
 			SessionID:         newCodexSessionID(),
-			MaxRetries:        cfg.ProviderMaxRetries,
-			CodexRefreshURL:   cfg.CodexRefreshURL,
-			CodexClientID:     cfg.CodexClientID,
+			MaxRetries:        binding.Limits.ProviderMaxRetries,
+			CodexRefreshURL:   binding.Auth.CodexRefreshURL,
+			CodexClientID:     binding.Auth.CodexClientID,
 			Auth:              auth,
 			Client:            client,
 		}, nil
 	}
-	apiKey, err := credentials.NewManager(cfg).ResolveDeepSeekAPIKey()
+	apiKey, err := credentials.NewManagerFromAuthSettings(binding.Auth).ResolveDeepSeekAPIKey()
 	if err != nil {
 		return nil, err
 	}
 	return &DeepSeek{
-		BaseURL:           strings.TrimRight(cfg.BaseURL, "/"),
+		BaseURL:           strings.TrimRight(binding.Provider.BaseURL, "/"),
 		APIKey:            apiKey.Value,
-		Model:             cfg.Model,
-		Thinking:          cfg.Thinking,
-		ReasoningEffort:   cfg.ReasoningEffort,
-		MaxTokens:         cfg.MaxTokens,
-		RequestTimeout:    cfg.RequestTimeout,
-		StreamIdleTimeout: cfg.StreamIdleTimeout,
-		MaxRetries:        cfg.ProviderMaxRetries,
+		Model:             binding.Model.Model,
+		Thinking:          binding.Model.Thinking,
+		ReasoningEffort:   binding.Model.ReasoningEffort,
+		MaxTokens:         binding.Model.MaxTokens,
+		RequestTimeout:    binding.Limits.RequestTimeout,
+		StreamIdleTimeout: binding.Limits.StreamIdleTimeout,
+		MaxRetries:        binding.Limits.ProviderMaxRetries,
 		Client:            &http.Client{Timeout: 0},
 	}, nil
 }
 
-func isCodexProvider(cfg config.Config) bool {
-	return modelinfo.ProviderForModel(cfg.Model, cfg.Provider) == modelinfo.ProviderOpenAICodex
+func isCodexBinding(binding config.ProviderBinding) bool {
+	return modelinfo.ProviderForModel(binding.Model.Model, binding.Provider.Provider) == modelinfo.ProviderOpenAICodex
 }
 
 type Mock struct{}
@@ -129,9 +186,7 @@ type Mock struct{}
 func (Mock) Stream(ctx context.Context, req Request) (<-chan Event, <-chan error) {
 	events := make(chan Event, 2)
 	errs := make(chan error, 1)
-	go func() {
-		defer close(events)
-		defer close(errs)
+	go runProviderStream(events, errs, func() error {
 		last := ""
 		for i := len(req.Messages) - 1; i >= 0; i-- {
 			if req.Messages[i].Role == protocol.RoleUser {
@@ -139,14 +194,11 @@ func (Mock) Stream(ctx context.Context, req Request) (<-chan Event, <-chan error
 				break
 			}
 		}
-		select {
-		case events <- Event{Kind: EventContent, Text: "mock: " + last}:
-		case <-ctx.Done():
-			errs <- ctx.Err()
-			return
+		if err := sendEvent(ctx, events, Event{Kind: EventContent, Text: "mock: " + last}); err != nil {
+			return err
 		}
-		events <- Event{Kind: EventDone}
-	}()
+		return sendEvent(ctx, events, Event{Kind: EventDone})
+	})
 	return events, errs
 }
 
@@ -166,13 +218,9 @@ type DeepSeek struct {
 func (d *DeepSeek) Stream(ctx context.Context, req Request) (<-chan Event, <-chan error) {
 	events := newProviderEventChannel()
 	errs := make(chan error, 1)
-	go func() {
-		defer close(events)
-		defer close(errs)
-		if err := d.stream(ctx, req, events); err != nil {
-			errs <- err
-		}
-	}()
+	go runProviderStream(events, errs, func() error {
+		return d.stream(ctx, req, events)
+	})
 	return events, errs
 }
 
@@ -183,13 +231,22 @@ func (d *DeepSeek) stream(ctx context.Context, req Request, events chan<- Event)
 	}
 	var resp *http.Response
 	var respCancel context.CancelFunc
-	var meta RequestMetadata
+	baseMeta := RequestMetadata{
+		RequestID:  req.RequestID,
+		ProviderID: modelinfo.ProviderDeepSeek,
+		ModelID:    req.Model,
+	}
+	meta := baseMeta
 	err = withProviderRetry(ctx, d.MaxRetries, func(attempt int) error {
+		attemptMeta := baseMeta
+		attemptMeta.Attempts = attempt + 1
+		attemptMeta.Retries = attempt
 		reqCtx, finishSetup, cancelReq := newRequestSetupContext(ctx, d.RequestTimeout)
 		attemptReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, d.BaseURL+"/chat/completions", bytes.NewReader(body))
 		if err != nil {
 			_ = finishSetup()
 			cancelReq()
+			meta = attemptMeta
 			return err
 		}
 		attemptReq.Header.Set("Content-Type", "application/json")
@@ -200,33 +257,33 @@ func (d *DeepSeek) stream(ctx context.Context, req Request, events chan<- Event)
 				_ = attemptResp.Body.Close()
 			}
 			cancelReq()
+			meta = attemptMeta
 			return context.DeadlineExceeded
 		}
 		if err != nil {
 			cancelReq()
+			meta = attemptMeta
 			return providerTransportError("deepseek", err)
 		}
 		if attemptResp.StatusCode < 200 || attemptResp.StatusCode >= 300 {
 			limited, _ := io.ReadAll(io.LimitReader(attemptResp.Body, 4096))
+			providerErr := providerHTTPError("deepseek", attemptResp.StatusCode, attemptResp.Header, secrets.Redact(string(limited), d.APIKey))
 			_ = attemptResp.Body.Close()
 			cancelReq()
-			return providerHTTPError("deepseek", attemptResp.StatusCode, attemptResp.Header, secrets.Redact(string(limited), d.APIKey))
+			attemptMeta.ProviderRequestID = providerErr.RequestID
+			attemptMeta.StatusCode = providerErr.Status
+			meta = attemptMeta
+			return providerErr
 		}
 		resp = attemptResp
 		respCancel = cancelReq
-		meta = RequestMetadata{
-			RequestID:         req.RequestID,
-			ProviderID:        modelinfo.ProviderDeepSeek,
-			ModelID:           req.Model,
-			ProviderRequestID: firstHeader(attemptResp.Header, "x-request-id", "request-id", "openai-request-id"),
-			Attempts:          attempt + 1,
-			Retries:           attempt,
-			StatusCode:        attemptResp.StatusCode,
-		}
+		attemptMeta.ProviderRequestID = firstHeader(attemptResp.Header, "x-request-id", "request-id", "openai-request-id")
+		attemptMeta.StatusCode = attemptResp.StatusCode
+		meta = attemptMeta
 		return nil
 	})
 	if err != nil {
-		return err
+		return withRequestMetadata(err, meta)
 	}
 	if respCancel != nil {
 		defer respCancel()
@@ -477,10 +534,20 @@ func (a *ToolAccumulator) Finish() ([]protocol.ToolCall, error) {
 		if args == "" {
 			args = "{}"
 		}
+		var invalidArgs string
+		var invalidArgErr string
 		if !json.Valid([]byte(args)) {
-			return nil, fmt.Errorf("tool call %s had invalid JSON args", call.Name)
+			invalidArgs = args
+			invalidArgErr = fmt.Sprintf("tool call %s had invalid JSON args", call.Name)
+			args = "{}"
 		}
-		out = append(out, protocol.ToolCall{ID: id, Name: call.Name, Arguments: json.RawMessage(args)})
+		out = append(out, protocol.ToolCall{
+			ID:                   id,
+			Name:                 call.Name,
+			Arguments:            json.RawMessage(args),
+			InvalidArguments:     invalidArgs,
+			InvalidArgumentError: invalidArgErr,
+		})
 	}
 	return out, nil
 }

@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/eventlog"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -34,27 +35,29 @@ type sessionStore struct {
 }
 
 type storedSession struct {
-	ID       string             `json:"id"`
-	Created  time.Time          `json:"created"`
-	Updated  time.Time          `json:"updated"`
-	Messages []protocol.Message `json:"messages"`
+	ID       string                  `json:"id"`
+	Created  time.Time               `json:"created"`
+	Updated  time.Time               `json:"updated"`
+	Owner    gatewayapi.SessionOwner `json:"owner,omitempty"`
+	Messages []protocol.Message      `json:"messages"`
 }
 
 type sessionManifest struct {
-	SchemaVersion             int       `json:"schema_version"`
-	SessionID                 string    `json:"session_id"`
-	CreatedAt                 time.Time `json:"created_at"`
-	UpdatedAt                 time.Time `json:"updated_at"`
-	HistoryJSONL              string    `json:"history_jsonl"`
-	EventsJSONL               string    `json:"events_jsonl,omitempty"`
-	SnapshotJSON              string    `json:"snapshot_json,omitempty"`
-	ConfigSnapshotJSON        string    `json:"config_snapshot_json,omitempty"`
-	ModelProviderSnapshotJSON string    `json:"model_provider_snapshot_json,omitempty"`
-	MCPSnapshotJSON           string    `json:"mcp_snapshot_json,omitempty"`
-	HistorySeq                int64     `json:"history_seq"`
-	EventSeq                  int64     `json:"event_seq,omitempty"`
-	MessageCount              int       `json:"message_count"`
-	HistorySHA256             string    `json:"history_sha256,omitempty"`
+	SchemaVersion             int                     `json:"schema_version"`
+	SessionID                 string                  `json:"session_id"`
+	CreatedAt                 time.Time               `json:"created_at"`
+	UpdatedAt                 time.Time               `json:"updated_at"`
+	HistoryJSONL              string                  `json:"history_jsonl"`
+	EventsJSONL               string                  `json:"events_jsonl,omitempty"`
+	SnapshotJSON              string                  `json:"snapshot_json,omitempty"`
+	ConfigSnapshotJSON        string                  `json:"config_snapshot_json,omitempty"`
+	ModelProviderSnapshotJSON string                  `json:"model_provider_snapshot_json,omitempty"`
+	MCPSnapshotJSON           string                  `json:"mcp_snapshot_json,omitempty"`
+	HistorySeq                int64                   `json:"history_seq"`
+	EventSeq                  int64                   `json:"event_seq,omitempty"`
+	MessageCount              int                     `json:"message_count"`
+	Owner                     gatewayapi.SessionOwner `json:"owner,omitempty"`
+	HistorySHA256             string                  `json:"history_sha256,omitempty"`
 }
 
 type sessionStoreSnapshots struct {
@@ -239,6 +242,7 @@ func (s *sessionStore) AppendEvent(session *Session, event protocol.Event) (prot
 			ModelProviderSnapshotJSON: sessionModelSnapshotName,
 			MCPSnapshotJSON:           sessionMCPSnapshotName,
 			MessageCount:              len(session.messages()),
+			Owner:                     session.Owner,
 		}
 		if err := writeSessionManifest(manifestPath, manifest); err != nil {
 			return event, err
@@ -272,7 +276,7 @@ func (s *sessionStore) AppendEvent(session *Session, event protocol.Event) (prot
 		EventType:     string(storedEvent.Type),
 		Event:         storedEvent,
 	}
-	if err := appendJSONL(eventsPath, record); err != nil {
+	if err := eventlog.AppendJSONL(eventsPath, record); err != nil {
 		return event, err
 	}
 	s.eventSeq[id] = seq
@@ -356,7 +360,7 @@ func (s *sessionStore) saveLocked(session *Session) error {
 			HistorySHA256: historySHA256,
 			Messages:      messages,
 		}
-		if err := appendJSONL(historyPath, record); err != nil {
+		if err := eventlog.AppendJSONL(historyPath, record); err != nil {
 			return err
 		}
 		history.lastSeq = record.Seq
@@ -411,6 +415,7 @@ func (s *sessionStore) saveLocked(session *Session) error {
 		HistorySeq:                history.lastSeq,
 		EventSeq:                  eventSeq,
 		MessageCount:              len(messages),
+		Owner:                     session.Owner,
 		HistorySHA256:             history.historySHA256,
 	}
 	if err := writeSessionManifest(manifestPath, manifest); err != nil {
@@ -421,6 +426,7 @@ func (s *sessionStore) saveLocked(session *Session) error {
 		ID:       session.ID,
 		Created:  created,
 		Updated:  now,
+		Owner:    session.Owner,
 		Messages: messages,
 	})
 }
@@ -451,7 +457,16 @@ func (s *sessionStore) loadSessionDir(dir string) (*Session, error) {
 	if created.IsZero() {
 		created = time.Now().UTC()
 	}
-	return newGatewaySession(id, created, history.messages), nil
+	session := newGatewaySessionWithOwner(id, created, history.messages, manifest.Owner)
+	eventsPath := filepath.Join(dir, sessionFileName(manifest.EventsJSONL, sessionEventsJSONLName))
+	status, ok, err := replaySessionStatus(eventsPath, id)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		session.restoreStatus(status)
+	}
+	return session, nil
 }
 
 func (s *sessionStore) loadLegacySnapshot(path string) (*Session, error) {
@@ -472,52 +487,36 @@ func (s *sessionStore) loadLegacySnapshot(path string) (*Session, error) {
 	if record.Created.IsZero() {
 		record.Created = time.Now().UTC()
 	}
-	return newGatewaySession(record.ID, record.Created, record.Messages), nil
+	return newGatewaySessionWithOwner(record.ID, record.Created, record.Messages, record.Owner), nil
 }
 
 func replaySessionHistory(path, sessionID string) (replayedSessionHistory, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return replayedSessionHistory{}, nil
-		}
-		return replayedSessionHistory{}, err
-	}
-	defer file.Close()
-
 	var history replayedSessionHistory
-	decoder := json.NewDecoder(file)
 	expectedSeq := int64(1)
-	for {
-		var record sessionHistoryRecord
-		err := decoder.Decode(&record)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return history, fmt.Errorf("%s record %d invalid: %w", path, expectedSeq, err)
-		}
+	err := eventlog.ReplayJSONL[sessionHistoryRecord](path, eventlog.JSONLOptions{MissingOK: true}, func(item eventlog.JSONLRecord[sessionHistoryRecord]) error {
+		record := item.Value
+		recordNo := expectedSeq
 		if record.SchemaVersion != 0 && record.SchemaVersion != gatewaySessionSchemaVersion {
-			return history, fmt.Errorf("%s record %d unsupported schema_version %d", path, expectedSeq, record.SchemaVersion)
+			return eventlog.NewCorruptionError(path, item.Line, recordNo, "", fmt.Errorf("unsupported schema_version %d", record.SchemaVersion))
 		}
 		if record.Seq != expectedSeq {
-			return history, fmt.Errorf("%s sequence gap: got %d want %d", path, record.Seq, expectedSeq)
+			return eventlog.NewCorruptionError(path, item.Line, recordNo, "", fmt.Errorf("sequence gap: got %d want %d", record.Seq, expectedSeq))
 		}
 		if record.SessionID != sessionID {
-			return history, fmt.Errorf("%s record %d session_id = %q, want %q", path, expectedSeq, record.SessionID, sessionID)
+			return eventlog.NewCorruptionError(path, item.Line, recordNo, "", fmt.Errorf("session_id = %q, want %q", record.SessionID, sessionID))
 		}
 		if record.Kind != sessionHistoryCreated && record.Kind != sessionHistorySnapshot {
-			return history, fmt.Errorf("%s record %d unsupported kind %q", path, expectedSeq, record.Kind)
+			return eventlog.NewCorruptionError(path, item.Line, recordNo, "", fmt.Errorf("unsupported kind %q", record.Kind))
 		}
 		if record.MessageCount != len(record.Messages) {
-			return history, fmt.Errorf("%s record %d message_count = %d, want %d", path, expectedSeq, record.MessageCount, len(record.Messages))
+			return eventlog.NewCorruptionError(path, item.Line, recordNo, "", fmt.Errorf("message_count = %d, want %d", record.MessageCount, len(record.Messages)))
 		}
 		historySHA256, err := hashSessionMessages(record.Messages)
 		if err != nil {
-			return history, fmt.Errorf("%s record %d invalid messages: %w", path, expectedSeq, err)
+			return eventlog.NewCorruptionError(path, item.Line, recordNo, "invalid messages", err)
 		}
 		if record.HistorySHA256 != "" && record.HistorySHA256 != historySHA256 {
-			return history, fmt.Errorf("%s record %d history_sha256 mismatch: got %s want %s", path, expectedSeq, record.HistorySHA256, historySHA256)
+			return eventlog.NewCorruptionError(path, item.Line, recordNo, "", fmt.Errorf("history_sha256 mismatch: got %s want %s", record.HistorySHA256, historySHA256))
 		}
 		history.lastSeq = record.Seq
 		history.created = record.CreatedAt
@@ -525,88 +524,140 @@ func replaySessionHistory(path, sessionID string) (replayedSessionHistory, error
 		history.messages = record.Messages
 		history.historySHA256 = historySHA256
 		expectedSeq++
+		return nil
+	})
+	if err != nil {
+		return history, err
 	}
 	return history, nil
 }
 
 func lastSessionEventSeq(path, sessionID string) (int64, error) {
-	file, err := os.Open(path)
+	validator := eventlog.NewRecordValidator(eventlog.RecordValidatorOptions{
+		SchemaVersion:   gatewaySessionSchemaVersion,
+		ScopeName:       "session_id",
+		ExpectedScopeID: sessionID,
+	})
+	err := eventlog.ReplayJSONL[sessionEventRecord](path, eventlog.JSONLOptions{MissingOK: true}, func(item eventlog.JSONLRecord[sessionEventRecord]) error {
+		record := item.Value
+		recordNo := validator.NextSeq()
+		if err := validator.Validate(eventlog.Record{
+			SchemaVersion: record.SchemaVersion,
+			Seq:           record.Seq,
+			ScopeID:       record.SessionID,
+			EventType:     record.EventType,
+			Event:         record.Event,
+			HasEvent:      record.Event.Type != "",
+		}); err != nil {
+			return eventlog.NewCorruptionError(path, item.Line, recordNo, "", err)
+		}
+		return nil
+	})
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return 0, nil
-		}
-		return 0, err
+		return validator.LastSeq(), err
 	}
-	defer file.Close()
+	return validator.LastSeq(), nil
+}
 
-	var lastSeq int64
-	decoder := json.NewDecoder(file)
-	expectedSeq := int64(1)
-	for {
-		var record sessionEventRecord
-		err := decoder.Decode(&record)
-		if errors.Is(err, io.EOF) {
-			break
+func replaySessionStatus(path, sessionID string) (SessionStatus, bool, error) {
+	var status SessionStatus
+	var found bool
+	var maxRunSeq int64
+	validator := eventlog.NewRecordValidator(eventlog.RecordValidatorOptions{
+		SchemaVersion:   gatewaySessionSchemaVersion,
+		ScopeName:       "session_id",
+		ExpectedScopeID: sessionID,
+	})
+	err := eventlog.ReplayJSONL[sessionEventRecord](path, eventlog.JSONLOptions{MissingOK: true}, func(item eventlog.JSONLRecord[sessionEventRecord]) error {
+		record := item.Value
+		recordNo := validator.NextSeq()
+		if err := validator.Validate(eventlog.Record{
+			SchemaVersion: record.SchemaVersion,
+			Seq:           record.Seq,
+			ScopeID:       record.SessionID,
+			EventType:     record.EventType,
+			Event:         record.Event,
+			HasEvent:      record.Event.Type != "",
+		}); err != nil {
+			return eventlog.NewCorruptionError(path, item.Line, recordNo, "", err)
 		}
-		if err != nil {
-			return lastSeq, fmt.Errorf("%s record %d invalid: %w", path, expectedSeq, err)
+		if record.RunSeq > maxRunSeq {
+			maxRunSeq = record.RunSeq
 		}
-		if record.SchemaVersion != 0 && record.SchemaVersion != gatewaySessionSchemaVersion {
-			return lastSeq, fmt.Errorf("%s record %d unsupported schema_version %d", path, expectedSeq, record.SchemaVersion)
+		if record.Event.Type != protocol.EventSessionStatus {
+			return nil
 		}
-		if record.Seq != expectedSeq {
-			return lastSeq, fmt.Errorf("%s sequence gap: got %d want %d", path, record.Seq, expectedSeq)
+		decoded, ok := decodeSessionStatus(record.Event.Data)
+		if !ok {
+			return nil
 		}
-		if record.SessionID != sessionID {
-			return lastSeq, fmt.Errorf("%s record %d session_id = %q, want %q", path, expectedSeq, record.SessionID, sessionID)
+		status = decoded
+		found = true
+		if record.RunSeq > status.RunSeq {
+			status.RunSeq = record.RunSeq
 		}
-		if record.EventType != "" && record.Event.Type != "" && record.EventType != string(record.Event.Type) {
-			return lastSeq, fmt.Errorf("%s record %d event_type = %q, event.type = %q", path, expectedSeq, record.EventType, record.Event.Type)
-		}
-		lastSeq = record.Seq
-		expectedSeq++
+		return nil
+	})
+	if err != nil {
+		return SessionStatus{}, false, err
 	}
-	return lastSeq, nil
+	if found {
+		if maxRunSeq > status.RunSeq {
+			status.RunSeq = maxRunSeq
+		}
+		return status, true, nil
+	}
+	if maxRunSeq > 0 {
+		return SessionStatus{ID: sessionID, RunSeq: maxRunSeq}, true, nil
+	}
+	return SessionStatus{}, false, nil
+}
+
+func decodeSessionStatus(value any) (SessionStatus, bool) {
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return SessionStatus{}, false
+	}
+	var status SessionStatus
+	if err := json.Unmarshal(bytes, &status); err != nil {
+		return SessionStatus{}, false
+	}
+	return status, status.ID != "" || status.RunSeq > 0
 }
 
 func replaySessionEventsAfter(path, sessionID string, afterSeq int64) ([]protocol.Event, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	defer file.Close()
-
 	var events []protocol.Event
-	decoder := json.NewDecoder(file)
-	expectedSeq := int64(1)
-	for {
-		var record sessionEventRecord
-		err := decoder.Decode(&record)
-		if errors.Is(err, io.EOF) {
-			break
+	validator := eventlog.NewRecordValidator(eventlog.RecordValidatorOptions{
+		SchemaVersion:   gatewaySessionSchemaVersion,
+		ScopeName:       "session_id",
+		ExpectedScopeID: sessionID,
+	})
+	lifecycle := eventlog.NewLifecycleValidator()
+	err := eventlog.ReplayJSONL[sessionEventRecord](path, eventlog.JSONLOptions{MissingOK: true}, func(item eventlog.JSONLRecord[sessionEventRecord]) error {
+		record := item.Value
+		recordNo := validator.NextSeq()
+		if err := validator.Validate(eventlog.Record{
+			SchemaVersion: record.SchemaVersion,
+			Seq:           record.Seq,
+			ScopeID:       record.SessionID,
+			EventType:     record.EventType,
+			Event:         record.Event,
+			HasEvent:      record.Event.Type != "",
+		}); err != nil {
+			return eventlog.NewCorruptionError(path, item.Line, recordNo, "", err)
 		}
-		if err != nil {
-			return events, fmt.Errorf("%s record %d invalid: %w", path, expectedSeq, err)
-		}
-		if record.SchemaVersion != 0 && record.SchemaVersion != gatewaySessionSchemaVersion {
-			return events, fmt.Errorf("%s record %d unsupported schema_version %d", path, expectedSeq, record.SchemaVersion)
-		}
-		if record.Seq != expectedSeq {
-			return events, fmt.Errorf("%s sequence gap: got %d want %d", path, record.Seq, expectedSeq)
-		}
-		if record.SessionID != sessionID {
-			return events, fmt.Errorf("%s record %d session_id = %q, want %q", path, expectedSeq, record.SessionID, sessionID)
-		}
-		if record.EventType != "" && record.Event.Type != "" && record.EventType != string(record.Event.Type) {
-			return events, fmt.Errorf("%s record %d event_type = %q, event.type = %q", path, expectedSeq, record.EventType, record.Event.Type)
+		if record.Event.Type != "" {
+			if err := lifecycle.Observe(record.Event); err != nil {
+				return eventlog.NewCorruptionError(path, item.Line, recordNo, "lifecycle", err)
+			}
 		}
 		if record.Seq > afterSeq {
 			events = append(events, record.Event)
 		}
-		expectedSeq++
+		return nil
+	})
+	if err != nil {
+		return events, err
 	}
 	return events, nil
 }
@@ -663,30 +714,6 @@ func writeSessionManifest(path string, manifest sessionManifest) error {
 		return err
 	}
 	return os.Rename(tmp, path)
-}
-
-func appendJSONL(path string, value any) error {
-	if err := ensurePrivateGatewayDir(filepath.Dir(path)); err != nil {
-		return err
-	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
-	if err != nil {
-		return err
-	}
-	encoder := json.NewEncoder(file)
-	encodeErr := encoder.Encode(value)
-	syncErr := file.Sync()
-	closeErr := file.Close()
-	if encodeErr != nil {
-		return encodeErr
-	}
-	if syncErr != nil {
-		return syncErr
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	return os.Chmod(path, 0o600)
 }
 
 func writeLegacySnapshot(path string, record storedSession) error {

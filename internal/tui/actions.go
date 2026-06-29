@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/billyhargroveofficial/billyharness/internal/clientux"
 )
 
 type actionSpec struct {
@@ -12,6 +14,8 @@ type actionSpec struct {
 	title           string
 	category        string
 	keybinding      string
+	keyAliases      []string
+	keySummary      string
 	slash           string
 	slashArgs       string
 	slashAliases    []string
@@ -20,20 +24,52 @@ type actionSpec struct {
 	enabled         func(Model) bool
 	args            func(Model) []slashArg
 	run             func(*Model, string) (bool, tea.Cmd)
+	keyRun          func(*Model, tea.KeyPressMsg) keyActionResult
+}
+
+type keyActionResult struct {
+	cmd                tea.Cmd
+	model              tea.Model
+	returnNow          bool
+	reflow             bool
+	gotoBottom         bool
+	skipTextareaUpdate bool
+	skipViewportUpdate bool
 }
 
 func actionRegistry() []actionSpec {
-	return []actionSpec{
+	return withSharedActionDefinitions([]actionSpec{
+		{
+			id:         "message.send",
+			title:      "Send Message",
+			category:   "message",
+			keybinding: "enter",
+			keyAliases: []string{"ctrl+s"},
+			keySummary: "send message",
+			summary:    "send message",
+			keyRun: func(m *Model, _ tea.KeyPressMsg) keyActionResult {
+				model, cmd := m.send()
+				return keyActionResult{model: model, cmd: cmd, returnNow: true}
+			},
+		},
+		{
+			id:         "message.newline",
+			title:      "Insert Newline",
+			category:   "message",
+			keybinding: "alt+enter",
+			keySummary: "insert newline",
+			summary:    "insert newline",
+			keyRun: func(m *Model, _ tea.KeyPressMsg) keyActionResult {
+				m.textarea.InsertString("\n")
+				return keyActionResult{skipTextareaUpdate: true}
+			},
+		},
 		{
 			id:       "help.show",
 			title:    "Show Help",
 			category: "session",
 			slash:    "/help",
-			telegramAliases: []string{
-				"/start",
-				"/help",
-			},
-			summary: "show commands and key bindings",
+			summary:  "show commands and key bindings",
 			run: func(m *Model, _ string) (bool, tea.Cmd) {
 				m.addInfoBlock("HELP", helpText())
 				m.status = "help shown"
@@ -45,10 +81,7 @@ func actionRegistry() []actionSpec {
 			title:    "Show Status",
 			category: "session",
 			slash:    "/status",
-			telegramAliases: []string{
-				"/status",
-			},
-			summary: "show current session details",
+			summary:  "show current session details",
 			run: func(m *Model, _ string) (bool, tea.Cmd) {
 				m.addInfoBlock("STATUS", m.statusText())
 				m.status = "status shown"
@@ -60,10 +93,7 @@ func actionRegistry() []actionSpec {
 			title:    "Show Context",
 			category: "runtime",
 			slash:    "/context",
-			telegramAliases: []string{
-				"/context",
-			},
-			summary: "show active context and contributors",
+			summary:  "show active context and contributors",
 			run: func(m *Model, _ string) (bool, tea.Cmd) {
 				m.status = "loading context"
 				return true, m.contextStatusCmd()
@@ -74,10 +104,7 @@ func actionRegistry() []actionSpec {
 			title:    "Show Config",
 			category: "setup",
 			slash:    "/config",
-			telegramAliases: []string{
-				"/config",
-			},
-			summary: "show resolved config summary",
+			summary:  "show resolved config summary",
 			run: func(m *Model, _ string) (bool, tea.Cmd) {
 				m.status = "loading config"
 				return true, m.configStatusCmd()
@@ -89,10 +116,7 @@ func actionRegistry() []actionSpec {
 			category:  "setup",
 			slash:     "/auth",
 			slashArgs: "deepseek|codex",
-			telegramAliases: []string{
-				"/auth",
-			},
-			summary: "configure DeepSeek key or Codex OAuth",
+			summary:   "configure DeepSeek key or Codex OAuth",
 			args: func(Model) []slashArg {
 				return []slashArg{
 					{"deepseek", "save DeepSeek API key"},
@@ -127,10 +151,7 @@ func actionRegistry() []actionSpec {
 			category:  "runtime",
 			slash:     "/model",
 			slashArgs: "flash|pro|gpt|id",
-			telegramAliases: []string{
-				"/model",
-			},
-			summary: "switch model",
+			summary:   "switch model",
 			args: func(m Model) []slashArg {
 				values := []slashArg{
 					{"flash", "deepseek-v4-flash"},
@@ -157,6 +178,12 @@ func actionRegistry() []actionSpec {
 			run: func(m *Model, arg string) (bool, tea.Cmd) {
 				return m.setModel(arg), nil
 			},
+			keybinding: "ctrl+n",
+			keySummary: "cycle model",
+			keyRun: func(m *Model, _ tea.KeyPressMsg) keyActionResult {
+				m.cycleModel()
+				return keyActionResult{skipTextareaUpdate: true}
+			},
 		},
 		{
 			id:       "models.list",
@@ -176,10 +203,7 @@ func actionRegistry() []actionSpec {
 			category:  "runtime",
 			slash:     "/profile",
 			slashArgs: "billy|name",
-			telegramAliases: []string{
-				"/profile",
-			},
-			summary: "switch SOUL.md system profile",
+			summary:   "switch SOUL.md system profile",
 			args: func(m Model) []slashArg {
 				return []slashArg{
 					{m.currentProfile(), "current SOUL.md profile"},
@@ -195,10 +219,7 @@ func actionRegistry() []actionSpec {
 			title:    "Show MCP",
 			category: "runtime",
 			slash:    "/mcp",
-			telegramAliases: []string{
-				"/mcp",
-			},
-			summary: "show connected MCP servers",
+			summary:  "show connected MCP servers",
 			run: func(m *Model, _ string) (bool, tea.Cmd) {
 				m.status = "loading mcp status"
 				return true, m.mcpStatusCmd()
@@ -210,10 +231,7 @@ func actionRegistry() []actionSpec {
 			category:  "runtime",
 			slash:     "/reasoning",
 			slashArgs: "high|max|off",
-			telegramAliases: []string{
-				"/reasoning",
-			},
-			summary: "set provider reasoning effort",
+			summary:   "set provider reasoning effort",
 			args: func(m Model) []slashArg {
 				return rotateSlashArgs([]slashArg{
 					{"high", "reasoning high"},
@@ -227,6 +245,12 @@ func actionRegistry() []actionSpec {
 			},
 			run: func(m *Model, arg string) (bool, tea.Cmd) {
 				return m.setReasoning(arg), nil
+			},
+			keybinding: "ctrl+t",
+			keySummary: "cycle reasoning mode",
+			keyRun: func(m *Model, _ tea.KeyPressMsg) keyActionResult {
+				m.cycleReasoning()
+				return keyActionResult{skipTextareaUpdate: true}
 			},
 		},
 		{
@@ -264,6 +288,12 @@ func actionRegistry() []actionSpec {
 			},
 			run: func(m *Model, arg string) (bool, tea.Cmd) {
 				return m.setThinkingDisplay(arg), nil
+			},
+			keybinding: "ctrl+r",
+			keySummary: "toggle thinking display",
+			keyRun: func(m *Model, _ tea.KeyPressMsg) keyActionResult {
+				m.toggleThinkingDisplay()
+				return keyActionResult{reflow: true, gotoBottom: m.followOutput, skipTextareaUpdate: true}
 			},
 		},
 		{
@@ -314,11 +344,7 @@ func actionRegistry() []actionSpec {
 			title:    "New Chat",
 			category: "chat",
 			slash:    "/new",
-			telegramAliases: []string{
-				"/new",
-				"/reset",
-			},
-			summary: "start a new chat",
+			summary:  "start a new chat",
 			run: func(m *Model, _ string) (bool, tea.Cmd) {
 				return true, m.newChat()
 			},
@@ -352,6 +378,143 @@ func actionRegistry() []actionSpec {
 			},
 		},
 		{
+			id:         "palette.open",
+			title:      "Command Palette",
+			category:   "ui",
+			keybinding: "ctrl+k",
+			keySummary: "open command palette",
+			summary:    "open command palette",
+			keyRun: func(m *Model, _ tea.KeyPressMsg) keyActionResult {
+				m.textarea.SetValue("/")
+				m.slashIndex = 0
+				m.slashDismissed = ""
+				m.status = "command palette"
+				return keyActionResult{reflow: true, gotoBottom: m.followOutput, skipTextareaUpdate: true}
+			},
+		},
+		{
+			id:         "gateway.reconnect",
+			title:      "Reconnect Gateway",
+			category:   "session",
+			keybinding: "ctrl+g",
+			keySummary: "reconnect gateway",
+			summary:    "reconnect gateway",
+			keyRun: func(m *Model, _ tea.KeyPressMsg) keyActionResult {
+				if m.gatewayURL != "" {
+					if strings.TrimSpace(m.sessionID) != "" {
+						m.status = "replaying gateway"
+						return keyActionResult{model: *m, cmd: m.replayGatewayEventsCmd(true), returnNow: true}
+					}
+					m.status = "connecting gateway"
+					return keyActionResult{model: *m, cmd: m.createSessionCmd(), returnNow: true}
+				}
+				return keyActionResult{skipTextareaUpdate: true}
+			},
+		},
+		{
+			id:         "viewport.page_up",
+			title:      "Page Up",
+			category:   "ui",
+			keybinding: "pgup",
+			keySummary: "scroll transcript up",
+			summary:    "scroll transcript up",
+			keyRun: func(m *Model, _ tea.KeyPressMsg) keyActionResult {
+				m.viewport.PageUp()
+				m.followOutput = false
+				return keyActionResult{skipTextareaUpdate: true, skipViewportUpdate: true}
+			},
+		},
+		{
+			id:         "viewport.page_down",
+			title:      "Page Down",
+			category:   "ui",
+			keybinding: "pgdown",
+			keySummary: "scroll transcript down",
+			summary:    "scroll transcript down",
+			keyRun: func(m *Model, _ tea.KeyPressMsg) keyActionResult {
+				m.viewport.PageDown()
+				m.followOutput = m.viewport.AtBottom()
+				return keyActionResult{skipTextareaUpdate: true, skipViewportUpdate: true}
+			},
+		},
+		{
+			id:         "viewport.top",
+			title:      "Top",
+			category:   "ui",
+			keybinding: "alt+home",
+			keySummary: "jump to top",
+			summary:    "jump to top",
+			keyRun: func(m *Model, _ tea.KeyPressMsg) keyActionResult {
+				m.viewport.GotoTop()
+				m.followOutput = false
+				return keyActionResult{skipTextareaUpdate: true, skipViewportUpdate: true}
+			},
+		},
+		{
+			id:         "viewport.bottom",
+			title:      "Follow Bottom",
+			category:   "ui",
+			keybinding: "alt+end",
+			keySummary: "follow bottom",
+			summary:    "follow bottom",
+			keyRun: func(m *Model, _ tea.KeyPressMsg) keyActionResult {
+				m.viewport.GotoBottom()
+				m.followOutput = true
+				return keyActionResult{skipTextareaUpdate: true, skipViewportUpdate: true}
+			},
+		},
+		{
+			id:         "block.toggle",
+			title:      "Toggle Block",
+			category:   "ui",
+			keybinding: "ctrl+e",
+			keySummary: "collapse or expand selected block",
+			summary:    "collapse or expand selected block",
+			keyRun: func(m *Model, _ tea.KeyPressMsg) keyActionResult {
+				result := keyActionResult{skipTextareaUpdate: true}
+				if len(m.blocks) > 0 {
+					m.toggleSelectedBlock()
+					result.reflow = true
+					result.gotoBottom = m.followOutput
+				}
+				return result
+			},
+		},
+		{
+			id:         "block.previous",
+			title:      "Previous Block",
+			category:   "ui",
+			keybinding: "ctrl+p",
+			keySummary: "select previous block",
+			summary:    "select previous block",
+			keyRun: func(m *Model, _ tea.KeyPressMsg) keyActionResult {
+				result := keyActionResult{skipTextareaUpdate: true}
+				if m.selected > 0 {
+					m.selected--
+					result.reflow = true
+					result.gotoBottom = m.followOutput
+				}
+				return result
+			},
+		},
+		{
+			id:         "block.next",
+			title:      "Next Block",
+			category:   "ui",
+			keybinding: "ctrl+l",
+			keySummary: "select next block",
+			summary:    "select next block",
+			keyRun: func(m *Model, _ tea.KeyPressMsg) keyActionResult {
+				result := keyActionResult{skipTextareaUpdate: true}
+				if m.selected < len(m.blocks)-1 {
+					m.selected++
+					result.reflow = true
+					result.gotoBottom = m.followOutput
+				}
+				return result
+			},
+		},
+		{
 			id:           "session.exit",
 			title:        "Exit",
 			category:     "session",
@@ -363,8 +526,30 @@ func actionRegistry() []actionSpec {
 				_ = m.saveSettings()
 				return true, tea.Quit
 			},
+			keybinding: "ctrl+c",
+			keySummary: "quit",
+			keyRun: func(m *Model, _ tea.KeyPressMsg) keyActionResult {
+				return keyActionResult{model: *m, cmd: tea.Quit, returnNow: true}
+			},
 		},
+	})
+}
+
+func withSharedActionDefinitions(actions []actionSpec) []actionSpec {
+	for i := range actions {
+		def, ok := clientux.ActionDefinitionByID(actions[i].id)
+		if !ok {
+			continue
+		}
+		actions[i].title = def.Title
+		actions[i].category = def.Category
+		actions[i].slash = def.Slash
+		actions[i].slashArgs = def.SlashArgs
+		actions[i].slashAliases = append([]string{}, def.SlashAliases...)
+		actions[i].telegramAliases = append([]string{}, def.TelegramAliases...)
+		actions[i].summary = def.Summary
 	}
+	return actions
 }
 
 func rotateSlashArgs(values []slashArg, current string) []slashArg {
@@ -431,6 +616,53 @@ func (m Model) actionEnabled(action actionSpec) bool {
 	return action.enabled(m)
 }
 
+func actionForKey(msg tea.KeyPressMsg) (actionSpec, bool) {
+	names := keyPressNames(msg)
+	for _, action := range actionRegistry() {
+		for _, key := range actionKeybindings(action) {
+			for _, name := range names {
+				if strings.EqualFold(key, name) {
+					return action, true
+				}
+			}
+		}
+	}
+	return actionSpec{}, false
+}
+
+func actionKeybindings(action actionSpec) []string {
+	var out []string
+	if strings.TrimSpace(action.keybinding) != "" {
+		out = append(out, strings.TrimSpace(action.keybinding))
+	}
+	for _, alias := range action.keyAliases {
+		if strings.TrimSpace(alias) != "" {
+			out = append(out, strings.TrimSpace(alias))
+		}
+	}
+	return out
+}
+
+func keyPressNames(msg tea.KeyPressMsg) []string {
+	names := []string{strings.ToLower(strings.TrimSpace(msg.String()))}
+	if msg.Code == tea.KeyEnter {
+		if msg.Mod.Contains(tea.ModAlt) {
+			names = append(names, "alt+enter")
+		} else {
+			names = append(names, "enter")
+		}
+	}
+	return names
+}
+
+func (m *Model) handleKeyAction(msg tea.KeyPressMsg) (keyActionResult, bool) {
+	action, ok := actionForKey(msg)
+	if !ok || !m.actionEnabled(action) || action.keyRun == nil {
+		return keyActionResult{}, false
+	}
+	return action.keyRun(m, msg), true
+}
+
 func helpText() string {
 	var lines []string
 	for _, action := range actionRegistry() {
@@ -443,17 +675,27 @@ func helpText() string {
 		}
 		lines = append(lines, fmt.Sprintf("%-42s %s", usage, action.summary))
 	}
-	lines = append(lines,
-		"Tab / Up / Down                           complete slash commands",
-		"Ctrl+K                                    open command palette",
-		"Enter                                     send",
-		"Alt+Enter                                 insert newline",
-		"Ctrl+S                                    send fallback; may freeze SSH if IXON is enabled",
-		"mouse wheel / PgUp/PgDn                    scroll transcript",
-		"Alt+Home / Alt+End                         top / follow bottom",
-		"Ctrl+E                                    collapse or expand selected block",
-		"Ctrl+P / Ctrl+L                           select previous / next block",
-		"Ctrl+G                                    reconnect gateway",
-	)
+	lines = append(lines, keybindingHelpLines()...)
 	return strings.Join(lines, "\n")
+}
+
+func keybindingHelpLines() []string {
+	var lines []string
+	lines = append(lines, "Tab / Up / Down                           complete slash commands")
+	for _, action := range actionRegistry() {
+		keys := actionKeybindings(action)
+		if len(keys) == 0 {
+			continue
+		}
+		summary := action.keySummary
+		if summary == "" {
+			summary = action.summary
+		}
+		if summary == "" {
+			summary = strings.ToLower(action.title)
+		}
+		lines = append(lines, fmt.Sprintf("%-42s %s", strings.Join(keys, " / "), summary))
+	}
+	lines = append(lines, "mouse wheel                                scroll transcript")
+	return lines
 }

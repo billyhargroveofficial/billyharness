@@ -48,6 +48,19 @@ Older state files used only `chat_id[:message_thread_id]`. Billyharness still re
 
 `/cancel` is scoped to the same key, so one user's cancel command does not cancel another user's local run in the same group. Gateway cancellation is sent only for that user's current gateway session.
 
+## Update Admission Durability
+
+Telegram polling is currently at-most-once. For each update returned by
+`getUpdates`, Billyharness persists the next offset before launching message
+handling. If the process exits after the offset is saved but before that handler
+creates/updates the gateway session, the Telegram update will not be replayed on
+restart. Once a handler reaches gateway/session state writes, those writes are
+durable through the normal gateway and Telegram state stores.
+
+This keeps polling simple and avoids duplicate command execution, but it is not
+a durable admission queue. Add a queued admission store before changing the bot
+to acknowledge updates after handling.
+
 ## Commands
 
 ```text
@@ -74,6 +87,13 @@ Older state files used only `chat_id[:message_thread_id]`. Billyharness still re
 `/new` starts a fresh gateway session for the current Telegram state key and resets that key's turn/tool totals. `/resume` lists recent gateway sessions, and `/resume SESSION_ID` switches the current Telegram state key to that session. `/fork current` or `/fork SESSION_ID` clones the replayable messages from the source session into a new gateway session and makes it current. `/context` shows active context and contributors for the current session. `/toolview` replays the current session and shows compact tool details for the latest run without raw tool output. `/mcp`, `/config`, and `/auth` show sanitized status.
 
 Session id arguments can be full ids or unambiguous prefixes.
+
+Telegram `/resume` and `/fork` are owner-scoped. A user can see and select
+their own Telegram-owned sessions plus ownerless legacy/solo sessions; sessions
+owned by another Telegram user are hidden and explicit id/prefix selection fails
+as not found. Billyharness currently has no Telegram admin/global session-owner
+override. `AllowAllChats` controls whether incoming chats are admitted, but it
+does not bypass per-user session ownership.
 
 ## Rendering And Throttling
 

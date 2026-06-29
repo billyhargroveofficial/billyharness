@@ -85,16 +85,17 @@ type compactionContributor struct {
 	Preview         string `json:"preview,omitempty"`
 }
 
-func compactMessages(messages []protocol.Message, cfg config.Config, observedPromptTokens int64) ([]protocol.Message, *compactionReport, bool) {
-	policy := effectiveCompactionPolicy(cfg)
+func compactMessages(messages []protocol.Message, limits config.RuntimeLimits, observedPromptTokens int64) ([]protocol.Message, *compactionReport, bool) {
+	policy := effectiveCompactionPolicy(limits)
 	if policy.ThresholdTokens <= 0 || len(messages) < 4 {
 		return messages, nil, false
 	}
-	triggerTokens := observedPromptTokens
-	triggerSource := "provider_usage"
-	if triggerTokens <= 0 {
-		triggerTokens = estimateMessagesTokens(messages)
-		triggerSource = "estimated_messages"
+	estimatedTokens := estimateMessagesTokens(messages)
+	triggerTokens := estimatedTokens
+	triggerSource := "estimated_messages"
+	if observedPromptTokens > estimatedTokens {
+		triggerTokens = observedPromptTokens
+		triggerSource = "provider_usage"
 	}
 	if triggerTokens < policy.ThresholdTokens {
 		return messages, nil, false
@@ -115,17 +116,17 @@ func compactMessages(messages []protocol.Message, cfg config.Config, observedPro
 	return out, report, true
 }
 
-func effectiveCompactionPolicy(cfg config.Config) compactionPolicy {
-	keep := cfg.ContextCompactKeep
+func effectiveCompactionPolicy(limits config.RuntimeLimits) compactionPolicy {
+	keep := limits.ContextCompactKeep
 	if keep <= 0 {
 		keep = defaultContextCompactKeep
 	}
-	maxChars := cfg.ContextCompactMaxChars
+	maxChars := limits.ContextCompactMaxChars
 	if maxChars <= 0 {
 		maxChars = defaultContextCompactMaxChars
 	}
 	return compactionPolicy{
-		ThresholdTokens: int64(cfg.ContextCompactTokens),
+		ThresholdTokens: int64(limits.ContextCompactTokens),
 		KeepMessages:    keep,
 		MaxSummaryChars: maxChars,
 	}

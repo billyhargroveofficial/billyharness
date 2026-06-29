@@ -15,12 +15,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/eventlog"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
@@ -32,7 +34,7 @@ func TestGatewaySessionRunStreamsEvents(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"
 	cfg.Model = "mock"
-	prov, err := provider.New(cfg)
+	prov, err := provider.NewFromBinding(cfg.ProviderBinding())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +77,149 @@ func TestGatewaySessionRunStreamsEvents(t *testing.T) {
 	}
 	if got := content.String(); got != "mock: through gateway" {
 		t.Fatalf("content = %q", got)
+	}
+}
+
+func TestStreamEventsDoesNotDuplicateEmittedRunFailure(t *testing.T) {
+	rec := httptest.NewRecorder()
+	streamEvents(rec, func(emit func(protocol.Event)) error {
+		emit(protocol.Event{Type: protocol.EventRunStarted})
+		emit(protocol.Event{Type: protocol.EventRunFailed, Data: "provider boom"})
+		return errors.New("provider boom")
+	})
+
+	events := readProtocolEvents(t, rec.Body)
+	failed := 0
+	for _, event := range events {
+		if event.Type == protocol.EventRunFailed {
+			failed++
+			if got := fmt.Sprint(event.Data); got != "provider boom" {
+				t.Fatalf("failure data = %q", got)
+			}
+		}
+	}
+	if failed != 1 {
+		t.Fatalf("run.failed count = %d, events=%v", failed, events)
+	}
+}
+
+func TestStreamEventsSynthesizesFailureForSetupError(t *testing.T) {
+	rec := httptest.NewRecorder()
+	streamEvents(rec, func(emit func(protocol.Event)) error {
+		return errors.New("setup boom")
+	})
+
+	events := readProtocolEvents(t, rec.Body)
+	if len(events) != 1 {
+		t.Fatalf("event count = %d, events=%v", len(events), events)
+	}
+	if events[0].Type != protocol.EventRunFailed {
+		t.Fatalf("event type = %s", events[0].Type)
+	}
+	if got := fmt.Sprint(events[0].Data); got != "setup boom" {
+		t.Fatalf("failure data = %q", got)
+	}
+}
+
+func TestStreamEventsDoesNotAppendFailureAfterRunCompleted(t *testing.T) {
+	rec := httptest.NewRecorder()
+	streamEvents(rec, func(emit func(protocol.Event)) error {
+		emit(protocol.Event{Type: protocol.EventRunStarted})
+		emit(protocol.Event{Type: protocol.EventRunCompleted})
+		return errors.New("late cleanup boom")
+	})
+
+	events := readProtocolEvents(t, rec.Body)
+	for _, event := range events {
+		if event.Type == protocol.EventRunFailed {
+			t.Fatalf("unexpected run.failed after completed run: events=%v", events)
+		}
+	}
+}
+
+func TestGatewaySessionRunStreamsStoredSequencedEvents(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+
+	create := httptest.NewRecorder()
+	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", nil))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	run := httptest.NewRecorder()
+	server.Handler().ServeHTTP(run, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/run", bytes.NewBufferString(`{"prompt":"sequenced stream"}`)))
+	if run.Code != http.StatusOK {
+		t.Fatalf("run status = %d body=%s", run.Code, run.Body.String())
+	}
+	var streamed []protocol.Event
+	dec := json.NewDecoder(run.Body)
+	for {
+		var event protocol.Event
+		err := dec.Decode(&event)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		streamed = append(streamed, event)
+	}
+	if len(streamed) == 0 {
+		t.Fatal("run streamed no events")
+	}
+
+	stored := readSessionEventRecords(t, filepath.Join(storeDir, created.ID, sessionEventsJSONLName))
+	storedBySeq := make(map[int64]protocol.Event, len(stored))
+	for _, record := range stored {
+		storedBySeq[record.Seq] = record.Event
+	}
+	var lastSeq int64
+	for _, event := range streamed {
+		if event.Seq == 0 {
+			t.Fatalf("streamed event has zero seq: %#v", event)
+		}
+		if event.Seq <= lastSeq {
+			t.Fatalf("streamed event seq = %d after %d", event.Seq, lastSeq)
+		}
+		lastSeq = event.Seq
+		storedEvent, ok := storedBySeq[event.Seq]
+		if !ok {
+			t.Fatalf("streamed event seq %d not found in stored events %#v", event.Seq, stored)
+		}
+		if !reflect.DeepEqual(event, storedEvent) {
+			t.Fatalf("streamed event seq %d = %#v, stored = %#v", event.Seq, event, storedEvent)
+		}
+	}
+
+	replay := httptest.NewRecorder()
+	path := "/v1/sessions/" + created.ID + "/events?after_seq=" + strconv.FormatInt(lastSeq, 10) + "&follow=false"
+	server.Handler().ServeHTTP(replay, httptest.NewRequest(http.MethodGet, path, nil))
+	if replay.Code != http.StatusOK {
+		t.Fatalf("replay status = %d body=%s", replay.Code, replay.Body.String())
+	}
+	dec = json.NewDecoder(replay.Body)
+	for {
+		var event protocol.Event
+		err := dec.Decode(&event)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Seq <= lastSeq {
+			t.Fatalf("replay after final streamed seq returned duplicate event: seq %d after %d", event.Seq, lastSeq)
+		}
 	}
 }
 
@@ -217,6 +362,62 @@ func TestGatewaySessionListEndpointReturnsTypedSummaries(t *testing.T) {
 	}
 }
 
+func TestGatewaySessionOwnerMetadataPersistsAndLists(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := t.TempDir()
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+
+	owner := SessionOwner{
+		ClientType:       "telegram",
+		TelegramChatID:   123,
+		TelegramThreadID: 7,
+		TelegramUserID:   1001,
+		Profile:          "billy",
+		Model:            "deepseek-v4-flash",
+	}
+	body, _ := json.Marshal(CreateSessionRequest{Profile: "billy", Owner: owner})
+	create := httptest.NewRecorder()
+	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(body)))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var created SessionResponse
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Owner != owner || created.Status.Owner != owner {
+		t.Fatalf("created owner = response:%#v status:%#v want %#v", created.Owner, created.Status.Owner, owner)
+	}
+
+	reloaded := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+	list := httptest.NewRecorder()
+	reloaded.Handler().ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/v1/sessions", nil))
+	if list.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", list.Code, list.Body.String())
+	}
+	var listed SessionListResponse
+	if err := json.Unmarshal(list.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Sessions) != 1 || listed.Sessions[0].Owner != owner {
+		t.Fatalf("listed sessions = %#v, want owner %#v", listed.Sessions, owner)
+	}
+	status := httptest.NewRecorder()
+	reloaded.Handler().ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID+"/status", nil))
+	if status.Code != http.StatusOK {
+		t.Fatalf("status code = %d body=%s", status.Code, status.Body.String())
+	}
+	var gotStatus SessionStatus
+	if err := json.Unmarshal(status.Body.Bytes(), &gotStatus); err != nil {
+		t.Fatal(err)
+	}
+	if gotStatus.Owner != owner {
+		t.Fatalf("status owner = %#v, want %#v", gotStatus.Owner, owner)
+	}
+}
+
 func TestGatewaySessionContextStatusEndpoint(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"
@@ -264,41 +465,6 @@ func TestGatewaySessionContextStatusEndpoint(t *testing.T) {
 	}
 	if len(got.TopContributors[0].Preview) > 120 {
 		t.Fatalf("preview too long: %q", got.TopContributors[0].Preview)
-	}
-}
-
-func TestGatewayContextStatusClassifiesSourcesAndThresholds(t *testing.T) {
-	cfg := config.Default()
-	cfg.ContextWindowTokens = 1000
-	cfg.ContextCompactTokens = 600
-	resp := BuildContextResponse(cfg, "session-test", []protocol.Message{
-		{Role: protocol.RoleSystem, Content: "system instructions"},
-		{Role: protocol.RoleUser, Content: strings.Repeat("ask ", 90)},
-		{Role: protocol.RoleAssistant, ToolCalls: []protocol.ToolCall{{ID: "call_1", Name: "web_fetch", Arguments: []byte(`{"url":"https://example.com/a/very/long/path"}`)}}},
-		{Role: protocol.RoleTool, Name: "web_fetch", ToolCallID: "call_1", Content: strings.Repeat("web summary ", 120)},
-		{Role: protocol.RoleTool, Name: "mcp_call", ToolCallID: "call_2", Content: strings.Repeat("mcp output ", 20)},
-		{Role: protocol.RoleAssistant, Content: "answer", ReasoningContent: strings.Repeat("reasoning summary ", 20)},
-	})
-	if resp.ID != "session-test" || resp.EstimatedTokens <= 500 {
-		t.Fatalf("context response = %#v", resp)
-	}
-	sourceTokens := map[string]int64{}
-	for _, source := range resp.Sources {
-		sourceTokens[source.Source] = source.EstimatedTokens
-	}
-	for _, source := range []string{"web_summaries", "mcp_outputs", "assistant_tool_calls", "user_messages", "system_instructions", "reasoning_summaries"} {
-		if sourceTokens[source] <= 0 {
-			t.Fatalf("missing source %s in %#v", source, resp.Sources)
-		}
-	}
-	if len(resp.Thresholds) != 4 || !resp.Thresholds[0].Crossed || resp.Thresholds[3].Crossed {
-		t.Fatalf("thresholds = %#v", resp.Thresholds)
-	}
-	formatted := FormatSessionContext(resp)
-	for _, want := range []string{"active context:", "thresholds:", "web_summaries", "mcp_outputs", "top contributors:"} {
-		if !strings.Contains(formatted, want) {
-			t.Fatalf("formatted context missing %q:\n%s", want, formatted)
-		}
 	}
 }
 
@@ -665,6 +831,44 @@ func TestGatewaySessionStoreRestoresSessionAfterRestart(t *testing.T) {
 	if len(got.Messages) == 0 || got.Messages[len(got.Messages)-1].Content != "mock: persist me" {
 		t.Fatalf("restored messages = %#v", got.Messages)
 	}
+	statusAfterRestart := httptest.NewRecorder()
+	restarted.Handler().ServeHTTP(statusAfterRestart, httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID+"/status", nil))
+	if statusAfterRestart.Code != http.StatusOK {
+		t.Fatalf("status after restart = %d body=%s", statusAfterRestart.Code, statusAfterRestart.Body.String())
+	}
+	var restoredStatus SessionStatus
+	if err := json.Unmarshal(statusAfterRestart.Body.Bytes(), &restoredStatus); err != nil {
+		t.Fatal(err)
+	}
+	if restoredStatus.RunSeq != 1 || restoredStatus.Running {
+		t.Fatalf("restored status = %#v, want run_seq 1 and not running", restoredStatus)
+	}
+	secondRun := httptest.NewRecorder()
+	restarted.Handler().ServeHTTP(secondRun, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/run", bytes.NewBufferString(`{"prompt":"persist me again"}`)))
+	if secondRun.Code != http.StatusOK {
+		t.Fatalf("second run status = %d body=%s", secondRun.Code, secondRun.Body.String())
+	}
+	eventsAfterRestart := readSessionEventRecords(t, eventsPath)
+	var maxRunSeq int64
+	var sawRun2Start bool
+	var sawRun2Status bool
+	for _, record := range eventsAfterRestart {
+		if record.RunSeq > maxRunSeq {
+			maxRunSeq = record.RunSeq
+		}
+		if record.RunSeq == 2 && record.Event.Type == protocol.EventRunStarted {
+			sawRun2Start = true
+		}
+		if record.RunSeq == 2 && record.Event.Type == protocol.EventSessionStatus {
+			sawRun2Status = true
+			if !strings.HasSuffix(record.Event.RunID, ":run-2") {
+				t.Fatalf("run-2 status event has run_id %q", record.Event.RunID)
+			}
+		}
+	}
+	if maxRunSeq != 2 || !sawRun2Start || !sawRun2Status {
+		t.Fatalf("events after restart should continue at run_seq 2, max=%d sawStart=%v sawStatus=%v records=%#v", maxRunSeq, sawRun2Start, sawRun2Status, eventsAfterRestart)
+	}
 }
 
 func TestGatewaySessionEventsReplayAfterSeqAcrossRestart(t *testing.T) {
@@ -729,6 +933,133 @@ func TestGatewaySessionEventsReplayAfterSeqAcrossRestart(t *testing.T) {
 	var extra protocol.Event
 	if err := dec.Decode(&extra); err != io.EOF {
 		t.Fatalf("one-shot replay decode after stored events = %v event=%#v, want EOF", err, extra)
+	}
+}
+
+func TestGatewaySessionEventsReplayRejectsLifecycleViolation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), sessionEventsJSONLName)
+	records := []sessionEventRecord{
+		{
+			SchemaVersion: gatewaySessionSchemaVersion,
+			Seq:           1,
+			SessionID:     "session-1",
+			EventType:     string(protocol.EventRunStarted),
+			Event: protocol.Event{
+				Type:  protocol.EventRunStarted,
+				RunID: "run-1",
+			},
+		},
+		{
+			SchemaVersion: gatewaySessionSchemaVersion,
+			Seq:           2,
+			SessionID:     "session-1",
+			EventType:     string(protocol.EventToolCallFinished),
+			Event: protocol.Event{
+				Type:      protocol.EventToolCallFinished,
+				RunID:     "run-1",
+				CallID:    "call-1",
+				AttemptID: "attempt-1",
+				Data: protocol.ToolResult{
+					CallID:  "call-1",
+					Content: "ok",
+					Metadata: map[string]any{
+						"attempt_id": "attempt-1",
+					},
+				},
+			},
+		},
+	}
+	var body bytes.Buffer
+	enc := json.NewEncoder(&body)
+	for _, record := range records {
+		if err := enc.Encode(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(path, body.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := replaySessionEventsAfter(path, "session-1", 0)
+	if err == nil || !strings.Contains(err.Error(), "matching call_id") {
+		t.Fatalf("expected lifecycle call_id error, got %v", err)
+	}
+	var corrupt *eventlog.CorruptionError
+	if !errors.As(err, &corrupt) {
+		t.Fatalf("error %T does not expose CorruptionError", err)
+	}
+	if corrupt.Path != path || corrupt.Line != 2 || corrupt.RecordNo != 2 || corrupt.Kind != "lifecycle" {
+		t.Fatalf("corruption error = %#v", corrupt)
+	}
+}
+
+func TestInspectStoredSessionReturnsStructuredEventCorruption(t *testing.T) {
+	root := t.TempDir()
+	sessionID := "session-1"
+	sessionDir := filepath.Join(root, sessionID)
+	now := time.Unix(10, 0).UTC()
+	if err := writeSessionManifest(filepath.Join(sessionDir, sessionManifestName), sessionManifest{
+		SchemaVersion: gatewaySessionSchemaVersion,
+		SessionID:     sessionID,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		HistoryJSONL:  sessionHistoryJSONLName,
+		EventsJSONL:   sessionEventsJSONLName,
+		SnapshotJSON:  sessionID + ".json",
+		MessageCount:  1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eventlog.AppendJSONL(filepath.Join(sessionDir, sessionHistoryJSONLName), sessionHistoryRecord{
+		SchemaVersion: gatewaySessionSchemaVersion,
+		Seq:           1,
+		SessionID:     sessionID,
+		Timestamp:     now,
+		Kind:          sessionHistoryCreated,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		MessageCount:  1,
+		Messages:      []protocol.Message{{Role: protocol.RoleUser, Content: "hello"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	eventsPath := filepath.Join(sessionDir, sessionEventsJSONLName)
+	for _, record := range []sessionEventRecord{
+		{
+			SchemaVersion: gatewaySessionSchemaVersion,
+			Seq:           1,
+			SessionID:     sessionID,
+			EventType:     string(protocol.EventRunStarted),
+			Event:         protocol.Event{Type: protocol.EventRunStarted, RunID: "run-1"},
+		},
+		{
+			SchemaVersion: gatewaySessionSchemaVersion,
+			Seq:           2,
+			SessionID:     sessionID,
+			EventType:     string(protocol.EventToolCallFinished),
+			Event: protocol.Event{
+				Type:      protocol.EventToolCallFinished,
+				RunID:     "run-1",
+				CallID:    "call-1",
+				AttemptID: "attempt-1",
+			},
+		},
+	} {
+		if err := eventlog.AppendJSONL(eventsPath, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := InspectStoredSession(root, sessionID)
+	if err == nil || !strings.Contains(err.Error(), "matching call_id") {
+		t.Fatalf("expected lifecycle call_id error, got %v", err)
+	}
+	var corrupt *eventlog.CorruptionError
+	if !errors.As(err, &corrupt) {
+		t.Fatalf("error %T does not expose CorruptionError", err)
+	}
+	if corrupt.Path != eventsPath || corrupt.Line != 2 || corrupt.RecordNo != 2 || corrupt.Kind != "lifecycle" {
+		t.Fatalf("corruption error = %#v", corrupt)
 	}
 }
 
@@ -910,12 +1241,20 @@ func TestGatewayShutdownAbortRecordsActiveSessionFailure(t *testing.T) {
 
 	started := make(chan struct{})
 	done := make(chan error, 1)
+	runID := "run-shutdown-abort"
 	go func() {
-		done <- session.Thread.Run(context.Background(), sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, _ func(protocol.Event)) ([]protocol.Message, error) {
+		done <- session.Thread.Run(context.Background(), sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
+			emit(protocol.Event{Type: protocol.EventRunStarted, RunID: runID})
 			close(started)
 			<-ctx.Done()
+			emit(protocol.Event{Type: protocol.EventRunFailed, RunID: runID, Data: ctx.Err().Error()})
 			return messages, ctx.Err()
-		}), "wait", nil)
+		}), "wait", func(event protocol.Event) {
+			if event.Type == protocol.EventRunStarted {
+				session.beginRunStatus(RunRequest{Provider: "mock", Model: "mock"})
+			}
+			session.observeRunEvent(event)
+		})
 	}()
 	select {
 	case <-started:
@@ -937,15 +1276,21 @@ func TestGatewayShutdownAbortRecordsActiveSessionFailure(t *testing.T) {
 	if len(records) == 0 {
 		t.Fatal("no event records written")
 	}
-	foundFailed := false
+	failedCount := 0
 	for _, record := range records {
-		if record.Event.Type == protocol.EventRunFailed && fmt.Sprint(record.Event.Data) == "gateway shutdown" {
-			foundFailed = true
-			break
+		if record.Event.Type != protocol.EventRunFailed {
+			continue
+		}
+		failedCount++
+		if record.Event.RunID != runID || fmt.Sprint(record.Event.Data) != "gateway shutdown" {
+			t.Fatalf("run.failed record = %#v, want run_id %q data gateway shutdown", record, runID)
 		}
 	}
-	if !foundFailed {
-		t.Fatalf("events = %#v, want shutdown run.failed", records)
+	if failedCount != 1 {
+		t.Fatalf("run.failed count = %d, records=%#v", failedCount, records)
+	}
+	if _, err := server.store.ReplayEventsAfter(session.ID, 0); err != nil {
+		t.Fatalf("shutdown abort replay failed: %v", err)
 	}
 }
 
@@ -953,7 +1298,7 @@ func TestGatewayRunAcceptsModelOverrides(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"
 	cfg.Model = "mock"
-	prov, err := provider.New(cfg)
+	prov, err := provider.NewFromBinding(cfg.ProviderBinding())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1061,6 +1406,11 @@ func TestGatewayConfigStatusIsSanitized(t *testing.T) {
 	if !strings.Contains(body, `"key":"model"`) || !strings.Contains(body, config.SourceGateway) {
 		t.Fatalf("config endpoint missing runtime model provenance: %s", body)
 	}
+	if !strings.Contains(body, `"diagnostics"`) ||
+		!strings.Contains(body, `"provider_auth"`) ||
+		!strings.Contains(body, `"runtime_tool"`) {
+		t.Fatalf("config endpoint missing diagnostics: %s", body)
+	}
 }
 
 func TestGatewayAPIRedactsSecretsAcrossResponsesAndStreams(t *testing.T) {
@@ -1088,6 +1438,34 @@ func TestGatewayAPIRedactsSecretsAcrossResponsesAndStreams(t *testing.T) {
 			t.Fatalf("%s retained token-looking material: %s", label, body)
 		}
 	}
+	assertJSON := func(label, body string, stream bool) {
+		t.Helper()
+		if stream {
+			requireLines := !strings.Contains(label, "event replay")
+			scanner := bufio.NewScanner(strings.NewReader(body))
+			lines := 0
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if line == "" {
+					continue
+				}
+				lines++
+				if !json.Valid([]byte(line)) {
+					t.Fatalf("%s emitted invalid NDJSON line %d: %s", label, lines, line)
+				}
+			}
+			if err := scanner.Err(); err != nil {
+				t.Fatalf("%s scan NDJSON: %v", label, err)
+			}
+			if requireLines && lines == 0 {
+				t.Fatalf("%s emitted no NDJSON lines", label)
+			}
+			return
+		}
+		if !json.Valid([]byte(body)) {
+			t.Fatalf("%s emitted invalid JSON: %s", label, body)
+		}
+	}
 
 	createPayload, err := json.Marshal(CreateSessionRequest{Messages: []protocol.Message{
 		{Role: protocol.RoleUser, Content: "user pasted " + rawKey},
@@ -1111,6 +1489,7 @@ func TestGatewayAPIRedactsSecretsAcrossResponsesAndStreams(t *testing.T) {
 		t.Fatal("empty session id")
 	}
 	assertRedacted("create session", create.Body.String())
+	assertJSON("create session", create.Body.String(), false)
 
 	for _, tc := range []struct {
 		label  string
@@ -1122,8 +1501,8 @@ func TestGatewayAPIRedactsSecretsAcrossResponsesAndStreams(t *testing.T) {
 		{label: "auth status", method: http.MethodGet, path: "/v1/auth/status"},
 		{label: "session", method: http.MethodGet, path: "/v1/sessions/" + created.ID},
 		{label: "session context", method: http.MethodGet, path: "/v1/sessions/" + created.ID + "/context"},
-		{label: "global run stream", method: http.MethodPost, path: "/v1/run", body: `{"prompt":"repeat ` + rawKey + `"}`},
-		{label: "session run stream", method: http.MethodPost, path: "/v1/sessions/" + created.ID + "/run", body: `{"prompt":"repeat ` + rawPAT + `"}`},
+		{label: "global run stream", method: http.MethodPost, path: "/v1/run", body: `{"prompt":"repeat ` + rawKey + ` and task_api_key = \"literal\" safely"}`},
+		{label: "session run stream", method: http.MethodPost, path: "/v1/sessions/" + created.ID + "/run", body: `{"prompt":"repeat ` + rawPAT + ` and explicit_api_key=abc123"}`},
 		{label: "event replay stream", method: http.MethodGet, path: "/v1/sessions/" + created.ID + "/events?after_seq=0&follow=false"},
 	} {
 		rec := httptest.NewRecorder()
@@ -1135,7 +1514,9 @@ func TestGatewayAPIRedactsSecretsAcrossResponsesAndStreams(t *testing.T) {
 		if rec.Code < 200 || rec.Code >= 300 {
 			t.Fatalf("%s status = %d body=%s", tc.label, rec.Code, rec.Body.String())
 		}
-		assertRedacted(tc.label, rec.Body.String())
+		body := rec.Body.String()
+		assertRedacted(tc.label, body)
+		assertJSON(tc.label, body, strings.Contains(tc.label, "stream"))
 	}
 }
 
@@ -1244,7 +1625,7 @@ func TestGatewayCreateSessionAcceptsMessages(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"
 	cfg.Model = "mock"
-	prov, err := provider.New(cfg)
+	prov, err := provider.NewFromBinding(cfg.ProviderBinding())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1450,6 +1831,24 @@ func readSessionEventRecords(t *testing.T, path string) []sessionEventRecord {
 		records = append(records, record)
 	}
 	return records
+}
+
+func readProtocolEvents(t *testing.T, r io.Reader) []protocol.Event {
+	t.Helper()
+	var events []protocol.Event
+	decoder := json.NewDecoder(r)
+	for {
+		var event protocol.Event
+		err := decoder.Decode(&event)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	return events
 }
 
 func sawSessionEvent(events []sessionEventRecord, typ protocol.EventType) bool {
