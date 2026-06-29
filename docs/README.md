@@ -9,6 +9,7 @@ Start here:
 - [MCP](mcp.md): billyharness-owned MCP config, built-ins, discovery, and troubleshooting.
 - [Profiles](profiles.md): `profile.toml`, `SOUL.md`, switching, and inspection.
 - [Master implementation TODO](master-implementation-todo.md): live execution plan and goal checklist.
+- [Architecture decomposition TODO](architecture-decomposition-todo.md): package boundaries, refactor order, and decomposition backlog.
 - [Codex research roadmap](codex-research-roadmap.md): architecture research summary and rationale.
 - [Benchmarks](benchmarks.md): local long-loop, Terminal-Bench adapter, and replay verification.
 - [Provider comparison report](provider-comparison-report.md): first live DeepSeek/Codex smoke results and failure modes.
