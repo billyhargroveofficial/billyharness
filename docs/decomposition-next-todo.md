@@ -551,13 +551,20 @@ Source: 4-agent static review of the current codebase. Goal: fix real architectu
     `internal/agent/tool_attempt_test.go` 988 LOC.
     Removed the stale `internal/agent/agent_test.go` size exception from
     `docs/architecture.md`.
+  - [x] Split `internal/gateway/gateway_test.go` into focused gateway,
+    session-event, and session-store test files:
+    `internal/gateway/gateway_test.go` 744 LOC,
+    `internal/gateway/session_events_test.go` 647 LOC,
+    `internal/gateway/session_store_test.go` 558 LOC.
+    Removed the stale `internal/gateway/gateway_test.go` size exception from
+    `docs/architecture.md`.
   - [ ] Remaining over-budget test files:
     `internal/tui/tui_test.go` 2,896 LOC,
-    `internal/telegrambot/bot_test.go` 2,074 LOC,
-    `internal/gateway/gateway_test.go` 1,904 LOC.
+    `internal/telegrambot/bot_test.go` 2,074 LOC.
   - Verified current split work with `/root/.local/go/bin/go test -count=1 ./internal/tools`,
     `/root/.local/go/bin/go test -count=1 ./internal/agent`,
-    `/root/.local/go/bin/go test -count=1 ./internal/agent ./internal/tools ./internal/architecture ./cmd/fast-agent-harness`,
+    `/root/.local/go/bin/go test -count=1 ./internal/gateway`,
+    `/root/.local/go/bin/go test -count=1 ./internal/agent ./internal/tools ./internal/gateway ./internal/architecture ./cmd/fast-agent-harness`,
     and `/root/.local/go/bin/go run ./cmd/fast-agent-harness hygiene -strict -repo /root/billyharness`.
 
 - [ ] Finish config decomposition.
