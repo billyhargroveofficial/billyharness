@@ -63,10 +63,7 @@ separately.
 | --- | --- | --- |
 | `internal/mcpclient/client.go` | P2.1 MCP client file split. | Split manager, catalog, server lifecycle, stdio transport, JSON-RPC, content rendering, env/secrets, and reconnect/status fanout into focused files. |
 | `internal/tui/tui_test.go` | P1.4 TUI subpackage tests. | Move renderer, transcript, selection, and runtimeclient behavioral coverage beside those packages; keep only Bubble Tea integration tests here. |
-| `internal/tools/tools_test.go` | P2 tools decomposition. | Split policy, discovery, web, filesystem, shell, output-ref, and MCP tests beside their implementation files. |
 | `internal/telegrambot/bot_test.go` | P1.5/P2 Telegram adapter decomposition. | Split command, delivery, runner, session-owner, progress, and rendering tests beside the extracted adapter files. |
-| `internal/agent/agent_test.go` | P1.1 runtime/toolexec split. | Move model-call, tool-attempt, compaction, transcript, and lifecycle tests beside extracted runtime packages. |
-| `internal/gateway/gateway_test.go` | P1.2 gateway API/client and session decomposition. | Move session store, replay, gatewayapi, gatewayclient, and eventlog integration coverage into narrower package tests. |
 
 ## Guarded Rules
 

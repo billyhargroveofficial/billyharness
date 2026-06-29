@@ -537,6 +537,28 @@ Source: 4-agent static review of the current codebase. Goal: fix real architectu
 - [ ] Split huge tests by ownership.
   Files: `internal/tui/tui_test.go`, `internal/tools/tools_test.go`, `internal/telegrambot/bot_test.go`, `internal/agent/agent_test.go`, `internal/gateway/gateway_test.go`.
   Acceptance: no `_test.go` over 1,200 LOC unless explicitly allowlisted.
+  - [x] Split `internal/tools/tools_test.go` into focused tools, web, and MCP
+    test files:
+    `internal/tools/tools_test.go` 641 LOC,
+    `internal/tools/web_test.go` 767 LOC,
+    `internal/tools/mcp_test.go` 838 LOC.
+    Removed the stale `internal/tools/tools_test.go` size exception from
+    `docs/architecture.md`.
+  - [x] Split `internal/agent/agent_test.go` into focused agent, compaction,
+    and tool-attempt test files:
+    `internal/agent/agent_test.go` 713 LOC,
+    `internal/agent/compaction_test.go` 420 LOC,
+    `internal/agent/tool_attempt_test.go` 988 LOC.
+    Removed the stale `internal/agent/agent_test.go` size exception from
+    `docs/architecture.md`.
+  - [ ] Remaining over-budget test files:
+    `internal/tui/tui_test.go` 2,896 LOC,
+    `internal/telegrambot/bot_test.go` 2,074 LOC,
+    `internal/gateway/gateway_test.go` 1,904 LOC.
+  - Verified current split work with `/root/.local/go/bin/go test -count=1 ./internal/tools`,
+    `/root/.local/go/bin/go test -count=1 ./internal/agent`,
+    `/root/.local/go/bin/go test -count=1 ./internal/agent ./internal/tools ./internal/architecture ./cmd/fast-agent-harness`,
+    and `/root/.local/go/bin/go run ./cmd/fast-agent-harness hygiene -strict -repo /root/billyharness`.
 
 - [ ] Finish config decomposition.
   Files: `internal/config/config.go`, `internal/config/resolved.go`.
