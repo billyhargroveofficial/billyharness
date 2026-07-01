@@ -190,7 +190,7 @@ func TestReplayEventsRejectsPayloadHashMismatch(t *testing.T) {
 	}
 }
 
-func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
+func TestReplayEventsAggregatesUsageCumulativeAndEventCounters(t *testing.T) {
 	var out bytes.Buffer
 	writer := NewEventWriter("run-1", &out)
 	profileHash := "profile-sha"
@@ -204,6 +204,14 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 			"output_tokens":     7,
 			"cache_hit_tokens":  80,
 			"cache_miss_tokens": 20,
+			"turn_id":           "turn-001",
+			"step_id":           "turn-001:model-call-001",
+		}},
+		{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
+			"input_tokens":      125,
+			"output_tokens":     9,
+			"cache_hit_tokens":  85,
+			"cache_miss_tokens": 40,
 			"turn_id":           "turn-001",
 			"step_id":           "turn-001:model-call-001",
 		}},
@@ -259,8 +267,8 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 	if summary.FirstDeltaSamples != 1 || summary.FirstDeltaTotalMS != 4 || summary.ModelLatencyMS != 11 || summary.ParallelBatchLatencyMS != 7 {
 		t.Fatalf("latency counters = %#v", summary)
 	}
-	if summary.InputTokens != 100 || summary.OutputTokens != 7 ||
-		summary.CacheHitTokens != 80 || summary.CacheMissTokens != 20 {
+	if summary.InputTokens != 125 || summary.OutputTokens != 9 ||
+		summary.CacheHitTokens != 85 || summary.CacheMissTokens != 40 {
 		t.Fatalf("usage counters = %#v", summary)
 	}
 	if len(summary.ProfileHashes) != 1 || summary.ProfileHashes[0] != profileHash {
@@ -303,10 +311,10 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 		summary.Timeline[2].Status != protocol.StepStatusStarted {
 		t.Fatalf("model step timeline item = %#v", summary.Timeline[2])
 	}
-	if summary.Timeline[4].Seq != 6 || summary.Timeline[4].Kind != "context_threshold" {
+	if summary.Timeline[4].Seq != 7 || summary.Timeline[4].Kind != "context_threshold" {
 		t.Fatalf("threshold timeline item = %#v", summary.Timeline[4])
 	}
-	if summary.Timeline[5].Seq != 7 || summary.Timeline[5].Kind != "context_compaction" {
+	if summary.Timeline[5].Seq != 8 || summary.Timeline[5].Kind != "context_compaction" {
 		t.Fatalf("compaction timeline item = %#v", summary.Timeline[5])
 	}
 	if summary.Timeline[8].CallID != "call-1" ||

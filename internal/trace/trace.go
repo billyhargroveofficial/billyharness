@@ -253,6 +253,7 @@ type ReplaySummary struct {
 	CacheMissTokens        int64                `json:"cache_miss_tokens,omitempty"`
 	ProfileHashes          []string             `json:"profile_hashes,omitempty"`
 	Timeline               []ReplayTimelineItem `json:"timeline,omitempty"`
+	usage                  replayUsageAccumulator
 }
 
 type ReplayTimelineItem struct {
@@ -456,6 +457,7 @@ func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEve
 		}
 	case protocol.EventModelCallStarted:
 		s.ModelCallsStarted++
+		s.usage.Reset()
 	case protocol.EventModelCallFinished:
 		s.ModelCallsFinished++
 	case protocol.EventToolCallStarted:
@@ -473,10 +475,11 @@ func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEve
 		if err != nil {
 			return err
 		}
-		s.InputTokens += usage.InputTokens
-		s.OutputTokens += usage.OutputTokens
-		s.CacheHitTokens += usage.CacheHitTokens
-		s.CacheMissTokens += usage.CacheMissTokens
+		delta := s.usage.Apply(usage)
+		s.InputTokens += delta.InputTokens
+		s.OutputTokens += delta.OutputTokens
+		s.CacheHitTokens += delta.CacheHitTokens
+		s.CacheMissTokens += delta.CacheMissTokens
 	}
 	return nil
 }
@@ -848,6 +851,53 @@ type replayUsage struct {
 	OutputTokens    int64 `json:"output_tokens"`
 	CacheHitTokens  int64 `json:"cache_hit_tokens"`
 	CacheMissTokens int64 `json:"cache_miss_tokens"`
+}
+
+type replayUsageAccumulator struct {
+	last    replayUsage
+	hasLast bool
+}
+
+func (a *replayUsageAccumulator) Reset() {
+	a.last = replayUsage{}
+	a.hasLast = false
+}
+
+func (a *replayUsageAccumulator) Apply(update replayUsage) replayUsage {
+	if update == (replayUsage{}) {
+		return replayUsage{}
+	}
+	if !a.hasLast {
+		a.last = update
+		a.hasLast = true
+		return update
+	}
+	if update == a.last {
+		return replayUsage{}
+	}
+	if update.atLeast(a.last) {
+		delta := update.minus(a.last)
+		a.last = update
+		return delta
+	}
+	a.last = update
+	return update
+}
+
+func (u replayUsage) atLeast(other replayUsage) bool {
+	return u.InputTokens >= other.InputTokens &&
+		u.OutputTokens >= other.OutputTokens &&
+		u.CacheHitTokens >= other.CacheHitTokens &&
+		u.CacheMissTokens >= other.CacheMissTokens
+}
+
+func (u replayUsage) minus(other replayUsage) replayUsage {
+	return replayUsage{
+		InputTokens:     u.InputTokens - other.InputTokens,
+		OutputTokens:    u.OutputTokens - other.OutputTokens,
+		CacheHitTokens:  u.CacheHitTokens - other.CacheHitTokens,
+		CacheMissTokens: u.CacheMissTokens - other.CacheMissTokens,
+	}
 }
 
 func usageFromEvent(value any) (replayUsage, error) {

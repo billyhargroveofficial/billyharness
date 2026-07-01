@@ -762,11 +762,32 @@ abuse.
 Goal: make many sessions and projects manageable without turning Billy into a
 platform.
 
-- [ ] HR-04.1 Rebuildable session search and diagnostics side index.
+- [x] HR-04.1 Rebuildable session search and diagnostics side index.
   - maps to: `competitive-improvements-todo.md` B5.
   - acceptance: rebuild emits text/tool/error/run/usage rows from JSONL; corrupt
     index never breaks session list/inspect; no mandatory SQLite/FTS/vector.
   - verification: `go test -count=1 ./internal/gateway ./internal/clientux/projector ./internal/trace`.
+  - status: completed 2026-07-01.
+  - evidence: added rebuild-only `diagnostics.json` session side index under the
+    existing optional `index/` directory. Rebuild reads canonical session
+    history/events JSONL, emits capped visible user/assistant text rows,
+    tool rows, error rows, run rows, and cumulative-usage rows, and leaves
+    session list/inspect paths independent of the side index even when the
+    diagnostics index is corrupt. Usage aggregation now matches the shared
+    projector semantics and trace replay also avoids double-counting cumulative
+    provider usage updates. No SQLite, FTS, vector store, daemon, or live
+    write path was added.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'TestStoredSessionDiagnosticsIndexUsageCumulativeMatchesProjector'
+    -count=1 ./internal/gateway` passed; `/root/.local/go/bin/go test -run
+    'TestReplayEventsAggregatesUsageCumulativeAndEventCounters' -count=1
+    ./internal/trace` passed; `/root/.local/go/bin/go test -count=1
+    ./internal/gateway ./internal/clientux/projector ./internal/trace` passed;
+    `/root/.local/go/bin/go test -run
+    'Test.*Session.*Index.*|Test.*Index.*(Tool|Error|Usage|Search).*|Test.*Usage.*Cumulative.*'
+    -count=1 ./internal/...` passed.
+  - commit: pending.
 
 - [ ] HR-04.2 CLI session queries.
   - maps to: `competitive-improvements-todo.md` B6.

@@ -61,11 +61,14 @@ func ReadStoredSessionIndex(dir string) (StoredSessionIndex, error) {
 
 func DeleteStoredSessionIndex(dir string) error {
 	dir = cleanSessionStoreDir(dir)
-	err := os.Remove(indexPath(dir))
-	if err == nil || errors.Is(err, os.ErrNotExist) {
-		return nil
+	for _, path := range []string{indexPath(dir), diagnosticsIndexPath(dir)} {
+		err := os.Remove(path)
+		if err == nil || errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		return err
 	}
-	return err
+	return nil
 }
 
 func writeStoredSessionIndex(path string, index StoredSessionIndex) error {
@@ -76,6 +79,10 @@ func writeStoredSessionIndex(path string, index StoredSessionIndex) error {
 		index.BuiltAt = time.Now().UTC()
 	}
 	index.SessionCount = len(index.Sessions)
+	return writeJSONIndex(path, index)
+}
+
+func writeJSONIndex(path string, value any) error {
 	if err := ensurePrivateGatewayDir(filepath.Dir(path)); err != nil {
 		return err
 	}
@@ -86,7 +93,7 @@ func writeStoredSessionIndex(path string, index StoredSessionIndex) error {
 	}
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
-	encodeErr := encoder.Encode(index)
+	encodeErr := encoder.Encode(value)
 	syncErr := file.Sync()
 	closeErr := file.Close()
 	if encodeErr != nil {

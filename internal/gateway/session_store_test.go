@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	clientprojector "github.com/billyhargroveofficial/billyharness/internal/clientux/projector"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/eventlog"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
@@ -244,6 +245,183 @@ func TestGatewaySessionStoreRestoresSessionAfterRestart(t *testing.T) {
 	}
 	if maxRunSeq != 2 || !sawRun2Start || !sawRun2Status {
 		t.Fatalf("events after restart should continue at run_seq 2, max=%d sawStart=%v sawStatus=%v records=%#v", maxRunSeq, sawRun2Start, sawRun2Status, eventsAfterRestart)
+	}
+}
+
+func TestStoredSessionDiagnosticsIndexUsageCumulativeMatchesProjector(t *testing.T) {
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	store := newSessionStore(storeDir)
+	sessionID := "session-diagnostics"
+	session := newGatewaySessionWithOwner(sessionID, time.Now().UTC(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "profile/system noise"},
+		{Role: protocol.RoleUser, Content: "please inspect the failing command"},
+		{Role: protocol.RoleAssistant, Content: "I found one failing shell command."},
+		{Role: protocol.RoleTool, Content: "internal tool payload"},
+	}, gatewayapi.SessionOwner{ClientType: "test"})
+	if err := store.Save(session); err != nil {
+		t.Fatal(err)
+	}
+
+	runID := "run-diagnostics"
+	turnID := "turn-001"
+	modelStepID := "turn-001:model-call-001"
+	toolBatchID := "turn-001:tool-batch-001"
+	callID := "call-shell"
+	attemptID := "turn-001:tool-call-001:attempt-001"
+	outputRef := filepath.Join(storeDir, "tool-output", "missing.txt")
+	events := []protocol.Event{
+		{Type: protocol.EventRunStarted, RunID: runID},
+		{Type: protocol.EventTurnStarted, RunID: runID, Data: protocol.TurnEvent{TurnID: turnID, Round: 1, Status: protocol.TurnStatusStarted}},
+		{Type: protocol.EventStepStarted, RunID: runID, Data: protocol.StepEvent{TurnID: turnID, StepID: modelStepID, Round: 1, Kind: protocol.StepKindModelCall, Status: protocol.StepStatusStarted}},
+		{Type: protocol.EventModelCallStarted, RunID: runID, TurnID: turnID, StepID: modelStepID, Data: protocol.ModelCallEvent{RequestID: "request-1", Status: protocol.StepStatusStarted}},
+		{Type: protocol.EventProviderUsageUpdate, RunID: runID, TurnID: turnID, StepID: modelStepID, Data: map[string]any{
+			"turn_id":           turnID,
+			"step_id":           modelStepID,
+			"input_tokens":      10,
+			"output_tokens":     1,
+			"cache_hit_tokens":  2,
+			"cache_miss_tokens": 8,
+			"reasoning_tokens":  1,
+		}},
+		{Type: protocol.EventProviderUsageUpdate, RunID: runID, TurnID: turnID, StepID: modelStepID, Data: map[string]any{
+			"turn_id":           turnID,
+			"step_id":           modelStepID,
+			"input_tokens":      15,
+			"output_tokens":     3,
+			"cache_hit_tokens":  2,
+			"cache_miss_tokens": 13,
+			"reasoning_tokens":  2,
+		}},
+		{Type: protocol.EventModelCallFinished, RunID: runID, TurnID: turnID, StepID: modelStepID, Data: protocol.ModelCallEvent{RequestID: "request-1", Status: protocol.StepStatusCompleted}},
+		{Type: protocol.EventStepCompleted, RunID: runID, Data: protocol.StepEvent{TurnID: turnID, StepID: modelStepID, Round: 1, Kind: protocol.StepKindModelCall, Status: protocol.StepStatusCompleted}},
+		{Type: protocol.EventStepStarted, RunID: runID, Data: protocol.StepEvent{TurnID: turnID, StepID: toolBatchID, Round: 1, Kind: protocol.StepKindToolBatch, Status: protocol.StepStatusStarted, BatchSize: 1}},
+		{Type: protocol.EventToolCallRequested, RunID: runID, Data: protocol.ToolCall{ID: callID, Name: "shell_exec", Arguments: json.RawMessage(`{"cmd":"go test ./..."}`)}},
+		{Type: protocol.EventToolCallStarted, RunID: runID, CallID: callID, AttemptID: attemptID, Data: "shell_exec"},
+		{Type: protocol.EventToolOutputRefCreated, RunID: runID, Data: protocol.ToolOutputRefEvent{
+			CallID:         callID,
+			Name:           "shell_exec",
+			AttemptID:      attemptID,
+			OutputRef:      outputRef,
+			OutputRefID:    "output-ref-1",
+			OutputRefBytes: 123,
+			Truncated:      true,
+		}},
+		{Type: protocol.EventToolCallFinished, RunID: runID, CallID: callID, AttemptID: attemptID, Data: protocol.ToolResult{
+			CallID:    callID,
+			Name:      "shell_exec",
+			Content:   "exit status 1",
+			IsError:   true,
+			ErrorCode: "exit_status",
+			OutputRef: outputRef,
+			Metadata: map[string]any{
+				"attempt_id":    attemptID,
+				"output_ref_id": "output-ref-1",
+			},
+		}},
+		{Type: protocol.EventStepCompleted, RunID: runID, Data: protocol.StepEvent{TurnID: turnID, StepID: toolBatchID, Round: 1, Kind: protocol.StepKindToolBatch, Status: protocol.StepStatusCompleted, BatchSize: 1}},
+		{Type: protocol.EventTurnCompleted, RunID: runID, Data: protocol.TurnEvent{TurnID: turnID, Round: 1, Status: protocol.TurnStatusCompleted, StopReason: protocol.TurnStopFinalAnswer}},
+		{Type: protocol.EventRunCompleted, RunID: runID},
+	}
+	var storedEvents []protocol.Event
+	for _, event := range events {
+		stored, err := store.AppendEvent(session, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		storedEvents = append(storedEvents, stored)
+	}
+
+	index, err := RebuildStoredSessionDiagnosticsIndex(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if index.SessionCount != 1 ||
+		index.TextRowCount != 2 ||
+		index.ToolRowCount == 0 ||
+		index.ErrorRowCount != 1 ||
+		index.RunRowCount != 1 ||
+		index.UsageRowCount != 1 {
+		t.Fatalf("diagnostics index counts = %#v", index)
+	}
+	if index.TextRows[0].Role != string(protocol.RoleUser) || index.TextRows[1].Role != string(protocol.RoleAssistant) {
+		t.Fatalf("text rows should include only visible user/assistant content: %#v", index.TextRows)
+	}
+	if !containsToolRow(index.ToolRows, callID, "requested", "shell_exec") ||
+		!containsToolRow(index.ToolRows, callID, "output_ref_created", "shell_exec") ||
+		!containsToolRow(index.ToolRows, callID, "failed", "shell_exec") {
+		t.Fatalf("tool rows = %#v", index.ToolRows)
+	}
+	var requestedArgs string
+	for _, row := range index.ToolRows {
+		if row.CallID == callID && row.Status == "requested" {
+			requestedArgs = row.ArgsPreview
+		}
+	}
+	if !strings.Contains(requestedArgs, "go test") {
+		t.Fatalf("requested args preview = %q", requestedArgs)
+	}
+	if index.ErrorRows[0].CallID != callID || !strings.Contains(index.ErrorRows[0].Error, "exit_status") {
+		t.Fatalf("error rows = %#v", index.ErrorRows)
+	}
+	if index.RunRows[0].RunID != runID || index.RunRows[0].Status != "completed" || index.RunRows[0].StartSeq == 0 || index.RunRows[0].EndSeq == 0 {
+		t.Fatalf("run rows = %#v", index.RunRows)
+	}
+	usage := index.UsageRows[0]
+	if usage.RunID != runID ||
+		usage.InputTokens != 15 ||
+		usage.OutputTokens != 3 ||
+		usage.CacheHitTokens != 2 ||
+		usage.CacheMissTokens != 13 ||
+		usage.ReasoningTokens != 2 ||
+		usage.ModelCalls != 1 ||
+		usage.ToolCalls != 1 {
+		t.Fatalf("usage row = %#v", usage)
+	}
+	projector := clientprojector.New()
+	var snapshot clientprojector.Snapshot
+	for _, event := range storedEvents {
+		snapshot = projector.Apply(event)
+	}
+	if usage.InputTokens != snapshot.InputTokens ||
+		usage.OutputTokens != snapshot.OutputTokens ||
+		usage.CacheHitTokens != snapshot.CacheHitTokens ||
+		usage.CacheMissTokens != snapshot.CacheMissTokens ||
+		usage.ReasoningTokens != snapshot.ReasoningTokens {
+		t.Fatalf("usage row %#v does not match projector snapshot %#v", usage, snapshot)
+	}
+	readBack, err := ReadStoredSessionDiagnosticsIndex(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readBack.UsageRowCount != 1 || readBack.UsageRows[0].InputTokens != 15 {
+		t.Fatalf("read diagnostics index = %#v", readBack)
+	}
+
+	if err := os.WriteFile(diagnosticsIndexPath(storeDir), []byte("{not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadStoredSessionDiagnosticsIndex(storeDir); err == nil {
+		t.Fatal("expected corrupt diagnostics index read to fail")
+	}
+	listed, err := ListStoredSessions(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Sessions) != 1 || listed.Sessions[0].ID != sessionID {
+		t.Fatalf("canonical list after corrupt diagnostics index = %#v", listed)
+	}
+	inspection, err := InspectStoredSession(storeDir, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.SessionID != sessionID || inspection.Events.Records == 0 {
+		t.Fatalf("inspection after corrupt diagnostics index = %#v", inspection)
+	}
+	if err := DeleteStoredSessionIndex(storeDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(diagnosticsIndexPath(storeDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("diagnostics index after delete err = %v", err)
 	}
 }
 
@@ -787,4 +965,13 @@ func TestGatewaySessionStoreLoadsLegacySnapshot(t *testing.T) {
 	if !inspection.Legacy || !inspection.OfflineReplayReady || inspection.MessageCount != 2 {
 		t.Fatalf("legacy inspection = %#v", inspection)
 	}
+}
+
+func containsToolRow(rows []StoredSessionToolRow, callID, status, name string) bool {
+	for _, row := range rows {
+		if row.CallID == callID && row.Status == status && row.Name == name {
+			return true
+		}
+	}
+	return false
 }
