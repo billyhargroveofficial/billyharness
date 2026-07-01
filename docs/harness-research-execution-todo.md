@@ -79,12 +79,17 @@ Goal: make the work reproducible before changing runtime behavior.
     P0/P1 continuation; exactly one item is in progress.
   - commit: pending.
 
-- [ ] HR-00.3 Establish verification baseline for touched packages.
+- [x] HR-00.3 Establish verification baseline for touched packages.
   - source: package-level commands in each task.
   - target files: no required code files.
   - acceptance: baseline failures, if any, are recorded before implementation.
   - verification: run the focused package tests needed by the first selected
     task.
+  - status: completed 2026-07-01.
+  - evidence: `/root/.local/go/bin/go test -count=1 ./internal/gateway
+    ./internal/gatewayclient ./internal/eventlog ./internal/clientux/projector`
+    passed before HR-01.1 implementation.
+  - commit: pending.
 
 ## Milestone 1 - Reliability, Admission, Backpressure
 
