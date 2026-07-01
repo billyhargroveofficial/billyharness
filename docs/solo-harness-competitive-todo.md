@@ -784,6 +784,31 @@ compatibility platform.
     ./internal/mcpclient ./internal/promptcommands ./internal/clientux
     ./internal/tui ./internal/telegrambot ./cmd/fast-agent-harness
     ./internal/architecture` passed.
+  - commit: `3218d79563b361b6f0eba014640de2d195b009c4`.
+
+Milestone 5 final verification:
+
+- [x] Run interop/config package suite:
+  - `go test -count=1 ./internal/session ./internal/trace ./internal/config ./cmd/fast-agent-harness`
+  - status: completed 2026-07-01.
+  - evidence: `/root/.local/go/bin/go test -count=1 ./internal/session
+    ./internal/trace ./internal/config ./cmd/fast-agent-harness` passed on
+    pushed `HEAD` `3218d79563b361b6f0eba014640de2d195b009c4`.
+
+- [x] Run SH-05 command-registry/touched package suite:
+  - `go test -count=1 ./internal/commandregistry ./internal/mcpclient ./internal/promptcommands ./internal/clientux ./internal/tui ./internal/telegrambot ./internal/architecture`
+  - status: completed 2026-07-01.
+  - evidence: `/root/.local/go/bin/go test -count=1
+    ./internal/commandregistry ./internal/mcpclient ./internal/promptcommands
+    ./internal/clientux ./internal/tui ./internal/telegrambot
+    ./internal/architecture` passed on pushed `HEAD`
+    `3218d79563b361b6f0eba014640de2d195b009c4`.
+
+- [x] Run SH-05 targeted regex suite:
+  - `go test -run 'TestImport.*|TestSessionsImportCommandConvertsExternalTranscript|TestReplayEventsCountsImportedSessionMarker|Test.*MCP.*Migration.*|TestConfigMCPMigrateCommandPrintsRedactedSuggestions|TestScanMCPMigrationReportsSuggestionsAndRedactsValues|Test.*Command.*Registry.*|Test.*Commands.*(List|Search).*|Test.*MCP.*Prompt.*|TestActionRegistryBacksSlashCommandsAndHelp|TestTelegramCommandMetadataDrivesHelpAndBypass|TestCommandRegistryBacksTUICommandsPopupAndProfiles|TestTelegramCommandsCommandShowsRegistryAndProfiles|TestCommandsCommandListsAndSearchesRegistry' -count=1 ./internal/session ./internal/trace ./internal/config ./internal/commandregistry ./internal/mcpclient ./internal/tui ./internal/telegrambot ./cmd/fast-agent-harness ./internal/architecture`
+  - status: completed 2026-07-01.
+  - evidence: the exact command above passed on pushed `HEAD`
+    `3218d79563b361b6f0eba014640de2d195b009c4`.
   - commit: pending.
 
 ## Milestone 6 - UX Polish With Hard Boundaries (P1)
