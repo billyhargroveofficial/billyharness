@@ -373,9 +373,9 @@ make silent stalls diagnosable.
     ./internal/tools ./internal/agent ./internal/gateway ./internal/trace
     ./cmd/fast-agent-harness` passed;
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `a2b2beade759b408d3e0e99fdd94219523874a11`.
 
-- [ ] SH-02.3 Add stream liveness watchdog events.
+- [x] SH-02.3 Add stream liveness watchdog events.
   - inspiration: user-observed Telegram "stuck while still working" failure and
     Codex/OpenCode explicit stream lifecycle.
   - target files: `internal/provider`, `internal/agent/model_call.go`,
@@ -386,7 +386,26 @@ make silent stalls diagnosable.
     `still_running`/heartbeat event with elapsed time and current phase.
   - acceptance: heartbeat events do not pollute model transcript.
   - verification: fake provider stall test and Telegram/TUI projector tests.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: added typed `stream.still_running` protocol events carrying
+    run/turn/step/tool correlation, current phase, elapsed time, idle time,
+    interval, count, and a compact message. Agent runs now wrap the enriched
+    event emitter with a run-scoped watchdog derived from
+    `stream_idle_timeout_sec`, so silent model streams, long tool/hook phases,
+    and other active-run gaps emit lightweight heartbeat progress without
+    touching model-visible messages. Telegram renders the heartbeat as an
+    updatable live-progress status row and event pulse label. TUI flushes the
+    heartbeat immediately into the status line while deliberately excluding it
+    from transcript projection.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*Still.*Running.*|Test.*Liveness.*|TestRunMessagesEmitsStillRunningDuringProviderStall|TestRendererShowsStillRunningProgress|TestStillRunningEventUpdatesStatusWithoutTranscriptBlock'
+    -count=1 ./internal/agent ./internal/telegrambot ./internal/tui` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/protocol
+    ./internal/agent ./internal/telegrambot ./internal/tui ./internal/provider`
+    passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] SH-02.4 Add managed-process dashboard polish.
   - inspiration: Claude tool progress and OpenCode process/output refs.

@@ -109,6 +109,8 @@ func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
 		return []RenderEvent{{Kind: "tool", Title: "Tool", Body: summary, Key: key}}
 	case protocol.EventContextThreshold:
 		return []RenderEvent{{Kind: "status", Title: "Context", Body: telegramContextThresholdText(event.Data), Key: telegramContextThresholdKey(event.Data)}}
+	case protocol.EventStreamStillRunning:
+		return []RenderEvent{{Kind: "status", Title: "Still Running", Body: telegramStillRunningText(event.Data), Key: "stream.still_running"}}
 	case protocol.EventTurnChangeRecorded:
 		if change, ok := toolrender.DecodeTurnChange(event.Data); ok {
 			return []RenderEvent{{Kind: "status", Title: "Changes", Body: toolrender.TurnChangeSummary(change), Key: change.ChangeID}}

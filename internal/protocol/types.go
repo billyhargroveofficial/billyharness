@@ -117,6 +117,7 @@ const (
 	EventProviderHelperUsage     EventType = "provider.helper_usage"
 	EventSessionStatus           EventType = "session.status"
 	EventGatewayStreamGap        EventType = "gateway.stream_gap"
+	EventStreamStillRunning      EventType = "stream.still_running"
 	EventUserInputRequested      EventType = "user_input.requested"
 	EventUserInputAnswered       EventType = "user_input.answered"
 	EventUserInputRejected       EventType = "user_input.rejected"
@@ -126,6 +127,20 @@ type GatewayStreamGapEvent struct {
 	DroppedEvents  int64  `json:"dropped_events"`
 	ReplayAfterSeq int64  `json:"replay_after_seq,omitempty"`
 	Message        string `json:"message,omitempty"`
+}
+
+type StreamStillRunningEvent struct {
+	RunID      string `json:"run_id,omitempty"`
+	TurnID     string `json:"turn_id,omitempty"`
+	StepID     string `json:"step_id,omitempty"`
+	CallID     string `json:"call_id,omitempty"`
+	AttemptID  string `json:"attempt_id,omitempty"`
+	Phase      string `json:"phase,omitempty"`
+	ElapsedMS  int64  `json:"elapsed_ms,omitempty"`
+	IdleMS     int64  `json:"idle_ms,omitempty"`
+	IntervalMS int64  `json:"interval_ms,omitempty"`
+	Count      int    `json:"count,omitempty"`
+	Message    string `json:"message,omitempty"`
 }
 
 type ProviderHelperUsageEvent struct {

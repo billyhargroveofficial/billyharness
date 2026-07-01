@@ -610,6 +610,29 @@ func TestStreamPlainTextShowsLastEventHeartbeat(t *testing.T) {
 	}
 }
 
+func TestRendererShowsStillRunningProgress(t *testing.T) {
+	renderer := NewRenderer()
+	progress := NewToolProgress()
+	events := renderer.Apply(protocol.Event{Type: protocol.EventStreamStillRunning, Data: protocol.StreamStillRunningEvent{
+		Phase:     "model",
+		IdleMS:    int64((2 * time.Second).Milliseconds()),
+		ElapsedMS: int64((5 * time.Second).Milliseconds()),
+		Count:     1,
+	}})
+	if len(events) != 1 || events[0].Kind != "status" || events[0].Key != "stream.still_running" {
+		t.Fatalf("still running render events = %#v", events)
+	}
+	if !progress.Add(events[0]) {
+		t.Fatal("expected still-running progress line")
+	}
+	text := renderer.StreamPlainText("deepseek-v4-flash", "high", progress)
+	for _, want := range []string{"still running", "model", "idle 2s", "elapsed 5s"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("stream text missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestStreamPlainTextKeepsToolsVisibleWhenContentIsLong(t *testing.T) {
 	renderer := NewRenderer()
 	renderer.Content.WriteString(strings.Repeat("old content ", 900))

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
@@ -39,6 +40,28 @@ func TestDefaultsToDarkTheme(t *testing.T) {
 	}
 	if got := m.toolView; got != "collapsed" {
 		t.Fatalf("toolView = %q, want collapsed", got)
+	}
+}
+
+func TestStillRunningEventUpdatesStatusWithoutTranscriptBlock(t *testing.T) {
+	m := newTestModel(t)
+	before := len(m.blocks)
+	event := protocol.Event{Type: protocol.EventStreamStillRunning, Data: protocol.StreamStillRunningEvent{
+		Phase:     "model",
+		IdleMS:    int64((2 * time.Second).Milliseconds()),
+		ElapsedMS: int64((5 * time.Second).Milliseconds()),
+	}}
+	m.applyEvent(event)
+	for _, want := range []string{"still running", "model", "idle 2s", "elapsed 5s"} {
+		if !strings.Contains(m.status, want) {
+			t.Fatalf("status missing %q: %q", want, m.status)
+		}
+	}
+	if len(m.blocks) != before {
+		t.Fatalf("still-running event should not add transcript blocks: before=%d after=%d blocks=%#v", before, len(m.blocks), m.blocks)
+	}
+	if !shouldFlushStreamEvent(event) {
+		t.Fatal("still-running event should flush stream queue immediately")
 	}
 }
 

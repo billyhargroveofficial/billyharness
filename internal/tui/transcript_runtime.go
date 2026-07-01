@@ -552,6 +552,8 @@ func (m *Model) applyEvent(event protocol.Event) {
 		m.status = "context compacted"
 	case protocol.EventContextThreshold:
 		m.status = "context threshold crossed"
+	case protocol.EventStreamStillRunning:
+		m.status = stillRunningStatus(event.Data)
 	case protocol.EventTurnChangeRecorded:
 		m.status = "turn changes recorded"
 	case protocol.EventTurnChangeReverted:
@@ -601,6 +603,7 @@ func shouldFlushStreamEvent(event protocol.Event) bool {
 	switch event.Type {
 	case protocol.EventRunCompleted, protocol.EventRunFailed,
 		protocol.EventUserInputRequested, protocol.EventUserInputAnswered, protocol.EventUserInputRejected,
+		protocol.EventStreamStillRunning,
 		protocol.EventToolCallRequested, protocol.EventToolCallStarted,
 		protocol.EventToolCallFinished, protocol.EventToolCallFailed,
 		protocol.EventToolCallAborted, protocol.EventToolOutputRefCreated,
@@ -610,6 +613,25 @@ func shouldFlushStreamEvent(event protocol.Event) bool {
 	default:
 		return false
 	}
+}
+
+func stillRunningStatus(value any) string {
+	var event protocol.StreamStillRunningEvent
+	bytes, _ := json.Marshal(value)
+	_ = json.Unmarshal(bytes, &event)
+	phase := strings.TrimSpace(event.Phase)
+	if phase == "" {
+		phase = "run"
+	}
+	var parts []string
+	parts = append(parts, "still running", phase)
+	if event.IdleMS > 0 {
+		parts = append(parts, "idle "+compactDuration(time.Duration(event.IdleMS)*time.Millisecond))
+	}
+	if event.ElapsedMS > 0 {
+		parts = append(parts, "elapsed "+compactDuration(time.Duration(event.ElapsedMS)*time.Millisecond))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func (m *Model) upsertRunSummaryBlock(eventType protocol.EventType, state, errText string) {

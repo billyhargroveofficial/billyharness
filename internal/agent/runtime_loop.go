@@ -55,6 +55,9 @@ func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []pro
 		RunID:        run.ID,
 		Source:       protocol.EventSourceAgent,
 	}, emit).Emit
+	var stopLiveness func()
+	emit, stopLiveness = a.withStreamLiveness(emit)
+	defer stopLiveness()
 	emitAgentRunStarted(run, emit)
 	hookRunner := runtimehooks.New(a.hookSettings)
 	if err := hookRunner.Run(ctx, "session_start", map[string]any{

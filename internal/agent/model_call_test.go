@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -175,6 +176,53 @@ func TestRunMessagesEmitsFirstCoalescedDeltaBeforeStreamCompletes(t *testing.T) 
 	}
 }
 
+func TestRunMessagesEmitsStillRunningDuringProviderStall(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.StreamIdleTimeout = 20 * time.Millisecond
+	prov := &stallingProvider{delay: 80 * time.Millisecond}
+	a := New(cfg, prov, tools.NewRegistry(cfg))
+	var emitted []protocol.Event
+	messages, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "stream"},
+	}, func(event protocol.Event) {
+		emitted = append(emitted, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var heartbeat protocol.StreamStillRunningEvent
+	var sawHeartbeat bool
+	for _, event := range emitted {
+		if event.Type != protocol.EventStreamStillRunning {
+			continue
+		}
+		sawHeartbeat = true
+		bytes, _ := json.Marshal(event.Data)
+		_ = json.Unmarshal(bytes, &heartbeat)
+		if event.TurnID == "" || event.StepID == "" {
+			t.Fatalf("heartbeat missing model ids: %#v", event)
+		}
+		break
+	}
+	if !sawHeartbeat {
+		t.Fatalf("still_running event missing: %#v", emitted)
+	}
+	if heartbeat.Phase != "model" || heartbeat.IdleMS <= 0 || heartbeat.ElapsedMS <= 0 || heartbeat.IntervalMS <= 0 {
+		t.Fatalf("heartbeat data = %#v", heartbeat)
+	}
+	if got := lastAssistantContent(messages); got != "done" {
+		t.Fatalf("assistant content = %q", got)
+	}
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, "still running") {
+			t.Fatalf("heartbeat polluted transcript messages: %#v", messages)
+		}
+	}
+}
+
 type blockingFirstDeltaProvider struct {
 	release chan struct{}
 }
@@ -199,6 +247,35 @@ func (p *blockingFirstDeltaProvider) Stream(ctx context.Context, _ provider.Requ
 		}
 		select {
 		case <-p.release:
+		case <-ctx.Done():
+			errs <- ctx.Err()
+			return
+		}
+		events <- provider.Event{Kind: provider.EventDone}
+	}()
+	return events, errs
+}
+
+type stallingProvider struct {
+	delay time.Duration
+}
+
+func (p *stallingProvider) Stream(ctx context.Context, _ provider.Request) (<-chan provider.Event, <-chan error) {
+	events := make(chan provider.Event, 2)
+	errs := make(chan error, 1)
+	go func() {
+		defer close(events)
+		defer close(errs)
+		timer := time.NewTimer(p.delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			errs <- ctx.Err()
+			return
+		}
+		select {
+		case events <- provider.Event{Kind: provider.EventContent, Text: "done"}:
 		case <-ctx.Done():
 			errs <- ctx.Err()
 			return

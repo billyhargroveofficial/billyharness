@@ -1,6 +1,7 @@
 package telegrambot
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -88,6 +89,8 @@ func (r *Renderer) eventPulseText() string {
 		label = "model"
 	case protocol.EventProviderUsageUpdate:
 		label = "usage"
+	case protocol.EventStreamStillRunning:
+		label = "still running"
 	}
 	if age <= 2*time.Second {
 		return "🟢 " + label + " now"
@@ -131,4 +134,23 @@ func streamContentPreview(content string, budget int) string {
 	runes := []rune(content)
 	n := telegramRuneSuffixLen(runes, available)
 	return prefix + string(runes[len(runes)-n:])
+}
+
+func telegramStillRunningText(value any) string {
+	var event protocol.StreamStillRunningEvent
+	bytes, _ := json.Marshal(value)
+	_ = json.Unmarshal(bytes, &event)
+	phase := strings.TrimSpace(event.Phase)
+	if phase == "" {
+		phase = "run"
+	}
+	var parts []string
+	parts = append(parts, "still running", phase)
+	if event.IdleMS > 0 {
+		parts = append(parts, "idle "+compactDuration(time.Duration(event.IdleMS)*time.Millisecond))
+	}
+	if event.ElapsedMS > 0 {
+		parts = append(parts, "elapsed "+compactDuration(time.Duration(event.ElapsedMS)*time.Millisecond))
+	}
+	return strings.Join(parts, " · ")
 }
