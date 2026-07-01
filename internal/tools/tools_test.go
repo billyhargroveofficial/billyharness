@@ -95,6 +95,86 @@ func TestToolArgumentsValidatedAgainstSchema(t *testing.T) {
 	}
 }
 
+func TestTodoWriteStoresBoundedPlanState(t *testing.T) {
+	registry := NewRegistry(config.Default())
+	result, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "todo_write",
+		Arguments: rawArgs(map[string]any{"todos": []map[string]any{
+			{"id": "inspect", "content": "Inspect existing plan code", "status": "completed", "priority": "high"},
+			{"id": "build", "content": "Build todo_write state", "status": "in_progress", "priority": "high"},
+			{"id": "verify", "content": "Run focused tests", "status": "pending", "priority": "medium"},
+		}}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"plan 3 todos", "1 in progress", "1 pending", "1 completed", "now: Build todo_write state"} {
+		if !strings.Contains(result.Content, want) {
+			t.Fatalf("todo_write content missing %q:\n%s", want, result.Content)
+		}
+	}
+	state, ok := result.Metadata["todo_state"].(protocol.TodoState)
+	if !ok {
+		t.Fatalf("todo_state metadata = %#v", result.Metadata["todo_state"])
+	}
+	if len(state.Todos) != 3 || state.InProgress != 1 || state.Pending != 1 || state.Completed != 1 {
+		t.Fatalf("todo state = %#v", state)
+	}
+	if got := result.Metadata["display_summary"]; got != "plan 3 todos · 1 in progress · 1 pending · 1 completed · now: Build todo_write state" {
+		t.Fatalf("display summary = %#v", got)
+	}
+}
+
+func TestTodoWriteRejectsInvalidPlanState(t *testing.T) {
+	registry := NewRegistry(config.Default())
+	for _, tc := range []struct {
+		name      string
+		todos     []map[string]any
+		want      string
+		errorCode string
+	}{
+		{
+			name: "two in progress",
+			todos: []map[string]any{
+				{"id": "one", "content": "one", "status": "in_progress"},
+				{"id": "two", "content": "two", "status": "in_progress"},
+			},
+			want:      "max 1",
+			errorCode: "todo_invalid",
+		},
+		{
+			name: "bad status",
+			todos: []map[string]any{
+				{"id": "one", "content": "one", "status": "started"},
+			},
+			want:      "must be one of",
+			errorCode: "validation_error",
+		},
+		{
+			name: "duplicate id",
+			todos: []map[string]any{
+				{"id": "one", "content": "one", "status": "pending"},
+				{"id": "one", "content": "again", "status": "completed"},
+			},
+			want:      "duplicate todo id",
+			errorCode: "todo_invalid",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := registry.Call(context.Background(), protocol.ToolCall{
+				Name:      "todo_write",
+				Arguments: rawArgs(map[string]any{"todos": tc.todos}),
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+			if !result.IsError || result.ErrorCode != tc.errorCode {
+				t.Fatalf("result = %#v", result)
+			}
+		})
+	}
+}
+
 func TestDangerousToolsCanBeDisabled(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Default()

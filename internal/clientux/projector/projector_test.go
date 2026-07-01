@@ -129,6 +129,34 @@ func TestProjectorTracksToolCompactDisplay(t *testing.T) {
 	}
 }
 
+func TestProjectorReplaysTodoPlanState(t *testing.T) {
+	p := New()
+	state := protocol.TodoState{Todos: []protocol.TodoItem{
+		{ID: "done", Content: "Inspect plan", Status: "completed", Priority: "high"},
+		{ID: "build", Content: "Build todo_write", Status: "in_progress", Priority: "high"},
+		{ID: "verify", Content: "Run tests", Status: "pending", Priority: "medium"},
+	}}
+	snap := p.Apply(protocol.Event{Seq: 1, Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
+		CallID:  "call_todo",
+		Name:    "todo_write",
+		Content: "plan updated",
+		Metadata: map[string]any{
+			"todo_state": state,
+		},
+	}})
+	if len(snap.TodoState.Todos) != 3 || snap.TodoState.InProgress != 1 || snap.TodoState.Pending != 1 || snap.TodoState.Completed != 1 {
+		t.Fatalf("todo state = %#v", snap.TodoState)
+	}
+	snap.TodoState.Todos[1].Content = "mutated"
+	if got := p.Snapshot().TodoState.Todos[1].Content; got != "Build todo_write" {
+		t.Fatalf("todo state was not cloned: %q", got)
+	}
+	snap = p.Apply(protocol.Event{Seq: 2, Type: protocol.EventRunStarted})
+	if len(snap.TodoState.Todos) != 3 || snap.TodoState.Todos[1].Status != "in_progress" {
+		t.Fatalf("todo state did not survive run start: %#v", snap.TodoState)
+	}
+}
+
 func TestGoldenTraceProjectsClientSnapshot(t *testing.T) {
 	p := New()
 	var snap Snapshot

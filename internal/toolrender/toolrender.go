@@ -118,6 +118,12 @@ func ResultSummaryFor(data any, base string, style Style) (ResultSummary, bool) 
 	if key == "" {
 		key = result.Name
 	}
+	if state, ok := TodoStateFromMetadata(result.Metadata); ok {
+		return ResultSummary{
+			Key:  key,
+			Line: TodoSummaryLine(state, style),
+		}, true
+	}
 	if base == "" {
 		base = result.Name
 	}
@@ -187,6 +193,95 @@ func ResultSummaryFromCompact(compact protocol.ToolCompact, base string, style S
 		EstimatedTokens: compact.EstimatedTokens,
 		OriginalBytes:   compact.OriginalBytes,
 	}
+}
+
+func TodoStateFromMetadata(metadata map[string]any) (protocol.TodoState, bool) {
+	if len(metadata) == 0 {
+		return protocol.TodoState{}, false
+	}
+	return DecodeTodoState(metadata["todo_state"])
+}
+
+func DecodeTodoState(value any) (protocol.TodoState, bool) {
+	if value == nil {
+		return protocol.TodoState{}, false
+	}
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return protocol.TodoState{}, false
+	}
+	var state protocol.TodoState
+	if err := json.Unmarshal(bytes, &state); err != nil {
+		return protocol.TodoState{}, false
+	}
+	state = recountTodoState(state)
+	return state, len(state.Todos) > 0 || state.Pending > 0 || state.InProgress > 0 || state.Completed > 0 || state.Blocked > 0
+}
+
+func TodoSummaryLine(state protocol.TodoState, style Style) string {
+	prefix := "Plan"
+	if style == StyleTelegram {
+		prefix = "📝"
+	}
+	return strings.TrimSpace(prefix + " " + TodoStateSummary(state))
+}
+
+func TodoStateSummary(state protocol.TodoState) string {
+	state = recountTodoState(state)
+	total := len(state.Todos)
+	parts := []string{fmt.Sprintf("%d todo%s", total, pluralSuffix(total))}
+	if state.InProgress > 0 {
+		parts = append(parts, fmt.Sprintf("%d in progress", state.InProgress))
+	}
+	if state.Pending > 0 {
+		parts = append(parts, fmt.Sprintf("%d pending", state.Pending))
+	}
+	if state.Completed > 0 {
+		parts = append(parts, fmt.Sprintf("%d completed", state.Completed))
+	}
+	if state.Blocked > 0 {
+		parts = append(parts, fmt.Sprintf("%d blocked", state.Blocked))
+	}
+	if current, ok := currentTodo(state); ok {
+		parts = append(parts, "now: "+CompactText(current.Content, 80))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func recountTodoState(state protocol.TodoState) protocol.TodoState {
+	state.Pending = 0
+	state.InProgress = 0
+	state.Completed = 0
+	state.Blocked = 0
+	for _, item := range state.Todos {
+		switch item.Status {
+		case "pending":
+			state.Pending++
+		case "in_progress":
+			state.InProgress++
+		case "completed":
+			state.Completed++
+		case "blocked":
+			state.Blocked++
+		}
+	}
+	return state
+}
+
+func currentTodo(state protocol.TodoState) (protocol.TodoItem, bool) {
+	for _, item := range state.Todos {
+		if item.Status == "in_progress" {
+			return item, true
+		}
+	}
+	return protocol.TodoItem{}, false
+}
+
+func pluralSuffix(count int) string {
+	if count == 1 {
+		return ""
+	}
+	return "s"
 }
 
 func CompactLine(compact protocol.ToolCompact, base string, style Style) string {
@@ -443,6 +538,10 @@ var callRenderers = map[string]callRenderer{
 	},
 	"time_now": {
 		tui: staticCallLine(func(map[string]any) string { return "Checked time" }),
+	},
+	"todo_write": {
+		tui:      staticCallLine(func(map[string]any) string { return "Updated plan" }),
+		telegram: staticCallLine(func(map[string]any) string { return "📝 plan update" }),
 	},
 	"mcp_list_tools": {
 		tui: staticCallLine(func(args map[string]any) string {

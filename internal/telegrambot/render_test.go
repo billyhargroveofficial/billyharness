@@ -711,6 +711,58 @@ func TestRendererUsesToolCompactResultSummary(t *testing.T) {
 	}
 }
 
+func TestRendererUsesTodoPlanStateSummary(t *testing.T) {
+	renderer := NewRenderer()
+	requested := renderer.Apply(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{
+			ID:        "call_todo",
+			Name:      "todo_write",
+			Arguments: []byte(`{"todos":[{"id":"raw","content":"raw secret payload","status":"pending"}]}`),
+		},
+	})
+	if len(requested) != 1 {
+		t.Fatalf("requested = %#v", requested)
+	}
+	if !strings.Contains(requested[0].Body, "plan update") {
+		t.Fatalf("todo request body = %q", requested[0].Body)
+	}
+	for _, notWant := range []string{"raw secret", `"todos"`} {
+		if strings.Contains(requested[0].Body, notWant) {
+			t.Fatalf("todo request leaked %q: %q", notWant, requested[0].Body)
+		}
+	}
+
+	state := protocol.TodoState{Todos: []protocol.TodoItem{
+		{ID: "done", Content: "Inspect plan", Status: "completed", Priority: "high"},
+		{ID: "build", Content: "Build todo_write", Status: "in_progress", Priority: "high"},
+	}}
+	rendered := renderer.Apply(protocol.Event{
+		Type: protocol.EventToolCallFinished,
+		Data: protocol.ToolResult{
+			CallID:  "call_todo",
+			Name:    "todo_write",
+			Content: "full internal todo payload should not be needed",
+			Metadata: map[string]any{
+				"todo_state": state,
+			},
+		},
+	})
+	if len(rendered) != 1 {
+		t.Fatalf("rendered = %#v", rendered)
+	}
+	for _, want := range []string{"📝", "2 todos", "1 in progress", "1 completed", "now: Build todo_write"} {
+		if !strings.Contains(rendered[0].Body, want) {
+			t.Fatalf("todo result missing %q: %q", want, rendered[0].Body)
+		}
+	}
+	for _, notWant := range []string{"raw secret", `"todos"`, "full internal todo payload"} {
+		if strings.Contains(rendered[0].Body, notWant) {
+			t.Fatalf("todo result leaked %q: %q", notWant, rendered[0].Body)
+		}
+	}
+}
+
 func TestRendererShowsTurnDiffDisplaySummary(t *testing.T) {
 	rendered := NewRenderer().Apply(protocol.Event{Type: protocol.EventTurnChangeRecorded, Data: protocol.TurnChangeEvent{
 		ChangeID:       "change-1",

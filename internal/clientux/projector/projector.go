@@ -50,6 +50,7 @@ type Snapshot struct {
 	ContextThresholds []ContextThreshold
 	TurnChanges       []TurnChangeItem
 	LatestTurnChange  *TurnChangeItem
+	TodoState         protocol.TodoState
 }
 
 type ToolItem struct {
@@ -238,6 +239,7 @@ func (p *Projector) Snapshot() Snapshot {
 	}
 	out.ContextThresholds = append([]ContextThreshold(nil), p.snapshot.ContextThresholds...)
 	out.TurnChanges = cloneTurnChangeItems(p.snapshot.TurnChanges)
+	out.TodoState = cloneTodoState(p.snapshot.TodoState)
 	if p.snapshot.LatestTurnChange != nil {
 		latest := cloneTurnChangeItem(*p.snapshot.LatestTurnChange)
 		out.LatestTurnChange = &latest
@@ -255,11 +257,13 @@ func (p *Projector) resetRun() {
 	p.reasoning.Reset()
 	lastSeq := p.snapshot.LastSeq
 	seqGap := p.snapshot.SeqGap
+	todoState := cloneTodoState(p.snapshot.TodoState)
 	p.snapshot = Snapshot{
 		RunState:      RunStateIdle,
 		LastSeq:       lastSeq,
 		SeqGap:        seqGap,
 		ToolsByCallID: map[string]ToolItem{},
+		TodoState:     todoState,
 	}
 	p.usage.Reset()
 	p.pendingAssistantBreak = false
@@ -454,6 +458,9 @@ func (p *Projector) upsertToolResult(event protocol.Event, status string) {
 		item.Content = result.Content
 		item.IsError = result.IsError
 		item.Error = result.ErrorCode
+		if state, ok := todoStateFromMetadata(result.Metadata); ok {
+			p.snapshot.TodoState = cloneTodoState(state)
+		}
 		if result.Compact != nil {
 			compact := cloneToolCompact(*result.Compact)
 			item.Compact = &compact
@@ -630,4 +637,45 @@ func nonNegative(value int64) int64 {
 		return 0
 	}
 	return value
+}
+
+func todoStateFromMetadata(metadata map[string]any) (protocol.TodoState, bool) {
+	if len(metadata) == 0 {
+		return protocol.TodoState{}, false
+	}
+	bytes, err := json.Marshal(metadata["todo_state"])
+	if err != nil {
+		return protocol.TodoState{}, false
+	}
+	var state protocol.TodoState
+	if err := json.Unmarshal(bytes, &state); err != nil {
+		return protocol.TodoState{}, false
+	}
+	state = recountTodoState(state)
+	return state, len(state.Todos) > 0 || state.Pending > 0 || state.InProgress > 0 || state.Completed > 0 || state.Blocked > 0
+}
+
+func cloneTodoState(state protocol.TodoState) protocol.TodoState {
+	state.Todos = append([]protocol.TodoItem(nil), state.Todos...)
+	return state
+}
+
+func recountTodoState(state protocol.TodoState) protocol.TodoState {
+	state.Pending = 0
+	state.InProgress = 0
+	state.Completed = 0
+	state.Blocked = 0
+	for _, item := range state.Todos {
+		switch item.Status {
+		case "pending":
+			state.Pending++
+		case "in_progress":
+			state.InProgress++
+		case "completed":
+			state.Completed++
+		case "blocked":
+			state.Blocked++
+		}
+	}
+	return state
 }

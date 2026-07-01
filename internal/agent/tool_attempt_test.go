@@ -252,6 +252,20 @@ func TestRunMessagesToolOrchestratorEmitsSafePermissionAndAttempt(t *testing.T) 
 	}
 }
 
+func TestApplyToolCompactMetadataUsesDisplaySummary(t *testing.T) {
+	compact := protocol.ToolCompact{
+		Summary: "fallback summary",
+		Target:  "fallback target",
+	}
+	applyToolCompactMetadata(&compact, map[string]any{
+		"display_summary": "plan 2 todos | 1 in progress",
+		"display_target":  "Build todo_write",
+	})
+	if compact.Summary != "plan 2 todos | 1 in progress" || compact.Target != "Build todo_write" {
+		t.Fatalf("compact metadata = %#v", compact)
+	}
+}
+
 func TestRunMessagesToolOrchestratorDeniesDangerousToolBeforeExecution(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Default()

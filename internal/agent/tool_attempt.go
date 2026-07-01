@@ -659,6 +659,8 @@ func applyToolCompactMetadata(compact *protocol.ToolCompact, metadata map[string
 	}
 	compact.OutputRef = firstNonEmptyString(compact.OutputRef, metadataString(metadata, "output_ref"))
 	compact.OutputRefID = firstNonEmptyString(compact.OutputRefID, metadataString(metadata, tooloutput.MetadataOutputRefID))
+	compact.Summary = firstNonEmptyString(metadataString(metadata, "display_summary"), compact.Summary)
+	compact.Target = firstNonEmptyString(metadataString(metadata, "display_target"), compact.Target)
 	compact.DurationMS = firstNonZeroInt64(compact.DurationMS, metadataInt64(metadata, "duration_ms"))
 	compact.EstimatedTokens = firstNonZeroInt64(compact.EstimatedTokens, metadataInt64(metadata, "output_estimated_tokens"))
 	compact.EstimatedTokens = firstNonZeroInt64(compact.EstimatedTokens, metadataInt64(metadata, "estimated_text_tokens"))

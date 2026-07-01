@@ -148,6 +148,7 @@ func NewRegistryFromSettings(settings RegistrySettings, opts ...RegistryOption) 
 		}
 	}
 	r.addTime()
+	r.addTodoWrite()
 	r.addFSRead()
 	r.addFSList()
 	r.addFSSearch()

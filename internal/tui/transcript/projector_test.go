@@ -111,6 +111,58 @@ func TestProjectorApplyToolCompactLifecycleCells(t *testing.T) {
 	}
 }
 
+func TestProjectorApplyTodoPlanStateWithoutRawArgs(t *testing.T) {
+	p := NewProjector()
+	cells := p.Apply(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{
+			ID:        "call_todo",
+			Name:      "todo_write",
+			Arguments: json.RawMessage(`{"todos":[{"id":"raw","content":"raw secret payload","status":"pending"}]}`),
+		},
+	})
+	if len(cells) != 1 || cells[0].Title != "Updated plan" {
+		t.Fatalf("todo call cell = %#v", cells)
+	}
+	if strings.Contains(cells[0].Content, "raw secret") || strings.Contains(cells[0].RawCopy, "raw secret") {
+		t.Fatalf("todo call leaked raw args: %#v", cells[0])
+	}
+
+	state := protocol.TodoState{Todos: []protocol.TodoItem{
+		{ID: "done", Content: "Inspect plan", Status: "completed", Priority: "high"},
+		{ID: "build", Content: "Build todo_write", Status: "in_progress", Priority: "high"},
+	}}
+	cells = p.Apply(protocol.Event{
+		Type: protocol.EventToolCallFinished,
+		Data: protocol.ToolResult{
+			CallID:  "call_todo",
+			Name:    "todo_write",
+			Content: "plan 2 todos\n- [completed] (high) done: Inspect plan\n- [in_progress] (high) build: Build todo_write",
+			Metadata: map[string]any{
+				"todo_state": state,
+			},
+		},
+	})
+	if len(cells) != 1 {
+		t.Fatalf("todo result cells = %#v", cells)
+	}
+	for _, want := range []string{"Plan 2 todos", "1 in progress", "1 completed", "now: Build todo_write"} {
+		if !strings.Contains(cells[0].Title, want) {
+			t.Fatalf("todo result title missing %q: %q", want, cells[0].Title)
+		}
+	}
+	for _, want := range []string{"plan 2 todos", "Build todo_write"} {
+		if !strings.Contains(cells[0].Content, want) {
+			t.Fatalf("todo result content missing %q:\n%s", want, cells[0].Content)
+		}
+	}
+	for _, notWant := range []string{"raw secret", `"todos"`} {
+		if strings.Contains(cells[0].Content, notWant) || strings.Contains(cells[0].RawCopy, notWant) {
+			t.Fatalf("todo result leaked %q: %#v", notWant, cells[0])
+		}
+	}
+}
+
 func TestProjectorApplyUsesCompactToolAuditText(t *testing.T) {
 	p := NewProjector()
 	cells := p.Apply(protocol.Event{Type: protocol.EventToolAudit, Data: map[string]any{

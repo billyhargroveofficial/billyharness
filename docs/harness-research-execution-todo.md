@@ -502,11 +502,28 @@ Goal: add rollback and compact display invariants before expanding edit power.
 Goal: make Billy useful as a coding agent without full-file rewrites or shell
 abuse.
 
-- [ ] HR-03.1 Agent work plan state.
+- [x] HR-03.1 Agent work plan state.
   - maps to: `competitive-improvements-todo.md` A3.
   - acceptance: `todo_write` has bounded todos, valid statuses, one
     `in_progress`, deterministic compact rendering, and replayable state.
   - verification: `go test -count=1 ./internal/tools ./internal/clientux/projector ./internal/toolrender ./internal/tui/transcript ./internal/telegrambot`.
+  - status: completed 2026-07-01.
+  - evidence: added native `todo_write` with bounded full-list replacement,
+    schema-enforced statuses/priorities, handler-level duplicate and
+    single-`in_progress` validation, deterministic plan summaries, and
+    `protocol.TodoState` metadata for replay. The shared client projector now
+    reconstructs todo state from durable tool-result metadata and preserves it
+    across run starts; shared tool rendering, TUI transcript projection, and
+    Telegram rendering show compact plan counts/current work without raw todo
+    JSON arguments.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/tools
+    ./internal/clientux/projector ./internal/toolrender
+    ./internal/tui/transcript ./internal/telegrambot` passed;
+    `/root/.local/go/bin/go test -run 'Test.*Todo.*|Test.*PlanState.*'
+    -count=1 ./internal/...` passed; `/root/.local/go/bin/go test -count=1
+    ./internal/protocol ./internal/agent ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] HR-03.2 Native grep and glob tools.
   - maps to: `competitive-improvements-todo.md` A5.

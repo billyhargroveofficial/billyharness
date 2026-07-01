@@ -298,6 +298,21 @@ type ToolCompact struct {
 	Hints           []string `json:"hints,omitempty"`
 }
 
+type TodoItem struct {
+	ID       string `json:"id"`
+	Content  string `json:"content"`
+	Status   string `json:"status"`
+	Priority string `json:"priority,omitempty"`
+}
+
+type TodoState struct {
+	Todos      []TodoItem `json:"todos,omitempty"`
+	Pending    int        `json:"pending"`
+	InProgress int        `json:"in_progress"`
+	Completed  int        `json:"completed"`
+	Blocked    int        `json:"blocked"`
+}
+
 type HookEvent struct {
 	HookEvent             string         `json:"hook_event"`
 	HookName              string         `json:"hook_name,omitempty"`

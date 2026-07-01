@@ -116,6 +116,18 @@ func TestCallLineSnapshotsCommonTools(t *testing.T) {
 			style:    StyleTelegram,
 			expected: "🔌 mcp call mcp__server__tool",
 		},
+		{
+			name:     "tui todo write",
+			call:     protocol.ToolCall{Name: "todo_write", Arguments: []byte(`{"todos":[{"id":"x","content":"secret-ish raw payload","status":"pending"}]}`)},
+			style:    StyleTUI,
+			expected: "Updated plan",
+		},
+		{
+			name:     "telegram todo write",
+			call:     protocol.ToolCall{Name: "todo_write", Arguments: []byte(`{"todos":[{"id":"x","content":"secret-ish raw payload","status":"pending"}]}`)},
+			style:    StyleTelegram,
+			expected: "📝 plan update",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -175,6 +187,33 @@ func TestTelegramCallLineCoversCommonToolTargets(t *testing.T) {
 				t.Fatalf("line leaked URL query: %q", got)
 			}
 		})
+	}
+}
+
+func TestTodoPlanStateSummary(t *testing.T) {
+	state := protocol.TodoState{Todos: []protocol.TodoItem{
+		{ID: "done", Content: "Inspect plan surfaces", Status: "completed", Priority: "high"},
+		{ID: "build", Content: "Build todo_write", Status: "in_progress", Priority: "high"},
+		{ID: "test", Content: "Run tests", Status: "pending", Priority: "medium"},
+	}}
+	result := protocol.ToolResult{
+		CallID: "call_todo",
+		Name:   "todo_write",
+		Metadata: map[string]any{
+			"todo_state": state,
+		},
+	}
+	summary, ok := ResultSummaryFor(result, "", StyleTelegram)
+	if !ok || summary.Key != "call_todo" {
+		t.Fatalf("summary = %#v ok=%v", summary, ok)
+	}
+	for _, want := range []string{"📝", "3 todos", "1 in progress", "1 pending", "1 completed", "now: Build todo_write"} {
+		if !strings.Contains(summary.Line, want) {
+			t.Fatalf("todo summary missing %q: %q", want, summary.Line)
+		}
+	}
+	if strings.Contains(CallLine(protocol.ToolCall{Name: "todo_write", Arguments: []byte(`{"todos":[{"content":"raw"}]}`)}, StyleTelegram), "raw") {
+		t.Fatal("todo_write call line leaked raw arguments")
 	}
 }
 
