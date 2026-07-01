@@ -874,7 +874,7 @@ framework migration.
     `/root/.local/go/bin/go test -count=1 ./internal/tui/selection
     ./internal/tui/render ./internal/tui/transcript ./internal/tui
     ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `1159b411c43e8e334e875f79e3af471afb69c288`.
 
 - [ ] SH-06.3 Add compact command palette source labels and argument menus.
   - inspiration: OpenCode command hints and Billy's current slash-command UX.
