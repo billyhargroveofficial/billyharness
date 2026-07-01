@@ -159,6 +159,7 @@ func NewRegistryFromSettings(settings RegistrySettings, opts ...RegistryOption) 
 	r.addFSGlob()
 	r.addFSFindFiles()
 	r.addFSWrite()
+	r.addFSEdit()
 	r.addFSMkdir()
 	r.addShellExec()
 	r.addWebFetch()
@@ -549,7 +550,7 @@ func defaultParallelMetadata(name string, risk protocol.Risk) ParallelMetadata {
 		return ParallelMetadata{Policy: ParallelPolicyReadOnly, Idempotent: true, Cancellable: true}
 	case "web_search", "web_fetch", "web_extract", "web_crawl":
 		return ParallelMetadata{Policy: ParallelPolicyNetworkRateLimited, Idempotent: true, RateLimitKey: "web", Cancellable: true, MaxConcurrency: 3}
-	case "fs_write_file", "fs_make_dir", "shell_exec", "web_cache_clear":
+	case "fs_write_file", "fs_edit_file", "fs_make_dir", "shell_exec", "web_cache_clear":
 		return ParallelMetadata{Policy: ParallelPolicyExclusiveWorkspace, RequiresExclusiveWorkspace: true, Cancellable: true, MaxConcurrency: 1}
 	case "mcp_list_tools", "mcp_call":
 		return ParallelMetadata{Policy: ParallelPolicyUnknownExternal, RequiresExclusiveWorkspace: true, Cancellable: true, RateLimitKey: "mcp", MaxConcurrency: 1}

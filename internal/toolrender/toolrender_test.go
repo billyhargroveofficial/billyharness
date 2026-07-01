@@ -152,6 +152,18 @@ func TestCallLineSnapshotsCommonTools(t *testing.T) {
 			style:    StyleTelegram,
 			expected: "🗂 find files tui file in internal",
 		},
+		{
+			name:     "tui fs edit",
+			call:     protocol.ToolCall{Name: "fs_edit_file", Arguments: []byte(`{"path":"internal/tools/tools.go","edits":[{"old_string":"secret raw payload","new_string":"replacement"}]}`)},
+			style:    StyleTUI,
+			expected: "Edited internal/tools/tools.go",
+		},
+		{
+			name:     "telegram fs edit",
+			call:     protocol.ToolCall{Name: "fs_edit_file", Arguments: []byte(`{"path":"internal/tools/tools.go","edits":[{"old_string":"secret raw payload","new_string":"replacement"}]}`)},
+			style:    StyleTelegram,
+			expected: "✏️ edit internal/tools/tools.go",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

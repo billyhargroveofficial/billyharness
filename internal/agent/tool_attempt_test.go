@@ -126,6 +126,57 @@ func TestRunMessagesMutatingToolEmitsTurnChangeRecorded(t *testing.T) {
 	}
 }
 
+func TestRunMessagesFSEditFileEmitsTurnChangeRecorded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "out.txt"), []byte("hello old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.MaxToolRounds = 2
+	cfg.AutoApproveDangerous = true
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_edit", ToolName: "fs_edit_file", ArgsDelta: `{"path":"out.txt","edits":[{"old_string":"old","new_string":"new"}]}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "finished"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	a := New(cfg, prov, tools.NewRegistry(cfg))
+	var events []protocol.Event
+	if _, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "edit file"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bytes, err := os.ReadFile(filepath.Join(root, "out.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(bytes) != "hello new\n" {
+		t.Fatalf("edited content = %q", bytes)
+	}
+	change, ok := firstTurnChange(events)
+	if !ok {
+		t.Fatalf("turn change event missing: %#v", events)
+	}
+	if change.ToolName != "fs_edit_file" || change.FileCount != 1 || change.Modified != 1 || change.PatchOutputRef == "" {
+		t.Fatalf("turn change = %#v", change)
+	}
+	result, ok := firstToolResult(events)
+	if !ok || result.Metadata["turn_change_id"] != change.ChangeID || result.Metadata["before_sha256"] == "" || result.Metadata["after_sha256"] == "" {
+		t.Fatalf("tool result metadata = %#v ok=%v change=%#v", result.Metadata, ok, change)
+	}
+}
+
 func TestRunMessagesShellExecEmitsTurnChangeRecorded(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", home)

@@ -601,12 +601,32 @@ abuse.
     ./internal/tui ./internal/telegrambot ./cmd/fast-agent-harness` passed.
   - commit: pending.
 
-- [ ] HR-03.5 Exact file edit tool.
+- [x] HR-03.5 Exact file edit tool.
   - maps to: `competitive-improvements-todo.md` A4.
   - dependency: HR-02.2.
   - acceptance: exact-only `fs_edit_file`; no fuzzy match; atomic multi-edit;
     optional `expected_sha256`; no full file result.
   - verification: `go test -count=1 ./internal/tools ./internal/agent ./internal/toolrender`.
+  - status: completed 2026-07-01.
+  - evidence: added native write-risk `fs_edit_file` with exact string
+    replacements only, bounded sequential multi-edit validation, optional
+    `expected_sha256`, UTF-8/binary and workspace safety checks, and a single
+    temp-file rename after every edit verifies in memory. Ambiguous matches
+    fail unless `replace_all=true`, missing/no-op/hash-mismatch failures leave
+    the file unchanged, result output returns only summary and before/after
+    hashes, and checkpoint tracking records edit turn diffs for undo/preview.
+    Plan/guarded/dangerous policy treats the edit tool like other write tools,
+    and TUI/Telegram compact call rendering avoids raw edit JSON.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/tools ./internal/agent
+    ./internal/toolrender` passed; `/root/.local/go/bin/go test -count=1
+    ./internal/tools ./internal/agent ./internal/toolrender
+    ./internal/checkpoint` passed;
+    `/root/.local/go/bin/go test -run
+    'Test.*FSEdit.*|Test.*Exact.*Replacement.*|Test.*DangerousTools.*|Test.*ParallelMetadata.*|Test.*Turn.*Diff.*'
+    -count=1 ./internal/tools ./internal/agent ./internal/toolrender
+    ./internal/checkpoint` passed.
+  - commit: pending.
 
 - [ ] HR-03.6 Structured patch tool.
   - maps to: `competitive-improvements-todo.md` A13.

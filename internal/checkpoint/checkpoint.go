@@ -258,7 +258,7 @@ func normalizeOptions(opts Options) Options {
 
 func targetsForTool(opts Options, toolName string, args json.RawMessage) ([]target, bool, error) {
 	switch toolName {
-	case "fs_write_file":
+	case "fs_write_file", "fs_edit_file":
 		var in struct {
 			Path string `json:"path"`
 		}

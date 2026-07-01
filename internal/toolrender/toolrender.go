@@ -537,6 +537,14 @@ var callRenderers = map[string]callRenderer{
 		tui:      staticCallLine(func(args map[string]any) string { return "Wrote " + firstArg(args, "path", "file") }),
 		telegram: staticCallLine(func(args map[string]any) string { return "✍️ write " + CompactArg(args["path"], 96) }),
 	},
+	"fs_edit_file": {
+		tui: staticCallLine(func(args map[string]any) string {
+			return "Edited " + firstArg(args, "path", "file")
+		}),
+		telegram: staticCallLine(func(args map[string]any) string {
+			return "✏️ edit " + CompactArg(args["path"], 96)
+		}),
+	},
 	"fs_make_dir": {
 		tui: staticCallLine(func(args map[string]any) string { return "Created dir " + firstArg(args, "path") }),
 	},
