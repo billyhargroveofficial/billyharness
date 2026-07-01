@@ -1056,9 +1056,20 @@ need.
     deferral.
   - commit: pending.
 
-- [ ] HR-05.6 Deferred diagnostics, LSP, memory, and backup extensions.
+- [-] HR-05.6 Deferred diagnostics, LSP, memory, and backup extensions.
   - maps to: `competitive-improvements-todo.md` A16.
   - acceptance: each feature stays opt-in and behind a proven interface.
+  - status: deferred 2026-07-01.
+  - blocker: A16 is marked P2 in `competitive-improvements-todo.md` and is a
+    bundle of optional extensions. HR-03.8 already provides command-based
+    diagnostics, and HR-05.1 added redo guardrails; no current test or
+    benchmark justifies adding LSP watchers, memory consolidation/search, or
+    non-git backup extensions in this pass.
+  - next action: split and revisit individual subfeatures only after their
+    existing interfaces have focused failing tests or benchmark evidence.
+  - verification evidence: source-priority check only; no code changed for this
+    deferral.
+  - commit: pending.
 
 - [ ] HR-05.7 Early tool execution and input-aware parallelism.
   - maps to: `competitive-improvements-todo.md` P2-15 and P2-16.
