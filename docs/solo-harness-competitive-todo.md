@@ -1,0 +1,476 @@
+# Solo Harness Competitive TODO
+
+Date: 2026-07-01
+Status: new source-of-truth roadmap for the next competitive pass
+
+This document is a clean-room implementation plan for improving Billyharness by
+studying Codex CLI, Claude Code, and OpenCode. It is not a request to copy
+their source code. It extracts the narrow engineering patterns that make sense
+for a fast solo harness and rejects platform, marketplace, enterprise, and cloud
+machinery that does not help the current owner.
+
+## Source Repositories
+
+- Codex: `/root/agent-research/codex`
+- Claude Code leak mirror: `/root/claude-code`
+- OpenCode: `/root/agent-research/opencode-current`
+
+## Billyharness Source Documents
+
+- `/root/billyharness/docs/architecture.md`
+- `/root/billyharness/docs/harness-research-execution-todo.md`
+- `/root/billyharness/docs/competitive-architecture-analysis.md`
+- `/root/billyharness/docs/memory-systems-research.md`
+
+## Solo Harness Filter
+
+Accept a competitor idea only when it does at least one of these things:
+
+- makes a known Telegram, TUI, gateway, or agent-loop failure impossible or
+  clearly diagnosable;
+- reduces latency, context bloat, provider spend, or repeated token waste on
+  the hot path;
+- gives TUI and Telegram one shared contract instead of duplicated rendering or
+  state interpretation;
+- strengthens replay, traceability, or deterministic tests;
+- makes future changes easier by clarifying ownership boundaries already
+  documented in `docs/architecture.md`;
+- stays useful for one local owner without a team platform.
+
+Reject by default:
+
+- plugin marketplaces, extension stores, remote plugin sync, app-server
+  compatibility layers, organization config, RBAC, policy engines, SaaS
+  telemetry, cloud queues, team agents, generated SDK surfaces, hidden user-git
+  state, mandatory SQLite/vector/FTS databases, shell-history ingestion,
+  headless browser extraction, React/Ink terminal rewrites, and default
+  auto-memory writes.
+
+## Current Billyharness Baseline
+
+Billyharness already has the important base layers:
+
+- typed protocol events and JSONL session storage;
+- gateway replay/follow, prompt admission, Telegram offset safety, and
+  interrupt semantics;
+- model/provider settings, Codex OAuth integration, DeepSeek routing, and web
+  summarization outside the main agent loop;
+- output refs for large tool/web results;
+- bounded `fs_read_file`, `fs_edit_file`, managed shell processes, diagnostics,
+  file search, and MCP discovery;
+- TUI/Telegram projection through shared protocol events;
+- `toolrender` for compact tool display labels;
+- `trace` bundles and benchmark scaffolding;
+- architecture import guards and hygiene checks.
+
+The next pass should therefore improve observability, context correctness,
+shared render contracts, replay tests, memory, and interop. It should not
+restart the project around another framework.
+
+## Competitive Findings
+
+### Codex Patterns To Take
+
+- Provider capability registry: provider-owned upper bounds for features,
+  preferred helper models, account/auth status, context window, streaming,
+  cache fields, and web/tool support.
+- Turn-scoped runtime snapshots: the model call, advertised tools, config,
+  context metadata, and MCP catalog should be frozen per turn.
+- External session import/export: foreign chat history can be translated into a
+  local event/turn model with explicit markers and approximate token counts.
+- Trace and rollout thinking: keep durable event history as the source of truth,
+  then derive UI and replay views from it.
+- Memory model selection: small/cheap models for extraction, stronger models
+  only for consolidation when explicitly enabled.
+
+### Codex Patterns To Reject
+
+- Cloud tasks, app server, connectors platform, enterprise approval/reviewer
+  flows, first-party attestation, multi-surface app protocols, remote execution
+  planes, and broad compatibility layers.
+
+### Claude Code Patterns To Take
+
+- Tool UI contract: every tool has compact display text, progress text,
+  result text, interrupt behavior, and grouping/collapse semantics.
+- Prompt-cache break diagnostics: hash system prompt sections, tool schemas,
+  cache controls, model/effort, and dynamic context so cache busts explain
+  themselves.
+- Terminal selection polish: semantic no-select regions, wide-character safe
+  coordinates, word/line selection, scrollback-safe copy, and visible highlight.
+- File-based memory taxonomy: small index plus bounded topic files, user
+  review first, no default automatic writes.
+- Compaction guards: avoid recursive compaction, track compact failures, and
+  preserve boundaries/epochs instead of mutating history invisibly.
+
+### Claude Code Patterns To Reject
+
+- React/Ink rewrite, team memory sync, Anthropic API-specific memory services,
+  mobile/Slack/CCR surfaces, managed policies, analytics, and default forked
+  memory agents.
+
+### OpenCode Patterns To Take
+
+- Unified command registry: local commands, prompt commands, MCP prompts, and
+  skills become one searchable palette with source labels and argument hints.
+- Output truncation contract: every large output gets a durable file/ref, a
+  bounded head/tail preview, and a model hint to inspect with search or offset
+  reads instead of inlining everything.
+- Adapter event translation: one semantic event stream can drive multiple
+  clients if adapters keep their own presentation state shallow.
+- Context epochs: dynamic context changes should be explicit durable events or
+  epochs, not invisible prompt drift.
+- Fake provider and replay tests as first-class verification.
+
+### OpenCode Patterns To Reject
+
+- Effect/layer runtime migration, SQLite/event-sourcing platform rewrite,
+  share/sync/control-plane features, plugin lifecycle, organization config,
+  broad IDE/LSP platform, and worktree management as a default dependency.
+
+## Milestone 0 - Research Baseline
+
+Goal: make the competitive pass reproducible and keep it separate from older
+roadmaps.
+
+- [x] SH-00.1 Confirm local competitor repos and current billyharness baseline.
+  - source: the repository paths listed above.
+  - target files: this document only.
+  - acceptance: record missing repos as blockers; do not rely on internet
+    sources unless the user explicitly asks for a fresh upstream comparison.
+  - verification: `git status --short`; `test -d` for each source repo.
+  - status: completed 2026-07-01.
+  - evidence: local competitor repositories exist at
+    `/root/agent-research/codex`, `/root/claude-code`, and
+    `/root/agent-research/opencode-current`; no internet comparison was used.
+    Billyharness is on branch `main` tracking `origin/main`; `HEAD` and
+    upstream both resolved to `cbcc80cc834e44b2418dc21ae843bc9e199c15c7`
+    (`cbcc80c Defer tool concurrency experiments`). The only dirty paths at
+    baseline were untracked roadmap docs:
+    `docs/solo-harness-competitive-goal.md` and
+    `docs/solo-harness-competitive-todo.md`.
+  - commit: pending.
+
+- [ ] SH-00.2 Cross-link this roadmap from the existing planning docs only if
+  it becomes the active source of truth.
+  - target files: optional docs only.
+  - acceptance: old TODO files are not duplicated or rewritten without need.
+  - verification: manual diff review.
+  - status: open.
+
+## Milestone 1 - Prompt, Context, And Provider Observability (P0)
+
+Goal: make every expensive model request understandable: what prompt sections
+were included, what changed, what helper model was used, and how close the turn
+is to compaction.
+
+- [ ] SH-01.1 Add prompt section inventory and cache-break diagnostics.
+  - inspiration: Claude Code prompt-cache break detection and OpenCode context
+    epochs.
+  - target files: `internal/instructions`, `internal/projectcontext`,
+    `internal/runstate`, `internal/agent/model_call.go`,
+    `internal/protocol`, `internal/trace`.
+  - acceptance: each model request can emit or record section names, byte
+    counts, approximate token counts, stable hashes, and a reason when the
+    prompt prefix changes between turns.
+  - acceptance: secrets and `.env` values are never included in diagnostics.
+  - verification: focused tests for prompt inventory hash stability and a cache
+    break caused by model/tool/context change.
+  - status: open.
+
+- [ ] SH-01.2 Add `/context` report v2 for CLI, TUI, and Telegram.
+  - inspiration: Codex/OpenCode context-window metadata and the user's current
+    Telegram status-line pain.
+  - target files: `internal/clientux/context.go`,
+    `internal/gateway/session_inspect.go`,
+    `internal/gatewayclient/client.go`, `internal/tui/status.go`,
+    `internal/telegrambot/status_html.go`, `cmd/fast-agent-harness`.
+  - acceptance: the report shows context tokens/window/percent, compact
+    threshold, last compaction epoch, prompt section budget, output refs,
+    websum in/out, helper-model usage, current model, reasoning mode, and
+    cache-hit/miss fields with clear labels.
+  - verification: package tests plus one fixture with websum and compaction.
+  - status: open.
+
+- [ ] SH-01.3 Make provider/model capability policy explicit.
+  - inspiration: Codex provider capability registry.
+  - target files: `internal/modelinfo`, `internal/provider`, `internal/config`,
+    `internal/credentials`, `cmd/fast-agent-harness/config*`.
+  - acceptance: provider/model metadata includes context window, max output,
+    tool-call support, parallel-tool support, streaming, reasoning support,
+    cache accounting fields, helper models for web summary and memory, and
+    cost/subscription mode.
+  - acceptance: unsupported model/provider/reasoning/helper combinations fail
+    early with actionable diagnostics.
+  - verification: modelinfo/config/provider tests.
+  - status: open.
+
+- [ ] SH-01.4 Record helper-model usage separately from main agent usage.
+  - inspiration: Codex memory extraction model selection and Billy websum
+    metrics.
+  - target files: `internal/provider/web_summary.go`,
+    `internal/tools/web_summary.go`, `internal/protocol`, `internal/trace`,
+    `internal/telegrambot/render.go`, `internal/tui/status.go`.
+  - acceptance: web summary, context compact summary, and future memory summary
+    usage show as helper usage, not as main LLM turn count.
+  - verification: web summary tests and trace summary tests.
+  - status: open.
+
+## Milestone 2 - Shared Tool UI, Output Refs, And Streaming Liveness (P0)
+
+Goal: make tool display compact, shared, and live across TUI and Telegram, and
+make silent stalls diagnosable.
+
+- [ ] SH-02.1 Upgrade `toolrender` into a tool display contract v2.
+  - inspiration: Claude Code `Tool` UI traits and OpenCode truncation display.
+  - target files: `internal/toolrender`, `internal/tui/transcript`,
+    `internal/tui/render`, `internal/telegrambot/render.go`,
+    `internal/protocol`.
+  - acceptance: shared structs cover tool start/progress/result/error,
+    collapse default, grouping, file/path/query/URL summary, duration, output
+    ref, truncation state, and one-line preview.
+  - acceptance: long URLs and JSON args are middle-truncated and never dominate
+    Telegram/TUI progress bubbles.
+  - verification: shared golden tests consumed by TUI and Telegram renderers.
+  - status: open.
+
+- [ ] SH-02.2 Audit output-ref behavior across resume/replay.
+  - inspiration: OpenCode durable truncation directory and Codex rollout traces.
+  - target files: `internal/tooloutput`, `internal/tools`,
+    `internal/agent/transcript.go`, `internal/gateway/session_store.go`,
+    `internal/trace`.
+  - acceptance: large web/shell/fs/MCP outputs are stored out of band, replay
+    never re-inlines the full body, summaries carry stable refs, and missing
+    refs are visible as warnings instead of silent context bloat.
+  - verification: tests with at least 500k chars of tool output and resume.
+  - status: open.
+
+- [ ] SH-02.3 Add stream liveness watchdog events.
+  - inspiration: user-observed Telegram "stuck while still working" failure and
+    Codex/OpenCode explicit stream lifecycle.
+  - target files: `internal/provider`, `internal/agent/model_call.go`,
+    `internal/protocol`, `internal/telegrambot/progress_stream.go`,
+    `internal/tui/transcript_runtime.go`.
+  - acceptance: if no visible model/tool/progress event arrives for a
+    configured interval while a run is active, clients get a lightweight
+    `still_running`/heartbeat event with elapsed time and current phase.
+  - acceptance: heartbeat events do not pollute model transcript.
+  - verification: fake provider stall test and Telegram/TUI projector tests.
+  - status: open.
+
+- [ ] SH-02.4 Add managed-process dashboard polish.
+  - inspiration: Claude tool progress and OpenCode process/output refs.
+  - target files: `internal/tools/shell_process.go`,
+    `internal/tools/diagnostics.go`, `internal/toolrender`,
+    `internal/telegrambot/commands.go`, `internal/tui/commands.go`.
+  - acceptance: running background processes can be listed, tailed, stopped,
+    and rendered with stable IDs, ports/URLs when detected, elapsed time, and
+    output refs.
+  - verification: shell process tests and command renderer tests.
+  - status: open.
+
+## Milestone 3 - Golden Replay And Adapter Parity (P0)
+
+Goal: prove TUI, Telegram, CLI, gateway, and trace all agree on the same
+canonical event stream.
+
+- [ ] SH-03.1 Create a canonical golden run bundle.
+  - inspiration: Codex rollout/session exports and OpenCode replay tests.
+  - target files: `internal/trace`, `internal/eventlog`,
+    `internal/testkit`, `internal/clientux/projector`,
+    `cmd/fast-agent-harness`.
+  - acceptance: a fixture contains user messages, assistant streaming chunks,
+    thinking, web summary, several tools, a large output ref, interruption,
+    compaction threshold, and final usage.
+  - acceptance: the bundle can be replayed without provider/network access.
+  - verification: `go test -run 'Test.*Golden.*Trace|Test.*Replay.*'`.
+  - status: open.
+
+- [ ] SH-03.2 Add adapter parity snapshot tests.
+  - inspiration: shared adapter event translation in OpenCode and Billy's
+    existing projector.
+  - target files: `internal/clientux/projector`, `internal/tui/transcript`,
+    `internal/telegrambot/render.go`, `internal/toolrender`.
+  - acceptance: the same golden bundle produces expected compact tool cells,
+    status/context lines, final message body, and no stale previous-run tools
+    in both Telegram and TUI projections.
+  - verification: focused snapshot/golden tests.
+  - status: open.
+
+- [ ] SH-03.3 Add provider replay/fake-provider regression suite.
+  - inspiration: OpenCode fake provider and Billy bench traces.
+  - target files: `internal/provider`, `internal/agent`, `internal/bench`,
+    `internal/testkit`.
+  - acceptance: fake streams can simulate slow chunks, invalid tool args,
+    partial JSON, provider retries, and cancellation; tests assert terminal
+    events and transcript pairing.
+  - verification: provider/agent package tests.
+  - status: open.
+
+## Milestone 4 - Manual Solo Memory MVP (P1)
+
+Goal: add useful memory without background magic or prompt bloat.
+
+- [ ] SH-04.1 Add file-based memory store with small index and topic files.
+  - inspiration: Claude Code memory taxonomy and Codex memory artifact layout.
+  - target files: new `internal/memory`, `internal/config`,
+    `internal/projectcontext`, `docs/memory-systems-research.md`.
+  - acceptance: memory lives under Billyharness config/profile directories,
+    has index entries with type/topic/summary/path, enforces file size caps,
+    rejects path traversal, and injects only a small summary unless explicitly
+    read.
+  - verification: memory store tests.
+  - status: open.
+
+- [ ] SH-04.2 Add manual memory commands and tools.
+  - inspiration: Claude `/memory` UX but without React dialogs or auto writes.
+  - target files: `internal/tools`, `internal/promptcommands`,
+    `internal/tui/commands.go`, `internal/telegrambot/commands.go`,
+    `cmd/fast-agent-harness`.
+  - acceptance: commands/tools support list/search/read/add/replace/remove with
+    preview and confirmation boundaries appropriate for TUI/Telegram.
+  - verification: command/tool tests.
+  - status: open.
+
+- [ ] SH-04.3 Defer automatic memory extraction behind explicit command.
+  - inspiration: Codex/Claude extraction pipelines, rejected as default.
+  - target files: docs first; code only after manual MVP is stable.
+  - acceptance: no background memory writes run by default; a future
+    `/memory extract` task has a clear design with helper model, budget, and
+    review gate.
+  - verification: config tests proving default disabled.
+  - status: open.
+
+## Milestone 5 - Interop Without Platform Bloat (P1)
+
+Goal: import useful data from other agents and configs without becoming a
+compatibility platform.
+
+- [ ] SH-05.1 Add external session import/export diagnostics.
+  - inspiration: Codex external-agent session importer.
+  - target files: `internal/session`, `internal/trace`,
+    `cmd/fast-agent-harness/sessions.go`.
+  - acceptance: import can convert simple user/assistant JSONL or markdown
+    transcripts into Billy messages/events with an explicit imported marker and
+    approximate token counts.
+  - acceptance: unsupported tool-call formats are reported, not guessed.
+  - verification: import tests with Codex/OpenCode/Claude-style simple samples.
+  - status: open.
+
+- [ ] SH-05.2 Add MCP config migration diagnostics.
+  - inspiration: Codex external MCP config migration tests.
+  - target files: `internal/config/mcp.go`,
+    `cmd/fast-agent-harness/config*`, docs.
+  - acceptance: command scans known local config locations, reports compatible
+    stdio/http MCP servers, redacts env values, and prints Billy config
+    suggestions without auto-overwriting.
+  - verification: config migration fixture tests.
+  - status: open.
+
+- [ ] SH-05.3 Unify command registry/search.
+  - inspiration: OpenCode command registry.
+  - target files: `internal/promptcommands`, `internal/mcpclient`,
+    `internal/tui/commands.go`, `internal/telegrambot/commands.go`,
+    `cmd/fast-agent-harness`.
+  - acceptance: slash commands, local markdown prompt commands, MCP prompts,
+    profiles, and built-in actions show through one registry with source,
+    description, argument hints, and availability.
+  - verification: command registry tests and TUI/Telegram menu tests.
+  - status: open.
+
+## Milestone 6 - UX Polish With Hard Boundaries (P1)
+
+Goal: borrow the parts of mature TUIs that improve daily solo use without a UI
+framework migration.
+
+- [ ] SH-06.1 Add raw/rich transcript toggle parity for TUI and CLI export.
+  - inspiration: Codex raw/rich modes and Claude selection reliability.
+  - target files: `internal/tui/transcript`, `internal/tui/commands.go`,
+    `cmd/fast-agent-harness/sessions.go`.
+  - acceptance: raw mode preserves exact event text/refs for debugging; rich
+    mode stays compact and readable; copy behavior is tested.
+  - verification: transcript render tests.
+  - status: open.
+
+- [ ] SH-06.2 Harden selection and copy with semantic no-select regions.
+  - inspiration: Claude Code terminal selection state.
+  - target files: `internal/tui/selection`, `internal/tui/transcript`,
+    `internal/tui/render`.
+  - acceptance: status lines, hidden thinking markers, and collapsed tool chrome
+    can be excluded from copy while visible highlight remains correct for ANSI
+    and wide Unicode text.
+  - verification: selection tests with Cyrillic, emoji, ANSI, tables, and
+    scrolled content.
+  - status: open.
+
+- [ ] SH-06.3 Add compact command palette source labels and argument menus.
+  - inspiration: OpenCode command hints and Billy's current slash-command UX.
+  - target files: `internal/tui/commands.go`, `internal/promptcommands`,
+    `internal/mcpclient`, `internal/telegrambot/commands.go`.
+  - acceptance: choosing `/model`, `/reasoning`, `/theme`, `/profile`,
+    `/memory`, or MCP prompt can complete arguments in one action; source labels
+    are visible but not noisy.
+  - verification: command menu tests.
+  - status: open.
+
+## Milestone 7 - Deferred Experiments (P2)
+
+These are useful only after P0/P1 proves the base is stable.
+
+- [-] SH-07.1 Early tool execution during streaming.
+  - reason: valuable for latency, but dangerous until tool snapshots, transcript
+    pairing, cancellation, and replay tests are extremely strong.
+  - next action: design doc plus fake-provider benchmark first.
+
+- [-] SH-07.2 Stateless subagent tool for local research.
+  - reason: useful for solo deep dives, but easy to turn into a context and
+    process explosion.
+  - next action: define strict input/output budget, no durable queue, no hidden
+    memory writes.
+
+- [-] SH-07.3 LSP/IDE diagnostics.
+  - reason: command diagnostics already exist; full IDE platform is not proven
+    necessary.
+  - next action: benchmark simple `go test`, `rg`, and compiler output parsing
+    before adding LSP.
+
+- [-] SH-07.4 SQLite/FTS or vector index.
+  - reason: JSONL and file-based summaries are currently enough.
+  - next action: only reconsider after measured JSONL/session search limits.
+
+- [-] SH-07.5 ACP/app-server compatibility.
+  - reason: not needed for one local owner.
+  - next action: only build a tiny adapter if a concrete client requires it.
+
+## Verification Matrix
+
+Use focused tests for each task. Before closing each milestone, run the relevant
+subset below.
+
+- Prompt/provider/context:
+  `go test -count=1 ./internal/instructions ./internal/projectcontext ./internal/runstate ./internal/provider ./internal/modelinfo ./internal/config ./internal/clientux ./internal/trace`
+- Tool display/output refs:
+  `go test -count=1 ./internal/toolrender ./internal/tooloutput ./internal/tools ./internal/tui ./internal/telegrambot ./internal/agent`
+- Replay/adapters:
+  `go test -count=1 ./internal/eventlog ./internal/trace ./internal/clientux/projector ./internal/gateway ./internal/gatewayclient ./internal/tui ./internal/telegrambot`
+- Memory:
+  `go test -count=1 ./internal/memory ./internal/projectcontext ./internal/tools ./internal/config`
+- Interop/config:
+  `go test -count=1 ./internal/session ./internal/trace ./internal/config ./cmd/fast-agent-harness`
+- Broad gate before marking P0 done:
+  `go test -count=1 ./internal/agent ./internal/provider ./internal/config ./internal/modelinfo ./internal/tools ./internal/toolrender ./internal/tooloutput ./internal/clientux ./internal/clientux/projector ./internal/gateway ./internal/gatewayclient ./internal/tui ./internal/telegrambot ./internal/trace ./internal/eventlog`
+
+If a package does not exist yet, create it only when the milestone reaches the
+task that needs it.
+
+## Completion Policy
+
+- A task is done only when implementation, focused tests, and this document's
+  status/evidence fields are updated.
+- A task may be split if the split produces independently testable work.
+- A task may be blocked only with exact command/error, concrete reason, and next
+  action.
+- Each completed or explicitly blocked implementation task should be committed
+  separately when this roadmap is used as an active Codex goal.
+- Do not mark P0 complete while any SH-01, SH-02, or SH-03 open item remains
+  unimplemented or unblocked.
