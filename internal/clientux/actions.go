@@ -254,6 +254,14 @@ var sharedActionDefinitions = []ActionDefinition{
 		Summary:   "control thinking blocks",
 	},
 	{
+		ID:        "transcript.view",
+		Title:     "Set Transcript View",
+		Category:  "ui",
+		Slash:     "/transcript",
+		SlashArgs: "raw|rich",
+		Summary:   "toggle raw or rich transcript rendering",
+	},
+	{
 		ID:           "thinking.visibility",
 		Title:        "Toggle Thinking",
 		Category:     "ui",
@@ -278,7 +286,7 @@ var sharedActionDefinitions = []ActionDefinition{
 		Title:     "Copy",
 		Category:  "ui",
 		Slash:     "/copy",
-		SlashArgs: "selected|last|tool|transcript|code|command",
+		SlashArgs: "selected|last|tool|transcript|transcript-rich|code|command",
 		Summary:   "copy raw transcript text without UI chrome",
 	},
 	{

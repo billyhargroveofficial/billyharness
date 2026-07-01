@@ -41,6 +41,9 @@ func TestDefaultsToDarkTheme(t *testing.T) {
 	if got := m.toolView; got != "collapsed" {
 		t.Fatalf("toolView = %q, want collapsed", got)
 	}
+	if got := m.transcriptMode; got != "rich" {
+		t.Fatalf("transcriptMode = %q, want rich", got)
+	}
 }
 
 func TestStillRunningEventUpdatesStatusWithoutTranscriptBlock(t *testing.T) {
@@ -408,6 +411,49 @@ func TestSemanticCopyTextUsesRawTranscriptFields(t *testing.T) {
 		if strings.Contains(transcript, bad) {
 			t.Fatalf("transcript copy should not include UI chrome %q: %q", bad, transcript)
 		}
+	}
+}
+
+func TestTranscriptModeSlashCommandAffectsRenderAndCopy(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.addBlock("assistant", "ASSISTANT", "answer **rich**")
+	m.addBlock("tool", "Done Read README.md", "rendered output")
+	m.blocks[1].RawCopy = "raw tool output_ref=tool-output/read.txt"
+	m.selected = 1
+
+	richRendered := stripANSITest(m.renderBlock(1, m.blocks[1]))
+	if !strings.Contains(richRendered, "Done Read README.md") || strings.Contains(richRendered, "raw tool output_ref") {
+		t.Fatalf("rich render = %q", richRendered)
+	}
+
+	handled, cmd := m.handleSlashCommand("/transcript raw")
+	if !handled || cmd != nil {
+		t.Fatalf("/transcript raw handled=%v cmd=%v", handled, cmd)
+	}
+	if m.transcriptMode != "raw" {
+		t.Fatalf("transcriptMode = %q, want raw", m.transcriptMode)
+	}
+	rawRendered := stripANSITest(m.renderBlock(1, m.blocks[1]))
+	if !strings.Contains(rawRendered, "raw tool output_ref=tool-output/read.txt") || strings.Contains(rawRendered, "Done Read README.md") {
+		t.Fatalf("raw render = %q", rawRendered)
+	}
+
+	rawCopy, rawLabel, ok := m.semanticCopyText("transcript")
+	if !ok || rawLabel != "raw transcript" || !strings.Contains(rawCopy, "raw tool output_ref=tool-output/read.txt") || strings.Contains(rawCopy, "Done Read README.md") {
+		t.Fatalf("raw copy = %q label=%q ok=%v", rawCopy, rawLabel, ok)
+	}
+	richCopy, richLabel, ok := m.semanticCopyText("transcript-rich")
+	if !ok || richLabel != "rich transcript" ||
+		!strings.Contains(richCopy, "ASSISTANT\nanswer **rich**") ||
+		!strings.Contains(richCopy, "Done Read README.md\nrendered output") ||
+		strings.Contains(richCopy, "raw tool output_ref") {
+		t.Fatalf("rich copy = %q label=%q ok=%v", richCopy, richLabel, ok)
+	}
+
+	handled, _ = m.handleSlashCommand("/transcript toggle")
+	if !handled || m.transcriptMode != "rich" {
+		t.Fatalf("/transcript toggle handled=%v transcriptMode=%q", handled, m.transcriptMode)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
 	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
+	tuitranscript "github.com/billyhargroveofficial/billyharness/internal/tui/transcript"
 )
 
 func sessionsCmd(args []string) error {
@@ -32,6 +33,8 @@ func sessionsCommand(args []string, out io.Writer) error {
 		return sessionsInspectCommand(args[1:], out)
 	case "context", "ctx":
 		return sessionsContextCommand(args[1:], out)
+	case "export":
+		return sessionsExportCommand(args[1:], out)
 	case "index":
 		return sessionsIndexCommand(args[1:], out)
 	case "search":
@@ -137,6 +140,45 @@ func sessionsContextCommand(args []string, out io.Writer) error {
 		return enc.Encode(resp)
 	}
 	fmt.Fprintln(out, gatewayclient.FormatSessionContext(resp))
+	return nil
+}
+
+func sessionsExportCommand(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("sessions export", flag.ExitOnError)
+	dir := fs.String("dir", gateway.DefaultSessionStoreDir(), "gateway session store directory")
+	modeFlag := fs.String("mode", tuitranscript.ExportModeRich, "transcript mode: raw or rich")
+	jsonOut := fs.Bool("json", false, "print JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: sessions export [-dir DIR] [-mode raw|rich] [-json] SESSION_ID")
+	}
+	mode := tuitranscript.NormalizeExportMode(*modeFlag)
+	if mode == "" {
+		return fmt.Errorf("unknown transcript mode %q", *modeFlag)
+	}
+	data, err := gateway.LoadStoredSessionTranscript(*dir, fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	text := tuitranscript.FormatSession(data.Messages, data.Events, mode)
+	if *jsonOut {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(struct {
+			Mode       string                          `json:"mode"`
+			Text       string                          `json:"text"`
+			Transcript gateway.StoredSessionTranscript `json:"transcript"`
+		}{
+			Mode:       mode,
+			Text:       text,
+			Transcript: data,
+		})
+	}
+	if text != "" {
+		fmt.Fprintln(out, text)
+	}
 	return nil
 }
 

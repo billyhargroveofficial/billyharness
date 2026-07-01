@@ -816,14 +816,35 @@ Milestone 5 final verification:
 Goal: borrow the parts of mature TUIs that improve daily solo use without a UI
 framework migration.
 
-- [ ] SH-06.1 Add raw/rich transcript toggle parity for TUI and CLI export.
+- [x] SH-06.1 Add raw/rich transcript toggle parity for TUI and CLI export.
   - inspiration: Codex raw/rich modes and Claude selection reliability.
   - target files: `internal/tui/transcript`, `internal/tui/commands.go`,
     `cmd/fast-agent-harness/sessions.go`.
   - acceptance: raw mode preserves exact event text/refs for debugging; rich
     mode stays compact and readable; copy behavior is tested.
   - verification: transcript render tests.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: added shared transcript export formatting in
+    `internal/tui/transcript` for raw/rich cells, message history, event
+    projection, and stored-session exports. TUI now persists a rich/raw
+    transcript mode, exposes `/transcript raw|rich|toggle`, shows the selected
+    mode in status, renders raw blocks from `RawCopy` without rich chrome, and
+    supports `/copy transcript` plus `/copy transcript-rich` with dedicated
+    tests. Output-ref events keep compact rich labels while preserving the
+    exact `output_ref` path in raw copy/export. CLI
+    `sessions export [-mode raw|rich] [-json] SESSION_ID` loads stored
+    JSONL-backed message/event data without changing the store and exports the
+    same transcript contract.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*Transcript.*|Test.*Export.*|Test.*Output.*Ref.*|Test.*Copy.*|TestActionRegistryBacksSlashCommandsAndHelp|TestSessionsCommandListsAndInspectsStore'
+    -count=1 ./internal/tui/transcript ./internal/tui ./internal/gateway
+    ./cmd/fast-agent-harness ./internal/clientux ./internal/architecture`
+    passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/tui/transcript
+    ./internal/tui ./internal/gateway ./cmd/fast-agent-harness
+    ./internal/clientux ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] SH-06.2 Harden selection and copy with semantic no-select regions.
   - inspiration: Claude Code terminal selection state.

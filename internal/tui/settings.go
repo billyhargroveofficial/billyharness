@@ -16,6 +16,7 @@ type appSettings struct {
 	Theme                     string  `json:"theme"`
 	ToolView                  string  `json:"tool_view"`
 	ThinkView                 string  `json:"think_view"`
+	TranscriptMode            string  `json:"transcript_mode"`
 	ContextWindowTokens       int64   `json:"context_window_tokens"`
 	InputPricePer1MTokens     float64 `json:"input_price_per_1m_tokens"`
 	OutputPricePer1MTokens    float64 `json:"output_price_per_1m_tokens"`
@@ -58,6 +59,7 @@ func defaultAppSettings() appSettings {
 		Theme:                     "dark",
 		ToolView:                  "collapsed",
 		ThinkView:                 "expanded",
+		TranscriptMode:            "rich",
 		ContextWindowTokens:       defaultContextWindowTokens,
 		InputPricePer1MTokens:     0,
 		OutputPricePer1MTokens:    0,
@@ -75,6 +77,9 @@ func (s appSettings) normalized() appSettings {
 	}
 	if !validViewMode(s.ThinkView, []string{"expanded", "collapsed", "hidden"}) {
 		s.ThinkView = "expanded"
+	}
+	if !validViewMode(s.TranscriptMode, []string{"raw", "rich"}) {
+		s.TranscriptMode = "rich"
 	}
 	if s.ContextWindowTokens <= 0 || s.ContextWindowTokens == 128000 {
 		s.ContextWindowTokens = defaultContextWindowTokens

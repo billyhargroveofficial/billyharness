@@ -92,25 +92,26 @@ type Model struct {
 	messages            []protocol.Message
 	version             string
 
-	models       []string
-	modelIndex   int
-	thinking     []thinkingMode
-	thinkingIdx  int
-	theme        string
-	toolView     string
-	thinkView    string
-	showThinking bool
-	dangerous    bool
-	accessMode   string
-	maxRounds    int
-	followOutput bool
-	plain        bool
-	settings     appSettings
-	settingsPath string
-	sessionsDir  string
-	localChatID  string
-	chatTitle    string
-	chatCreated  time.Time
+	models         []string
+	modelIndex     int
+	thinking       []thinkingMode
+	thinkingIdx    int
+	theme          string
+	toolView       string
+	thinkView      string
+	transcriptMode string
+	showThinking   bool
+	dangerous      bool
+	accessMode     string
+	maxRounds      int
+	followOutput   bool
+	plain          bool
+	settings       appSettings
+	settingsPath   string
+	sessionsDir    string
+	localChatID    string
+	chatTitle      string
+	chatCreated    time.Time
 
 	textarea textarea.Model
 	viewport viewport.Model
@@ -355,6 +356,10 @@ func NewModel(cfg config.Config, opts Options) Model {
 	if thinkView == "" {
 		thinkView = "expanded"
 	}
+	transcriptMode := settings.TranscriptMode
+	if transcriptMode == "" {
+		transcriptMode = "rich"
+	}
 	status := "ready"
 	if notice := strings.TrimSpace(opts.GatewayNotice); notice != "" {
 		status = notice
@@ -379,6 +384,7 @@ func NewModel(cfg config.Config, opts Options) Model {
 		theme:               theme,
 		toolView:            toolView,
 		thinkView:           thinkView,
+		transcriptMode:      transcriptMode,
 		showThinking:        thinkView != "hidden",
 		dangerous:           opts.Dangerous || cfg.AutoApproveDangerous,
 		accessMode:          config.NormalizeAccessMode(cfg.AccessMode),
@@ -1463,6 +1469,29 @@ func (m *Model) setToolView(value string) bool {
 	}
 	m.toolView = value
 	m.status = "tool blocks " + value
+	_ = m.saveSettings()
+	return true
+}
+
+func (m *Model) setTranscriptMode(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "toggle", "next":
+		if m.transcriptMode == transcript.ExportModeRaw {
+			value = transcript.ExportModeRich
+		} else {
+			value = transcript.ExportModeRaw
+		}
+	case "raw", "plain", "debug":
+		value = transcript.ExportModeRaw
+	case "rich", "pretty":
+		value = transcript.ExportModeRich
+	default:
+		m.status = "unknown transcript mode " + value
+		return false
+	}
+	m.transcriptMode = value
+	m.status = "transcript " + value
+	m.clearRichRenderCache()
 	_ = m.saveSettings()
 	return true
 }

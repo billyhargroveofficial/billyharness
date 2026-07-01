@@ -53,14 +53,11 @@ func (m Model) semanticCopyText(target string) (text, label string, ok bool) {
 		}
 		return "", "raw tool output", false
 	case "transcript", "all", "full":
-		var parts []string
-		for _, block := range m.blocks {
-			text := strings.TrimSpace(block.RawCopy)
-			if text != "" {
-				parts = append(parts, text)
-			}
-		}
-		return strings.Join(parts, "\n\n"), "full transcript", len(parts) > 0
+		text := transcript.FormatCells(m.blocks, transcript.ExportModeRaw)
+		return text, "raw transcript", strings.TrimSpace(text) != ""
+	case "transcript-rich", "rich-transcript", "rich":
+		text := transcript.FormatCells(m.blocks, transcript.ExportModeRich)
+		return text, "rich transcript", strings.TrimSpace(text) != ""
 	case "code", "codeblock", "code-block":
 		if text, ok := m.semanticCodeBlockCopyText(); ok {
 			return text, "code block", true
@@ -115,6 +112,7 @@ func (m *Model) saveSettings() error {
 	m.settings.Theme = m.theme
 	m.settings.ToolView = m.toolView
 	m.settings.ThinkView = m.thinkView
+	m.settings.TranscriptMode = m.transcriptMode
 	m.settings.LastLocalChatID = m.localChatID
 	m.settings.LastGatewaySessionID = m.sessionID
 	m.settings.LastSelectedModel = m.currentModel()
@@ -327,7 +325,7 @@ func (m Model) statusText() string {
 		follow = "on"
 	}
 	return fmt.Sprintf(
-		"mode: %s\nchat: %s\nprovider: %s\nmodel: %s\nprofile: %s\naccess mode: %s\nreasoning: %s / %s\nthinking blocks: %s\ntool blocks: %s\ntheme: %s\ngateway: %s\ngateway session: %s\nlocal settings: %s\ntools: %s, max rounds %d\ncalls: model %d, tools %d\ntokens: input %d, output %d\ncontext: %s\ncost: %s\nfollow output: %s",
+		"mode: %s\nchat: %s\nprovider: %s\nmodel: %s\nprofile: %s\naccess mode: %s\nreasoning: %s / %s\nthinking blocks: %s\ntool blocks: %s\ntranscript: %s\ntheme: %s\ngateway: %s\ngateway session: %s\nlocal settings: %s\ntools: %s, max rounds %d\ncalls: model %d, tools %d\ntokens: input %d, output %d\ncontext: %s\ncost: %s\nfollow output: %s",
 		mode,
 		m.localChatID,
 		m.currentProvider(),
@@ -338,6 +336,7 @@ func (m Model) statusText() string {
 		m.currentThinking().effort,
 		thinkingDisplay,
 		m.toolView,
+		m.transcriptMode,
 		m.theme,
 		gateway,
 		session,
@@ -1140,6 +1139,17 @@ func (m Model) renderBlock(i int, b transcript.Cell) string {
 	if b.Kind == "assistant" && b.Live {
 		body = b.Content
 	}
+	width := max(20, m.width-style.GetHorizontalFrameSize())
+	if m.transcriptMode == transcript.ExportModeRaw {
+		raw := strings.TrimSpace(b.RawCopy)
+		if raw == "" {
+			raw = strings.TrimSpace(b.Content)
+		}
+		if raw == "" {
+			raw = strings.TrimSpace(b.Title)
+		}
+		return style.Width(width).Render(raw)
+	}
 	switch {
 	case b.Kind == "tool" && m.toolCollapsed(i):
 		body = ""
@@ -1150,7 +1160,6 @@ func (m Model) renderBlock(i int, b transcript.Cell) string {
 	case m.blockCollapsed(i):
 		body = collapsedPreview(b.Content, 8, 1000)
 	}
-	width := max(20, m.width-style.GetHorizontalFrameSize())
 	if b.Kind == "assistant" {
 		body = tuirender.RenderAssistantMarkdown(body, width, styles.markdown, b.Live)
 	}

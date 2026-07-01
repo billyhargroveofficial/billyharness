@@ -380,6 +380,24 @@ func actionRegistry() []actionSpec {
 			},
 		},
 		{
+			id:        "transcript.view",
+			title:     "Set Transcript View",
+			category:  "ui",
+			slash:     "/transcript",
+			slashArgs: "raw|rich",
+			summary:   "toggle raw or rich transcript rendering",
+			args: func(m Model) []slashArg {
+				return rotateSlashArgs([]slashArg{
+					{"rich", "render compact rich transcript"},
+					{"raw", "render raw transcript text"},
+					{"toggle", "switch transcript mode"},
+				}, m.transcriptMode)
+			},
+			run: func(m *Model, arg string) (bool, tea.Cmd) {
+				return m.setTranscriptMode(arg), nil
+			},
+		},
+		{
 			id:           "thinking.visibility",
 			title:        "Toggle Thinking",
 			category:     "ui",
@@ -430,7 +448,7 @@ func actionRegistry() []actionSpec {
 			title:     "Copy",
 			category:  "ui",
 			slash:     "/copy",
-			slashArgs: "selected|last|tool|transcript|code|command",
+			slashArgs: "selected|last|tool|transcript|transcript-rich|code|command",
 			summary:   "copy raw transcript text without UI chrome",
 			args: func(Model) []slashArg {
 				return []slashArg{
@@ -438,6 +456,7 @@ func actionRegistry() []actionSpec {
 					{"last", "copy last assistant answer"},
 					{"tool", "copy selected or last raw tool output"},
 					{"transcript", "copy full raw transcript"},
+					{"transcript-rich", "copy full rich transcript"},
 					{"code", "copy selected or last fenced code block"},
 					{"command", "copy current command line"},
 				}

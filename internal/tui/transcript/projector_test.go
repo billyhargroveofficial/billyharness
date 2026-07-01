@@ -116,6 +116,9 @@ func TestProjectorApplyToolCompactLifecycleCells(t *testing.T) {
 	if !cells[1].CollapseSet || !cells[1].Collapsed {
 		t.Fatalf("output ref collapse default not applied: %#v", cells[1])
 	}
+	if !strings.Contains(cells[1].RawCopy, "output_ref=/root/billyharness/tool-output/custom.txt") {
+		t.Fatalf("output ref raw copy lost full ref: %#v", cells[1])
+	}
 }
 
 func TestGoldenBundleProjectsTUITranscriptParitySnapshot(t *testing.T) {

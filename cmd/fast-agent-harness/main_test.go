@@ -374,6 +374,45 @@ func TestSessionsCommandListsAndInspectsStore(t *testing.T) {
 		}
 	}
 
+	var rawExport bytes.Buffer
+	if err := sessionsCommand([]string{"export", "-dir", storeDir, "-mode", "raw", created.ID}, &rawExport); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"inspect me", "mock: inspect me"} {
+		if !strings.Contains(rawExport.String(), want) {
+			t.Fatalf("raw export missing %q:\n%s", want, rawExport.String())
+		}
+	}
+	if strings.Contains(rawExport.String(), "EVENTS") {
+		t.Fatalf("raw export should not add rich section labels:\n%s", rawExport.String())
+	}
+
+	var richExport bytes.Buffer
+	if err := sessionsCommand([]string{"export", "-dir", storeDir, "-mode", "rich", created.ID}, &richExport); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"USER\ninspect me", "ASSISTANT\nmock: inspect me", "EVENTS"} {
+		if !strings.Contains(richExport.String(), want) {
+			t.Fatalf("rich export missing %q:\n%s", want, richExport.String())
+		}
+	}
+
+	var exportJSON bytes.Buffer
+	if err := sessionsCommand([]string{"export", "-dir", storeDir, "-mode", "raw", "-json", created.ID}, &exportJSON); err != nil {
+		t.Fatal(err)
+	}
+	var exported struct {
+		Mode       string                          `json:"mode"`
+		Text       string                          `json:"text"`
+		Transcript gateway.StoredSessionTranscript `json:"transcript"`
+	}
+	if err := json.Unmarshal(exportJSON.Bytes(), &exported); err != nil {
+		t.Fatal(err)
+	}
+	if exported.Mode != "raw" || exported.Transcript.SessionID != created.ID || !strings.Contains(exported.Text, "inspect me") {
+		t.Fatalf("export json = %#v", exported)
+	}
+
 	var indexOut bytes.Buffer
 	if err := sessionsCommand([]string{"index", "rebuild", "-dir", storeDir}, &indexOut); err != nil {
 		t.Fatal(err)
