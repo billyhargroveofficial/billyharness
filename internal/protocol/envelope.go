@@ -138,6 +138,8 @@ func ValidateEventEnvelope(event Event) error {
 		return requireEnvelope(event, "run_id", "turn_id", "step_id")
 	case EventModelCallStarted, EventModelCallFinished, EventAssistantDelta, EventAssistantReasoning, EventProviderUsageUpdate:
 		return requireEnvelope(event, "run_id", "turn_id", "step_id")
+	case EventProviderHelperUsage:
+		return requireEnvelope(event, "run_id")
 	case EventToolCallRequested, EventToolPermissionRequested, EventToolPermissionDecided, EventToolAudit, EventToolCallProgress:
 		return requireEnvelope(event, "run_id", "call_id")
 	case EventToolCallStarted, EventToolCallFinished, EventToolCallFailed, EventToolCallAborted, EventToolOutputRefCreated:
@@ -241,6 +243,12 @@ func enrichEventIDsFromData(event *Event) {
 	case *ToolOutputRefEvent:
 		if data != nil {
 			copyToolOutputRefEnvelope(event, *data)
+		}
+	case ProviderHelperUsageEvent:
+		copyProviderHelperUsageEnvelope(event, data)
+	case *ProviderHelperUsageEvent:
+		if data != nil {
+			copyProviderHelperUsageEnvelope(event, *data)
 		}
 	case UserInputRequestEvent:
 		copyUserInputRequestEnvelope(event, data)
@@ -364,18 +372,22 @@ func copyToolOutputRefEnvelope(event *Event, ref ToolOutputRefEvent) {
 }
 
 func copyUserInputRequestEnvelope(event *Event, input UserInputRequestEvent) {
-	copyUserInputEnvelope(event, input.RunID, input.TurnID, input.StepID, input.CallID, input.AttemptID)
+	copyEventCorrelationEnvelope(event, input.RunID, input.TurnID, input.StepID, input.CallID, input.AttemptID)
+}
+
+func copyProviderHelperUsageEnvelope(event *Event, usage ProviderHelperUsageEvent) {
+	copyEventCorrelationEnvelope(event, usage.RunID, usage.TurnID, usage.StepID, usage.CallID, usage.AttemptID)
 }
 
 func copyUserInputAnswerEnvelope(event *Event, input UserInputAnswerEvent) {
-	copyUserInputEnvelope(event, input.RunID, input.TurnID, input.StepID, input.CallID, input.AttemptID)
+	copyEventCorrelationEnvelope(event, input.RunID, input.TurnID, input.StepID, input.CallID, input.AttemptID)
 }
 
 func copyUserInputRejectEnvelope(event *Event, input UserInputRejectEvent) {
-	copyUserInputEnvelope(event, input.RunID, input.TurnID, input.StepID, input.CallID, input.AttemptID)
+	copyEventCorrelationEnvelope(event, input.RunID, input.TurnID, input.StepID, input.CallID, input.AttemptID)
 }
 
-func copyUserInputEnvelope(event *Event, runID, turnID, stepID, callID, attemptID string) {
+func copyEventCorrelationEnvelope(event *Event, runID, turnID, stepID, callID, attemptID string) {
 	if event.RunID == "" {
 		event.RunID = runID
 	}

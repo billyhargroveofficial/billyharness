@@ -310,12 +310,13 @@ func TestModelCompactionStrategyReplacesSummaryAndReportsModel(t *testing.T) {
 		if got.Model.Model != "mock-summary" || got.Provider.Provider != "mock" || got.Model.Thinking != "disabled" {
 			t.Fatalf("summary binding = provider:%q model:%q thinking:%q", got.Provider.Provider, got.Model.Model, got.Model.Thinking)
 		}
-		return staticContentProvider{text: "model says keep latest task and important file path", usage: provider.Usage{InputTokens: 123, OutputTokens: 9}}, nil
+		return staticContentProvider{text: "model says keep latest task and important file path", usage: provider.Usage{InputTokens: 123, OutputTokens: 9, CacheHitTokens: 80, CacheMissTokens: 43}}, nil
 	}
 	t.Cleanup(func() { newCompactionSummaryProvider = oldSummaryProvider })
 
 	a := New(cfg, capture, tools.NewRegistry(cfg))
 	var compactEvent map[string]any
+	var helperEvent map[string]any
 	_, err := a.RunMessages(context.Background(), []protocol.Message{
 		{Role: protocol.RoleSystem, Content: "system"},
 		{Role: protocol.RoleUser, Content: strings.Repeat("old context ", 100)},
@@ -324,6 +325,9 @@ func TestModelCompactionStrategyReplacesSummaryAndReportsModel(t *testing.T) {
 	}, func(event protocol.Event) {
 		if event.Type == protocol.EventContextCompacted {
 			compactEvent = eventDataMap(event)
+		}
+		if event.Type == protocol.EventProviderHelperUsage {
+			helperEvent = eventDataMap(event)
 		}
 	})
 	if err != nil {
@@ -337,8 +341,20 @@ func TestModelCompactionStrategyReplacesSummaryAndReportsModel(t *testing.T) {
 		compactEvent["summary_provider"] != "mock" ||
 		compactEvent["summary_model"] != "mock-summary" ||
 		int64(compactEvent["model_summary_input_tokens"].(float64)) != 123 ||
-		int64(compactEvent["model_summary_output_tokens"].(float64)) != 9 {
+		int64(compactEvent["model_summary_output_tokens"].(float64)) != 9 ||
+		int64(compactEvent["model_summary_cache_hit_tokens"].(float64)) != 80 ||
+		int64(compactEvent["model_summary_cache_miss_tokens"].(float64)) != 43 {
 		t.Fatalf("compaction event missing model summary fields: %#v", compactEvent)
+	}
+	if helperEvent["kind"] != "context_compact" ||
+		helperEvent["provider"] != "mock" ||
+		helperEvent["model"] != "mock-summary" ||
+		int64(helperEvent["input_tokens"].(float64)) != 123 ||
+		int64(helperEvent["output_tokens"].(float64)) != 9 ||
+		int64(helperEvent["cache_hit_tokens"].(float64)) != 80 ||
+		int64(helperEvent["cache_miss_tokens"].(float64)) != 43 ||
+		int64(helperEvent["api_tokens"].(float64)) != 132 {
+		t.Fatalf("helper usage event = %#v", helperEvent)
 	}
 }
 

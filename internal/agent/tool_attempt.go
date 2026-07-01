@@ -288,7 +288,7 @@ func (o *toolOrchestrator) Execute(ctx context.Context, runID, turnID string, in
 		"output_ref":              out.OutputRef,
 		"rate_limit_wait_ms":      out.Metadata["rate_limit_wait_ms"],
 	})
-	return toolExecutionResult{Index: index, Call: call, Result: out, DurationMS: duration, AttemptID: attemptID}
+	return toolExecutionResult{Index: index, Call: call, Result: out, DurationMS: duration, AttemptID: attemptID, RunID: runID, TurnID: turnID, StepID: stepID}
 }
 
 func (o *toolOrchestrator) executeAskUser(ctx context.Context, runID, turnID, stepID string, call protocol.ToolCall, attemptID string) (tools.Result, error) {
@@ -401,6 +401,9 @@ func (o *toolOrchestrator) EmitAttemptFinished(result toolExecutionResult) {
 	if result.Result.OutputRef != "" {
 		o.emit(protocol.Event{Type: protocol.EventToolOutputRefCreated, Data: toolOutputRefEvent(result)})
 	}
+	if usage, ok := providerHelperUsageFromToolResult(result); ok {
+		o.emit(protocol.Event{Type: protocol.EventProviderHelperUsage, Data: usage})
+	}
 	if result.Result.IsError {
 		eventType := protocol.EventToolCallFailed
 		if result.Result.ErrorCode == "tool_aborted" {
@@ -428,6 +431,41 @@ func (o *toolOrchestrator) EmitAttemptFinished(result toolExecutionResult) {
 		"truncated":   result.Result.Truncated,
 		"output_ref":  result.Result.OutputRef,
 	})
+}
+
+func providerHelperUsageFromToolResult(result toolExecutionResult) (protocol.ProviderHelperUsageEvent, bool) {
+	metadata := result.Result.Metadata
+	if len(metadata) == 0 {
+		return protocol.ProviderHelperUsageEvent{}, false
+	}
+	inputTokens := metadataInt64(metadata, "tool_summary_api_input_tokens")
+	outputTokens := metadataInt64(metadata, "tool_summary_api_output_tokens")
+	apiTokens := metadataInt64(metadata, "tool_summary_api_total_tokens")
+	if apiTokens == 0 {
+		apiTokens = inputTokens + outputTokens
+	}
+	cacheHit := metadataInt64(metadata, "tool_summary_api_cache_hit_tokens")
+	cacheMiss := metadataInt64(metadata, "tool_summary_api_cache_miss_tokens")
+	externalModel := metadataBool(metadata, "tool_summary_external_model_used")
+	if !externalModel && apiTokens <= 0 && cacheHit <= 0 && cacheMiss <= 0 {
+		return protocol.ProviderHelperUsageEvent{}, false
+	}
+	return protocol.ProviderHelperUsageEvent{
+		Kind:            "web_summary",
+		Provider:        metadataString(metadata, "summarizer_provider"),
+		Model:           firstNonEmptyString(metadataString(metadata, "summarizer_model"), metadataString(metadata, "websum_model")),
+		RunID:           result.RunID,
+		TurnID:          result.TurnID,
+		StepID:          result.StepID,
+		CallID:          result.Call.ID,
+		AttemptID:       result.AttemptID,
+		InputTokens:     inputTokens,
+		OutputTokens:    outputTokens,
+		CacheHitTokens:  cacheHit,
+		CacheMissTokens: cacheMiss,
+		APITokens:       apiTokens,
+		CostUSD:         metadataFloat64(metadata, "tool_summary_estimated_cost_usd"),
+	}, true
 }
 
 func (o *toolOrchestrator) EmitProgress(call protocol.ToolCall, attemptID, phase, status string, metadata map[string]any) {
@@ -862,4 +900,19 @@ func metadataInt64(metadata map[string]any, key string) int64 {
 		return int64(value)
 	}
 	return 0
+}
+
+func metadataFloat64(metadata map[string]any, key string) float64 {
+	switch value := metadata[key].(type) {
+	case float64:
+		return value
+	case float32:
+		return float64(value)
+	case int:
+		return float64(value)
+	case int64:
+		return float64(value)
+	default:
+		return 0
+	}
 }

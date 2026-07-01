@@ -152,6 +152,11 @@ func (m *Model) resetFreshChatState(title string) {
 	m.toolSummaryInTok = 0
 	m.toolSummaryOutTok = 0
 	m.toolSummaryAPITok = 0
+	m.helperModelInTok = 0
+	m.helperModelOutTok = 0
+	m.helperModelCacheHit = 0
+	m.helperModelCacheMiss = 0
+	m.helperModelAPITok = 0
 	m.resetProjectedAccounting()
 	m.sessionID = ""
 	m.lastGatewayEventSeq = 0
@@ -277,6 +282,11 @@ func (m *Model) applyChatSession(session chatSession) {
 	m.toolSummaryInTok = 0
 	m.toolSummaryOutTok = 0
 	m.toolSummaryAPITok = 0
+	m.helperModelInTok = 0
+	m.helperModelOutTok = 0
+	m.helperModelCacheHit = 0
+	m.helperModelCacheMiss = 0
+	m.helperModelAPITok = 0
 	m.toolCalls = session.ToolCalls
 	m.modelCalls = session.ModelCalls
 	m.resetProjectedAccounting()

@@ -217,47 +217,63 @@ func WriteManifest(path string, manifest Manifest) error {
 }
 
 type ReplaySummary struct {
-	RunID                  string               `json:"run_id"`
-	Records                int                  `json:"records"`
-	FirstSeq               int64                `json:"first_seq,omitempty"`
-	LastSeq                int64                `json:"last_seq,omitempty"`
-	PayloadRefs            int                  `json:"payload_refs,omitempty"`
-	PayloadBytes           int64                `json:"payload_bytes,omitempty"`
-	EventTypes             map[string]int       `json:"event_types"`
-	Tasks                  map[string]int       `json:"tasks"`
-	RunStarted             int                  `json:"run_started,omitempty"`
-	RunCompleted           int                  `json:"run_completed,omitempty"`
-	RunFailed              int                  `json:"run_failed,omitempty"`
-	TurnsStarted           int                  `json:"turns_started,omitempty"`
-	TurnsCompleted         int                  `json:"turns_completed,omitempty"`
-	TurnsFailed            int                  `json:"turns_failed,omitempty"`
-	StepsStarted           int                  `json:"steps_started,omitempty"`
-	StepsCompleted         int                  `json:"steps_completed,omitempty"`
-	StepsFailed            int                  `json:"steps_failed,omitempty"`
-	ParallelBatches        int                  `json:"parallel_batches,omitempty"`
-	FirstDeltaSamples      int                  `json:"first_delta_samples,omitempty"`
-	FirstDeltaTotalMS      int64                `json:"first_delta_total_ms,omitempty"`
-	ModelLatencyMS         int64                `json:"model_latency_ms,omitempty"`
-	ToolLatencyMS          int64                `json:"tool_latency_ms,omitempty"`
-	ParallelBatchLatencyMS int64                `json:"parallel_batch_latency_ms,omitempty"`
-	ModelCallsStarted      int                  `json:"model_calls_started,omitempty"`
-	ModelCallsFinished     int                  `json:"model_calls_finished,omitempty"`
-	PromptInventories      int                  `json:"prompt_inventories,omitempty"`
-	PromptCacheInitial     int                  `json:"prompt_cache_initial,omitempty"`
-	PromptCacheUnchanged   int                  `json:"prompt_cache_unchanged,omitempty"`
-	PromptCacheBreaks      int                  `json:"prompt_cache_breaks,omitempty"`
-	ToolCallsStarted       int                  `json:"tool_calls_started,omitempty"`
-	ToolCallProgress       int                  `json:"tool_call_progress,omitempty"`
-	ToolCallsFinished      int                  `json:"tool_calls_finished,omitempty"`
-	ContextThresholds      int                  `json:"context_thresholds,omitempty"`
-	ContextCompactions     int                  `json:"context_compactions,omitempty"`
-	InputTokens            int64                `json:"input_tokens,omitempty"`
-	OutputTokens           int64                `json:"output_tokens,omitempty"`
-	CacheHitTokens         int64                `json:"cache_hit_tokens,omitempty"`
-	CacheMissTokens        int64                `json:"cache_miss_tokens,omitempty"`
-	ProfileHashes          []string             `json:"profile_hashes,omitempty"`
-	Timeline               []ReplayTimelineItem `json:"timeline,omitempty"`
+	RunID                  string                       `json:"run_id"`
+	Records                int                          `json:"records"`
+	FirstSeq               int64                        `json:"first_seq,omitempty"`
+	LastSeq                int64                        `json:"last_seq,omitempty"`
+	PayloadRefs            int                          `json:"payload_refs,omitempty"`
+	PayloadBytes           int64                        `json:"payload_bytes,omitempty"`
+	EventTypes             map[string]int               `json:"event_types"`
+	Tasks                  map[string]int               `json:"tasks"`
+	RunStarted             int                          `json:"run_started,omitempty"`
+	RunCompleted           int                          `json:"run_completed,omitempty"`
+	RunFailed              int                          `json:"run_failed,omitempty"`
+	TurnsStarted           int                          `json:"turns_started,omitempty"`
+	TurnsCompleted         int                          `json:"turns_completed,omitempty"`
+	TurnsFailed            int                          `json:"turns_failed,omitempty"`
+	StepsStarted           int                          `json:"steps_started,omitempty"`
+	StepsCompleted         int                          `json:"steps_completed,omitempty"`
+	StepsFailed            int                          `json:"steps_failed,omitempty"`
+	ParallelBatches        int                          `json:"parallel_batches,omitempty"`
+	FirstDeltaSamples      int                          `json:"first_delta_samples,omitempty"`
+	FirstDeltaTotalMS      int64                        `json:"first_delta_total_ms,omitempty"`
+	ModelLatencyMS         int64                        `json:"model_latency_ms,omitempty"`
+	ToolLatencyMS          int64                        `json:"tool_latency_ms,omitempty"`
+	ParallelBatchLatencyMS int64                        `json:"parallel_batch_latency_ms,omitempty"`
+	ModelCallsStarted      int                          `json:"model_calls_started,omitempty"`
+	ModelCallsFinished     int                          `json:"model_calls_finished,omitempty"`
+	PromptInventories      int                          `json:"prompt_inventories,omitempty"`
+	PromptCacheInitial     int                          `json:"prompt_cache_initial,omitempty"`
+	PromptCacheUnchanged   int                          `json:"prompt_cache_unchanged,omitempty"`
+	PromptCacheBreaks      int                          `json:"prompt_cache_breaks,omitempty"`
+	ToolCallsStarted       int                          `json:"tool_calls_started,omitempty"`
+	ToolCallProgress       int                          `json:"tool_call_progress,omitempty"`
+	ToolCallsFinished      int                          `json:"tool_calls_finished,omitempty"`
+	ContextThresholds      int                          `json:"context_thresholds,omitempty"`
+	ContextCompactions     int                          `json:"context_compactions,omitempty"`
+	InputTokens            int64                        `json:"input_tokens,omitempty"`
+	OutputTokens           int64                        `json:"output_tokens,omitempty"`
+	CacheHitTokens         int64                        `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens        int64                        `json:"cache_miss_tokens,omitempty"`
+	HelperModelCalls       int                          `json:"helper_model_calls,omitempty"`
+	HelperInputTokens      int64                        `json:"helper_input_tokens,omitempty"`
+	HelperOutputTokens     int64                        `json:"helper_output_tokens,omitempty"`
+	HelperCacheHitTokens   int64                        `json:"helper_cache_hit_tokens,omitempty"`
+	HelperCacheMissTokens  int64                        `json:"helper_cache_miss_tokens,omitempty"`
+	HelperAPITokens        int64                        `json:"helper_api_tokens,omitempty"`
+	HelperUsageByKind      map[string]ReplayHelperUsage `json:"helper_usage_by_kind,omitempty"`
+	ProfileHashes          []string                     `json:"profile_hashes,omitempty"`
+	Timeline               []ReplayTimelineItem         `json:"timeline,omitempty"`
 	usage                  replayUsageAccumulator
+}
+
+type ReplayHelperUsage struct {
+	Calls           int   `json:"calls,omitempty"`
+	InputTokens     int64 `json:"input_tokens,omitempty"`
+	OutputTokens    int64 `json:"output_tokens,omitempty"`
+	CacheHitTokens  int64 `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens int64 `json:"cache_miss_tokens,omitempty"`
+	APITokens       int64 `json:"api_tokens,omitempty"`
 }
 
 type ReplayTimelineItem struct {
@@ -291,8 +307,9 @@ type ReplayTimelineItem struct {
 
 func ReplayEvents(path string) (ReplaySummary, error) {
 	summary := ReplaySummary{
-		EventTypes: map[string]int{},
-		Tasks:      map[string]int{},
+		EventTypes:        map[string]int{},
+		Tasks:             map[string]int{},
+		HelperUsageByKind: map[string]ReplayHelperUsage{},
 	}
 	validator := eventlog.NewRecordValidator(eventlog.RecordValidatorOptions{
 		SchemaVersion:    CurrentManifestVersion,
@@ -490,8 +507,46 @@ func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEve
 		s.OutputTokens += delta.OutputTokens
 		s.CacheHitTokens += delta.CacheHitTokens
 		s.CacheMissTokens += delta.CacheMissTokens
+	case protocol.EventProviderHelperUsage:
+		usage, err := helperUsageFromEvent(record.Event)
+		if err != nil {
+			return err
+		}
+		s.observeHelperUsage(usage)
 	}
 	return nil
+}
+
+func (s *ReplaySummary) observeHelperUsage(usage protocol.ProviderHelperUsageEvent) {
+	inputTokens := nonNegativeInt64(usage.InputTokens)
+	outputTokens := nonNegativeInt64(usage.OutputTokens)
+	apiTokens := nonNegativeInt64(usage.APITokens)
+	if apiTokens == 0 {
+		apiTokens = inputTokens + outputTokens
+	}
+	cacheHit := nonNegativeInt64(usage.CacheHitTokens)
+	cacheMiss := nonNegativeInt64(usage.CacheMissTokens)
+	s.HelperModelCalls++
+	s.HelperInputTokens += inputTokens
+	s.HelperOutputTokens += outputTokens
+	s.HelperCacheHitTokens += cacheHit
+	s.HelperCacheMissTokens += cacheMiss
+	s.HelperAPITokens += apiTokens
+	kind := strings.TrimSpace(usage.Kind)
+	if kind == "" {
+		kind = "unknown"
+	}
+	if s.HelperUsageByKind == nil {
+		s.HelperUsageByKind = map[string]ReplayHelperUsage{}
+	}
+	byKind := s.HelperUsageByKind[kind]
+	byKind.Calls++
+	byKind.InputTokens += inputTokens
+	byKind.OutputTokens += outputTokens
+	byKind.CacheHitTokens += cacheHit
+	byKind.CacheMissTokens += cacheMiss
+	byKind.APITokens += apiTokens
+	s.HelperUsageByKind[kind] = byKind
 }
 
 func (s *ReplaySummary) observePromptDiagnostics(event protocol.Event) error {
@@ -616,6 +671,14 @@ func (s *ReplaySummary) appendTimeline(record EventRecord, event protocol.Event)
 	case protocol.EventContextCompacted:
 		item.Kind = "context_compaction"
 		item.Status = protocol.StepStatusCompleted
+	case protocol.EventProviderHelperUsage:
+		item.Kind = "helper_usage"
+		item.Status = protocol.StepStatusCompleted
+		if usage, err := helperUsageFromEvent(event); err == nil {
+			item.Name = usage.Kind
+			item.CallID = firstString(item.CallID, usage.CallID)
+			item.AttemptID = firstString(item.AttemptID, usage.AttemptID)
+		}
 	case protocol.EventHookStarted:
 		item.Kind = "hook"
 		item.Status = protocol.StepStatusStarted
@@ -655,6 +718,7 @@ func isReplayTimelineEvent(eventType protocol.EventType) bool {
 		protocol.EventToolOutputRefCreated,
 		protocol.EventContextThreshold,
 		protocol.EventContextCompacted,
+		protocol.EventProviderHelperUsage,
 		protocol.EventHookStarted,
 		protocol.EventHookFinished,
 		protocol.EventHookFailed:
@@ -803,6 +867,13 @@ func firstInt64(values ...int64) int64 {
 		}
 	}
 	return 0
+}
+
+func nonNegativeInt64(value int64) int64 {
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 func mapString(m map[string]any, key string) string {
@@ -975,6 +1046,31 @@ func usageFromEvent(value any) (replayUsage, error) {
 	var usage replayUsage
 	if err := json.Unmarshal(event.Data, &usage); err != nil {
 		return replayUsage{}, fmt.Errorf("invalid provider usage data: %w", err)
+	}
+	return usage, nil
+}
+
+func helperUsageFromEvent(value any) (protocol.ProviderHelperUsageEvent, error) {
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return protocol.ProviderHelperUsageEvent{}, fmt.Errorf("invalid provider helper usage event: %w", err)
+	}
+	var event struct {
+		Type protocol.EventType `json:"type"`
+		Data json.RawMessage    `json:"data"`
+	}
+	if err := json.Unmarshal(bytes, &event); err != nil {
+		return protocol.ProviderHelperUsageEvent{}, fmt.Errorf("invalid provider helper usage event: %w", err)
+	}
+	if event.Type != "" && event.Type != protocol.EventProviderHelperUsage {
+		return protocol.ProviderHelperUsageEvent{}, fmt.Errorf("invalid provider helper usage event type %q", event.Type)
+	}
+	if len(event.Data) == 0 {
+		return protocol.ProviderHelperUsageEvent{}, fmt.Errorf("provider helper usage event missing data")
+	}
+	var usage protocol.ProviderHelperUsageEvent
+	if err := json.Unmarshal(event.Data, &usage); err != nil {
+		return protocol.ProviderHelperUsageEvent{}, fmt.Errorf("invalid provider helper usage data: %w", err)
 	}
 	return usage, nil
 }

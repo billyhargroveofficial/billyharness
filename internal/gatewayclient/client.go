@@ -607,12 +607,24 @@ func formatContextUsage(usage gatewayapi.ContextUsage) string {
 			compactContextNumber(usage.LastCacheMissTokens),
 		)
 	}
-	if usage.WebSummaryInputTokens > 0 || usage.WebSummaryOutputTokens > 0 || usage.HelperModelAPITokens > 0 {
-		fmt.Fprintf(&b, "helper usage: websum=%s→%s helper_api=%s\n",
+	if usage.WebSummaryInputTokens > 0 || usage.WebSummaryOutputTokens > 0 || usage.HelperModelAPITokens > 0 || usage.HelperModelInputTokens > 0 || usage.HelperModelOutputTokens > 0 || usage.HelperModelCacheHit > 0 || usage.HelperModelCacheMiss > 0 {
+		fmt.Fprintf(&b, "helper usage: websum=%s→%s helper=%s→%s helper_api=%s",
 			compactContextNumber(usage.WebSummaryInputTokens),
 			compactContextNumber(usage.WebSummaryOutputTokens),
+			compactContextNumber(usage.HelperModelInputTokens),
+			compactContextNumber(usage.HelperModelOutputTokens),
 			compactContextNumber(usage.HelperModelAPITokens),
 		)
+		if usage.HelperModelCacheHit > 0 || usage.HelperModelCacheMiss > 0 {
+			fmt.Fprintf(&b, " helper_cache_hit=%s helper_cache_miss=%s",
+				compactContextNumber(usage.HelperModelCacheHit),
+				compactContextNumber(usage.HelperModelCacheMiss),
+			)
+		}
+		if usage.HelperModelCalls > 0 {
+			fmt.Fprintf(&b, " helper_calls=%d", usage.HelperModelCalls)
+		}
+		b.WriteByte('\n')
 	}
 	return b.String()
 }

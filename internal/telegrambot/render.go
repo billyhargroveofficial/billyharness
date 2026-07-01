@@ -35,6 +35,11 @@ type Renderer struct {
 	ToolSummaryIn    int64
 	ToolSummaryOut   int64
 	ToolSummaryAPI   int64
+	HelperModelIn    int64
+	HelperModelOut   int64
+	HelperModelHit   int64
+	HelperModelMiss  int64
+	HelperModelAPI   int64
 	ContextWindow    int64
 	Started          time.Time
 	LastEventAt      time.Time
@@ -157,6 +162,11 @@ func (r *Renderer) applySnapshot(snapshot projector.Snapshot) {
 	r.ToolSummaryIn = snapshot.ToolSummaryInputTokens
 	r.ToolSummaryOut = snapshot.ToolSummaryOutputTokens
 	r.ToolSummaryAPI = snapshot.ToolSummaryAPITokens
+	r.HelperModelIn = snapshot.HelperModelInputTokens
+	r.HelperModelOut = snapshot.HelperModelOutputTokens
+	r.HelperModelHit = snapshot.HelperModelCacheHitTokens
+	r.HelperModelMiss = snapshot.HelperModelCacheMissTokens
+	r.HelperModelAPI = snapshot.HelperModelAPITokens
 	r.LastError = snapshot.LastError
 	r.Done = snapshot.RunState == projector.RunStateCompleted
 }
@@ -258,7 +268,12 @@ func (r *Renderer) footerLineWithContext(includeContext bool) string {
 	}
 	if r.ToolSummaryIn+r.ToolSummaryOut > 0 {
 		parts = append(parts, fmt.Sprintf("🧩 websum %s→%s", compactInt(r.ToolSummaryIn), compactInt(r.ToolSummaryOut)))
-		parts = append(parts, fmt.Sprintf("sumapi %s", compactInt(r.ToolSummaryAPI)))
+	}
+	if r.HelperModelIn+r.HelperModelOut > 0 {
+		parts = append(parts, fmt.Sprintf("helper %s→%s", compactInt(r.HelperModelIn), compactInt(r.HelperModelOut)))
+	}
+	if r.ToolSummaryIn+r.ToolSummaryOut > 0 || r.HelperModelAPI > 0 {
+		parts = append(parts, fmt.Sprintf("sumapi %s", compactInt(r.HelperModelAPI)))
 	}
 	if len(parts) == 0 {
 		return "⚡ streaming"

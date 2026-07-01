@@ -116,6 +116,7 @@ func applyWebModelSummaryToPage(page *compactPage, summary webModelSummary) {
 	page.WebsumInputTokens = summary.InputTokens
 	page.WebsumOutputTokens = summary.OutputTokens
 	page.WebsumCacheHit = summary.CacheHit
+	page.WebsumCacheMiss = summary.CacheMiss
 	page.WebsumCost = summary.CostUSD
 	page.WebsumModel = summary.Model
 	page.WebsumError = ""
@@ -135,6 +136,7 @@ func applyWebModelSummaryToCrawlPage(page *compactCrawlPage, summary webModelSum
 	page.WebsumInputTokens = summary.InputTokens
 	page.WebsumOutputTokens = summary.OutputTokens
 	page.WebsumCacheHit = summary.CacheHit
+	page.WebsumCacheMiss = summary.CacheMiss
 	page.WebsumCost = summary.CostUSD
 	page.WebsumModel = summary.Model
 	page.WebsumError = ""
@@ -177,6 +179,7 @@ func (r *Registry) compactCrawlResult(ctx context.Context, pages []crawlPage, op
 		out.WebsumInputTokens += page.WebsumInputTokens
 		out.WebsumOutputTokens += page.WebsumOutputTokens
 		out.WebsumCacheHit += page.WebsumCacheHit
+		out.WebsumCacheMiss += page.WebsumCacheMiss
 		out.WebsumCost += page.WebsumCost
 		if out.SummarizerProvider == "" && page.SummarizerProvider != "" {
 			out.SummarizerProvider = page.SummarizerProvider

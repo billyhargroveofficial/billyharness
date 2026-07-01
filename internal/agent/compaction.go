@@ -43,6 +43,8 @@ type compactionReport struct {
 	SummaryError             string                          `json:"summary_error,omitempty"`
 	ModelSummaryInputTokens  int64                           `json:"model_summary_input_tokens,omitempty"`
 	ModelSummaryOutputTokens int64                           `json:"model_summary_output_tokens,omitempty"`
+	ModelSummaryCacheHit     int64                           `json:"model_summary_cache_hit_tokens,omitempty"`
+	ModelSummaryCacheMiss    int64                           `json:"model_summary_cache_miss_tokens,omitempty"`
 	ProtectedPrefix          compactionProtectedPrefixReport `json:"protected_prefix"`
 	ProtectedPrefixMessages  int                             `json:"protected_prefix_messages"`
 	ProtectedPrefixChars     int                             `json:"protected_prefix_chars"`

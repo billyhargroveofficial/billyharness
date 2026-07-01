@@ -176,8 +176,11 @@ type ContextUsage struct {
 	LastCacheMissTokens     int64 `json:"last_cache_miss_tokens,omitempty"`
 	WebSummaryInputTokens   int64 `json:"web_summary_input_tokens,omitempty"`
 	WebSummaryOutputTokens  int64 `json:"web_summary_output_tokens,omitempty"`
+	HelperModelCalls        int   `json:"helper_model_calls,omitempty"`
 	HelperModelInputTokens  int64 `json:"helper_model_input_tokens,omitempty"`
 	HelperModelOutputTokens int64 `json:"helper_model_output_tokens,omitempty"`
+	HelperModelCacheHit     int64 `json:"helper_model_cache_hit_tokens,omitempty"`
+	HelperModelCacheMiss    int64 `json:"helper_model_cache_miss_tokens,omitempty"`
 	HelperModelAPITokens    int64 `json:"helper_model_api_tokens,omitempty"`
 }
 

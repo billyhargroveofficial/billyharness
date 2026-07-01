@@ -159,6 +159,42 @@ func TestProjectorTracksToolCompactDisplay(t *testing.T) {
 	}
 }
 
+func TestProjectorTracksHelperUsageWithoutDoubleCountingToolMetadata(t *testing.T) {
+	p := New()
+	p.Apply(protocol.Event{Seq: 1, Type: protocol.EventProviderHelperUsage, Data: protocol.ProviderHelperUsageEvent{
+		Kind:            "web_summary",
+		CallID:          "call-web",
+		InputTokens:     90,
+		OutputTokens:    10,
+		CacheHitTokens:  50,
+		CacheMissTokens: 40,
+		APITokens:       100,
+	}})
+	snap := p.Apply(protocol.Event{Seq: 2, Type: protocol.EventToolCallFinished, CallID: "call-web", Data: protocol.ToolResult{
+		CallID:  "call-web",
+		Name:    "web_fetch",
+		Content: "summary",
+		Metadata: map[string]any{
+			"tool_summary_input_tokens":          200,
+			"tool_summary_output_tokens":         25,
+			"tool_summary_api_input_tokens":      90,
+			"tool_summary_api_output_tokens":     10,
+			"tool_summary_api_total_tokens":      100,
+			"tool_summary_api_cache_hit_tokens":  50,
+			"tool_summary_api_cache_miss_tokens": 40,
+			"tool_summary_external_model_used":   true,
+		},
+	}})
+	if snap.ToolSummaryInputTokens != 200 || snap.ToolSummaryOutputTokens != 25 {
+		t.Fatalf("web summary compression = %#v", snap)
+	}
+	if snap.HelperModelCalls != 1 || snap.HelperModelInputTokens != 90 || snap.HelperModelOutputTokens != 10 ||
+		snap.HelperModelCacheHitTokens != 50 || snap.HelperModelCacheMissTokens != 40 ||
+		snap.HelperModelAPITokens != 100 || snap.ToolSummaryAPITokens != 100 {
+		t.Fatalf("helper usage = %#v", snap)
+	}
+}
+
 func TestProjectorReplaysTodoPlanState(t *testing.T) {
 	p := New()
 	state := protocol.TodoState{Todos: []protocol.TodoItem{

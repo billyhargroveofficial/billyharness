@@ -240,6 +240,18 @@ func TestReplayEventsAggregatesUsageCumulativeAndEventCounters(t *testing.T) {
 		}},
 		{Type: protocol.EventContextThreshold, Data: protocol.ContextThresholdEvent{Percent: 50, EstimatedTokens: 500000, ContextWindowTokens: 1000000, ThresholdTokens: 500000, Stage: "before_turn"}},
 		{Type: protocol.EventContextCompacted},
+		{Type: protocol.EventProviderHelperUsage, Data: protocol.ProviderHelperUsageEvent{
+			Kind:            "context_compact",
+			Provider:        "mock",
+			Model:           "mock-summary",
+			RunID:           "run-1",
+			CompactionID:    "compact-1",
+			InputTokens:     50,
+			OutputTokens:    5,
+			CacheHitTokens:  20,
+			CacheMissTokens: 30,
+			APITokens:       55,
+		}},
 		{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:model-call-001", Round: 1, Kind: protocol.StepKindModelCall, Status: protocol.StepStatusCompleted, DurationMS: 11, Metadata: map[string]any{"first_delta_ms": 4}}},
 		{Type: protocol.EventStepStarted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:tool-batch-001", Round: 1, Kind: protocol.StepKindToolBatch, Status: protocol.StepStatusStarted, Parallel: true, BatchSize: 2}},
 		{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{ID: "call-1", Name: "time_now"}},
@@ -295,6 +307,13 @@ func TestReplayEventsAggregatesUsageCumulativeAndEventCounters(t *testing.T) {
 		summary.CacheHitTokens != 85 || summary.CacheMissTokens != 40 {
 		t.Fatalf("usage counters = %#v", summary)
 	}
+	if summary.HelperModelCalls != 1 || summary.HelperInputTokens != 50 || summary.HelperOutputTokens != 5 ||
+		summary.HelperCacheHitTokens != 20 || summary.HelperCacheMissTokens != 30 || summary.HelperAPITokens != 55 {
+		t.Fatalf("helper usage counters = %#v", summary)
+	}
+	if got := summary.HelperUsageByKind["context_compact"]; got.Calls != 1 || got.APITokens != 55 {
+		t.Fatalf("helper usage by kind = %#v", summary.HelperUsageByKind)
+	}
 	if len(summary.ProfileHashes) != 1 || summary.ProfileHashes[0] != profileHash {
 		t.Fatalf("profile hashes = %#v", summary.ProfileHashes)
 	}
@@ -305,6 +324,7 @@ func TestReplayEventsAggregatesUsageCumulativeAndEventCounters(t *testing.T) {
 		string(protocol.EventModelCallStarted),
 		string(protocol.EventContextThreshold),
 		string(protocol.EventContextCompacted),
+		string(protocol.EventProviderHelperUsage),
 		string(protocol.EventStepCompleted),
 		string(protocol.EventStepStarted),
 		string(protocol.EventToolCallRequested),
@@ -346,26 +366,30 @@ func TestReplayEventsAggregatesUsageCumulativeAndEventCounters(t *testing.T) {
 	if summary.Timeline[5].Seq != 8 || summary.Timeline[5].Kind != "context_compaction" {
 		t.Fatalf("compaction timeline item = %#v", summary.Timeline[5])
 	}
-	if summary.Timeline[8].CallID != "call-1" ||
-		summary.Timeline[8].Name != "time_now" {
-		t.Fatalf("tool request timeline item = %#v", summary.Timeline[8])
+	if summary.Timeline[6].Kind != "helper_usage" || summary.Timeline[6].Name != "context_compact" {
+		t.Fatalf("helper usage timeline item = %#v", summary.Timeline[6])
 	}
 	if summary.Timeline[9].CallID != "call-1" ||
-		summary.Timeline[9].AttemptID != "turn-001:tool-call-001:attempt-001" ||
 		summary.Timeline[9].Name != "time_now" {
-		t.Fatalf("tool start timeline item = %#v", summary.Timeline[9])
+		t.Fatalf("tool request timeline item = %#v", summary.Timeline[9])
 	}
 	if summary.Timeline[10].CallID != "call-1" ||
 		summary.Timeline[10].AttemptID != "turn-001:tool-call-001:attempt-001" ||
 		summary.Timeline[10].Name != "time_now" ||
-		summary.Timeline[10].Phase != "executing" ||
 		summary.Timeline[10].Status != protocol.StepStatusStarted {
-		t.Fatalf("tool progress timeline item = %#v", summary.Timeline[10])
+		t.Fatalf("tool start timeline item = %#v", summary.Timeline[10])
 	}
 	if summary.Timeline[11].CallID != "call-1" ||
 		summary.Timeline[11].AttemptID != "turn-001:tool-call-001:attempt-001" ||
-		summary.Timeline[11].Name != "time_now" {
-		t.Fatalf("tool finish timeline item = %#v", summary.Timeline[11])
+		summary.Timeline[11].Name != "time_now" ||
+		summary.Timeline[11].Phase != "executing" ||
+		summary.Timeline[11].Status != protocol.StepStatusStarted {
+		t.Fatalf("tool progress timeline item = %#v", summary.Timeline[11])
+	}
+	if summary.Timeline[12].CallID != "call-1" ||
+		summary.Timeline[12].AttemptID != "turn-001:tool-call-001:attempt-001" ||
+		summary.Timeline[12].Name != "time_now" {
+		t.Fatalf("tool finish timeline item = %#v", summary.Timeline[12])
 	}
 
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")

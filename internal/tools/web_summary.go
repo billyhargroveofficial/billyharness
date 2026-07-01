@@ -18,6 +18,7 @@ type webModelSummary struct {
 	InputTokens  int64
 	OutputTokens int64
 	CacheHit     int64
+	CacheMiss    int64
 	CostUSD      float64
 }
 
@@ -78,6 +79,7 @@ func (r *Registry) modelWebSummary(ctx context.Context, src webtools.SummarySour
 		InputTokens:  inputTokens,
 		OutputTokens: outputTokens,
 		CacheHit:     summary.CacheHit,
+		CacheMiss:    summary.CacheMiss,
 		CostUSD:      summary.CostUSD,
 	}, nil
 }

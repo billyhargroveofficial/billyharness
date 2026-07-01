@@ -148,6 +148,11 @@ type Model struct {
 	runStartSummaryIn    int64
 	runStartSummaryOut   int64
 	runStartSummaryAPI   int64
+	runStartHelperIn     int64
+	runStartHelperOut    int64
+	runStartHelperHit    int64
+	runStartHelperMiss   int64
+	runStartHelperAPI    int64
 	inputTok             int64
 	outputTok            int64
 	cacheHitTok          int64
@@ -160,6 +165,11 @@ type Model struct {
 	toolSummaryInTok     int64
 	toolSummaryOutTok    int64
 	toolSummaryAPITok    int64
+	helperModelInTok     int64
+	helperModelOutTok    int64
+	helperModelCacheHit  int64
+	helperModelCacheMiss int64
+	helperModelAPITok    int64
 	slashIndex           int
 	slashDismissed       string
 	fileResolver         *filesearch.Resolver
@@ -1021,9 +1031,11 @@ func (m Model) loadContextStatus() (string, error) {
 			LastCacheMissTokens:     m.lastCacheMissTok,
 			WebSummaryInputTokens:   m.toolSummaryInTok,
 			WebSummaryOutputTokens:  m.toolSummaryOutTok,
-			HelperModelInputTokens:  m.toolSummaryInTok,
-			HelperModelOutputTokens: m.toolSummaryOutTok,
-			HelperModelAPITokens:    m.toolSummaryAPITok,
+			HelperModelInputTokens:  m.helperModelInTok,
+			HelperModelOutputTokens: m.helperModelOutTok,
+			HelperModelCacheHit:     m.helperModelCacheHit,
+			HelperModelCacheMiss:    m.helperModelCacheMiss,
+			HelperModelAPITokens:    m.helperModelAPITok,
 		},
 	})
 	return gatewayclient.FormatSessionContext(resp), nil

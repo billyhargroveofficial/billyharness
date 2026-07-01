@@ -47,6 +47,7 @@ type compactPage struct {
 	WebsumInputTokens    int64    `json:"websum_input_tokens,omitempty"`
 	WebsumOutputTokens   int64    `json:"websum_output_tokens,omitempty"`
 	WebsumCacheHit       int64    `json:"websum_cache_hit,omitempty"`
+	WebsumCacheMiss      int64    `json:"websum_cache_miss,omitempty"`
 	WebsumCost           float64  `json:"websum_cost,omitempty"`
 	WebsumModel          string   `json:"websum_model,omitempty"`
 	WebsumError          string   `json:"websum_error,omitempty"`
@@ -93,6 +94,7 @@ type compactCrawlPage struct {
 	WebsumInputTokens    int64    `json:"websum_input_tokens,omitempty"`
 	WebsumOutputTokens   int64    `json:"websum_output_tokens,omitempty"`
 	WebsumCacheHit       int64    `json:"websum_cache_hit,omitempty"`
+	WebsumCacheMiss      int64    `json:"websum_cache_miss,omitempty"`
 	WebsumCost           float64  `json:"websum_cost,omitempty"`
 	WebsumModel          string   `json:"websum_model,omitempty"`
 	WebsumError          string   `json:"websum_error,omitempty"`
@@ -129,6 +131,7 @@ type compactCrawlOutput struct {
 	WebsumInputTokens    int64              `json:"websum_input_tokens,omitempty"`
 	WebsumOutputTokens   int64              `json:"websum_output_tokens,omitempty"`
 	WebsumCacheHit       int64              `json:"websum_cache_hit,omitempty"`
+	WebsumCacheMiss      int64              `json:"websum_cache_miss,omitempty"`
 	WebsumCost           float64            `json:"websum_cost,omitempty"`
 	WebsumModel          string             `json:"websum_model,omitempty"`
 	WebsumError          string             `json:"websum_error,omitempty"`

@@ -95,12 +95,27 @@ func TestContextReportV2IncludesEventsRuntimePromptAndHelperUsage(t *testing.T) 
 			{Seq: 2, Type: protocol.EventProviderUsageUpdate, Data: map[string]any{"input_tokens": 100, "output_tokens": 5, "cache_hit_tokens": 70, "cache_miss_tokens": 30}},
 			{Seq: 3, Type: protocol.EventProviderUsageUpdate, Data: map[string]any{"input_tokens": 125, "output_tokens": 8, "cache_hit_tokens": 90, "cache_miss_tokens": 35}},
 			{Seq: 4, Type: protocol.EventToolCallStarted},
-			{Seq: 5, Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{Name: "web_fetch", Metadata: map[string]any{
-				"tool_summary_input_tokens":  200,
-				"tool_summary_output_tokens": 25,
+			{Seq: 5, Type: protocol.EventProviderHelperUsage, Data: protocol.ProviderHelperUsageEvent{
+				Kind:            "web_summary",
+				CallID:          "call-web",
+				InputTokens:     90,
+				OutputTokens:    10,
+				CacheHitTokens:  50,
+				CacheMissTokens: 40,
+				APITokens:       100,
+			}},
+			{Seq: 6, Type: protocol.EventToolCallFinished, CallID: "call-web", Data: protocol.ToolResult{CallID: "call-web", Name: "web_fetch", Metadata: map[string]any{
+				"tool_summary_input_tokens":          200,
+				"tool_summary_output_tokens":         25,
+				"tool_summary_api_input_tokens":      90,
+				"tool_summary_api_output_tokens":     10,
+				"tool_summary_api_total_tokens":      100,
+				"tool_summary_external_model_used":   true,
+				"tool_summary_api_cache_hit_tokens":  50,
+				"tool_summary_api_cache_miss_tokens": 40,
 			}}},
-			{Seq: 6, Type: protocol.EventToolOutputRefCreated},
-			{Seq: 7, Type: protocol.EventContextCompacted, Data: map[string]any{
+			{Seq: 7, Type: protocol.EventToolOutputRefCreated},
+			{Seq: 8, Type: protocol.EventContextCompacted, Data: map[string]any{
 				"compaction_id":           "compact-1",
 				"summary_strategy":        "deterministic",
 				"before_estimated_tokens": 800,
@@ -121,7 +136,9 @@ func TestContextReportV2IncludesEventsRuntimePromptAndHelperUsage(t *testing.T) 
 		t.Fatalf("usage = %#v", resp.Usage)
 	}
 	if resp.Usage.WebSummaryInputTokens != 200 || resp.Usage.WebSummaryOutputTokens != 25 ||
-		resp.Usage.HelperModelAPITokens != 225 {
+		resp.Usage.HelperModelInputTokens != 90 || resp.Usage.HelperModelOutputTokens != 10 ||
+		resp.Usage.HelperModelCacheHit != 50 || resp.Usage.HelperModelCacheMiss != 40 ||
+		resp.Usage.HelperModelAPITokens != 100 {
 		t.Fatalf("helper usage = %#v", resp.Usage)
 	}
 	if resp.Prompt.InventoryHash != "inventory-sha" || resp.Prompt.SectionCount != 1 ||

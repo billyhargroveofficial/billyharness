@@ -41,7 +41,12 @@ func (m Model) inlineStatusView() string {
 			"websum " + compactNumber(m.toolSummaryInTok) + "→" + compactNumber(m.toolSummaryOutTok),
 			styles.statusUsage,
 		})
-		bottom = append(bottom, statusSegment{"sumapi " + compactNumber(m.toolSummaryAPITok), styles.statusDim})
+	}
+	if m.helperModelInTok > 0 || m.helperModelOutTok > 0 {
+		bottom = append(bottom, statusSegment{"helper " + compactNumber(m.helperModelInTok) + "→" + compactNumber(m.helperModelOutTok), styles.statusDim})
+	}
+	if m.toolSummaryInTok > 0 || m.toolSummaryOutTok > 0 || m.helperModelAPITok > 0 {
+		bottom = append(bottom, statusSegment{"sumapi " + compactNumber(m.helperModelAPITok), styles.statusDim})
 	}
 	bottom = append(bottom,
 		statusSegment{"agent turns " + strconv.Itoa(m.modelCalls), styles.statusDim},

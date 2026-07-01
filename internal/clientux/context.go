@@ -146,10 +146,11 @@ type contextEventMetrics struct {
 	compaction *gatewayapi.ContextCompaction
 	outputRefs int
 	usageAcc   contextUsageAccumulator
+	helperSeen map[string]bool
 }
 
 func contextEventReport(events []protocol.Event) contextEventMetrics {
-	var metrics contextEventMetrics
+	metrics := contextEventMetrics{helperSeen: map[string]bool{}}
 	for _, event := range events {
 		switch event.Type {
 		case protocol.EventModelCallStarted:
@@ -172,7 +173,9 @@ func contextEventReport(events []protocol.Event) contextEventMetrics {
 			metrics.usage.LastCacheHitTokens = current.CacheHitTokens
 			metrics.usage.LastCacheMissTokens = current.CacheMissTokens
 		case protocol.EventToolCallFinished, protocol.EventToolCallFailed, protocol.EventToolCallAborted:
-			metrics.observeToolSummary(event.Data)
+			metrics.observeToolSummary(event)
+		case protocol.EventProviderHelperUsage:
+			metrics.observeHelperUsage(event)
 		case protocol.EventToolOutputRefCreated:
 			metrics.outputRefs++
 		case protocol.EventContextCompacted:
@@ -224,22 +227,62 @@ func promptReportFromInventory(inventory *protocol.PromptInventory) gatewayapi.C
 	}
 }
 
-func (m *contextEventMetrics) observeToolSummary(data any) {
-	result, ok := decodeContextData[protocol.ToolResult](data)
+func (m *contextEventMetrics) observeToolSummary(event protocol.Event) {
+	result, ok := decodeContextData[protocol.ToolResult](event.Data)
 	if !ok || len(result.Metadata) == 0 {
 		return
 	}
 	in := metadataInt64(result.Metadata, "tool_summary_input_tokens")
 	out := metadataInt64(result.Metadata, "tool_summary_output_tokens")
-	api := metadataInt64(result.Metadata, "tool_summary_api_tokens")
-	if api == 0 && (in > 0 || out > 0) {
-		api = in + out
-	}
 	m.usage.WebSummaryInputTokens += in
 	m.usage.WebSummaryOutputTokens += out
-	m.usage.HelperModelInputTokens += in
-	m.usage.HelperModelOutputTokens += out
+	callID := firstContextString(result.CallID, event.CallID)
+	if callID != "" && m.helperSeen[callID] {
+		return
+	}
+	apiInput := metadataInt64(result.Metadata, "tool_summary_api_input_tokens")
+	apiOutput := metadataInt64(result.Metadata, "tool_summary_api_output_tokens")
+	api := metadataInt64(result.Metadata, "tool_summary_api_total_tokens")
+	if api == 0 {
+		api = metadataInt64(result.Metadata, "tool_summary_api_tokens")
+	}
+	if api == 0 {
+		api = apiInput + apiOutput
+	}
+	cacheHit := metadataInt64(result.Metadata, "tool_summary_api_cache_hit_tokens")
+	cacheMiss := metadataInt64(result.Metadata, "tool_summary_api_cache_miss_tokens")
+	if api <= 0 && apiInput <= 0 && apiOutput <= 0 && cacheHit <= 0 && cacheMiss <= 0 && !metadataBool(result.Metadata, "tool_summary_external_model_used") {
+		return
+	}
+	m.usage.HelperModelCalls++
+	m.usage.HelperModelInputTokens += apiInput
+	m.usage.HelperModelOutputTokens += apiOutput
 	m.usage.HelperModelAPITokens += api
+	m.usage.HelperModelCacheHit += cacheHit
+	m.usage.HelperModelCacheMiss += cacheMiss
+}
+
+func (m *contextEventMetrics) observeHelperUsage(event protocol.Event) {
+	usage, ok := decodeContextData[protocol.ProviderHelperUsageEvent](event.Data)
+	if !ok {
+		return
+	}
+	api := usage.APITokens
+	if api == 0 {
+		api = usage.InputTokens + usage.OutputTokens
+	}
+	m.usage.HelperModelCalls++
+	m.usage.HelperModelInputTokens += usage.InputTokens
+	m.usage.HelperModelOutputTokens += usage.OutputTokens
+	m.usage.HelperModelAPITokens += api
+	m.usage.HelperModelCacheHit += usage.CacheHitTokens
+	m.usage.HelperModelCacheMiss += usage.CacheMissTokens
+	if strings.TrimSpace(usage.Kind) == "web_summary" {
+		callID := firstContextString(usage.CallID, event.CallID)
+		if callID != "" {
+			m.helperSeen[callID] = true
+		}
+	}
 }
 
 func contextCompactionFromEvent(event protocol.Event) *gatewayapi.ContextCompaction {
@@ -549,6 +592,17 @@ func metadataString(metadata map[string]any, key string) string {
 	}
 }
 
+func metadataBool(metadata map[string]any, key string) bool {
+	switch value := metadata[key].(type) {
+	case bool:
+		return value
+	case string:
+		return strings.EqualFold(strings.TrimSpace(value), "true")
+	default:
+		return false
+	}
+}
+
 func metadataInt64(metadata map[string]any, key string) int64 {
 	switch value := metadata[key].(type) {
 	case int:
@@ -563,4 +617,13 @@ func metadataInt64(metadata map[string]any, key string) int64 {
 	default:
 		return 0
 	}
+}
+
+func firstContextString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

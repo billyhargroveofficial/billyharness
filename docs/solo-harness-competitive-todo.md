@@ -267,9 +267,9 @@ is to compaction.
     -count=1 ./internal/modelinfo ./internal/config ./internal/provider
     ./internal/credentials ./cmd/fast-agent-harness` passed;
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `b0885693bf0c4518e8284fd255b3044ce7b6a0da`.
 
-- [ ] SH-01.4 Record helper-model usage separately from main agent usage.
+- [x] SH-01.4 Record helper-model usage separately from main agent usage.
   - inspiration: Codex memory extraction model selection and Billy websum
     metrics.
   - target files: `internal/provider/web_summary.go`,
@@ -278,7 +278,29 @@ is to compaction.
   - acceptance: web summary, context compact summary, and future memory summary
     usage show as helper usage, not as main LLM turn count.
   - verification: web summary tests and trace summary tests.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: added first-class `provider.helper_usage` protocol events with
+    run/call/attempt/compaction correlation. Model web summaries now emit
+    helper usage before the final tool result, model-based context compaction
+    emits helper usage after `context.compacted`, and web metadata carries
+    model API input/output/cache-hit/cache-miss tokens separately from
+    web-summary compression tokens. Shared client projection, `/context`,
+    trace replay, TUI status, and Telegram footers now account helper model
+    usage separately from main `provider.usage` turn totals while preserving
+    legacy tool-result metadata as a replay fallback without double-counting.
+    Extractive/direct web summaries remain websum compression only and do not
+    inflate helper model usage.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/protocol
+    ./internal/tools ./internal/provider ./internal/agent ./internal/clientux
+    ./internal/clientux/projector ./internal/gatewayapi
+    ./internal/gatewayclient ./internal/trace ./internal/tui
+    ./internal/telegrambot` passed;
+    `/root/.local/go/bin/go test -run
+    'Test.*Helper.*Usage.*|Test.*WebSummarizer.*|Test.*ToolSummary.*|TestReplayEventsAggregatesUsageCumulativeAndEventCounters|TestTUIAccountingMatchesClientUXProjector|TestRendererFooterShowsToolSummaryTokens|TestModelCompactionStrategyReplacesSummaryAndReportsModel|TestModelWebSummary.*'
+    -count=1 ./internal/...` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 ## Milestone 2 - Shared Tool UI, Output Refs, And Streaming Liveness (P0)
 

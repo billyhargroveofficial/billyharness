@@ -46,6 +46,13 @@ type Snapshot struct {
 	ToolSummaryOutputTokens int64
 	ToolSummaryAPITokens    int64
 
+	HelperModelCalls           int
+	HelperModelInputTokens     int64
+	HelperModelOutputTokens    int64
+	HelperModelCacheHitTokens  int64
+	HelperModelCacheMissTokens int64
+	HelperModelAPITokens       int64
+
 	ToolsByCallID     map[string]ToolItem
 	ContextThresholds []ContextThreshold
 	TurnChanges       []TurnChangeItem
@@ -108,6 +115,7 @@ type Projector struct {
 	reasoning             strings.Builder
 	snapshot              Snapshot
 	usage                 usageAccumulator
+	helperUsageCalls      map[string]bool
 	pendingAssistantBreak bool
 }
 
@@ -176,13 +184,13 @@ func (p *Projector) Apply(event protocol.Event) Snapshot {
 		p.upsertToolOutputRef(event)
 	case protocol.EventToolCallFinished:
 		p.upsertToolResult(event, "finished")
-		p.observeToolSummary(event.Data)
+		p.observeToolSummary(event)
 	case protocol.EventToolCallFailed:
 		p.upsertToolResult(event, "failed")
-		p.observeToolSummary(event.Data)
+		p.observeToolSummary(event)
 	case protocol.EventToolCallAborted:
 		p.upsertToolResult(event, "aborted")
-		p.observeToolSummary(event.Data)
+		p.observeToolSummary(event)
 	case protocol.EventContextThreshold:
 		if threshold, ok := decodeData[protocol.ContextThresholdEvent](event.Data); ok {
 			p.snapshot.ContextThresholds = append(p.snapshot.ContextThresholds, ContextThreshold{
@@ -215,6 +223,8 @@ func (p *Projector) Apply(event protocol.Event) Snapshot {
 		p.snapshot.LastOutputTokens = current.OutputTokens
 		p.snapshot.LastCacheHitTokens = current.CacheHitTokens
 		p.snapshot.LastCacheMissTokens = current.CacheMissTokens
+	case protocol.EventProviderHelperUsage:
+		p.observeProviderHelperUsage(event)
 	case protocol.EventRunCompleted:
 		p.snapshot.RunState = RunStateCompleted
 	case protocol.EventRunFailed:
@@ -266,6 +276,7 @@ func (p *Projector) resetRun() {
 		TodoState:     todoState,
 	}
 	p.usage.Reset()
+	p.helperUsageCalls = map[string]bool{}
 	p.pendingAssistantBreak = false
 }
 
@@ -475,18 +486,63 @@ func (p *Projector) upsertToolResult(event protocol.Event, status string) {
 	p.snapshot.ToolsByCallID[callID] = item
 }
 
-func (p *Projector) observeToolSummary(data any) {
-	result, ok := decodeData[protocol.ToolResult](data)
+func (p *Projector) observeToolSummary(event protocol.Event) {
+	result, ok := decodeData[protocol.ToolResult](event.Data)
 	if !ok || result.Metadata == nil {
 		return
 	}
 	p.snapshot.ToolSummaryInputTokens += metadataInt64(result.Metadata, "tool_summary_input_tokens")
 	p.snapshot.ToolSummaryOutputTokens += metadataInt64(result.Metadata, "tool_summary_output_tokens")
+	callID := firstNonEmpty(result.CallID, event.CallID)
+	if callID != "" && p.helperUsageCalls[callID] {
+		return
+	}
+	inputTokens := metadataInt64(result.Metadata, "tool_summary_api_input_tokens")
+	outputTokens := metadataInt64(result.Metadata, "tool_summary_api_output_tokens")
 	apiTokens := metadataInt64(result.Metadata, "tool_summary_api_total_tokens")
 	if apiTokens == 0 {
-		apiTokens = metadataInt64(result.Metadata, "tool_summary_api_input_tokens") + metadataInt64(result.Metadata, "tool_summary_api_output_tokens")
+		apiTokens = inputTokens + outputTokens
+	}
+	cacheHit := metadataInt64(result.Metadata, "tool_summary_api_cache_hit_tokens")
+	cacheMiss := metadataInt64(result.Metadata, "tool_summary_api_cache_miss_tokens")
+	if apiTokens <= 0 && inputTokens <= 0 && outputTokens <= 0 && cacheHit <= 0 && cacheMiss <= 0 && !metadataBool(result.Metadata, "tool_summary_external_model_used") {
+		return
 	}
 	p.snapshot.ToolSummaryAPITokens += apiTokens
+	p.snapshot.HelperModelCalls++
+	p.snapshot.HelperModelInputTokens += inputTokens
+	p.snapshot.HelperModelOutputTokens += outputTokens
+	p.snapshot.HelperModelCacheHitTokens += cacheHit
+	p.snapshot.HelperModelCacheMissTokens += cacheMiss
+	p.snapshot.HelperModelAPITokens += apiTokens
+}
+
+func (p *Projector) observeProviderHelperUsage(event protocol.Event) {
+	usage, ok := decodeData[protocol.ProviderHelperUsageEvent](event.Data)
+	if !ok {
+		return
+	}
+	inputTokens := nonNegative(usage.InputTokens)
+	outputTokens := nonNegative(usage.OutputTokens)
+	apiTokens := nonNegative(usage.APITokens)
+	if apiTokens == 0 {
+		apiTokens = inputTokens + outputTokens
+	}
+	cacheHit := nonNegative(usage.CacheHitTokens)
+	cacheMiss := nonNegative(usage.CacheMissTokens)
+	p.snapshot.HelperModelCalls++
+	p.snapshot.HelperModelInputTokens += inputTokens
+	p.snapshot.HelperModelOutputTokens += outputTokens
+	p.snapshot.HelperModelCacheHitTokens += cacheHit
+	p.snapshot.HelperModelCacheMissTokens += cacheMiss
+	p.snapshot.HelperModelAPITokens += apiTokens
+	p.snapshot.ToolSummaryAPITokens += apiTokens
+	if strings.TrimSpace(usage.Kind) == "web_summary" {
+		callID := firstNonEmpty(usage.CallID, event.CallID)
+		if callID != "" {
+			p.helperUsageCalls[callID] = true
+		}
+	}
 }
 
 func eventCallID(event protocol.Event) string {
@@ -538,6 +594,21 @@ func metadataInt64(metadata map[string]any, key string) int64 {
 		return parsed
 	}
 	return 0
+}
+
+func metadataBool(metadata map[string]any, key string) bool {
+	if metadata == nil {
+		return false
+	}
+	switch value := metadata[key].(type) {
+	case bool:
+		return value
+	case string:
+		parsed, _ := strconv.ParseBool(strings.TrimSpace(value))
+		return parsed
+	default:
+		return false
+	}
 }
 
 func firstNonEmpty(values ...string) string {

@@ -114,6 +114,7 @@ const (
 	EventRunCompleted            EventType = "run.completed"
 	EventRunFailed               EventType = "run.failed"
 	EventProviderUsageUpdate     EventType = "provider.usage"
+	EventProviderHelperUsage     EventType = "provider.helper_usage"
 	EventSessionStatus           EventType = "session.status"
 	EventGatewayStreamGap        EventType = "gateway.stream_gap"
 	EventUserInputRequested      EventType = "user_input.requested"
@@ -125,6 +126,26 @@ type GatewayStreamGapEvent struct {
 	DroppedEvents  int64  `json:"dropped_events"`
 	ReplayAfterSeq int64  `json:"replay_after_seq,omitempty"`
 	Message        string `json:"message,omitempty"`
+}
+
+type ProviderHelperUsageEvent struct {
+	Kind            string  `json:"kind"`
+	Provider        string  `json:"provider,omitempty"`
+	Model           string  `json:"model,omitempty"`
+	RequestID       string  `json:"request_id,omitempty"`
+	RunID           string  `json:"run_id,omitempty"`
+	TurnID          string  `json:"turn_id,omitempty"`
+	StepID          string  `json:"step_id,omitempty"`
+	CallID          string  `json:"call_id,omitempty"`
+	AttemptID       string  `json:"attempt_id,omitempty"`
+	CompactionID    string  `json:"compaction_id,omitempty"`
+	InputTokens     int64   `json:"input_tokens,omitempty"`
+	OutputTokens    int64   `json:"output_tokens,omitempty"`
+	CacheHitTokens  int64   `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens int64   `json:"cache_miss_tokens,omitempty"`
+	ReasoningTokens int64   `json:"reasoning_tokens,omitempty"`
+	APITokens       int64   `json:"api_tokens,omitempty"`
+	CostUSD         float64 `json:"cost_usd,omitempty"`
 }
 
 type Event struct {

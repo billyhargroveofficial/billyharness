@@ -525,6 +525,7 @@ func TestModelWebSummarizerRunsOutsideMainLoopAndRecordsMetrics(t *testing.T) {
 			InputTokens:  900,
 			OutputTokens: 40,
 			CacheHit:     300,
+			CacheMiss:    600,
 		},
 	}
 
@@ -556,7 +557,8 @@ func TestModelWebSummarizerRunsOutsideMainLoopAndRecordsMetrics(t *testing.T) {
 	}
 	if compact.OutputClass != "model_summary" || compact.SummaryMode != "model" ||
 		compact.SummarizerProvider != "mock" || compact.SummarizerModel != "mock-summarizer" ||
-		compact.WebsumInputTokens != 900 || compact.WebsumOutputTokens != 40 || compact.WebsumCacheHit != 300 ||
+		compact.WebsumInputTokens != 900 || compact.WebsumOutputTokens != 40 ||
+		compact.WebsumCacheHit != 300 || compact.WebsumCacheMiss != 600 ||
 		compact.WebsumModel != "mock-summarizer" || compact.WebsumError != "" {
 		t.Fatalf("model summary compact = %#v", compact)
 	}
@@ -565,6 +567,9 @@ func TestModelWebSummarizerRunsOutsideMainLoopAndRecordsMetrics(t *testing.T) {
 		anyInt64(meta["tool_summary_api_input_tokens"]) != 900 ||
 		anyInt64(meta["tool_summary_api_output_tokens"]) != 40 ||
 		anyInt64(meta["tool_summary_api_total_tokens"]) != 940 ||
+		anyInt64(meta["tool_summary_api_cache_hit_tokens"]) != 300 ||
+		anyInt64(meta["tool_summary_api_cache_miss_tokens"]) != 600 ||
+		anyInt64(meta["websum_cache_miss"]) != 600 ||
 		meta["websum_model"] != "mock-summarizer" {
 		t.Fatalf("model summary metadata = %#v", meta)
 	}

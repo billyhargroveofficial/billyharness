@@ -80,7 +80,31 @@ func (a *Agent) applyModelCompactionSummary(ctx context.Context, messages []prot
 	report.ActiveEstimatedTokens = report.AfterEstimatedTokens
 	report.ModelSummaryInputTokens = usage.InputTokens
 	report.ModelSummaryOutputTokens = usage.OutputTokens
+	report.ModelSummaryCacheHit = usage.CacheHitTokens
+	report.ModelSummaryCacheMiss = usage.CacheMissTokens
 	return nil
+}
+
+func (report *compactionReport) helperUsageEvent(runID string) (protocol.ProviderHelperUsageEvent, bool) {
+	if report == nil || report.SummaryStrategy != "model" {
+		return protocol.ProviderHelperUsageEvent{}, false
+	}
+	apiTokens := report.ModelSummaryInputTokens + report.ModelSummaryOutputTokens
+	if apiTokens <= 0 && report.ModelSummaryCacheHit <= 0 && report.ModelSummaryCacheMiss <= 0 {
+		return protocol.ProviderHelperUsageEvent{}, false
+	}
+	return protocol.ProviderHelperUsageEvent{
+		Kind:            "context_compact",
+		Provider:        report.SummaryProvider,
+		Model:           report.SummaryModel,
+		RunID:           runID,
+		CompactionID:    report.CompactionID,
+		InputTokens:     report.ModelSummaryInputTokens,
+		OutputTokens:    report.ModelSummaryOutputTokens,
+		CacheHitTokens:  report.ModelSummaryCacheHit,
+		CacheMissTokens: report.ModelSummaryCacheMiss,
+		APITokens:       apiTokens,
+	}, true
 }
 
 func (a *Agent) compactionSummaryBinding() (config.ProviderBinding, int, time.Duration) {

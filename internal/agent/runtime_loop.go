@@ -89,6 +89,9 @@ func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []pro
 		if compacted {
 			lastPromptTokens = 0
 			emit(protocol.Event{Type: protocol.EventContextCompacted, Data: compaction})
+			if usage, ok := compaction.helperUsageEvent(run.ID); ok {
+				emit(protocol.Event{Type: protocol.EventProviderHelperUsage, Data: usage})
+			}
 		}
 		toolSet := a.snapshotToolSet(ctx)
 		toolSpecs := toolSet.Specs()
@@ -247,6 +250,9 @@ type toolExecutionResult struct {
 	Result     protocol.ToolResult
 	DurationMS int64
 	AttemptID  string
+	RunID      string
+	TurnID     string
+	StepID     string
 }
 
 func (a *Agent) snapshotToolSet(ctx context.Context) tools.ToolSet {

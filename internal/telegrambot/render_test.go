@@ -354,6 +354,23 @@ func TestRendererFooterShowsToolSummaryTokens(t *testing.T) {
 	}
 }
 
+func TestRendererFooterShowsHelperUsageTokens(t *testing.T) {
+	r := NewRenderer()
+	r.Apply(protocol.Event{Type: protocol.EventProviderHelperUsage, Data: protocol.ProviderHelperUsageEvent{
+		Kind:         "context_compact",
+		InputTokens:  1200,
+		OutputTokens: 80,
+		APITokens:    1280,
+	}})
+
+	footer := r.footerLine()
+	for _, want := range []string{"helper 1.2k→80", "sumapi 1.3k"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("footer missing %q: %q", want, footer)
+		}
+	}
+}
+
 func TestRendererFinalRichMarkdownPreservesRichMarkdown(t *testing.T) {
 	r := NewRenderer()
 	r.Apply(protocol.Event{Type: protocol.EventAssistantDelta, Data: `## Погода
