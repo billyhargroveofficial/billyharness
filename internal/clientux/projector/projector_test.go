@@ -86,6 +86,36 @@ func TestProjectorBuildsClientSnapshot(t *testing.T) {
 	}
 }
 
+func TestProjectorCoalescedDeltasMatchUncoalescedReplay(t *testing.T) {
+	uncoalesced := New()
+	for _, event := range []protocol.Event{
+		{Seq: 1, Type: protocol.EventRunStarted},
+		{Seq: 2, Type: protocol.EventModelCallStarted},
+		{Seq: 3, Type: protocol.EventAssistantReasoning, Data: "think "},
+		{Seq: 4, Type: protocol.EventAssistantReasoning, Data: "more"},
+		{Seq: 5, Type: protocol.EventAssistantDelta, Data: "hello "},
+		{Seq: 6, Type: protocol.EventAssistantDelta, Data: "world"},
+		{Seq: 7, Type: protocol.EventRunCompleted},
+	} {
+		uncoalesced.Apply(event)
+	}
+	coalesced := New()
+	var snap Snapshot
+	for _, event := range []protocol.Event{
+		{Seq: 1, Type: protocol.EventRunStarted},
+		{Seq: 2, Type: protocol.EventModelCallStarted},
+		{Seq: 3, Type: protocol.EventAssistantReasoning, Data: "think more"},
+		{Seq: 4, Type: protocol.EventAssistantDelta, Data: "hello world"},
+		{Seq: 5, Type: protocol.EventRunCompleted},
+	} {
+		snap = coalesced.Apply(event)
+	}
+	want := uncoalesced.Snapshot()
+	if snap.AssistantText != want.AssistantText || snap.ReasoningText != want.ReasoningText || snap.RunState != want.RunState {
+		t.Fatalf("coalesced snapshot = %#v want %#v", snap, want)
+	}
+}
+
 func TestProjectorTracksToolCompactDisplay(t *testing.T) {
 	p := New()
 	progressCompact := protocol.ToolCompact{

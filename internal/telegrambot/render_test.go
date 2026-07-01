@@ -41,6 +41,25 @@ func TestRendererFinalChunksAreTelegramSizedAndEscaped(t *testing.T) {
 	}
 }
 
+func TestRendererCoalescedDeltasMatchUncoalescedContent(t *testing.T) {
+	pieces := []string{"hello ", "from ", "coalesced ", "stream"}
+	started := time.Now().Add(-2 * time.Second)
+	uncoalesced := NewRenderer()
+	uncoalesced.Started = started
+	for _, piece := range pieces {
+		uncoalesced.Apply(protocol.Event{Type: protocol.EventAssistantDelta, Data: piece})
+	}
+	coalesced := NewRenderer()
+	coalesced.Started = started
+	coalesced.Apply(protocol.Event{Type: protocol.EventAssistantDelta, Data: strings.Join(pieces, "")})
+	if coalesced.assistantText() != uncoalesced.assistantText() {
+		t.Fatalf("assistant text = %q want %q", coalesced.assistantText(), uncoalesced.assistantText())
+	}
+	if coalesced.FinalChunks("mock", "low")[0] != uncoalesced.FinalChunks("mock", "low")[0] {
+		t.Fatalf("final chunks differ for coalesced stream")
+	}
+}
+
 func TestGoldenTraceRendersTelegram(t *testing.T) {
 	r := NewRenderer()
 	var progress []RenderEvent

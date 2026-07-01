@@ -20,6 +20,7 @@ import (
 	"time"
 
 	agentpkg "github.com/billyhargroveofficial/billyharness/internal/agent"
+	"github.com/billyhargroveofficial/billyharness/internal/clientux/projector"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
@@ -76,6 +77,67 @@ func TestGatewaySessionRunStreamsEvents(t *testing.T) {
 	}
 	if got := content.String(); got != "mock: through gateway" {
 		t.Fatalf("content = %q", got)
+	}
+}
+
+func TestGatewaySessionRunPersistsCoalescedDeltasReplayValid(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	const chunks = 2000
+	var want strings.Builder
+	providerEvents := make([]provider.Event, 0, chunks+1)
+	for i := 0; i < chunks; i++ {
+		text := fmt.Sprintf("delta-%04d ", i)
+		want.WriteString(text)
+		providerEvents = append(providerEvents, provider.Event{Kind: provider.EventContent, Text: text})
+	}
+	providerEvents = append(providerEvents, provider.Event{Kind: provider.EventDone})
+	prov := &gatewayScriptedProvider{steps: [][]provider.Event{providerEvents}}
+	registry := tools.NewRegistry(cfg)
+	server := NewServerWithOptions(cfg, provider.Mock{}, registry, ServerOptions{SessionStoreDir: storeDir})
+	sessionID := createGatewaySessionForTest(t, server)
+
+	streamed := runGatewaySessionAgentForTest(t, server, sessionID, agentpkg.New(cfg, prov, registry), "long stream")
+	var streamedContent strings.Builder
+	var streamedDeltaEvents int
+	for _, event := range streamed {
+		if event.Type == protocol.EventAssistantDelta {
+			streamedDeltaEvents++
+			streamedContent.WriteString(fmt.Sprint(event.Data))
+		}
+	}
+	if streamedContent.String() != want.String() {
+		t.Fatalf("streamed content len got=%d want=%d", streamedContent.Len(), want.Len())
+	}
+	if streamedDeltaEvents >= chunks/10 {
+		t.Fatalf("streamed delta events = %d, want far fewer than chunks %d", streamedDeltaEvents, chunks)
+	}
+
+	replayed, err := server.store.ReplayEventsAfter(sessionID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lastSeq int64
+	var replayedDeltaEvents int
+	projected := projector.New()
+	var snap projector.Snapshot
+	for _, event := range replayed {
+		if event.Seq <= lastSeq {
+			t.Fatalf("replayed seq not increasing: previous=%d event=%#v", lastSeq, event)
+		}
+		lastSeq = event.Seq
+		if event.Type == protocol.EventAssistantDelta {
+			replayedDeltaEvents++
+		}
+		snap = projected.Apply(event)
+	}
+	if replayedDeltaEvents != streamedDeltaEvents {
+		t.Fatalf("replayed delta events = %d streamed=%d", replayedDeltaEvents, streamedDeltaEvents)
+	}
+	if snap.AssistantText != want.String() || snap.RunState != projector.RunStateCompleted {
+		t.Fatalf("replayed snapshot state=%s content len got=%d want=%d", snap.RunState, len(snap.AssistantText), want.Len())
 	}
 }
 

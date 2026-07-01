@@ -883,11 +883,33 @@ platform.
     -count=1 ./internal/...` passed.
   - commit: pending.
 
-- [ ] HR-04.6 Delta coalescing before durable append and render.
+- [x] HR-04.6 Delta coalescing before durable append and render.
   - maps to: `competitive-improvements-todo.md` B10.
   - acceptance: final assistant text is identical; first visible delta latency
     is bounded; replay order remains valid.
   - verification: `go test -count=1 ./internal/agent ./internal/gateway ./internal/clientux/projector ./internal/telegrambot`.
+  - status: completed 2026-07-01.
+  - evidence: provider content/reasoning streams now emit the first delta of
+    each consecutive visible stream immediately, coalesce subsequent same-type
+    deltas up to a bounded byte/time threshold, and flush before tool-call,
+    usage, request-metadata, done, and channel-close boundaries. The protocol
+    event types and string payload contract stay unchanged, so existing
+    projectors and renderers concatenate replayed coalesced deltas into the
+    same assistant/reasoning text. A 2000-chunk gateway session regression
+    verifies far fewer persisted assistant delta events, monotonic replay seqs,
+    completed replay projection, and exact final assistant text.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/agent
+    ./internal/gateway ./internal/clientux/projector ./internal/telegrambot`
+    passed; `/root/.local/go/bin/go test -run
+    'Test.*Delta.*Coalesc.*|Test.*Assistant.*Final.*Text.*|Test.*Replay.*Coalesc.*|Test.*Coalesced.*|Test.*First.*Delta.*'
+    -count=1 ./internal/...` passed. Note: the first package-suite attempt hit
+    transient Telegram timing in
+    `TestClientSerializesSameChatRateLimitReservations`
+    (`request 1 arrived after 10.654818ms, want serialized pacing`); an
+    immediate `/root/.local/go/bin/go test -count=1 ./internal/telegrambot`
+    rerun and the full package-suite rerun both passed.
+  - commit: pending.
 
 - [ ] HR-04.7 JSONL scale benchmark and sparse seq index gate.
   - maps to: `competitive-improvements-todo.md` B12.
