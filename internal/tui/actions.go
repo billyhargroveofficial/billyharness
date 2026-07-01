@@ -303,6 +303,22 @@ func actionRegistry() []actionSpec {
 			},
 		},
 		{
+			id:        "mcp.prompt",
+			title:     "Show MCP Prompt",
+			category:  "prompt",
+			slash:     "/mcp-prompt",
+			slashArgs: "server/name",
+			summary:   "show MCP prompt metadata",
+			args: func(m Model) []slashArg {
+				return m.mcpPromptSlashArgs()
+			},
+			run: func(m *Model, arg string) (bool, tea.Cmd) {
+				m.addInfoBlock("MCP PROMPT", m.mcpPromptText(arg))
+				m.status = "mcp prompt shown"
+				return true, nil
+			},
+		},
+		{
 			id:       "processes.show",
 			title:    "Show Processes",
 			category: "runtime",

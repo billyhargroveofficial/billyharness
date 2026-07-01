@@ -85,6 +85,7 @@ type Registry struct {
 	mcpTools        map[string]Tool
 	mcpCatalog      mcpCatalogState
 	mcpStatuses     []mcpclient.ServerStatus
+	mcpPrompts      []mcpclient.Prompt
 	mcpUnsubscribe  func()
 	mcpMu           sync.RWMutex
 	manager         *mcpclient.Manager
@@ -310,6 +311,18 @@ func (r *Registry) MCPStatuses() []mcpclient.ServerStatus {
 	return r.manager.Statuses()
 }
 
+func (r *Registry) MCPPrompts() []mcpclient.Prompt {
+	if r == nil {
+		return nil
+	}
+	if r.manager == nil {
+		r.mcpMu.RLock()
+		defer r.mcpMu.RUnlock()
+		return cloneMCPPrompts(r.mcpPrompts)
+	}
+	return cloneMCPPrompts(r.manager.CatalogSnapshot().Prompts)
+}
+
 func (r *Registry) AddMCPStatusListener(listener func(mcpclient.ServerStatus)) func() {
 	if r == nil || r.manager == nil {
 		return func() {}
@@ -360,6 +373,7 @@ func (r *Registry) syncMCPToolsFromManager() {
 		ModelVisible: false,
 		Collisions:   append([]string(nil), snapshot.Collisions...),
 	}
+	r.mcpPrompts = cloneMCPPrompts(snapshot.Prompts)
 	r.mcpMu.Unlock()
 }
 

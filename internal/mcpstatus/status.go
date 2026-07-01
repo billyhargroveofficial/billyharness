@@ -7,11 +7,15 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
 )
 
+type Prompt = mcpclient.Prompt
+type PromptArgument = mcpclient.PromptArgument
+
 type Response struct {
 	ConfigFiles []string                 `json:"config_files"`
 	Allowed     []string                 `json:"allowed"`
 	Enabled     bool                     `json:"enabled"`
 	Servers     []mcpclient.ServerStatus `json:"servers"`
+	Prompts     []mcpclient.Prompt       `json:"prompts,omitempty"`
 }
 
 func Format(status Response) string {
@@ -34,7 +38,7 @@ func Format(status Response) string {
 	}
 	if len(status.Servers) == 0 {
 		lines = append(lines, "servers: none configured")
-		return strings.Join(lines, "\n")
+		return strings.Join(appendPromptLines(lines, status.Prompts), "\n")
 	}
 	lines = append(lines, "")
 	for _, server := range status.Servers {
@@ -89,7 +93,44 @@ func Format(status Response) string {
 		}
 		lines = append(lines, line)
 	}
+	lines = appendPromptLines(lines, status.Prompts)
 	return strings.Join(lines, "\n")
+}
+
+func appendPromptLines(lines []string, prompts []mcpclient.Prompt) []string {
+	if len(prompts) == 0 {
+		return lines
+	}
+	lines = append(lines, "", "prompts:")
+	for _, prompt := range prompts {
+		name := strings.TrimSpace(prompt.Server + "/" + prompt.Name)
+		line := "  " + name
+		if hint := promptHint(prompt.Arguments); hint != "" {
+			line += " " + hint
+		}
+		if desc := strings.TrimSpace(prompt.Description); desc != "" {
+			line += " - " + oneLine(desc, 120)
+		}
+		line += " (metadata only)"
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func promptHint(args []mcpclient.PromptArgument) string {
+	var parts []string
+	for _, arg := range args {
+		name := strings.TrimSpace(arg.Name)
+		if name == "" {
+			continue
+		}
+		if arg.Required {
+			parts = append(parts, "<"+name+">")
+		} else {
+			parts = append(parts, "["+name+"]")
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func serverState(server mcpclient.ServerStatus) string {

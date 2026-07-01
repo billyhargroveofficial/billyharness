@@ -186,6 +186,18 @@ func cloneMCPStatuses(in []mcpclient.ServerStatus) []mcpclient.ServerStatus {
 	return out
 }
 
+func cloneMCPPrompts(in []mcpclient.Prompt) []mcpclient.Prompt {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]mcpclient.Prompt, 0, len(in))
+	for _, prompt := range in {
+		prompt.Arguments = append([]mcpclient.PromptArgument(nil), prompt.Arguments...)
+		out = append(out, prompt)
+	}
+	return out
+}
+
 func cloneTimePtr(value *time.Time) *time.Time {
 	if value == nil {
 		return nil

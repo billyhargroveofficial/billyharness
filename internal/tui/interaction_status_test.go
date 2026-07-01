@@ -893,6 +893,12 @@ func TestFormatMCPStatusShowsOwnConfigAndNativeWebTools(t *testing.T) {
 			UnsupportedReason: "streamable HTTP MCP is not implemented in billyharness yet; use stdio MCP or remove the url server",
 			Error:             "MCP server remote unsupported: streamable HTTP MCP is not implemented in billyharness yet; use stdio MCP or remove the url server",
 		}},
+		Prompts: []mcpclient.Prompt{{
+			Server:      "github",
+			Name:        "review",
+			Description: "Review a target",
+			Arguments:   []mcpclient.PromptArgument{{Name: "target", Required: true}},
+		}},
 	})
 	for _, want := range []string{
 		"/root/billyharness/mcp.config.toml",
@@ -919,6 +925,8 @@ func TestFormatMCPStatusShowsOwnConfigAndNativeWebTools(t *testing.T) {
 		"streamable-http",
 		"url:https://example.com/mcp",
 		"unsupported: streamable HTTP MCP is not implemented",
+		"prompts:",
+		"github/review <target> - Review a target (metadata only)",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("mcp status missing %q: %q", want, text)

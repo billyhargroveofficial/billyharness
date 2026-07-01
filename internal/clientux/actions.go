@@ -213,6 +213,14 @@ var sharedActionDefinitions = []ActionDefinition{
 		TelegramSummary: "MCP status",
 	},
 	{
+		ID:        "mcp.prompt",
+		Title:     "Show MCP Prompt",
+		Category:  "prompt",
+		Slash:     "/mcp-prompt",
+		SlashArgs: "server/name",
+		Summary:   "show MCP prompt metadata",
+	},
+	{
 		ID:              "processes.show",
 		Title:           "Show Processes",
 		Category:        "runtime",

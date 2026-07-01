@@ -29,6 +29,15 @@ func TestGatewayClientMCPStatusUsesSharedFormatter(t *testing.T) {
 					"state":      "connected",
 					"tool_count": 7,
 				}},
+				"prompts": []map[string]any{{
+					"server":      "github",
+					"name":        "review",
+					"description": "Review a target",
+					"arguments": []map[string]any{{
+						"name":     "target",
+						"required": true,
+					}},
+				}},
 			})
 		},
 	})
@@ -37,7 +46,7 @@ func TestGatewayClientMCPStatusUsesSharedFormatter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"config: /root/billyharness/mcp.config.toml", "allowed: github", "github", "connected", "command:npx", "tools:7"} {
+	for _, want := range []string{"config: /root/billyharness/mcp.config.toml", "allowed: github", "github", "connected", "command:npx", "tools:7", "github/review <target>", "metadata only"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("MCP status missing %q: %q", want, text)
 		}

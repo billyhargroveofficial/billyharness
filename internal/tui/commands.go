@@ -323,6 +323,7 @@ func (m Model) commandRegistry() commandregistry.Registry {
 	return commandregistry.Build(commandregistry.BuildOptions{
 		PromptCommands: m.promptCommands,
 		Profiles:       profiles,
+		MCPPrompts:     m.mcpPrompts,
 	})
 }
 
@@ -352,6 +353,55 @@ func (m Model) profileSlashArgs() []slashArg {
 		args = append(args, slashArg{profile.Name, summary})
 	}
 	return args
+}
+
+func (m Model) mcpPromptSlashArgs() []slashArg {
+	entries := m.commandRegistry().Entries()
+	var args []slashArg
+	for _, entry := range entries {
+		if entry.Kind != commandregistry.KindMCPPrompt {
+			continue
+		}
+		value := strings.TrimSpace(entry.MCPServer + "/" + entry.MCPName)
+		if value == "/" {
+			value = strings.TrimPrefix(entry.Name, "mcp:")
+		}
+		value = strings.Trim(value, "/")
+		if value == "" {
+			continue
+		}
+		summary := strings.TrimSpace(entry.Description)
+		if entry.ArgumentHint != "" {
+			if summary != "" {
+				summary += " "
+			}
+			summary += entry.ArgumentHint
+		}
+		if summary == "" {
+			summary = "metadata only"
+		} else {
+			summary += " · metadata only"
+		}
+		args = append(args, slashArg{value: value, summary: summary})
+	}
+	return args
+}
+
+func (m Model) mcpPromptText(arg string) string {
+	arg = strings.Trim(strings.TrimSpace(arg), "/")
+	if arg == "" {
+		return commandregistry.FormatEntries(m.commandRegistry().Search("mcp", 50))
+	}
+	for _, entry := range m.commandRegistry().Entries() {
+		if entry.Kind != commandregistry.KindMCPPrompt {
+			continue
+		}
+		value := strings.Trim(strings.TrimSpace(entry.MCPServer+"/"+entry.MCPName), "/")
+		if strings.EqualFold(value, arg) || strings.EqualFold(strings.TrimPrefix(entry.Name, "mcp:"), arg) {
+			return commandregistry.FormatEntries([]commandregistry.Entry{entry})
+		}
+	}
+	return "No MCP prompt metadata found for " + arg + ". Run /mcp to refresh MCP status."
 }
 
 func (m Model) promptCommand(token string) (promptcommands.Command, bool) {
@@ -474,8 +524,8 @@ func (m Model) slashPopupView() string {
 			label += " " + command.args
 		}
 		line := padRight(truncateRunes(label, nameW), nameW) + "  " + truncateRunes(command.summary, summaryW)
-		if command.source != "" {
-			line = padRight(truncateRunes(label, nameW), nameW) + "  " + truncateRunes(command.summary+" ["+command.source+"]", summaryW)
+		if source := slashSourceLabel(command); source != "" {
+			line = padRight(truncateRunes(label, nameW), nameW) + "  " + truncateRunes(command.summary+" ["+source+"]", summaryW)
 		}
 		if i == index {
 			lines = append(lines, styles.popupSelected.Width(contentW).Render(line))
@@ -488,6 +538,20 @@ func (m Model) slashPopupView() string {
 	}
 	lines = append(lines, styles.popupMuted.Width(contentW).Render("Up/Down select  Tab complete  Enter run  Esc close"))
 	return styles.popup.Width(contentW).Render(strings.Join(lines, "\n"))
+}
+
+func slashSourceLabel(command slashCommand) string {
+	source := strings.TrimSpace(command.source)
+	switch {
+	case source == "" || source == "builtin":
+		return ""
+	case command.kind == commandregistry.KindPromptCommand:
+		return source
+	case command.kind == commandregistry.KindMCPPrompt:
+		return "mcp"
+	default:
+		return source
+	}
 }
 
 func (m Model) slashArgPopupView(styles themeStyles, command slashCommand, prefix string, contentW int) string {

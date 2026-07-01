@@ -876,7 +876,7 @@ framework migration.
     ./internal/architecture` passed.
   - commit: `1159b411c43e8e334e875f79e3af471afb69c288`.
 
-- [ ] SH-06.3 Add compact command palette source labels and argument menus.
+- [x] SH-06.3 Add compact command palette source labels and argument menus.
   - inspiration: OpenCode command hints and Billy's current slash-command UX.
   - target files: `internal/tui/commands.go`, `internal/promptcommands`,
     `internal/mcpclient`, `internal/telegrambot/commands.go`.
@@ -884,7 +884,30 @@ framework migration.
     `/memory`, or MCP prompt can complete arguments in one action; source labels
     are visible but not noisy.
   - verification: command menu tests.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: refined the TUI slash popup source labels so built-in actions stay
+    quiet while home/workspace prompt commands and MCP metadata keep compact
+    source labels. Existing argument menus cover `/model`, `/reasoning`,
+    `/theme`, `/profile`, and `/memory`; regression coverage now verifies
+    `/memory search query=` completion. MCP prompt metadata from
+    `prompts/list` now survives the MCP manager -> tools registry ->
+    gateway/local MCP status path, is formatted in shared TUI/Telegram MCP
+    status output, and is cached by the TUI after `/mcp`. Added a
+    metadata-only `/mcp-prompt server/name` slash action whose argument menu can
+    complete known MCP prompts and whose output explicitly reports metadata-only
+    availability instead of implementing prompt invocation.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*Command.*Registry.*|Test.*Slash.*(Popup|Arg|Command).*|Test.*MCP.*Prompt.*|Test.*MCPStatus.*|TestFormatMCPStatus.*|TestGatewayClientMCPStatusUsesSharedFormatter|TestActionRegistryBacksSlashCommandsAndHelp|TestTelegramCommandsCommandShowsRegistryAndProfiles'
+    -count=1 ./internal/commandregistry ./internal/mcpclient
+    ./internal/mcpstatus ./internal/tools ./internal/tui
+    ./internal/tui/runtimeclient ./internal/gateway ./internal/telegrambot
+    ./internal/clientux ./internal/architecture` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/commandregistry
+    ./internal/mcpclient ./internal/mcpstatus ./internal/tools ./internal/tui
+    ./internal/tui/runtimeclient ./internal/gateway ./internal/telegrambot
+    ./internal/clientux ./internal/architecture` passed.
+  - commit: pending.
 
 ## Milestone 7 - Deferred Experiments (P2)
 

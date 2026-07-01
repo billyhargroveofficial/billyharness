@@ -54,6 +54,7 @@ func MCPStatus(ctx context.Context, settings Settings) (mcpstatus.Response, erro
 		Allowed:     mcpSettings.AllowedServers,
 		Enabled:     mcpSettings.Enabled,
 		Servers:     registry.MCPStatuses(),
+		Prompts:     registry.MCPPrompts(),
 	}, nil
 }
 

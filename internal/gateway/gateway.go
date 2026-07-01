@@ -418,6 +418,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, _ *http.Request) {
 		"allowed":      mcpSettings.AllowedServers,
 		"enabled":      mcpSettings.Enabled,
 		"servers":      s.registry.MCPStatuses(),
+		"prompts":      s.registry.MCPPrompts(),
 	})
 }
 

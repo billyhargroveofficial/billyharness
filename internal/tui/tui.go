@@ -81,6 +81,7 @@ type Model struct {
 	toolPolicy          config.ToolPolicySettings
 	diagnosticsSettings config.DiagnosticsSettings
 	mcpSettings         config.MCPSettings
+	mcpPrompts          []mcpstatus.Prompt
 	hookSettings        config.HookSettings
 	instructions        config.InstructionSettings
 	promptCommands      []promptcommands.Command
@@ -204,8 +205,9 @@ type errMsg struct {
 }
 
 type mcpStatusMsg struct {
-	text string
-	err  error
+	status mcpStatusResponse
+	text   string
+	err    error
 }
 
 type configStatusMsg struct {
@@ -590,6 +592,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addBlock("error", "MCP", msg.err.Error())
 			m.status = "mcp status failed"
 		} else {
+			m.mcpPrompts = append([]mcpstatus.Prompt(nil), msg.status.Prompts...)
 			m.addInfoBlock("MCP", msg.text)
 			m.status = "mcp status shown"
 		}
@@ -1105,24 +1108,24 @@ func (m Model) loadConfigSummary() (string, error) {
 
 func (m Model) mcpStatusCmd() tea.Cmd {
 	return func() tea.Msg {
-		text, err := m.loadMCPStatus()
-		return mcpStatusMsg{text: text, err: err}
+		status, err := m.loadMCPStatus()
+		return mcpStatusMsg{status: status, text: formatMCPStatus(status), err: err}
 	}
 }
 
-func (m Model) loadMCPStatus() (string, error) {
+func (m Model) loadMCPStatus() (mcpStatusResponse, error) {
 	if m.gatewayURL != "" {
 		resp, err := m.fetchGatewayMCPStatus()
 		if err != nil {
-			return "", err
+			return mcpStatusResponse{}, err
 		}
-		return formatMCPStatus(resp), nil
+		return resp, nil
 	}
 	status, err := tuiruntime.MCPStatus(context.Background(), m.runtimeClientSettings())
 	if err != nil {
-		return "", err
+		return mcpStatusResponse{}, err
 	}
-	return formatMCPStatus(status), nil
+	return status, nil
 }
 
 func (m Model) fetchGatewayMCPStatus() (mcpStatusResponse, error) {

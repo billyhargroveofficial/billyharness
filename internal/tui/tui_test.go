@@ -19,6 +19,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/clientux"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
+	"github.com/billyhargroveofficial/billyharness/internal/mcpstatus"
 	"github.com/billyhargroveofficial/billyharness/internal/promptcommands"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/testkit"
@@ -242,11 +243,38 @@ Review $ARGUMENTS carefully.
 	cfg.WorkspaceRoots = []string{root}
 	m := NewModel(cfg, Options{})
 	m.width = 100
+	m.mcpPrompts = []mcpstatus.Prompt{{
+		Server:      "fake",
+		Name:        "review",
+		Description: "Review a target",
+		Arguments:   []mcpstatus.PromptArgument{{Name: "target", Required: true}},
+	}}
 
 	m.textarea.SetValue("/rev")
 	popup := stripANSITest(m.slashPopupView())
 	if !strings.Contains(popup, "/review <path>") || !strings.Contains(popup, "[home]") {
 		t.Fatalf("popup missing registry source label:\n%s", popup)
+	}
+	m.textarea.SetValue("/sta")
+	popup = stripANSITest(m.slashPopupView())
+	if strings.Contains(popup, "[builtin]") {
+		t.Fatalf("builtin source label should stay quiet:\n%s", popup)
+	}
+
+	m.textarea.SetValue("/memory ")
+	m.slashIndex = 1
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = updated.(Model)
+	if got := m.textarea.Value(); got != "/memory search query=" {
+		t.Fatalf("memory arg completion = %q", got)
+	}
+
+	m.textarea.SetValue("/mcp-prompt ")
+	m.slashIndex = 0
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = updated.(Model)
+	if got := m.textarea.Value(); got != "/mcp-prompt fake/review" {
+		t.Fatalf("mcp prompt arg completion = %q", got)
 	}
 
 	handled, cmd := m.handleSlashCommand("/commands review")
@@ -261,6 +289,17 @@ Review $ARGUMENTS carefully.
 		!strings.Contains(last.Content, "/review <path> [home/prompt_command]") ||
 		!strings.Contains(last.Content, "Review with focus") {
 		t.Fatalf("commands block = %#v", last)
+	}
+
+	handled, cmd = m.handleSlashCommand("/mcp-prompt fake/review")
+	if !handled || cmd != nil {
+		t.Fatalf("/mcp-prompt handled=%v cmd=%v", handled, cmd)
+	}
+	last = m.blocks[len(m.blocks)-1]
+	if !strings.EqualFold(last.Title, "MCP PROMPT") ||
+		!strings.Contains(last.Content, "mcp:fake/review <target> [mcp/mcp_prompt]") ||
+		!strings.Contains(last.Content, "metadata only") {
+		t.Fatalf("mcp prompt block = %#v", last)
 	}
 
 	args := m.profileSlashArgs()
