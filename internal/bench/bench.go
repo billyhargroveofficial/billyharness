@@ -615,7 +615,8 @@ func runTask(parent context.Context, cfg config.Config, rc RunConfig, runID stri
 		result.WallTimeMS = time.Since(start).Milliseconds()
 		return result
 	}
-	registry, err := tools.NewRegistryWithMCP(ctx, taskCfg, tools.WithWebSummarizer(provider.NewWebSummarizerFromProjections(taskCfg.ProviderBinding(), taskCfg.ToolPolicySettings())))
+	registrySettings := tools.RegistrySettingsFromConfig(taskCfg)
+	registry, err := tools.NewRegistryWithMCPFromSettings(ctx, registrySettings, tools.WithWebSummarizer(provider.NewWebSummarizerFromProjections(registrySettings.Provider, registrySettings.ToolPolicy)))
 	if err != nil {
 		result.Outcome = "crash"
 		result.Error = err.Error()
@@ -623,7 +624,7 @@ func runTask(parent context.Context, cfg config.Config, rc RunConfig, runID stri
 		return result
 	}
 	defer registry.Close()
-	a := agent.New(taskCfg, prov, registry)
+	a := agent.NewFromSettings(agent.SettingsFromConfig(taskCfg), prov, registry)
 	var eventWriteErr error
 	err = a.Run(ctx, task.Prompt, func(event protocol.Event) {
 		observe(&result, event)

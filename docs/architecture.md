@@ -59,11 +59,8 @@ for `_test.go` files. `fast-agent-harness hygiene` reports tracked source files
 over those budgets from `git ls-files` and reports ignored runtime artifacts
 separately.
 
-| File | Current exception owner | Split plan |
-| --- | --- | --- |
-| `internal/mcpclient/client.go` | P2.1 MCP client file split. | Split manager, catalog, server lifecycle, stdio transport, JSON-RPC, content rendering, env/secrets, and reconnect/status fanout into focused files. |
-| `internal/tui/tui_test.go` | P1.4 TUI subpackage tests. | Move renderer, transcript, selection, and runtimeclient behavioral coverage beside those packages; keep only Bubble Tea integration tests here. |
-| `internal/telegrambot/bot_test.go` | P1.5/P2 Telegram adapter decomposition. | Split command, delivery, runner, session-owner, progress, and rendering tests beside the extracted adapter files. |
+Current exceptions: none. Add any future exception here with an owner, removal
+phase, and split plan before depending on it in strict hygiene.
 
 ## Guarded Rules
 

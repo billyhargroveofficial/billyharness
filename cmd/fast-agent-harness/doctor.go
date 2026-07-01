@@ -190,7 +190,8 @@ func doctorBuildStatus(ctx context.Context, repoDir string, opts doctorOptions, 
 		return doctorCheck{Name: "build check", Status: "skip", Detail: "repository directory unknown"}
 	}
 	start := time.Now()
-	out, err := runDoctorCommand(ctx, runner, repoDir, opts.Timeout, goCommand(), "test", "-run", "^$", "./cmd/fast-agent-harness")
+	goBin := goCommand()
+	out, err := runDoctorCommand(ctx, runner, repoDir, opts.Timeout, goBin, "test", "-run", "^$", "./cmd/fast-agent-harness")
 	check := doctorCheck{Name: "build check", DurationMS: time.Since(start).Milliseconds()}
 	if err != nil {
 		check.Status = "fail"
@@ -198,7 +199,7 @@ func doctorBuildStatus(ctx context.Context, repoDir string, opts doctorOptions, 
 		return check
 	}
 	check.Status = "ok"
-	check.Detail = "go test -run '^$' ./cmd/fast-agent-harness"
+	check.Detail = goBin + " test -run '^$' ./cmd/fast-agent-harness"
 	return check
 }
 

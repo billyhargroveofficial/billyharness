@@ -1,9 +1,12 @@
 # Architecture Decomposition TODO
 
-This document is the execution backlog for keeping billyharness fast and
-extendable as it grows. It was created from six parallel architecture reviews
-covering runtime/events, tools/web/MCP, TUI, Telegram/gateway UX,
-config/provider/auth, and general repository hygiene.
+This document is the completed first-pass execution backlog for keeping
+billyharness fast and extendable as it grows. It was created from six parallel
+architecture reviews covering runtime/events, tools/web/MCP, TUI,
+Telegram/gateway UX, config/provider/auth, and general repository hygiene.
+Treat it as historical/reference material; active follow-up work now lives in
+`docs/decomposition-next-todo.md`, and current package/file-size boundaries live
+in `docs/architecture.md`.
 
 The goal is not to make the codebase abstract for its own sake. The goal is to
 stop the harness from turning into a pile of large cross-cutting files where
@@ -11,7 +14,10 @@ every new feature touches TUI, gateway, tools, provider, and config at once.
 
 ## Current Snapshot
 
-Generated on 2026-06-29 from the current `main` branch.
+Generated on 2026-06-29 from the then-current `main` branch. This snapshot is
+kept for historical context and is intentionally not the live line-count source
+of truth; use `docs/architecture.md` plus `fast-agent-harness hygiene -strict`
+for current boundaries.
 
 - Total tracked Go lines: about 49k.
 - Largest files:

@@ -24,6 +24,65 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
+func TestNewServerFromSettingsClonesProjectionSettings(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.WorkspaceRoots = []string{"/repo"}
+	cfg.ProjectDocFallbacks = []string{"README.md"}
+	cfg.MCPEnabled = true
+	cfg.MCPConfigFiles = []string{"mcp.toml"}
+	cfg.MCPAllowedServers = []string{"github"}
+	cfg.MCPServers = []config.MCPServer{{
+		Name: "github",
+		Args: []string{"serve"},
+		Env:  map[string]string{"TOKEN": "secret"},
+	}}
+	cfg.HooksEnabled = true
+	cfg.HookConfigFiles = []string{"hooks.toml"}
+	cfg.Hooks = []config.Hook{{
+		Name:    "audit",
+		Event:   "before_tool",
+		Command: "sh",
+		Args:    []string{"-c", "true"},
+		Env:     map[string]string{"HOOK_TOKEN": "secret"},
+		Enabled: true,
+	}}
+
+	settings := ServerSettingsFromConfig(cfg)
+	server := NewServerFromSettings(settings, provider.Mock{}, tools.NewRegistryFromSettings(tools.RegistrySettingsFromConfig(cfg)))
+
+	settings.ToolPolicy.WorkspaceRoots[0] = "/mutated"
+	settings.ToolPolicy.ProjectDocFallbacks[0] = "MUTATED.md"
+	settings.MCP.ConfigFiles[0] = "mutated.toml"
+	settings.MCP.AllowedServers[0] = "mutated"
+	settings.MCP.Servers[0].Args[0] = "mutated"
+	settings.MCP.Servers[0].Env["TOKEN"] = "mutated"
+	settings.Hooks.ConfigFiles[0] = "mutated-hooks.toml"
+	settings.Hooks.Hooks[0].Args[0] = "mutated"
+	settings.Hooks.Hooks[0].Env["HOOK_TOKEN"] = "mutated"
+	settings.Instructions.WorkspaceRoots[0] = "/mutated"
+	settings.Instructions.ProjectDocFallbacks[0] = "MUTATED.md"
+
+	if server.toolPolicy.WorkspaceRoots[0] != "/repo" ||
+		server.toolPolicy.ProjectDocFallbacks[0] != "README.md" ||
+		server.instructions.WorkspaceRoots[0] != "/repo" ||
+		server.instructions.ProjectDocFallbacks[0] != "README.md" {
+		t.Fatalf("server tool/instruction settings changed after caller mutation: %#v %#v", server.toolPolicy, server.instructions)
+	}
+	if server.mcpSettings.ConfigFiles[0] != "mcp.toml" ||
+		server.mcpSettings.AllowedServers[0] != "github" ||
+		server.mcpSettings.Servers[0].Args[0] != "serve" ||
+		server.mcpSettings.Servers[0].Env["TOKEN"] != "secret" {
+		t.Fatalf("server MCP settings changed after caller mutation: %#v", server.mcpSettings)
+	}
+	if server.hookSettings.ConfigFiles[0] != "hooks.toml" ||
+		server.hookSettings.Hooks[0].Args[0] != "-c" ||
+		server.hookSettings.Hooks[0].Env["HOOK_TOKEN"] != "secret" {
+		t.Fatalf("server hook settings changed after caller mutation: %#v", server.hookSettings)
+	}
+}
+
 func TestGatewaySessionCancelEndpointCancelsActiveThread(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"

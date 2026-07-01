@@ -60,6 +60,19 @@ type ServerOptions struct {
 	SessionStoreDir string
 }
 
+type ServerSettings struct {
+	ProviderAuth    config.ProviderAuthSnapshot
+	ProviderBinding config.ProviderBinding
+	Profile         config.ProfileSelection
+	Runtime         config.RuntimeLimits
+	ToolPolicy      config.ToolPolicySettings
+	MCP             config.MCPSettings
+	Hooks           config.HookSettings
+	Instructions    config.InstructionSettings
+	GatewayAddr     string
+	Auth            config.AuthSettings
+}
+
 type Session struct {
 	ID             string                  `json:"id"`
 	Created        time.Time               `json:"created"`
@@ -103,23 +116,47 @@ type runSettings struct {
 }
 
 func NewServer(cfg config.Config, prov provider.Provider, registry *tools.Registry) *Server {
-	return NewServerWithOptions(cfg, prov, registry, ServerOptions{})
+	return NewServerFromSettings(ServerSettingsFromConfig(cfg), prov, registry)
 }
 
 func NewServerWithOptions(cfg config.Config, prov provider.Provider, registry *tools.Registry, opts ServerOptions) *Server {
+	return NewServerWithOptionsFromSettings(ServerSettingsFromConfig(cfg), prov, registry, opts)
+}
+
+func ServerSettingsFromConfig(cfg config.Config) ServerSettings {
+	return ServerSettings{
+		ProviderAuth:    cfg.ProviderAuthSnapshot(),
+		ProviderBinding: cfg.ProviderBinding(),
+		Profile:         cfg.ProfileSelection(),
+		Runtime:         cfg.RuntimeLimits(),
+		ToolPolicy:      cfg.ToolPolicySettings(),
+		MCP:             cfg.MCPSettings(),
+		Hooks:           cfg.HookSettings(),
+		Instructions:    cfg.InstructionSettings(),
+		GatewayAddr:     cfg.GatewayAddr,
+		Auth:            cfg.AuthSettings(),
+	}
+}
+
+func NewServerFromSettings(settings ServerSettings, prov provider.Provider, registry *tools.Registry) *Server {
+	return NewServerWithOptionsFromSettings(settings, prov, registry, ServerOptions{})
+}
+
+func NewServerWithOptionsFromSettings(settings ServerSettings, prov provider.Provider, registry *tools.Registry, opts ServerOptions) *Server {
+	settings = cloneServerSettings(settings)
 	s := &Server{
-		providerAuth:    cfg.ProviderAuthSnapshot(),
-		providerBinding: cfg.ProviderBinding(),
-		profile:         cfg.ProfileSelection(),
-		runtime:         cfg.RuntimeLimits(),
-		toolPolicy:      cfg.ToolPolicySettings(),
-		mcpSettings:     cfg.MCPSettings(),
-		hookSettings:    cfg.HookSettings(),
-		instructions:    cfg.InstructionSettings(),
-		gatewayAddr:     cfg.GatewayAddr,
-		agent:           agent.NewFromSettings(agent.SettingsFromConfig(cfg), prov, registry),
+		providerAuth:    settings.ProviderAuth,
+		providerBinding: settings.ProviderBinding,
+		profile:         settings.Profile,
+		runtime:         settings.Runtime,
+		toolPolicy:      settings.ToolPolicy,
+		mcpSettings:     settings.MCP,
+		hookSettings:    settings.Hooks,
+		instructions:    settings.Instructions,
+		gatewayAddr:     settings.GatewayAddr,
+		agent:           agent.NewFromSettings(agentSettingsFromServerSettings(settings), prov, registry),
 		registry:        registry,
-		auth:            credentials.NewManagerFromAuthSettings(cfg.AuthSettings()),
+		auth:            credentials.NewManagerFromAuthSettings(settings.Auth),
 		mux:             http.NewServeMux(),
 		sessions:        map[string]*Session{},
 	}
@@ -138,6 +175,37 @@ func NewServerWithOptions(cfg config.Config, prov provider.Provider, registry *t
 	s.authToken = opts.AuthToken
 	s.routes()
 	return s
+}
+
+func agentSettingsFromServerSettings(settings ServerSettings) agent.Settings {
+	return agent.Settings{
+		ProviderBinding: settings.ProviderBinding,
+		Profile:         settings.Profile,
+		Runtime:         settings.Runtime,
+		ToolPolicy:      settings.ToolPolicy,
+		MCP:             settings.MCP,
+		Hooks:           settings.Hooks,
+		Instructions:    settings.Instructions,
+	}
+}
+
+func cloneServerSettings(settings ServerSettings) ServerSettings {
+	settings.ToolPolicy.WorkspaceRoots = append([]string(nil), settings.ToolPolicy.WorkspaceRoots...)
+	settings.ToolPolicy.ProjectDocFallbacks = append([]string(nil), settings.ToolPolicy.ProjectDocFallbacks...)
+	settings.MCP = config.Config{
+		MCPEnabled:        settings.MCP.Enabled,
+		MCPConfigFiles:    settings.MCP.ConfigFiles,
+		MCPAllowedServers: settings.MCP.AllowedServers,
+		MCPServers:        settings.MCP.Servers,
+	}.MCPSettings()
+	settings.Hooks = config.Config{
+		HooksEnabled:    settings.Hooks.Enabled,
+		HookConfigFiles: settings.Hooks.ConfigFiles,
+		Hooks:           settings.Hooks.Hooks,
+	}.HookSettings()
+	settings.Instructions.WorkspaceRoots = append([]string(nil), settings.Instructions.WorkspaceRoots...)
+	settings.Instructions.ProjectDocFallbacks = append([]string(nil), settings.Instructions.ProjectDocFallbacks...)
+	return settings
 }
 
 func DefaultSessionStoreDir() string {

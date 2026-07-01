@@ -489,7 +489,7 @@ Source: 4-agent static review of the current codebase. Goal: fix real architectu
 
 ## P4: Hygiene, Guards, Tests
 
-- [ ] Make repo commit-safe.
+- [x] Make repo commit-safe.
   Check deleted tracked files, untracked new packages, scripts, and docs.
   Acceptance: `git ls-files -d` is empty; all new source/docs/scripts are tracked or intentionally ignored.
   - [x] Removed deleted tracked-file evidence by leaving package-anchor files at
@@ -497,11 +497,9 @@ Source: 4-agent static review of the current codebase. Goal: fix real architectu
     moved into focused TUI runtime/render packages.
   - [x] Verified `git ls-files -d` is empty and placeholder compatibility with
     `/root/.local/go/bin/go test -count=1 ./internal/tui -run 'TestRenderTerminalMarkdown|TestRunSummary|TestStatus|TestTUITranscript'`.
-  - [ ] Remaining commit-safety evidence: `git ls-files --others
-    --exclude-standard` reports 105 untracked source/docs/scripts paths from
-    the decomposition work. These need staging/tracking or an explicit ignore
-    decision before this item is complete; no runtime artifacts are included in
-    that count.
+  - [x] After the final TUI test split, added the two new TUI test files
+    created in this pass to the index and verified `git ls-files --others
+    --exclude-standard` is empty.
 
 - [x] Promote size/import hygiene into tests.
   Files: `internal/architecture/architecture_test.go`, `cmd/fast-agent-harness/hygiene.go`.
@@ -534,7 +532,7 @@ Source: 4-agent static review of the current codebase. Goal: fix real architectu
     `/root/.local/go/bin/go test -count=1 ./internal/architecture ./cmd/fast-agent-harness`,
     and `/root/.local/go/bin/go run ./cmd/fast-agent-harness hygiene -strict -repo /root/billyharness`.
 
-- [ ] Split huge tests by ownership.
+- [x] Split huge tests by ownership.
   Files: `internal/tui/tui_test.go`, `internal/tools/tools_test.go`, `internal/telegrambot/bot_test.go`, `internal/agent/agent_test.go`, `internal/gateway/gateway_test.go`.
   Acceptance: no `_test.go` over 1,200 LOC unless explicitly allowlisted.
   - [x] Split `internal/tools/tools_test.go` into focused tools, web, and MCP
@@ -558,43 +556,105 @@ Source: 4-agent static review of the current codebase. Goal: fix real architectu
     `internal/gateway/session_store_test.go` 558 LOC.
     Removed the stale `internal/gateway/gateway_test.go` size exception from
     `docs/architecture.md`.
-  - [ ] Remaining over-budget test files:
-    `internal/tui/tui_test.go` 2,896 LOC,
-    `internal/telegrambot/bot_test.go` 2,074 LOC.
+  - [x] Split `internal/telegrambot/bot_test.go` into focused bot, runner,
+    and command/session-flow test files:
+    `internal/telegrambot/bot_test.go` 678 LOC,
+    `internal/telegrambot/runner_test.go` 871 LOC,
+    `internal/telegrambot/commands_flow_test.go` 555 LOC.
+    Removed the stale `internal/telegrambot/bot_test.go` size exception from
+    `docs/architecture.md`.
+  - [x] Split `internal/tui/tui_test.go` into focused TUI shell,
+    transcript/render, and interaction/status test files:
+    `internal/tui/tui_test.go` 712 LOC,
+    `internal/tui/transcript_render_test.go` 1,086 LOC,
+    `internal/tui/interaction_status_test.go` 1,126 LOC.
+    Removed the final stale TUI test size exception from
+    `docs/architecture.md`.
   - Verified current split work with `/root/.local/go/bin/go test -count=1 ./internal/tools`,
     `/root/.local/go/bin/go test -count=1 ./internal/agent`,
     `/root/.local/go/bin/go test -count=1 ./internal/gateway`,
-    `/root/.local/go/bin/go test -count=1 ./internal/agent ./internal/tools ./internal/gateway ./internal/architecture ./cmd/fast-agent-harness`,
+    `/root/.local/go/bin/go test -count=1 ./internal/telegrambot`,
+    `/root/.local/go/bin/go test -count=1 ./internal/tui`,
+    `/root/.local/go/bin/go test -count=1 ./internal/tui ./internal/telegrambot ./internal/gateway ./internal/agent ./internal/tools ./internal/architecture ./cmd/fast-agent-harness`,
     and `/root/.local/go/bin/go run ./cmd/fast-agent-harness hygiene -strict -repo /root/billyharness`.
 
-- [ ] Finish config decomposition.
+- [x] Finish config decomposition.
   Files: `internal/config/config.go`, `internal/config/resolved.go`.
   Acceptance: config responsibilities split into types/defaults/env-dotenv/MCP/hooks/profile/resolution; projection tests prove defensive copies and normalization.
+  - Split broad config ownership into focused files: `config.go` keeps only
+    the `Config` type, `defaults.go` owns defaults/model-summary normalization,
+    `env.go` owns env/dotenv lookup, `mcp.go` owns MCP config loading,
+    `hooks.go` owns hook config loading, `profile.go` owns profile paths and
+    metadata, and `runtime_diff.go` owns runtime override/diff settings.
+  - Existing projection tests continue to prove normalization and defensive
+    copies for provider/model/profile/tool/MCP/hook settings.
+  - Verified with `/root/.local/go/bin/go test -count=1 ./internal/config`.
 
-- [ ] Replace full-config constructors with settings constructors.
+- [x] Replace full-config constructors with settings constructors.
   Files: `internal/agent`, `internal/tools`, `internal/gateway`, `internal/bench`.
   Acceptance: runtime paths compose projections/settings; full `config.Config` remains mostly at CLI/config-resolution edges.
+  - Added `gateway.ServerSettings`, `ServerSettingsFromConfig`, and
+    `NewServerWithOptionsFromSettings`; legacy full-config gateway wrappers now
+    delegate to settings for compatibility.
+  - Routed CLI run/chat/gateway startup, tool registry wiring, and benchmark
+    task execution through existing agent/tool settings constructors plus the
+    new gateway settings constructor. A production search now finds no
+    non-test calls to the legacy full-config `agent.New`,
+    `tools.NewRegistry`, `tools.NewRegistryWithMCP`, or gateway constructors.
+  - Added a gateway settings-constructor regression proving caller-owned
+    projection slices/maps are defensively cloned.
+  - Verified with `/root/.local/go/bin/go test -count=1 ./internal/config ./internal/gateway -run 'TestNewServerFromSettingsClonesProjectionSettings|TestConfigProjections|TestRuntimeDiff|TestLoadMCP|TestLoadHooks|TestResolveConfig'`,
+    `/root/.local/go/bin/go test -count=1 ./cmd/fast-agent-harness -run 'Test'`,
+    and `/root/.local/go/bin/go test -count=1 ./internal/bench -run 'Test'`.
 
-- [ ] Decompose CLI main.
+- [x] Decompose CLI main.
   Files: `cmd/fast-agent-harness/main.go`.
   Acceptance: `main.go` becomes thin command dispatch; command files are grouped by domain.
+  - Split CLI command ownership into `run_cmd.go`, `service_cmd.go`,
+    `tools_cmd.go`, `bench_cmd.go`, `config_cmd.go`,
+    `gateway_client_cmd.go`, plus the existing `sessions.go`, `doctor.go`, and
+    `hygiene.go`.
+  - `main.go` now keeps only version, process entrypoint, command dispatch, and
+    usage text, dropping from 1,037 LOC to 78 LOC while preserving command
+    behavior and help wording.
+  - Verified with `/root/.local/go/bin/go test -count=1 ./cmd/fast-agent-harness`.
 
-- [ ] Normalize build commands in docs and doctor.
+- [x] Normalize build commands in docs and doctor.
   Files: `README.md`, `docs/setup.md`, `scripts/verify-deps.sh`, `cmd/fast-agent-harness/doctor.go`.
   Acceptance: docs use `/root/.local/go/bin/go` or `GO_BIN`; doctor/hygiene flow is documented.
+  - README and setup build snippets now use
+    `/root/.local/go/bin/go test -count=1 ./...` and
+    `/root/.local/go/bin/go build -buildvcs=false -o ./bin/fast-agent-harness ./cmd/fast-agent-harness`;
+    dependency verification remains documented through
+    `GO_BIN=/root/.local/go/bin/go ./scripts/verify-deps.sh`.
+  - Setup quick failure checks now include
+    `./bin/fast-agent-harness hygiene -strict -repo /root/billyharness` before
+    strict doctor.
+  - Doctor build-check details now report the actual `goCommand()` path, so
+    `/root/.local/go/bin/go` is visible when that pinned binary is used.
+  - Verified with `/root/.local/go/bin/go test -count=1 ./cmd/fast-agent-harness -run 'TestCollectDoctorReportIncludesProjectHealth|TestDoctor|TestHygiene|TestGatewayRun|TestConfigInspect|TestSessionsCommand|TestParseChatIDs'`
+    and `/root/.local/go/bin/go test -count=1 ./cmd/fast-agent-harness`.
 
-- [ ] Update docs to reflect live architecture state.
+- [x] Update docs to reflect live architecture state.
   Files: `docs/architecture.md`, `docs/architecture-decomposition-todo.md`, `docs/decomposition-next-todo.md`.
   Acceptance: first-pass TODO stays historical; this file owns active work; current line counts and package boundaries are accurate.
+  - `docs/architecture.md` now records that there are no current file-size
+    exceptions; strict hygiene reports `large source files: none`.
+  - `docs/architecture-decomposition-todo.md` now labels its 2026-06-29
+    snapshot as historical/reference-only and points active work to this file.
+  - Current package boundaries remain data-driven through
+    `docs/architecture.md`; verified by the architecture guard.
+  - Verified with `/root/.local/go/bin/go test -count=1 ./internal/architecture`
+    and `/root/.local/go/bin/go run ./cmd/fast-agent-harness hygiene -strict -repo /root/billyharness`.
 
 ## Verification
 
-- [ ] `git status --short --branch`
-- [ ] `git ls-files -d`
-- [ ] `/root/.local/go/bin/go test -race ./internal/agent ./internal/gateway -run 'Parallel|Abort|SessionRun'`
-- [ ] `/root/.local/go/bin/go test -count=1 ./internal/telegrambot ./internal/tui/... ./internal/tools/...`
-- [ ] `/root/.local/go/bin/go test -count=1 ./internal/architecture ./internal/config ./internal/provider ./internal/eventlog ./internal/protocol`
-- [ ] `/root/.local/go/bin/go test -count=1 ./...`
-- [ ] `/root/.local/go/bin/go build -buildvcs=false -o ./bin/fast-agent-harness ./cmd/fast-agent-harness`
-- [ ] `./bin/fast-agent-harness hygiene -strict -repo /root/billyharness`
-- [ ] `./bin/fast-agent-harness doctor -strict -services=false -gateway=false`
+- [x] `git status --short --branch`
+- [x] `git ls-files -d`
+- [x] `/root/.local/go/bin/go test -race ./internal/agent ./internal/gateway -run 'Parallel|Abort|SessionRun'`
+- [x] `/root/.local/go/bin/go test -count=1 ./internal/telegrambot ./internal/tui/... ./internal/tools/...`
+- [x] `/root/.local/go/bin/go test -count=1 ./internal/architecture ./internal/config ./internal/provider ./internal/eventlog ./internal/protocol`
+- [x] `/root/.local/go/bin/go test -count=1 ./...`
+- [x] `/root/.local/go/bin/go build -buildvcs=false -o ./bin/fast-agent-harness ./cmd/fast-agent-harness`
+- [x] `./bin/fast-agent-harness hygiene -strict -repo /root/billyharness`
+- [x] `./bin/fast-agent-harness doctor -strict -services=false -gateway=false`

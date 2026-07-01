@@ -6,7 +6,7 @@
 cd /root/billyharness
 GO_BIN=/root/.local/go/bin/go ./scripts/verify-deps.sh
 /root/.local/go/bin/go test -count=1 ./...
-/root/.local/go/bin/go build -o ./bin/fast-agent-harness ./cmd/fast-agent-harness
+/root/.local/go/bin/go build -buildvcs=false -o ./bin/fast-agent-harness ./cmd/fast-agent-harness
 ```
 
 ## Gateway
@@ -148,6 +148,7 @@ journalctl -b -u billyharness-telegram.service --no-pager
 ```sh
 cd /root/billyharness
 git status --short
+./bin/fast-agent-harness hygiene -strict -repo /root/billyharness
 ./bin/fast-agent-harness doctor -strict
 curl -fsS http://127.0.0.1:8765/health
 ./bin/fast-agent-harness sessions list

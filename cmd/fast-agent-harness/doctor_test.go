@@ -99,6 +99,11 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	assertDoctorCheck(t, report, "service billyharness-gateway.service", "ok")
 	assertDoctorCheck(t, report, "service billyharness-telegram.service", "ok")
 	assertDoctorCheck(t, report, "gateway /health", "skip")
+	for _, check := range report.Checks {
+		if check.Name == "build check" && !strings.HasPrefix(check.Detail, goCommand()+" test -run '^$'") {
+			t.Fatalf("build check detail = %q", check.Detail)
+		}
+	}
 
 	var buf bytes.Buffer
 	printDoctorReport(&buf, report)

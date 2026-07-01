@@ -18,9 +18,9 @@ Work protocol for runtime changes:
 
 1. Map the change to a checkbox in the master TODO.
 2. Add or update focused tests.
-3. Run the relevant package tests, then `go test -count=1 ./...` for broad runtime changes.
+3. Run the relevant package tests, then `/root/.local/go/bin/go test -count=1 ./...` for broad runtime changes.
 4. Run `GO_BIN=/root/.local/go/bin/go ./scripts/verify-deps.sh` when `go.mod` or `go.sum` changes.
-5. Rebuild `bin/fast-agent-harness` when CLI, gateway, agent, provider, tool, TUI, or Telegram code changes.
+5. Rebuild with `/root/.local/go/bin/go build -buildvcs=false -o ./bin/fast-agent-harness ./cmd/fast-agent-harness` when CLI, gateway, agent, provider, tool, TUI, or Telegram code changes.
 6. Restart `billyharness-gateway.service` and `billyharness-telegram.service` when deployed runtime behavior changes.
 7. Commit and push coherent verified slices.
 
@@ -43,8 +43,8 @@ For a non-failing local snapshot while editing, disable active checks:
 ## Quick start
 
 ```bash
-go test ./...
-go build -buildvcs=false -o bin/fast-agent-harness ./cmd/fast-agent-harness
+/root/.local/go/bin/go test -count=1 ./...
+/root/.local/go/bin/go build -buildvcs=false -o ./bin/fast-agent-harness ./cmd/fast-agent-harness
 setsid ./bin/fast-agent-harness > gateway.log 2>&1 < /dev/null &
 ./bin/fast-agent-harness tui
 ```
