@@ -418,6 +418,162 @@ DEEPSEEK_API_KEY=sk-secret-should-not-appear
 	}
 }
 
+func TestProjectConfigDenylistBlocksProviderAuthOverrides(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(`
+base_url = "https://trusted.deepseek.example"
+api_key_env = "TRUSTED_DEEPSEEK_KEY"
+credential_file = "/trusted/credentials.json"
+codex_base_url = "https://trusted.codex.example"
+codex_auth_file = "/trusted/codex.json"
+codex_refresh_url = "https://trusted.refresh.example/token"
+codex_auth_api_base_url = "https://trusted.auth.example/api"
+codex_client_id = "trusted-client"
+codex_originator = "trusted-originator"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	projectConfigDir := filepath.Join(project, ".billyharness")
+	if err := os.MkdirAll(projectConfigDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	projectConfigPath := filepath.Join(projectConfigDir, "config.toml")
+	if err := os.WriteFile(projectConfigPath, []byte(`
+base_url = "https://project.deepseek.invalid"
+api_key_env = "PROJECT_DEEPSEEK_KEY"
+credential_file = "/project/credentials.json"
+codex_base_url = "https://project.codex.invalid"
+codex_auth_file = "/project/codex.json"
+codex_refresh_url = "https://project.refresh.invalid/token"
+codex_auth_api_base_url = "https://project.auth.invalid/api"
+codex_client_id = "project-client"
+codex_originator = "project-originator"
+max_tool_rounds = 77
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+	if err := os.Chdir(project); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := resolved.Config
+	if cfg.BaseURL != "https://trusted.deepseek.example" ||
+		cfg.APIKeyEnv != "TRUSTED_DEEPSEEK_KEY" ||
+		cfg.CredentialFile != "/trusted/credentials.json" ||
+		cfg.CodexBaseURL != "https://trusted.codex.example" ||
+		cfg.CodexAuthFile != "/trusted/codex.json" ||
+		cfg.CodexRefreshURL != "https://trusted.refresh.example/token" ||
+		cfg.CodexAuthAPIBaseURL != "https://trusted.auth.example/api" ||
+		cfg.CodexClientID != "trusted-client" ||
+		cfg.CodexOriginator != "trusted-originator" {
+		t.Fatalf("project config changed provider/auth authority: %#v", cfg)
+	}
+	if cfg.MaxToolRounds != 77 {
+		t.Fatalf("non-sensitive project runtime setting was not applied: %d", cfg.MaxToolRounds)
+	}
+	for _, key := range []string{
+		"base_url",
+		"api_key_env",
+		"credential_file",
+		"codex_base_url",
+		"codex_auth_file",
+		"codex_refresh_url",
+		"codex_auth_api_base_url",
+		"codex_client_id",
+		"codex_originator",
+	} {
+		assertResolvedSource(t, resolved, key, SourceHomeConfig, key)
+		if !hasWarning(resolved.Warnings, `project config key "`+key+`"`, projectConfigPath) {
+			t.Fatalf("missing project denylist warning for %s in %#v", key, resolved.Warnings)
+		}
+	}
+	assertResolvedSource(t, resolved, "max_tool_rounds", SourceProject, "max_tool_rounds")
+}
+
+func TestProjectConfigDenylistAllowsTrustedRuntimeOverrides(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	t.Setenv("DEEPSEEK_BASE_URL", "https://env.deepseek.example")
+	projectConfigDir := filepath.Join(project, ".billyharness")
+	if err := os.MkdirAll(projectConfigDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectConfigDir, "config.toml"), []byte(`
+base_url = "https://project.deepseek.invalid"
+credential_file = "/project/credentials.json"
+codex_auth_file = "/project/codex.json"
+max_tool_rounds = 77
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+	if err := os.Chdir(project); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := Resolve(
+		ResolveOverride{Key: "credential_file", Value: "/gateway/credentials.json", Source: SourceGateway, SourceKey: "credential_file"},
+		ResolveOverride{Key: "codex_auth_file", Value: "/cli/codex.json", Source: SourceCLI, SourceKey: "-codex-auth-file"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Config.BaseURL != "https://env.deepseek.example" ||
+		resolved.Config.CredentialFile != "/gateway/credentials.json" ||
+		resolved.Config.CodexAuthFile != "/cli/codex.json" ||
+		resolved.Config.MaxToolRounds != 77 {
+		t.Fatalf("resolved config = %#v", resolved.Config)
+	}
+	binding := resolved.Config.ProviderBinding()
+	if binding.Provider.BaseURL != "https://env.deepseek.example" ||
+		binding.Auth.CredentialFile != "/gateway/credentials.json" ||
+		binding.Auth.CodexAuthFile != "/cli/codex.json" {
+		t.Fatalf("provider binding = %#v", binding)
+	}
+	assertResolvedSource(t, resolved, "base_url", SourceEnvironment, "DEEPSEEK_BASE_URL")
+	assertResolvedSource(t, resolved, "credential_file", SourceGateway, "credential_file")
+	assertResolvedSource(t, resolved, "codex_auth_file", SourceCLI, "-codex-auth-file")
+}
+
+func TestResolveProviderBindingWarnsWhenExplicitProviderConflictsWithModelRouting(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	t.Setenv("FAST_AGENT_PROVIDER", "deepseek")
+	t.Setenv("FAST_AGENT_MODEL", "gpt-5.5")
+
+	resolved, err := Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Config.Provider != "openai-codex" || resolved.Config.Model != "gpt-5.5" {
+		t.Fatalf("resolved provider/model = %q/%q", resolved.Config.Provider, resolved.Config.Model)
+	}
+	value, ok := resolved.Value("provider")
+	if !ok || value.Source != SourceDerived || !strings.Contains(value.Warning, `provider "deepseek"`) {
+		t.Fatalf("provider value = %#v", value)
+	}
+	if !hasWarning(resolved.Warnings, `provider "deepseek" from environment ignored`, `model "gpt-5.5" routes to "openai-codex"`) {
+		t.Fatalf("missing provider conflict warning: %#v", resolved.Warnings)
+	}
+}
+
 func assertResolvedSource(t *testing.T, resolved ResolvedConfig, key, source, sourceKey string) {
 	t.Helper()
 	value, ok := resolved.Value(key)
@@ -427,6 +583,22 @@ func assertResolvedSource(t *testing.T, resolved ResolvedConfig, key, source, so
 	if value.Source != source || value.SourceKey != sourceKey {
 		t.Fatalf("%s source = %q/%q, want %q/%q; value=%#v", key, value.Source, value.SourceKey, source, sourceKey, value)
 	}
+}
+
+func hasWarning(warnings []string, parts ...string) bool {
+	for _, warning := range warnings {
+		matched := true
+		for _, part := range parts {
+			if !strings.Contains(warning, part) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
 }
 
 func TestLoadMCPServersParsesCodexStyleTOML(t *testing.T) {

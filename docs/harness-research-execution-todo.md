@@ -378,11 +378,28 @@ Milestone 1 final verification:
 
 Goal: add rollback and compact display invariants before expanding edit power.
 
-- [ ] HR-02.1 Provider binding denylist and auth-source discipline.
+- [x] HR-02.1 Provider binding denylist and auth-source discipline.
   - maps to: `competitive-improvements-todo.md` P0-6.
   - acceptance: project config cannot redirect secrets or mix Codex/DeepSeek
     credential paths.
   - verification: `go test -count=1 ./internal/config ./internal/provider ./internal/credentials ./internal/codexauth ./internal/modelinfo`.
+  - status: completed 2026-07-01.
+  - evidence: project `.billyharness/config.toml` now ignores provider/auth
+    authority keys for DeepSeek and Codex routing, including base URLs,
+    API-key env names, credential files, Codex auth files, refresh/auth URLs,
+    client ids, and originator metadata, while still allowing non-sensitive
+    runtime preferences. Environment, CLI, and gateway overrides remain trusted
+    sources for those keys. Provider/model conflicts now resolve through the
+    existing model-routing rule with an explicit warning, and provider
+    construction tests prove DeepSeek and Codex credential paths stay isolated.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*Denylist.*|Test.*ProviderBinding.*|Test.*Credentials.*' -count=1
+    ./internal/config ./internal/provider ./internal/credentials` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/config
+    ./internal/provider ./internal/credentials ./internal/codexauth
+    ./internal/modelinfo` passed.
+  - commit: pending.
 
 - [ ] HR-02.2 Turn-scoped checkpoints, diff, preview, and undo.
   - maps to: `competitive-improvements-todo.md` A2.

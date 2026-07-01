@@ -144,6 +144,74 @@ func TestNewFromBindingDeepSeekProviderUsesProjection(t *testing.T) {
 	}
 }
 
+func TestNewFromBindingDeepSeekCredentialsIgnoreCodexAuthPath(t *testing.T) {
+	t.Setenv("ISOLATED_DEEPSEEK_KEY", "sk-isolated-value")
+	t.Setenv("CODEX_ACCESS_TOKEN", "")
+
+	prov, err := NewFromBinding(config.ProviderBinding{
+		Provider: config.ProviderSelection{
+			Provider: "deepseek",
+			BaseURL:  "https://api.deepseek.example",
+		},
+		Model: config.ModelSelection{
+			Model: "deepseek-v4-flash",
+		},
+		Auth: config.AuthSettings{
+			APIKeyEnv:       "ISOLATED_DEEPSEEK_KEY",
+			CodexAuthFile:   filepath.Join(t.TempDir(), "missing-codex.json"),
+			CodexRefreshURL: "https://auth.invalid/token",
+			CodexClientID:   "codex-client",
+		},
+		Limits: config.RuntimeLimits{
+			RequestTimeout:    time.Second,
+			StreamIdleTimeout: time.Second,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := prov.(*DeepSeek); !ok {
+		t.Fatalf("provider = %T, want *DeepSeek", prov)
+	}
+}
+
+func TestNewFromBindingCodexIgnoresDeepSeekCredentials(t *testing.T) {
+	t.Setenv("CODEX_ACCESS_TOKEN", "codex-env-token")
+	t.Setenv("MISSING_DEEPSEEK_KEY", "")
+
+	prov, err := NewFromBinding(config.ProviderBinding{
+		Provider: config.ProviderSelection{
+			Provider:     "deepseek",
+			BaseURL:      "https://api.deepseek.invalid",
+			CodexBaseURL: "https://codex.example/backend",
+		},
+		Model: config.ModelSelection{
+			Model: "gpt-5.5",
+		},
+		Auth: config.AuthSettings{
+			APIKeyEnv:       "MISSING_DEEPSEEK_KEY",
+			CodexAuthFile:   filepath.Join(t.TempDir(), "missing-codex.json"),
+			CodexRefreshURL: "https://auth.example/token",
+			CodexClientID:   "codex-client",
+			CodexOriginator: "test-originator",
+		},
+		Limits: config.RuntimeLimits{
+			RequestTimeout:    time.Second,
+			StreamIdleTimeout: time.Second,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	codex, ok := prov.(*Codex)
+	if !ok {
+		t.Fatalf("provider = %T, want *Codex", prov)
+	}
+	if codex.BaseURL != "https://codex.example/backend" || codex.Auth.AccessToken != "codex-env-token" {
+		t.Fatalf("codex provider = %#v", codex)
+	}
+}
+
 func TestProviderStreamRunnerClosesEventsBeforeErrs(t *testing.T) {
 	events := make(chan Event)
 	errs := make(chan error)

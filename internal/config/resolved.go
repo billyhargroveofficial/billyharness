@@ -298,6 +298,10 @@ func (s *resolveState) applyTOML(path, source string) error {
 			s.warn(fmt.Sprintf("unknown config key %q in %s", key, path))
 			continue
 		}
+		if source == SourceProject && projectConfigDeniedKey(normalized) {
+			s.warn(fmt.Sprintf("project config key %q in %s ignored: provider/auth routing must be configured from home config, environment, CLI, or gateway override", key, path))
+			continue
+		}
 		s.applyValue(normalized, value, source, path, key)
 	}
 	return nil
@@ -468,12 +472,19 @@ func (s *resolveState) applyValue(key string, value any, source, sourcePath, sou
 func (s *resolveState) finalizeDerivedValues() {
 	beforeProvider := s.cfg.Provider
 	beforeModel := s.cfg.Model
+	providerValue, providerValueOK := s.values["provider"]
+	explicitProvider := providerValueOK && isExplicitProviderSource(providerValue.Source)
 	s.cfg.ApplyModelProviderDefaults()
 	if s.cfg.Model != beforeModel {
 		s.record("model", s.cfg.Model, SourceDerived, "", "model alias", false, "normalized from "+beforeModel, "")
 	}
 	if s.cfg.Provider != beforeProvider {
-		s.record("provider", s.cfg.Provider, SourceDerived, "", "model", false, "derived from model "+s.cfg.Model, "")
+		warning := "derived from model " + s.cfg.Model
+		if explicitProvider && strings.TrimSpace(beforeProvider) != "" {
+			warning = fmt.Sprintf("provider %q from %s ignored because model %q routes to %q", beforeProvider, providerValue.Source, s.cfg.Model, s.cfg.Provider)
+			s.warn(warning)
+		}
+		s.record("provider", s.cfg.Provider, SourceDerived, "", "model", false, warning, "")
 	}
 	beforeWebProvider := s.cfg.WebSummaryProvider
 	beforeWebModel := s.cfg.WebSummaryModel
@@ -508,6 +519,32 @@ func (s *resolveState) finalizeDerivedValues() {
 		if _, ok := s.values[spec.Key]; !ok {
 			s.record(spec.Key, displayConfigValue(spec.get(s.cfg)), SourceDerived, "", spec.Key, spec.Redacted, "", "")
 		}
+	}
+}
+
+func projectConfigDeniedKey(key string) bool {
+	switch normalizeConfigKey(key) {
+	case "base_url",
+		"api_key_env",
+		"credential_file",
+		"codex_base_url",
+		"codex_auth_file",
+		"codex_refresh_url",
+		"codex_auth_api_base_url",
+		"codex_client_id",
+		"codex_originator":
+		return true
+	default:
+		return false
+	}
+}
+
+func isExplicitProviderSource(source string) bool {
+	switch source {
+	case SourceHomeConfig, SourceProject, SourceDotenv, SourceEnvironment, SourceCLI, SourceGateway, SourceProfile:
+		return true
+	default:
+		return false
 	}
 }
 
