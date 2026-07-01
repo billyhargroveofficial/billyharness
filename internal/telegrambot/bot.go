@@ -35,6 +35,7 @@ type Bot struct {
 	client  *Client
 	harness Harness
 	store   Store
+	admit   telegramAdmissionStore
 	state   State
 
 	mu       sync.Mutex
@@ -82,6 +83,7 @@ func New(opts Options, client *Client, harness Harness) (*Bot, error) {
 		client:   client,
 		harness:  harness,
 		store:    store,
+		admit:    newTelegramAdmissionStore(opts.StatePath),
 		state:    state,
 		chatMux:  map[string]*sync.Mutex{},
 		cancel:   map[string]context.CancelFunc{},

@@ -50,16 +50,24 @@ Older state files used only `chat_id[:message_thread_id]`. Billyharness still re
 
 ## Update Admission Durability
 
-Telegram polling is currently at-most-once. For each update returned by
-`getUpdates`, Billyharness persists the next offset before launching message
-handling. If the process exits after the offset is saved but before that handler
-creates/updates the gateway session, the Telegram update will not be replayed on
-restart. Once a handler reaches gateway/session state writes, those writes are
-durable through the normal gateway and Telegram state stores.
+Telegram prompts are durably admitted before Billyharness advances the Telegram
+offset. For each non-command text update, the bot resolves or creates the
+gateway session, admits the prompt to `/v1/sessions/{id}/inputs` with a
+deterministic `input_id` such as `telegram-update-123`, appends local admission
+evidence to `*.admissions.jsonl`, and only then persists the next offset.
 
-This keeps polling simple and avoids duplicate command execution, but it is not
-a durable admission queue. Add a queued admission store before changing the bot
-to acknowledge updates after handling.
+If the process exits before offset persistence, Telegram can redeliver the
+update and the gateway admission remains idempotent. If the same update is
+already promoted, completed, or ambiguous, the bot acknowledges it without
+starting a duplicate run. If gateway admission fails, the offset is left
+unchanged so the update can be retried after restart.
+
+Empty, unsupported, and command updates are recorded as intentional ignores in
+the same local admission JSONL before their offset is advanced. A prompt that is
+admitted and acknowledged but crashes before execution remains visible as a
+pending input in `/status` and in the gateway session's `inputs.jsonl`; operator
+repair/retry of such inputs is deferred to the later input-inbox recovery
+extension.
 
 ## Commands
 

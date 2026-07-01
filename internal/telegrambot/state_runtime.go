@@ -57,6 +57,31 @@ func (b *Bot) setChatState(key string, state ChatState) {
 	}
 }
 
+func (b *Bot) clearPendingInput(key, inputID string) {
+	inputID = strings.TrimSpace(inputID)
+	if inputID == "" {
+		return
+	}
+	b.saveMu.Lock()
+	defer b.saveMu.Unlock()
+
+	b.mu.Lock()
+	state := b.state.Chats[key]
+	if state.PendingInputID != inputID {
+		b.mu.Unlock()
+		return
+	}
+	state.PendingInputID = ""
+	state.PendingUpdateID = 0
+	state.UpdatedAt = time.Now().UTC()
+	b.state.Chats[key] = state
+	snapshot := cloneState(b.state)
+	b.mu.Unlock()
+	if err := b.store.Save(snapshot); err != nil {
+		log.Printf("telegram state save: %v", err)
+	}
+}
+
 func (b *Bot) ackOffset(updateID int) {
 	b.saveMu.Lock()
 	defer b.saveMu.Unlock()
@@ -196,6 +221,29 @@ func messageUserID(msg Message) int64 {
 		return 0
 	}
 	return msg.From.ID
+}
+
+func telegramInputID(updateID int) string {
+	return "telegram-update-" + strconv.Itoa(updateID)
+}
+
+func telegramClientID(scope ChatScope) string {
+	return "telegram:" + scope.Key()
+}
+
+func telegramInputMetadata(updateID int, msg Message, scope ChatScope) map[string]string {
+	metadata := map[string]string{
+		"update_id":  strconv.Itoa(updateID),
+		"message_id": strconv.Itoa(msg.MessageID),
+		"chat_id":    strconv.FormatInt(scope.ChatID, 10),
+	}
+	if scope.ThreadID > 0 {
+		metadata["thread_id"] = strconv.Itoa(scope.ThreadID)
+	}
+	if scope.UserID > 0 {
+		metadata["user_id"] = strconv.FormatInt(scope.UserID, 10)
+	}
+	return metadata
 }
 
 func userChatKey(chatID int64, threadID int, userID int64) string {

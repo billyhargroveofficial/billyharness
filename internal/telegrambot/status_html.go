@@ -82,8 +82,19 @@ func StatusHTML(state ChatState, opts Options) string {
 		"agent turns: <code>" + esc(strconv.Itoa(state.AgentTurns)) + "</code>\n" +
 		"tools: <code>" + esc(strconv.Itoa(state.ToolCalls)) + "</code>\n" +
 		"event cursor: <code>" + esc(strconv.FormatInt(state.LastEventSeq, 10)) + "</code>\n" +
+		"pending input: <code>" + esc(statusPendingInput(state)) + "</code>\n" +
 		"context window: <code>" + esc(compactInt(opts.ContextWindow)) + "</code>\n" +
 		"send: <code>" + esc(fmt.Sprint(opts.SendEnabled && !opts.DryRunDefault)) + "</code>\n" +
 		"allowed chats: <code>" + esc(strings.Join(allowedChats, ",")) + "</code>\n" +
 		"allowed users: <code>" + esc(strings.Join(allowedUsers, ",")) + "</code>"
+}
+
+func statusPendingInput(state ChatState) string {
+	if strings.TrimSpace(state.PendingInputID) == "" {
+		return "none"
+	}
+	if state.PendingUpdateID > 0 {
+		return short(state.PendingInputID) + " update=" + strconv.Itoa(state.PendingUpdateID)
+	}
+	return short(state.PendingInputID)
 }

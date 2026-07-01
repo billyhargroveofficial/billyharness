@@ -12,7 +12,22 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
+type telegramPromptAdmission struct {
+	UpdateID   int
+	InputID    string
+	ClientID   string
+	InputSeq   int64
+	Response   gatewayapi.SessionInputResponse
+	State      ChatState
+	StateReady bool
+	SkipRun    bool
+}
+
 func (b *Bot) handleMessage(parent context.Context, msg Message) {
+	b.handleMessageWithAdmission(parent, msg, telegramPromptAdmission{})
+}
+
+func (b *Bot) handleMessageWithAdmission(parent context.Context, msg Message, admission telegramPromptAdmission) {
 	scope := messageChatScope(msg)
 	key := scope.Key()
 	if !b.allowed(msg) {
@@ -25,7 +40,10 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 		return
 	}
 	isCommand := strings.HasPrefix(text, "/")
-	inputSeq := b.interruptActiveRunForInput(msg, scope, isCommand)
+	inputSeq := admission.InputSeq
+	if inputSeq <= 0 {
+		inputSeq = b.interruptActiveRunForInput(msg, scope, isCommand)
+	}
 
 	mu := b.mutexFor(key)
 	mu.Lock()
@@ -33,6 +51,7 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 
 	if !isCommand && b.inputSuperseded(key, inputSeq) {
 		log.Printf("telegram dropped superseded queued message chat=%d key=%s seq=%d", msg.Chat.ID, key, inputSeq)
+		b.clearPendingInput(key, admission.InputID)
 		return
 	}
 	if isCommand {
@@ -45,16 +64,23 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 	defer cancel()
 	if b.inputSuperseded(key, inputSeq) {
 		log.Printf("telegram dropped superseded message before run chat=%d key=%s seq=%d", msg.Chat.ID, key, inputSeq)
+		b.clearPendingInput(key, admission.InputID)
 		return
 	}
 
-	state, err := b.resolveRunState(runCtx, msg, scope)
-	if err != nil {
-		_ = b.sendPlain(parent, msg, "Gateway session failed: "+err.Error())
-		return
+	state := admission.State
+	if !admission.StateReady {
+		var err error
+		state, err = b.resolveRunState(runCtx, msg, scope)
+		if err != nil {
+			_ = b.sendPlain(parent, msg, "Gateway session failed: "+err.Error())
+			return
+		}
 	}
 
 	runReq := gatewayapi.RunRequest{
+		InputID:         admission.InputID,
+		ClientID:        admission.ClientID,
 		Prompt:          text,
 		Model:           state.Model,
 		Profile:         state.Profile,
@@ -75,6 +101,7 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 	}
 	if b.inputSuperseded(key, inputSeq) {
 		log.Printf("telegram dropped superseded message after replay catch-up chat=%d key=%s seq=%d", msg.Chat.ID, key, inputSeq)
+		b.clearPendingInput(key, admission.InputID)
 		return
 	}
 
@@ -119,6 +146,7 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 			state.UpdatedAt = time.Now().UTC()
 			b.setChatState(key, state)
 		}
+		b.clearPendingInput(key, admission.InputID)
 		if err := b.edit(parent, msg.Chat.ID, live.sent.MessageID, "Interrupted by newer message.", ""); err != nil {
 			log.Printf("telegram interrupted edit: %v", err)
 		}
@@ -145,8 +173,61 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 		state.UpdatedAt = time.Now().UTC()
 		b.setChatState(key, state)
 	}
+	b.clearPendingInput(key, admission.InputID)
 
 	b.deliverRunFinal(parent, msg, live, state)
+}
+
+func (b *Bot) admitTelegramPromptUpdate(ctx context.Context, update Update) (telegramPromptAdmission, error) {
+	if update.Message == nil {
+		return telegramPromptAdmission{}, fmt.Errorf("message required")
+	}
+	msg := *update.Message
+	scope := messageChatScope(msg)
+	key := scope.Key()
+	state, err := b.resolveRunState(ctx, msg, scope)
+	if err != nil {
+		return telegramPromptAdmission{}, err
+	}
+	inputID := telegramInputID(update.UpdateID)
+	clientID := telegramClientID(scope)
+	resp, err := b.harness.AdmitSessionInput(ctx, state.SessionID, gatewayapi.SessionInputRequest{
+		InputID:         inputID,
+		Prompt:          strings.TrimSpace(msg.Text),
+		InterruptPolicy: gatewayapi.InterruptPolicyInterrupt,
+		ClientID:        clientID,
+		ClientType:      "telegram",
+		Metadata:        telegramInputMetadata(update.UpdateID, msg, scope),
+	})
+	if err != nil {
+		return telegramPromptAdmission{}, err
+	}
+	if strings.TrimSpace(resp.InputID) == "" {
+		resp.InputID = inputID
+	}
+	if err := b.admit.RecordAdmitted(update.UpdateID, msg, state.SessionID, resp); err != nil {
+		return telegramPromptAdmission{}, err
+	}
+	skipRun := resp.Duplicate && resp.State != "" && resp.State != "admitted"
+	if skipRun {
+		b.clearPendingInput(key, resp.InputID)
+	} else {
+		state.PendingInputID = resp.InputID
+		state.PendingUpdateID = update.UpdateID
+		state.UpdatedAt = time.Now().UTC()
+		b.setChatState(key, state)
+	}
+	log.Printf("telegram admitted update=%d chat=%d key=%s session=%s input=%s state=%s duplicate=%t skip_run=%t",
+		update.UpdateID, msg.Chat.ID, key, short(state.SessionID), resp.InputID, resp.State, resp.Duplicate, skipRun)
+	return telegramPromptAdmission{
+		UpdateID:   update.UpdateID,
+		InputID:    resp.InputID,
+		ClientID:   clientID,
+		Response:   resp,
+		State:      state,
+		StateReady: true,
+		SkipRun:    skipRun,
+	}, nil
 }
 
 func (b *Bot) runGatewaySessionWithRetry(ctx context.Context, msg Message, key string, state ChatState, runReq gatewayapi.RunRequest, emit func(protocol.Event), beforeRetry func(ChatState)) (ChatState, error) {

@@ -69,6 +69,8 @@ type ChatState struct {
 	AgentTurns      int       `json:"agent_turns,omitempty"`
 	ToolCalls       int       `json:"tool_calls,omitempty"`
 	LastEventSeq    int64     `json:"last_event_seq,omitempty"`
+	PendingInputID  string    `json:"pending_input_id,omitempty"`
+	PendingUpdateID int       `json:"pending_update_id,omitempty"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 

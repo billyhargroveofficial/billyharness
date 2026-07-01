@@ -19,6 +19,7 @@ import (
 
 type Harness interface {
 	CreateSession(context.Context, string) (string, error)
+	AdmitSessionInput(context.Context, string, gatewayapi.SessionInputRequest) (gatewayapi.SessionInputResponse, error)
 	ReplaySessionEvents(context.Context, string, int64, func(protocol.Event)) error
 	RunSession(context.Context, string, gatewayapi.RunRequest, func(protocol.Event)) error
 	CancelSession(context.Context, string) (bool, error)
@@ -68,6 +69,10 @@ func (c *GatewayClient) GetSession(ctx context.Context, sessionID string) (gatew
 
 func (c *GatewayClient) RunSession(ctx context.Context, sessionID string, run gatewayapi.RunRequest, emit func(protocol.Event)) error {
 	return c.gatewayClient().RunSession(ctx, sessionID, run, emit)
+}
+
+func (c *GatewayClient) AdmitSessionInput(ctx context.Context, sessionID string, input gatewayapi.SessionInputRequest) (gatewayapi.SessionInputResponse, error) {
+	return c.gatewayClient().AdmitSessionInput(ctx, sessionID, input)
 }
 
 func (c *GatewayClient) ReplaySessionEvents(ctx context.Context, sessionID string, afterSeq int64, emit func(protocol.Event)) error {

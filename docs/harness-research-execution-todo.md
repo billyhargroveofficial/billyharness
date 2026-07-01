@@ -167,7 +167,7 @@ adding more powerful tools.
     -count=1 ./internal/...` passed.
   - commit: pending.
 
-- [ ] HR-01.4 Telegram durable admission and offset safety.
+- [x] HR-01.4 Telegram durable admission and offset safety.
   - maps to: `competitive-improvements-todo.md` B2.
   - target files: `internal/telegrambot/poller.go`,
     `internal/telegrambot/runner.go`,
@@ -179,6 +179,20 @@ adding more powerful tools.
     intentional ignore; duplicate updates do not duplicate runs; interrupt and
     supersede semantics remain intact.
   - verification: `go test -count=1 ./internal/telegrambot ./internal/gatewayclient`.
+  - status: completed 2026-07-01.
+  - evidence: Telegram prompt updates now resolve/create their gateway session,
+    admit deterministic `telegram-update-<id>` inputs through the gateway
+    input inbox, append local admission/ignore JSONL evidence, and only then
+    advance the Telegram offset. Duplicate promoted/completed/ambiguous inputs
+    are acknowledged without rerunning, pending admitted inputs are visible in
+    Telegram state/status, and admission failures leave the offset unchanged
+    for retry.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/telegrambot
+    ./internal/gatewayclient` passed; `/root/.local/go/bin/go test -run
+    'Test.*Telegram.*(Admission|Offset|Duplicate|Interrupt|Superseded).*'
+    -count=1 ./internal/telegrambot` passed.
+  - commit: pending.
 
 - [ ] HR-01.5 Slow-client run/event decoupling.
   - maps to: `competitive-improvements-todo.md` B3.

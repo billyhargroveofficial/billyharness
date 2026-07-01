@@ -97,6 +97,10 @@ func (h *blockingHarness) CreateSession(context.Context, string) (string, error)
 	return "session-1", nil
 }
 
+func (h *blockingHarness) AdmitSessionInput(_ context.Context, _ string, input gatewayapi.SessionInputRequest) (gatewayapi.SessionInputResponse, error) {
+	return gatewayapi.SessionInputResponse{InputID: fallback(input.InputID, "input-1"), State: "admitted", Seq: 1}, nil
+}
+
 func (h *blockingHarness) RunSession(ctx context.Context, _ string, _ gatewayapi.RunRequest, _ func(protocol.Event)) error {
 	h.startOnce.Do(func() { close(h.runStarted) })
 	<-ctx.Done()
@@ -139,6 +143,10 @@ func (h *blockingHarness) CancelSession(context.Context, string) (bool, error) {
 
 func (h *interruptHarness) CreateSession(context.Context, string) (string, error) {
 	return "session-1", nil
+}
+
+func (h *interruptHarness) AdmitSessionInput(_ context.Context, _ string, input gatewayapi.SessionInputRequest) (gatewayapi.SessionInputResponse, error) {
+	return gatewayapi.SessionInputResponse{InputID: fallback(input.InputID, "input-1"), State: "admitted", Seq: 1}, nil
 }
 
 func (h *interruptHarness) RunSession(ctx context.Context, _ string, req gatewayapi.RunRequest, emit func(protocol.Event)) error {
@@ -221,6 +229,10 @@ func (h *interruptHarness) CancelSession(context.Context, string) (bool, error) 
 
 func (h scriptedHarness) CreateSession(context.Context, string) (string, error) {
 	return "session-1", nil
+}
+
+func (h scriptedHarness) AdmitSessionInput(_ context.Context, _ string, input gatewayapi.SessionInputRequest) (gatewayapi.SessionInputResponse, error) {
+	return gatewayapi.SessionInputResponse{InputID: fallback(input.InputID, "input-1"), State: "admitted", Seq: 1}, nil
 }
 
 func (h scriptedHarness) RunSession(ctx context.Context, _ string, _ gatewayapi.RunRequest, emit func(protocol.Event)) error {
