@@ -54,13 +54,18 @@ Status markers:
 
 Goal: make the work reproducible before changing runtime behavior.
 
-- [ ] HR-00.1 Confirm current repo baseline.
+- [x] HR-00.1 Confirm current repo baseline.
   - source: current worktree and all source documents above.
   - target files: no required code files.
   - acceptance: `git status --short` is understood; unrelated dirty files are
     not reverted; current branch and upstream are known.
   - verification: `git status --short`, `git branch --show-current`,
     `git rev-parse --abbrev-ref --symbolic-full-name @{u}`.
+  - status: completed 2026-07-01.
+  - evidence: worktree clean; branch `main`; upstream `origin/main`; pushed
+    baseline commit `16e96a791a4f67d97d0a234ebf2a094ad6a88c2d`; `HEAD` matches
+    `@{u}`.
+  - commit: pending.
 
 - [ ] HR-00.2 Build an internal implementation plan from this file.
   - source: this TODO.
@@ -410,4 +415,3 @@ need.
 - Full milestone verification passes, or failures are documented with exact
   command output and next action.
 - No explicit non-goal has been introduced.
-
