@@ -274,6 +274,148 @@ func TestReadToolReturnsFullContentForAgentManagedOutput(t *testing.T) {
 	}
 }
 
+func TestFSReadLegacyPathReturnsFullContent(t *testing.T) {
+	root := t.TempDir()
+	content := "alpha\nbeta\ngamma\n"
+	if err := os.WriteFile(filepath.Join(root, "legacy.txt"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	registry := NewRegistry(cfg)
+
+	result, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "fs_read_file",
+		Arguments: rawArgs(map[string]any{"path": "legacy.txt"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != content || result.Truncated || result.Metadata != nil {
+		t.Fatalf("legacy read result=%#v", result)
+	}
+}
+
+func TestFSReadOffsetLimitReturnsNumberedLineWindow(t *testing.T) {
+	root := t.TempDir()
+	content := strings.Join([]string{"one", "two", "three", "four", "five"}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(root, "lines.txt"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	registry := NewRegistry(cfg)
+
+	result, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "fs_read_file",
+		Arguments: rawArgs(map[string]any{
+			"path":   "lines.txt",
+			"offset": 2,
+			"limit":  2,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "2: two\n3: three\n...[truncated; next_offset=4 total_lines=5]"
+	if result.Content != want {
+		t.Fatalf("content = %q, want %q", result.Content, want)
+	}
+	if !result.Truncated ||
+		anyInt64(result.Metadata["offset"]) != 2 ||
+		anyInt64(result.Metadata["limit"]) != 2 ||
+		anyInt64(result.Metadata["line_start"]) != 2 ||
+		anyInt64(result.Metadata["line_end"]) != 3 ||
+		anyInt64(result.Metadata["line_count"]) != 2 ||
+		anyInt64(result.Metadata["total_lines"]) != 5 ||
+		anyInt64(result.Metadata["next_offset"]) != 4 ||
+		result.Metadata["lines_truncated"] != true {
+		t.Fatalf("metadata = %#v", result.Metadata)
+	}
+}
+
+func TestFSReadLimitClampAndLongLineTruncation(t *testing.T) {
+	root := t.TempDir()
+	lines := []string{strings.Repeat("x", maxFSReadLineRunes+8), "tail"}
+	if err := os.WriteFile(filepath.Join(root, "long.txt"), []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	registry := NewRegistry(cfg)
+
+	result, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "fs_read_file",
+		Arguments: rawArgs(map[string]any{
+			"path":  "long.txt",
+			"limit": maxFSReadLimit + 50,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, fsReadTruncationLabel) || !result.Truncated {
+		t.Fatalf("expected long-line truncation result=%#v content=%q", result, result.Content)
+	}
+	if anyInt64(result.Metadata["limit"]) != maxFSReadLimit ||
+		anyInt64(result.Metadata["long_lines_truncated"]) != 1 ||
+		anyInt64(result.Metadata["total_lines"]) != 2 ||
+		anyInt64(result.Metadata["next_offset"]) != 0 {
+		t.Fatalf("metadata = %#v", result.Metadata)
+	}
+}
+
+func TestFSReadRejectsBinaryWindow(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "bin.dat"), []byte{'o', 'k', 0, 'x'}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	registry := NewRegistry(cfg)
+
+	_, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "fs_read_file",
+		Arguments: rawArgs(map[string]any{"path": "bin.dat", "offset": 1, "limit": 1}),
+	})
+	if err == nil || !strings.Contains(err.Error(), "binary") {
+		t.Fatalf("expected binary error, got %v", err)
+	}
+}
+
+func TestFSReadSensitiveAndSymlinkSafetyForWindows(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("SECRET=1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outsideDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outsideDir, "outside.txt"), []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(outsideDir, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	registry := NewRegistry(cfg)
+
+	_, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "fs_read_file",
+		Arguments: rawArgs(map[string]any{"path": ".env", "offset": 1, "limit": 1}),
+	})
+	if err == nil || !strings.Contains(err.Error(), "sensitive") {
+		t.Fatalf("expected sensitive path error, got %v", err)
+	}
+	_, err = registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "fs_read_file",
+		Arguments: rawArgs(map[string]any{"path": filepath.Join(link, "outside.txt"), "offset": 1, "limit": 1}),
+	})
+	if err == nil || !strings.Contains(err.Error(), "outside workspace") {
+		t.Fatalf("expected symlink escape error, got %v", err)
+	}
+}
+
 func TestSafePathRejectsSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	outsideDir := t.TempDir()

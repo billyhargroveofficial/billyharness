@@ -324,7 +324,7 @@ adding more powerful tools.
     'Test.*Golden.*Trace.*' -count=1 ./internal/...` passed.
   - commit: pending.
 
-- [ ] HR-01.10 Bounded file reads with line windows.
+- [x] HR-01.10 Bounded file reads with line windows.
   - maps to: `competitive-improvements-todo.md` A1.
   - target files: `internal/tools/tools.go`, `internal/tools/fs_read.go`,
     `internal/tools/tools_test.go`, `internal/toolrender/toolrender.go`.
@@ -332,6 +332,21 @@ adding more powerful tools.
     `offset/limit` returns numbered lines, truncation metadata, `next_offset`,
     `total_lines`, and safe binary/symlink/sensitive-path behavior.
   - verification: `go test -count=1 ./internal/tools ./internal/toolrender`.
+  - status: completed 2026-07-01.
+  - evidence: moved `fs_read_file` into a focused `fs_read.go` handler and kept
+    bare `{"path":...}` on the legacy full-file path. Supplying `offset` or
+    `limit` now enables a bounded 1-indexed line window with numbered lines,
+    clamped limits, UTF-8/NUL binary rejection, long-line truncation, visible
+    `next_offset`, and metadata for total lines, line bounds, truncation, and
+    skipped long lines. Existing sensitive-path and symlink escape checks are
+    reused before either full or windowed reads, and TUI/Telegram tool call
+    lines summarize requested line windows.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/tools
+    ./internal/toolrender` passed; `/root/.local/go/bin/go test -run
+    'Test.*FSRead.*(Offset|Limit|Line|Sensitive|Symlink|Legacy)' -count=1
+    ./internal/tools` passed.
+  - commit: pending.
 
 Milestone 1 final verification:
 

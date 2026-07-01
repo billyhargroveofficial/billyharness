@@ -567,34 +567,6 @@ func (r *Registry) addTime() {
 	})
 }
 
-func (r *Registry) addFSRead() {
-	r.add(Tool{
-		Spec: protocol.ToolSpec{
-			Name:        "fs_read_file",
-			Description: "Read a UTF-8 file from the allowed workspace.",
-			Parameters:  raw(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}`),
-			Risk:        protocol.RiskReadOnly,
-		},
-		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
-			var in struct {
-				Path string `json:"path"`
-			}
-			if err := json.Unmarshal(args, &in); err != nil {
-				return Result{}, err
-			}
-			path, err := r.safePath(in.Path)
-			if err != nil {
-				return Result{}, err
-			}
-			bytes, err := os.ReadFile(path)
-			if err != nil {
-				return Result{}, err
-			}
-			return Result{Content: string(bytes)}, nil
-		},
-	})
-}
-
 func (r *Registry) addFSList() {
 	r.add(Tool{
 		Spec: protocol.ToolSpec{

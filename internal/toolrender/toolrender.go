@@ -200,8 +200,8 @@ var callRenderers = map[string]callRenderer{
 		},
 	},
 	"fs_read_file": {
-		tui:      staticCallLine(func(args map[string]any) string { return "Read " + firstArg(args, "path", "file") }),
-		telegram: staticCallLine(func(args map[string]any) string { return "📖 read " + CompactArg(args["path"], 96) }),
+		tui:      staticCallLine(fsReadTUILine),
+		telegram: staticCallLine(fsReadTelegramLine),
 	},
 	"fs_list": {
 		tui:      staticCallLine(func(args map[string]any) string { return "Listed " + firstArgDefault(args, ".", "path") }),
@@ -424,6 +424,45 @@ func firstArgDefault(args map[string]any, fallback string, keys ...string) strin
 		return value
 	}
 	return fallback
+}
+
+func intArg(args map[string]any, key string) int {
+	switch value := args[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	case json.Number:
+		n, _ := value.Int64()
+		return int(n)
+	default:
+		return 0
+	}
+}
+
+func fsReadTUILine(args map[string]any) string {
+	return "Read " + fsReadTargetLine(firstArg(args, "path", "file"), args)
+}
+
+func fsReadTelegramLine(args map[string]any) string {
+	return "📖 read " + fsReadTargetLine(CompactArg(args["path"], 96), args)
+}
+
+func fsReadTargetLine(path string, args map[string]any) string {
+	offset := intArg(args, "offset")
+	limit := intArg(args, "limit")
+	if offset <= 0 && limit <= 0 {
+		return path
+	}
+	if offset <= 0 {
+		offset = 1
+	}
+	if limit > 0 {
+		return fmt.Sprintf("%s lines %d-%d", path, offset, offset+limit-1)
+	}
+	return fmt.Sprintf("%s from line %d", path, offset)
 }
 
 func stringSliceArg(value any) []string {

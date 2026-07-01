@@ -81,6 +81,18 @@ func TestCallLineSnapshotsCommonTools(t *testing.T) {
 			expected: "📖 read /root/billyharness/README.md",
 		},
 		{
+			name:     "tui read window",
+			call:     protocol.ToolCall{Name: "fs_read_file", Arguments: []byte(`{"path":"/root/billyharness/README.md","offset":10,"limit":5}`)},
+			style:    StyleTUI,
+			expected: "Read /root/billyharness/README.md lines 10-14",
+		},
+		{
+			name:     "telegram read window",
+			call:     protocol.ToolCall{Name: "fs_read_file", Arguments: []byte(`{"path":"/root/billyharness/README.md","offset":10,"limit":5}`)},
+			style:    StyleTelegram,
+			expected: "📖 read /root/billyharness/README.md lines 10-14",
+		},
+		{
 			name:     "tui web search",
 			call:     protocol.ToolCall{Name: "web_search", Arguments: []byte(`{"query":"agent loop benchmark"}`)},
 			style:    StyleTUI,
