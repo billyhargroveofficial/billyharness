@@ -1071,11 +1071,27 @@ need.
     deferral.
   - commit: pending.
 
-- [ ] HR-05.7 Early tool execution and input-aware parallelism.
+- [-] HR-05.7 Early tool execution and input-aware parallelism.
   - maps to: `competitive-improvements-todo.md` P2-15 and P2-16.
   - dependency: transcript pairing, tool snapshots, interrupt cleanup.
   - acceptance: latency improves without violating model-call order or
     cancellation semantics.
+  - status: deferred 2026-07-01.
+  - blocker: P2-15 and P2-16 are marked P2 in
+    `competitive-improvements-todo.md`, and the active execution goal defers P2
+    unless test or benchmark evidence explicitly unblocks it. Transcript
+    pairing, tool snapshots, and interrupt cleanup are in place, but no current
+    latency benchmark or failing cancellation/order test justifies changing
+    provider streaming, tool start order, or cancellation semantics in this
+    pass.
+  - next action: revisit only after focused `Benchmark.*EarlyTool`,
+    `BenchmarkParallelBatch`, `Test.*EarlyTool.*`,
+    `Test.*InputAware.*`, or `Test.*InterruptBehavior.*` evidence proves the
+    existing conservative tool execution path is a bottleneck or correctness
+    risk.
+  - verification evidence: source-priority check only; no code changed for this
+    deferral.
+  - commit: pending.
 
 ## Completion Criteria
 
