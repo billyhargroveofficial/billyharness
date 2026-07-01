@@ -990,11 +990,21 @@ need.
     fragment is injected while allowing the existing project-context message.
   - commit: pending.
 
-- [ ] HR-05.2 Minimal stateless subagent tools.
+- [-] HR-05.2 Minimal stateless subagent tools.
   - maps to: `competitive-improvements-todo.md` A14.
   - dependency: Milestone 1 and ToolCompact.
   - acceptance: depth 1, max 3 workers, explorer read-only, compact output ref,
     parent cancel cancels children.
+  - status: deferred 2026-07-01.
+  - blocker: A14 is marked P2 in `competitive-improvements-todo.md`, and the
+    active execution goal says to defer P2 unless explicitly unblocked and
+    justified by tests or benchmarks. No current failing test or benchmark
+    requires subagent tools ahead of the remaining bounded/runtime work.
+  - next action: revisit only after a focused parent-cancel, transcript-bloat,
+    or parallel research benchmark proves stateless depth-1 workers are needed.
+  - verification evidence: source-priority check only; no code changed for this
+    deferral.
+  - commit: pending.
 
 - [ ] HR-05.3 Opt-in AI memory candidate extraction.
   - maps to: `competitive-improvements-todo.md` A15.
