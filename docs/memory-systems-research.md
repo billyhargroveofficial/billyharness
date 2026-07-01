@@ -492,6 +492,18 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(id, scope, kind, content);
 
 ### 8.7 Layer 5: Background Extraction Jobs (Phase 3)
 
+**2026-07-01 SH-04.3 deferral note:** automatic memory extraction remains
+disabled by default through `memory_auto_extract_enabled=false`, and Billyharness
+does not start a background extractor, scheduler, provider call, or canonical
+memory writer. The future reviewed path should be an explicit `/memory extract`
+command, not an end-of-turn side effect. It should use the configured
+memory-helper model from provider capability diagnostics, take bounded session
+or event ranges as input, cap helper input/output tokens, produce candidate
+entries with evidence and confidence, write only to a pending/review area, and
+require a separate manual approve step before updating `MEMORY.md` or topic
+files. If background extraction is ever reconsidered, it must remain opt-in,
+rate-limited, and candidate-only.
+
 **Trigger conditions:**
 - After `run.completed` event
 - Token threshold met (e.g., 10K tokens since last extraction)

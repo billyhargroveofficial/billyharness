@@ -639,16 +639,32 @@ Goal: add useful memory without background magic or prompt bloat.
     ./internal/toolrender ./internal/promptcommands ./internal/tui
     ./internal/telegrambot ./cmd/fast-agent-harness ./internal/architecture`
     passed.
-  - commit: pending.
+  - commit: `dc257053896b55bec3cfd1f67ab299efe22fe8be`.
 
-- [ ] SH-04.3 Defer automatic memory extraction behind explicit command.
+- [x] SH-04.3 Defer automatic memory extraction behind explicit command.
   - inspiration: Codex/Claude extraction pipelines, rejected as default.
   - target files: docs first; code only after manual MVP is stable.
   - acceptance: no background memory writes run by default; a future
     `/memory extract` task has a clear design with helper model, budget, and
     review gate.
   - verification: config tests proving default disabled.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: added explicit `memory_auto_extract_enabled` config and
+    diagnostics state, defaulting to false and requiring an opt-in environment
+    override before any future background extraction path could be enabled. No
+    extractor, scheduler, background worker, provider call, memory candidate
+    writer, or `/memory extract` command was added in this slice. The design
+    note in `docs/memory-systems-research.md` now scopes the future explicit
+    `/memory extract` flow to helper-model candidate generation, bounded
+    input/output budgets, evidence/provenance, and a manual review gate before
+    canonical memory mutation.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'TestMemory.*Auto.*Extract|TestDefaultRuntimeLimits|TestConfigInspectJSONDoesNotLeakDotenvSecrets'
+    -count=1 ./internal/config ./cmd/fast-agent-harness` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/config
+    ./cmd/fast-agent-harness` passed.
+  - commit: pending.
 
 ## Milestone 5 - Interop Without Platform Bloat (P1)
 

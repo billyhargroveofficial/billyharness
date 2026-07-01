@@ -57,6 +57,9 @@ func TestDefaultRuntimeLimits(t *testing.T) {
 		cfg.MemoryTopicMaxBytes != 64*1024 {
 		t.Fatalf("memory defaults = enabled:%v summary:%d index:%d topic:%d", cfg.MemoryEnabled, cfg.MemorySummaryMaxBytes, cfg.MemoryIndexMaxBytes, cfg.MemoryTopicMaxBytes)
 	}
+	if cfg.MemoryAutoExtractEnabled || cfg.DiagnosticSnapshot().RuntimeTool.MemoryAutoExtractEnabled {
+		t.Fatalf("memory auto extraction must default disabled: cfg=%v diagnostics=%v", cfg.MemoryAutoExtractEnabled, cfg.DiagnosticSnapshot().RuntimeTool.MemoryAutoExtractEnabled)
+	}
 	if !cfg.AutoApproveDangerous {
 		t.Fatalf("AutoApproveDangerous should be enabled by default")
 	}
@@ -131,6 +134,20 @@ func TestMemoryConfigEnvOverridesInstructionSettings(t *testing.T) {
 		cfg.MemoryIndexMaxBytes != 456 || instructions.MemoryIndexMaxBytes != 456 ||
 		cfg.MemoryTopicMaxBytes != 789 || instructions.MemoryTopicMaxBytes != 789 {
 		t.Fatalf("memory caps = cfg:%#v instructions:%#v", cfg, instructions)
+	}
+}
+
+func TestMemoryAutoExtractionRequiresExplicitOptIn(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	t.Setenv("BILLYHARNESS_MEMORY_AUTO_EXTRACT_ENABLED", "")
+	cfg := Default()
+	if cfg.MemoryAutoExtractEnabled {
+		t.Fatalf("memory auto extraction default = true")
+	}
+	t.Setenv("BILLYHARNESS_MEMORY_AUTO_EXTRACT_ENABLED", "true")
+	cfg = Default()
+	if !cfg.MemoryAutoExtractEnabled || !cfg.DiagnosticSnapshot().RuntimeTool.MemoryAutoExtractEnabled {
+		t.Fatalf("memory auto extraction override not visible: cfg=%v diagnostics=%v", cfg.MemoryAutoExtractEnabled, cfg.DiagnosticSnapshot().RuntimeTool.MemoryAutoExtractEnabled)
 	}
 }
 

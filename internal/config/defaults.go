@@ -159,6 +159,7 @@ func builtInConfig() Config {
 		ProjectDocMaxBytes:        32 * 1024,
 		ProjectContextMaxBytes:    4 * 1024,
 		MemoryEnabled:             true,
+		MemoryAutoExtractEnabled:  false,
 		MemorySummaryMaxBytes:     2 * 1024,
 		MemoryIndexMaxBytes:       25 * 1024,
 		MemoryTopicMaxBytes:       64 * 1024,

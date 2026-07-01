@@ -46,6 +46,7 @@ type RuntimeToolSnapshot struct {
 	MaxParallelTools              int    `json:"max_parallel_tools"`
 	GatewayAddr                   string `json:"gateway_addr"`
 	MemoryEnabled                 bool   `json:"memory_enabled"`
+	MemoryAutoExtractEnabled      bool   `json:"memory_auto_extract_enabled"`
 	MemorySummaryMaxBytes         int    `json:"memory_summary_max_bytes"`
 	MemoryIndexMaxBytes           int    `json:"memory_index_max_bytes"`
 	MemoryTopicMaxBytes           int    `json:"memory_topic_max_bytes"`
@@ -131,6 +132,7 @@ func (c Config) RuntimeToolSnapshot() RuntimeToolSnapshot {
 		MaxParallelTools:              limits.MaxParallelTools,
 		GatewayAddr:                   c.GatewayAddr,
 		MemoryEnabled:                 tools.MemoryEnabled,
+		MemoryAutoExtractEnabled:      c.MemoryAutoExtractEnabled,
 		MemorySummaryMaxBytes:         tools.MemorySummaryMaxBytes,
 		MemoryIndexMaxBytes:           tools.MemoryIndexMaxBytes,
 		MemoryTopicMaxBytes:           tools.MemoryTopicMaxBytes,

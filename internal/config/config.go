@@ -45,6 +45,7 @@ type Config struct {
 	ProjectDocFallbacks           []string
 	ProjectContextMaxBytes        int
 	MemoryEnabled                 bool
+	MemoryAutoExtractEnabled      bool
 	MemorySummaryMaxBytes         int
 	MemoryIndexMaxBytes           int
 	MemoryTopicMaxBytes           int
