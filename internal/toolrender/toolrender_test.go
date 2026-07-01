@@ -207,6 +207,93 @@ func TestResultKeyAndLineCompactsMetadata(t *testing.T) {
 	}
 }
 
+func TestToolCompactSummaryDrivesResultLine(t *testing.T) {
+	result := protocol.ToolResult{
+		CallID:  "call_custom",
+		Name:    "custom_tool",
+		Content: strings.Repeat("raw payload ", 40),
+		Compact: &protocol.ToolCompact{
+			CallID:          "call_custom",
+			Name:            "custom_tool",
+			Lifecycle:       "result",
+			Status:          protocol.StepStatusCompleted,
+			Title:           "custom_tool",
+			Summary:         "completed custom_tool target=src/main.go",
+			OutputRef:       "/root/billyharness/tool-output/custom.txt",
+			DurationMS:      25,
+			EstimatedTokens: 1400,
+			OriginalBytes:   9000,
+			Truncated:       true,
+		},
+	}
+	summary, ok := ResultSummaryFor(result, "", StyleTelegram)
+	if !ok || summary.Key != "call_custom" || summary.OutputRef == "" || summary.EstimatedTokens != 1400 || summary.OriginalBytes != 9000 {
+		t.Fatalf("summary = %#v ok=%v", summary, ok)
+	}
+	for _, want := range []string{"✅", "completed custom_tool", "custom.txt", "25ms", "~1.4k tok", "9kB", "truncated"} {
+		if !strings.Contains(summary.Line, want) {
+			t.Fatalf("compact result line missing %q: %q", want, summary.Line)
+		}
+	}
+	if strings.Contains(summary.Line, "raw payload") {
+		t.Fatalf("compact result leaked raw content: %q", summary.Line)
+	}
+}
+
+func TestToolCompactNoRawJSONFallbackForUnknownTool(t *testing.T) {
+	call := protocol.ToolCall{
+		Name:      "custom_tool",
+		Arguments: []byte(`{"token":"secret","payload":{"raw":"json"},"items":[1,2,3]}`),
+	}
+	line := CallLine(call, StyleTelegram)
+	if !strings.Contains(line, "custom_tool") {
+		t.Fatalf("line = %q", line)
+	}
+	for _, notWant := range []string{"token", "secret", "payload", "{", "raw"} {
+		if strings.Contains(line, notWant) {
+			t.Fatalf("unknown tool line leaked raw args %q: %q", notWant, line)
+		}
+	}
+}
+
+func TestProgressAndOutputRefLinesUseToolCompact(t *testing.T) {
+	progress := protocol.ToolProgressEvent{
+		CallID: "call_1",
+		Name:   "custom_tool",
+		Phase:  "executing",
+		Status: protocol.StepStatusStarted,
+		Compact: &protocol.ToolCompact{
+			CallID:    "call_1",
+			Name:      "custom_tool",
+			Lifecycle: "executing",
+			Status:    protocol.StepStatusStarted,
+			Summary:   "started custom_tool target=README.md",
+		},
+	}
+	key, line := ProgressLine(progress, StyleTUI)
+	if key != "call_1" || !strings.Contains(line, "started custom_tool") {
+		t.Fatalf("progress key=%q line=%q", key, line)
+	}
+	ref := protocol.ToolOutputRefEvent{
+		CallID:    "call_1",
+		Name:      "custom_tool",
+		AttemptID: "attempt_1",
+		OutputRef: "/root/billyharness/tool-output/custom.txt",
+		Compact: &protocol.ToolCompact{
+			CallID:    "call_1",
+			Name:      "custom_tool",
+			Lifecycle: "output_ref",
+			Status:    "output_ref",
+			Summary:   "custom_tool output ref",
+			OutputRef: "/root/billyharness/tool-output/custom.txt",
+		},
+	}
+	key, line = OutputRefLine(ref, StyleTUI)
+	if key != "call_1" || !strings.Contains(line, "custom_tool output ref") || !strings.Contains(line, "custom.txt") {
+		t.Fatalf("output ref key=%q line=%q", key, line)
+	}
+}
+
 func TestTurnChangeSummaryAndDetailsExposePatchRef(t *testing.T) {
 	change := protocol.TurnChangeEvent{
 		ChangeID:       "change-1",

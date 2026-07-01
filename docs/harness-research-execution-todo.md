@@ -451,11 +451,30 @@ Goal: add rollback and compact display invariants before expanding edit power.
     ./internal/architecture ./internal/tui/transcript` passed.
   - commit: pending.
 
-- [ ] HR-02.4 Shared ToolCompact display contract.
+- [x] HR-02.4 Shared ToolCompact display contract.
   - maps to: `competitive-improvements-todo.md` P1-7.
   - acceptance: TUI and Telegram render one bounded compact tool state with no
     raw JSON fallback.
   - verification: `go test -count=1 ./internal/toolrender ./internal/tooloutput ./internal/agent ./internal/clientux/projector ./internal/telegrambot ./internal/tui/transcript`.
+  - status: completed 2026-07-01.
+  - evidence: added an optional protocol `ToolCompact` display contract on tool
+    result, progress, and output-ref events; agent tool orchestration now
+    populates compact identity, lifecycle, summary, output-ref, metric, error,
+    truncation, and hint fields without importing presentation packages. Shared
+    `toolrender` helpers render compact result/progress/output-ref/permission
+    lines, unknown Telegram tool calls no longer fall back to raw JSON
+    arguments, the client projector stores one compact tool state by call id,
+    and TUI/Telegram tests prove compact display is used without leaking raw
+    payloads.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/toolrender
+    ./internal/tooloutput ./internal/agent ./internal/clientux/projector
+    ./internal/telegrambot ./internal/tui/transcript` passed;
+    `/root/.local/go/bin/go test -run
+    'Test.*ToolCompact.*|Test.*NoRaw.*JSON.*|Test.*OutputRef.*' -count=1
+    ./internal/...` passed; `/root/.local/go/bin/go test -count=1
+    ./internal/protocol ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] HR-02.5 MCP catalog change lifecycle.
   - maps to: `competitive-improvements-todo.md` P1-8.

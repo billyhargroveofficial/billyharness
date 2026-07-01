@@ -668,6 +668,49 @@ func TestToolProgressUpdatesToolLineOnFinish(t *testing.T) {
 	}
 }
 
+func TestRendererUsesToolCompactResultSummary(t *testing.T) {
+	renderer := NewRenderer()
+	renderer.Apply(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{
+			ID:        "call_custom",
+			Name:      "custom_tool",
+			Arguments: []byte(`{"token":"secret","payload":"raw"}`),
+		},
+	})
+	rendered := renderer.Apply(protocol.Event{
+		Type: protocol.EventToolCallFinished,
+		Data: protocol.ToolResult{
+			CallID:  "call_custom",
+			Name:    "custom_tool",
+			Content: strings.Repeat("raw payload ", 50),
+			Compact: &protocol.ToolCompact{
+				CallID:          "call_custom",
+				Name:            "custom_tool",
+				Lifecycle:       "result",
+				Status:          protocol.StepStatusCompleted,
+				Summary:         "completed custom_tool target=README.md",
+				OutputRef:       "/root/billyharness/tool-output/custom.txt",
+				EstimatedTokens: 1200,
+				Truncated:       true,
+			},
+		},
+	})
+	if len(rendered) != 1 {
+		t.Fatalf("rendered = %#v", rendered)
+	}
+	for _, want := range []string{"completed custom_tool", "README.md", "custom.txt", "~1.2k tok", "truncated"} {
+		if !strings.Contains(rendered[0].Body, want) {
+			t.Fatalf("compact result missing %q: %q", want, rendered[0].Body)
+		}
+	}
+	for _, notWant := range []string{"raw payload", "secret", "payload"} {
+		if strings.Contains(rendered[0].Body, notWant) {
+			t.Fatalf("compact result leaked %q: %q", notWant, rendered[0].Body)
+		}
+	}
+}
+
 func TestRendererShowsTurnDiffDisplaySummary(t *testing.T) {
 	rendered := NewRenderer().Apply(protocol.Event{Type: protocol.EventTurnChangeRecorded, Data: protocol.TurnChangeEvent{
 		ChangeID:       "change-1",

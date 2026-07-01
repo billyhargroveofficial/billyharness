@@ -54,7 +54,8 @@ func (p *Projector) Apply(event protocol.Event) []Cell {
 	case protocol.EventToolCallFinished, protocol.EventToolCallFailed, protocol.EventToolCallAborted:
 		p.appendToolResult(event)
 	case protocol.EventToolCallStarted, protocol.EventToolCallProgress, protocol.EventToolPermissionRequested, protocol.EventToolPermissionDecided, protocol.EventToolOutputRefCreated:
-		p.addProtocolCell(event, "tool", CellTypeToolCall, "Tool event", oneLineJSON(event.Data))
+		title, body := toolLifecycleText(event)
+		p.addProtocolCell(event, "tool", CellTypeToolCall, title, body)
 	case protocol.EventStepStarted, protocol.EventStepCompleted:
 		p.applyStepEvent(event)
 	case protocol.EventContextCompacted:
@@ -387,6 +388,28 @@ func toolResultTitle(value any, base string) string {
 		return summary.Line
 	}
 	return base
+}
+
+func toolLifecycleText(event protocol.Event) (string, string) {
+	switch event.Type {
+	case protocol.EventToolCallProgress:
+		_, line := toolrender.ProgressLine(event.Data, toolrender.StyleTUI)
+		return "Tool progress", line
+	case protocol.EventToolOutputRefCreated:
+		_, line := toolrender.OutputRefLine(event.Data, toolrender.StyleTUI)
+		return "Tool output", line
+	case protocol.EventToolPermissionRequested, protocol.EventToolPermissionDecided:
+		_, line := toolrender.PermissionLine(event.Data, toolrender.StyleTUI)
+		return "Tool permission", line
+	case protocol.EventToolCallStarted:
+		name := strings.TrimSpace(fmt.Sprint(event.Data))
+		if name == "" {
+			name = "tool"
+		}
+		return "Tool started", "started " + name
+	default:
+		return "Tool event", string(event.Type)
+	}
 }
 
 func TurnChangeEventText(value any) string {

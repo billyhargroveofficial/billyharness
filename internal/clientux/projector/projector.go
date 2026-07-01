@@ -57,6 +57,7 @@ type ToolItem struct {
 	AttemptID string
 	Name      string
 	Call      protocol.ToolCall
+	Compact   *protocol.ToolCompact
 	Status    string
 	Content   string
 	Error     string
@@ -170,6 +171,8 @@ func (p *Projector) Apply(event protocol.Event) Snapshot {
 		p.upsertToolStatus(event, "running", "")
 	case protocol.EventToolCallProgress:
 		p.upsertToolProgress(event)
+	case protocol.EventToolOutputRefCreated:
+		p.upsertToolOutputRef(event)
 	case protocol.EventToolCallFinished:
 		p.upsertToolResult(event, "finished")
 		p.observeToolSummary(event.Data)
@@ -343,6 +346,10 @@ func (p *Projector) upsertToolCall(event protocol.Event) {
 
 func cloneToolItem(item ToolItem) ToolItem {
 	item.Call = cloneToolCall(item.Call)
+	if item.Compact != nil {
+		compact := cloneToolCompact(*item.Compact)
+		item.Compact = &compact
+	}
 	return item
 }
 
@@ -351,6 +358,11 @@ func cloneToolCall(call protocol.ToolCall) protocol.ToolCall {
 		call.Arguments = append([]byte(nil), call.Arguments...)
 	}
 	return call
+}
+
+func cloneToolCompact(compact protocol.ToolCompact) protocol.ToolCompact {
+	compact.Hints = append([]string(nil), compact.Hints...)
+	return compact
 }
 
 func (p *Projector) upsertToolStatus(event protocol.Event, status, message string) {
@@ -388,7 +400,36 @@ func (p *Projector) upsertToolProgress(event protocol.Event) {
 	item.AttemptID = firstNonEmpty(strings.TrimSpace(progress.AttemptID), strings.TrimSpace(event.AttemptID), item.AttemptID)
 	item.Status = firstNonEmpty(progress.Status, progress.Phase, "progress")
 	item.Content = progress.Message
+	if progress.Compact != nil {
+		compact := cloneToolCompact(*progress.Compact)
+		item.Compact = &compact
+	}
 	item.LastEvent = event.Type
+	p.snapshot.ToolsByCallID[callID] = item
+}
+
+func (p *Projector) upsertToolOutputRef(event protocol.Event) {
+	ref, ok := decodeData[protocol.ToolOutputRefEvent](event.Data)
+	if !ok {
+		return
+	}
+	callID := strings.TrimSpace(ref.CallID)
+	if callID == "" {
+		callID = eventCallID(event)
+	}
+	if callID == "" {
+		return
+	}
+	item := p.snapshot.ToolsByCallID[callID]
+	item.CallID = callID
+	item.Name = firstNonEmpty(item.Name, ref.Name)
+	item.AttemptID = firstNonEmpty(strings.TrimSpace(ref.AttemptID), strings.TrimSpace(event.AttemptID), item.AttemptID)
+	item.Status = "output_ref"
+	item.LastEvent = event.Type
+	if ref.Compact != nil {
+		compact := cloneToolCompact(*ref.Compact)
+		item.Compact = &compact
+	}
 	p.snapshot.ToolsByCallID[callID] = item
 }
 
@@ -413,6 +454,10 @@ func (p *Projector) upsertToolResult(event protocol.Event, status string) {
 		item.Content = result.Content
 		item.IsError = result.IsError
 		item.Error = result.ErrorCode
+		if result.Compact != nil {
+			compact := cloneToolCompact(*result.Compact)
+			item.Compact = &compact
+		}
 	}
 	if status == "failed" || status == "aborted" {
 		item.IsError = true

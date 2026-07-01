@@ -47,6 +47,7 @@ type ToolResult struct {
 	Metadata  map[string]any `json:"metadata,omitempty"`
 	Truncated bool           `json:"truncated,omitempty"`
 	OutputRef string         `json:"output_ref,omitempty"`
+	Compact   *ToolCompact   `json:"compact,omitempty"`
 }
 
 type ToolSpec struct {
@@ -247,6 +248,7 @@ type ToolProgressEvent struct {
 	Status    string         `json:"status"`
 	Message   string         `json:"message,omitempty"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
+	Compact   *ToolCompact   `json:"compact,omitempty"`
 }
 
 type ToolPermissionEvent struct {
@@ -260,16 +262,40 @@ type ToolPermissionEvent struct {
 }
 
 type ToolOutputRefEvent struct {
-	CallID               string `json:"call_id"`
-	Name                 string `json:"name,omitempty"`
-	AttemptID            string `json:"attempt_id"`
-	OutputRef            string `json:"output_ref"`
-	OutputRefID          string `json:"output_ref_id,omitempty"`
-	OutputRefBytes       int64  `json:"output_ref_bytes,omitempty"`
-	OutputRefSHA256      string `json:"output_ref_sha256,omitempty"`
-	OutputRefPermissions string `json:"output_ref_permissions,omitempty"`
-	OutputRefPlaintext   bool   `json:"output_ref_plaintext,omitempty"`
-	Truncated            bool   `json:"truncated"`
+	CallID               string       `json:"call_id"`
+	Name                 string       `json:"name,omitempty"`
+	AttemptID            string       `json:"attempt_id"`
+	OutputRef            string       `json:"output_ref"`
+	OutputRefID          string       `json:"output_ref_id,omitempty"`
+	OutputRefBytes       int64        `json:"output_ref_bytes,omitempty"`
+	OutputRefSHA256      string       `json:"output_ref_sha256,omitempty"`
+	OutputRefPermissions string       `json:"output_ref_permissions,omitempty"`
+	OutputRefPlaintext   bool         `json:"output_ref_plaintext,omitempty"`
+	Truncated            bool         `json:"truncated"`
+	Compact              *ToolCompact `json:"compact,omitempty"`
+}
+
+type ToolCompact struct {
+	CallID          string   `json:"call_id,omitempty"`
+	AttemptID       string   `json:"attempt_id,omitempty"`
+	Name            string   `json:"name,omitempty"`
+	Lifecycle       string   `json:"lifecycle,omitempty"`
+	Status          string   `json:"status,omitempty"`
+	Title           string   `json:"title,omitempty"`
+	Summary         string   `json:"summary,omitempty"`
+	Detail          string   `json:"detail,omitempty"`
+	Category        string   `json:"category,omitempty"`
+	Verb            string   `json:"verb,omitempty"`
+	Target          string   `json:"target,omitempty"`
+	Error           string   `json:"error,omitempty"`
+	OutputRef       string   `json:"output_ref,omitempty"`
+	OutputRefID     string   `json:"output_ref_id,omitempty"`
+	DurationMS      int64    `json:"duration_ms,omitempty"`
+	EstimatedTokens int64    `json:"estimated_tokens,omitempty"`
+	OriginalBytes   int64    `json:"original_bytes,omitempty"`
+	Truncated       bool     `json:"truncated,omitempty"`
+	IsError         bool     `json:"is_error,omitempty"`
+	Hints           []string `json:"hints,omitempty"`
 }
 
 type HookEvent struct {

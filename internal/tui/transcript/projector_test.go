@@ -65,6 +65,52 @@ func TestProjectorApplyUpdatesToolCellsByCallID(t *testing.T) {
 	}
 }
 
+func TestProjectorApplyToolCompactLifecycleCells(t *testing.T) {
+	p := NewProjector()
+	cells := p.Apply(protocol.Event{
+		Type: protocol.EventToolCallProgress,
+		Data: protocol.ToolProgressEvent{
+			CallID: "call-a",
+			Name:   "custom_tool",
+			Phase:  "executing",
+			Status: protocol.StepStatusStarted,
+			Compact: &protocol.ToolCompact{
+				CallID:    "call-a",
+				Name:      "custom_tool",
+				Lifecycle: "executing",
+				Status:    protocol.StepStatusStarted,
+				Summary:   "started custom_tool target=README.md",
+			},
+		},
+	})
+	if len(cells) != 1 || cells[0].Title != "Tool progress" || !strings.Contains(cells[0].Content, "started custom_tool") {
+		t.Fatalf("progress cell = %#v", cells)
+	}
+	if strings.Contains(cells[0].Content, `"call_id"`) || strings.Contains(cells[0].Content, `"compact"`) {
+		t.Fatalf("progress cell leaked raw JSON: %q", cells[0].Content)
+	}
+	cells = p.Apply(protocol.Event{
+		Type: protocol.EventToolOutputRefCreated,
+		Data: protocol.ToolOutputRefEvent{
+			CallID:    "call-a",
+			Name:      "custom_tool",
+			AttemptID: "attempt-a",
+			OutputRef: "/root/billyharness/tool-output/custom.txt",
+			Compact: &protocol.ToolCompact{
+				CallID:    "call-a",
+				Name:      "custom_tool",
+				Lifecycle: "output_ref",
+				Status:    "output_ref",
+				Summary:   "custom_tool output ref",
+				OutputRef: "/root/billyharness/tool-output/custom.txt",
+			},
+		},
+	})
+	if len(cells) != 2 || cells[1].Title != "Tool output" || !strings.Contains(cells[1].Content, "custom.txt") {
+		t.Fatalf("output ref cell = %#v", cells)
+	}
+}
+
 func TestProjectorApplyUsesCompactToolAuditText(t *testing.T) {
 	p := NewProjector()
 	cells := p.Apply(protocol.Event{Type: protocol.EventToolAudit, Data: map[string]any{

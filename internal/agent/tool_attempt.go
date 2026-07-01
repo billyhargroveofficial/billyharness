@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/checkpoint"
@@ -240,6 +242,8 @@ func (o *toolOrchestrator) Execute(ctx context.Context, turnID string, index int
 		}
 	}
 	progressStatus := toolResultProgressStatus(out)
+	compact := toolResultCompact(call, attemptID, progressStatus, out)
+	out.Compact = &compact
 	if out.ErrorCode == "tool_aborted" {
 		o.EmitProgress(call, attemptID, toolPhaseCancelAbort, toolProgressStatusAborted, map[string]any{
 			"error_code":  out.ErrorCode,
@@ -286,6 +290,8 @@ func (o *toolOrchestrator) AbortBeforeExecute(index int, call protocol.ToolCall,
 	out.Metadata["output_bytes"] = len(out.Content)
 	out.Metadata["output_estimated_tokens"] = estimateMessagesTokens([]protocol.Message{{Role: protocol.RoleTool, Content: out.Content}})
 	out.Metadata["truncated"] = false
+	compact := toolResultCompact(call, attemptID, toolProgressStatusAborted, out)
+	out.Compact = &compact
 	o.EmitProgress(call, attemptID, toolPhaseCancelAbort, toolProgressStatusAborted, map[string]any{
 		"error_code":              out.ErrorCode,
 		"output_bytes":            out.Metadata["output_bytes"],
@@ -346,13 +352,16 @@ func (o *toolOrchestrator) EmitProgress(call protocol.ToolCall, attemptID, phase
 	if o == nil || o.emit == nil {
 		return
 	}
+	cleanMetadata := cleanProgressMetadata(metadata)
+	compact := toolProgressCompact(call, attemptID, phase, status, cleanMetadata)
 	progress := protocol.ToolProgressEvent{
 		CallID:    call.ID,
 		Name:      call.Name,
 		AttemptID: attemptID,
 		Phase:     phase,
 		Status:    status,
-		Metadata:  cleanProgressMetadata(metadata),
+		Metadata:  cleanMetadata,
+		Compact:   &compact,
 	}
 	o.emit(protocol.Event{
 		Type:      protocol.EventToolCallProgress,
@@ -475,6 +484,8 @@ func (d toolPermissionDecision) progressMetadata() map[string]any {
 
 func toolOutputRefEvent(result toolExecutionResult) protocol.ToolOutputRefEvent {
 	metadata := result.Result.Metadata
+	compact := toolResultCompact(result.Call, result.AttemptID, "output_ref", result.Result)
+	compact.Lifecycle = "output_ref"
 	return protocol.ToolOutputRefEvent{
 		CallID:               result.Call.ID,
 		Name:                 result.Call.Name,
@@ -486,6 +497,7 @@ func toolOutputRefEvent(result toolExecutionResult) protocol.ToolOutputRefEvent 
 		OutputRefPermissions: metadataString(metadata, tooloutput.MetadataOutputRefPermissions),
 		OutputRefPlaintext:   metadataBool(metadata, tooloutput.MetadataOutputRefPlaintext),
 		Truncated:            result.Result.Truncated,
+		Compact:              &compact,
 	}
 }
 
@@ -593,6 +605,133 @@ func recordReversible(record checkpoint.PatchRecord) bool {
 		}
 	}
 	return true
+}
+
+func toolProgressCompact(call protocol.ToolCall, attemptID, phase, status string, metadata map[string]any) protocol.ToolCompact {
+	target := metadataString(metadata, "args_summary")
+	if target == "" {
+		target = summarizeToolCallArgs(call)
+	}
+	compact := protocol.ToolCompact{
+		CallID:    call.ID,
+		AttemptID: attemptID,
+		Name:      call.Name,
+		Lifecycle: phase,
+		Status:    status,
+		Title:     call.Name,
+		Summary:   compactToolSummary(call.Name, target, status),
+		Detail:    phase,
+		Category:  metadataText(metadata, "risk"),
+		Verb:      phase,
+		Target:    target,
+	}
+	applyToolCompactMetadata(&compact, metadata)
+	return compact
+}
+
+func toolResultCompact(call protocol.ToolCall, attemptID, status string, result protocol.ToolResult) protocol.ToolCompact {
+	metadata := result.Metadata
+	compact := toolProgressCompact(call, attemptID, "result", status, metadata)
+	compact.OutputRef = result.OutputRef
+	compact.Truncated = result.Truncated
+	compact.IsError = result.IsError
+	if result.ErrorCode != "" {
+		compact.Error = result.ErrorCode
+	} else if result.IsError {
+		compact.Error = compactText(result.Content, 120)
+	}
+	if result.OutputRef != "" {
+		compact.Hints = append(compact.Hints, "output_ref")
+	}
+	if result.Truncated {
+		compact.Hints = append(compact.Hints, "truncated")
+	}
+	if result.IsError {
+		compact.Status = protocol.StepStatusFailed
+		compact.Summary = compactToolSummary(call.Name, compact.Target, compact.Status)
+	}
+	return compact
+}
+
+func applyToolCompactMetadata(compact *protocol.ToolCompact, metadata map[string]any) {
+	if compact == nil || len(metadata) == 0 {
+		return
+	}
+	compact.OutputRef = firstNonEmptyString(compact.OutputRef, metadataString(metadata, "output_ref"))
+	compact.OutputRefID = firstNonEmptyString(compact.OutputRefID, metadataString(metadata, tooloutput.MetadataOutputRefID))
+	compact.DurationMS = firstNonZeroInt64(compact.DurationMS, metadataInt64(metadata, "duration_ms"))
+	compact.EstimatedTokens = firstNonZeroInt64(compact.EstimatedTokens, metadataInt64(metadata, "output_estimated_tokens"))
+	compact.EstimatedTokens = firstNonZeroInt64(compact.EstimatedTokens, metadataInt64(metadata, "estimated_text_tokens"))
+	compact.OriginalBytes = firstNonZeroInt64(compact.OriginalBytes, metadataInt64(metadata, "original_output_bytes"))
+	compact.OriginalBytes = firstNonZeroInt64(compact.OriginalBytes, metadataInt64(metadata, "output_bytes"))
+	compact.OriginalBytes = firstNonZeroInt64(compact.OriginalBytes, metadataInt64(metadata, tooloutput.MetadataOutputRefBytes))
+	if metadataBool(metadata, "truncated") {
+		compact.Truncated = true
+	}
+	if compact.OutputRef != "" {
+		compact.Hints = appendMissingHint(compact.Hints, "output_ref")
+	}
+	if compact.Truncated {
+		compact.Hints = appendMissingHint(compact.Hints, "truncated")
+	}
+}
+
+func compactToolSummary(name, target, status string) string {
+	var parts []string
+	if status != "" {
+		parts = append(parts, status)
+	}
+	if name != "" {
+		parts = append(parts, name)
+	}
+	if target != "" && target != "{}" {
+		parts = append(parts, target)
+	}
+	return compactText(strings.Join(parts, " "), 180)
+}
+
+func appendMissingHint(hints []string, hint string) []string {
+	for _, existing := range hints {
+		if existing == hint {
+			return hints
+		}
+	}
+	return append(hints, hint)
+}
+
+func firstNonZeroInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func metadataText(metadata map[string]any, key string) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	switch value := metadata[key].(type) {
+	case string:
+		return value
+	case fmt.Stringer:
+		return value.String()
+	default:
+		if value == nil {
+			return ""
+		}
+		return fmt.Sprint(value)
+	}
 }
 
 func metadataString(metadata map[string]any, key string) string {

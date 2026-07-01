@@ -211,6 +211,13 @@ func TestRunMessagesToolOrchestratorEmitsSafePermissionAndAttempt(t *testing.T) 
 		result.Metadata["truncated"] == nil {
 		t.Fatalf("tool result metadata = %#v ok=%v", result, ok)
 	}
+	if result.Compact == nil ||
+		result.Compact.CallID != "call_time" ||
+		result.Compact.Name != "time_now" ||
+		result.Compact.Status != protocol.StepStatusCompleted ||
+		result.Compact.Title != "time_now" {
+		t.Fatalf("tool result compact = %#v", result.Compact)
+	}
 	progress := toolProgressEvents(events, "call_time")
 	wantPhases := []string{
 		toolPhasePrepare,
@@ -236,6 +243,12 @@ func TestRunMessagesToolOrchestratorEmitsSafePermissionAndAttempt(t *testing.T) 
 		progress[5].Status != toolProgressStatusSkipped ||
 		progress[6].Status != protocol.StepStatusCompleted {
 		t.Fatalf("tool progress statuses = %#v", progress)
+	}
+	if progress[0].Compact == nil ||
+		progress[0].Compact.CallID != "call_time" ||
+		progress[0].Compact.Lifecycle != toolPhasePrepare ||
+		progress[0].Compact.Target != "{}" {
+		t.Fatalf("tool progress compact = %#v", progress[0].Compact)
 	}
 }
 

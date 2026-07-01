@@ -20,7 +20,7 @@ const (
 func CallKeyAndLine(data any, style Style) (string, string) {
 	call, ok := DecodeCall(data)
 	if !ok {
-		return "", Preview(mustJSON(data), 600)
+		return "", "Tool event"
 	}
 	key := call.ID
 	if key == "" {
@@ -111,6 +111,9 @@ func ResultSummaryFor(data any, base string, style Style) (ResultSummary, bool) 
 	if !ok {
 		return ResultSummary{}, false
 	}
+	if result.Compact != nil {
+		return ResultSummaryFromCompact(*result.Compact, base, style), true
+	}
 	key := result.CallID
 	if key == "" {
 		key = result.Name
@@ -168,6 +171,170 @@ func ResultSummaryFor(data any, base string, style Style) (ResultSummary, bool) 
 	return summary, true
 }
 
+func ResultSummaryFromCompact(compact protocol.ToolCompact, base string, style Style) ResultSummary {
+	key := compact.CallID
+	if key == "" {
+		key = compact.Name
+	}
+	line := CompactLine(compact, base, style)
+	return ResultSummary{
+		Key:             key,
+		Line:            line,
+		IsError:         compact.IsError || compact.Status == protocol.StepStatusFailed || compact.Status == "aborted",
+		Truncated:       compact.Truncated,
+		OutputRef:       compact.OutputRef,
+		DurationMS:      compact.DurationMS,
+		EstimatedTokens: compact.EstimatedTokens,
+		OriginalBytes:   compact.OriginalBytes,
+	}
+}
+
+func CompactLine(compact protocol.ToolCompact, base string, style Style) string {
+	subject := strings.TrimSpace(base)
+	if subject == "" {
+		subject = strings.TrimSpace(compact.Title)
+	}
+	if subject == "" {
+		subject = strings.TrimSpace(compact.Name)
+	}
+	summary := strings.TrimSpace(compact.Summary)
+	if summary == "" {
+		summary = strings.TrimSpace(strings.Join([]string{compact.Status, subject, compact.Target}, " "))
+	}
+	if subject != "" && !strings.Contains(summary, subject) {
+		summary = strings.TrimSpace(subject + " " + summary)
+	}
+	prefix := compactPrefix(compact, style)
+	var parts []string
+	parts = append(parts, strings.TrimSpace(prefix+" "+CompactText(summary, 160)))
+	if compact.Error != "" {
+		parts = append(parts, CompactText(compact.Error, 80))
+	}
+	if compact.Truncated {
+		parts = append(parts, "truncated")
+	}
+	if compact.OutputRef != "" {
+		parts = append(parts, "ref "+CompactText(filepathBase(compact.OutputRef), 56))
+	}
+	if compact.DurationMS > 0 {
+		parts = append(parts, CompactDurationMS(compact.DurationMS))
+	}
+	if compact.EstimatedTokens > 0 {
+		parts = append(parts, "~"+CompactInt(compact.EstimatedTokens)+" tok")
+	}
+	if compact.OriginalBytes > 0 {
+		parts = append(parts, CompactInt(compact.OriginalBytes)+"B")
+	}
+	return strings.Join(nonEmptyParts(parts...), " · ")
+}
+
+func compactPrefix(compact protocol.ToolCompact, style Style) string {
+	failed := compact.IsError || compact.Status == protocol.StepStatusFailed || compact.Status == "aborted"
+	switch {
+	case style == StyleTelegram && failed:
+		return "⛔"
+	case style == StyleTelegram && (compact.Status == protocol.StepStatusCompleted || compact.Lifecycle == "result"):
+		return "✅"
+	case style == StyleTelegram && compact.Lifecycle == "output_ref":
+		return "📎"
+	case style == StyleTelegram:
+		return "⏳"
+	case failed:
+		return "Failed"
+	case compact.Status == protocol.StepStatusCompleted || compact.Lifecycle == "result":
+		return "Done"
+	case compact.Lifecycle == "output_ref":
+		return "Output"
+	default:
+		return "Tool"
+	}
+}
+
+func nonEmptyParts(parts ...string) []string {
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func ProgressLine(data any, style Style) (string, string) {
+	progress, ok := DecodeProgress(data)
+	if !ok {
+		return "", "Tool progress"
+	}
+	key := progress.CallID
+	if key == "" {
+		key = progress.Name
+	}
+	if progress.Compact != nil {
+		return key, CompactLine(*progress.Compact, "", style)
+	}
+	return key, CompactLine(protocol.ToolCompact{
+		CallID:    progress.CallID,
+		AttemptID: progress.AttemptID,
+		Name:      progress.Name,
+		Lifecycle: progress.Phase,
+		Status:    progress.Status,
+		Title:     progress.Name,
+		Summary:   strings.TrimSpace(strings.Join([]string{progress.Status, progress.Name, progress.Phase}, " ")),
+		Detail:    progress.Message,
+	}, "", style)
+}
+
+func OutputRefLine(data any, style Style) (string, string) {
+	ref, ok := DecodeOutputRef(data)
+	if !ok {
+		return "", "Tool output ref"
+	}
+	key := ref.CallID
+	if key == "" {
+		key = ref.Name
+	}
+	if ref.Compact != nil {
+		return key, CompactLine(*ref.Compact, "", style)
+	}
+	return key, CompactLine(protocol.ToolCompact{
+		CallID:        ref.CallID,
+		AttemptID:     ref.AttemptID,
+		Name:          ref.Name,
+		Lifecycle:     "output_ref",
+		Status:        "output_ref",
+		Title:         ref.Name,
+		Summary:       strings.TrimSpace(ref.Name + " output ref"),
+		OutputRef:     ref.OutputRef,
+		OutputRefID:   ref.OutputRefID,
+		OriginalBytes: ref.OutputRefBytes,
+		Truncated:     ref.Truncated,
+	}, "", style)
+}
+
+func PermissionLine(data any, style Style) (string, string) {
+	permission, ok := DecodePermission(data)
+	if !ok {
+		return "", "Tool permission"
+	}
+	key := permission.CallID
+	if key == "" {
+		key = permission.Name
+	}
+	state := permission.Decision
+	if state == "" && permission.RequiresApproval {
+		state = "approval required"
+	}
+	if state == "" {
+		state = "permission"
+	}
+	line := strings.TrimSpace(strings.Join([]string{state, permission.Name, string(permission.Risk)}, " "))
+	if style == StyleTelegram {
+		line = "🔐 " + line
+	}
+	return key, CompactText(line, 180)
+}
+
 func DecodeResult(data any) (protocol.ToolResult, bool) {
 	bytes, _ := json.Marshal(data)
 	var result protocol.ToolResult
@@ -175,6 +342,33 @@ func DecodeResult(data any) (protocol.ToolResult, bool) {
 		return protocol.ToolResult{}, false
 	}
 	return result, result.Name != "" || result.CallID != "" || result.Content != ""
+}
+
+func DecodeProgress(data any) (protocol.ToolProgressEvent, bool) {
+	bytes, _ := json.Marshal(data)
+	var progress protocol.ToolProgressEvent
+	if err := json.Unmarshal(bytes, &progress); err != nil {
+		return protocol.ToolProgressEvent{}, false
+	}
+	return progress, progress.CallID != "" || progress.Name != "" || progress.Phase != ""
+}
+
+func DecodeOutputRef(data any) (protocol.ToolOutputRefEvent, bool) {
+	bytes, _ := json.Marshal(data)
+	var ref protocol.ToolOutputRefEvent
+	if err := json.Unmarshal(bytes, &ref); err != nil {
+		return protocol.ToolOutputRefEvent{}, false
+	}
+	return ref, ref.CallID != "" || ref.OutputRef != ""
+}
+
+func DecodePermission(data any) (protocol.ToolPermissionEvent, bool) {
+	bytes, _ := json.Marshal(data)
+	var permission protocol.ToolPermissionEvent
+	if err := json.Unmarshal(bytes, &permission); err != nil {
+		return protocol.ToolPermissionEvent{}, false
+	}
+	return permission, permission.CallID != "" || permission.Name != ""
 }
 
 type callRenderFunc func(protocol.ToolCall, map[string]any) (string, bool)
@@ -290,7 +484,10 @@ func registeredCallLine(call protocol.ToolCall, args map[string]any, style Style
 
 func fallbackCallLine(call protocol.ToolCall, args map[string]any, style Style) string {
 	if style == StyleTelegram {
-		return "🛠 " + call.Name + " " + Preview(string(call.Arguments), 160)
+		if target := genericCallTarget(args); target != "" {
+			return "🛠 " + call.Name + " " + CompactText(target, 120)
+		}
+		return "🛠 " + call.Name
 	}
 	for _, key := range []string{"path", "command", "cmd", "query", "url", "pattern", "glob", "file"} {
 		if text, ok := args[key].(string); ok && text != "" {
@@ -298,6 +495,15 @@ func fallbackCallLine(call protocol.ToolCall, args map[string]any, style Style) 
 		}
 	}
 	return "Called " + call.Name
+}
+
+func genericCallTarget(args map[string]any) string {
+	for _, key := range []string{"path", "command", "cmd", "query", "url", "pattern", "glob", "file"} {
+		if text, ok := args[key].(string); ok && text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 func CompactArg(value any, limit int) string {
@@ -565,12 +771,4 @@ func metadataBool(metadata map[string]any, key string) bool {
 	default:
 		return false
 	}
-}
-
-func mustJSON(value any) string {
-	bytes, err := json.Marshal(value)
-	if err != nil {
-		return fmt.Sprint(value)
-	}
-	return string(bytes)
 }

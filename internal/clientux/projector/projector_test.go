@@ -86,6 +86,49 @@ func TestProjectorBuildsClientSnapshot(t *testing.T) {
 	}
 }
 
+func TestProjectorTracksToolCompactDisplay(t *testing.T) {
+	p := New()
+	progressCompact := protocol.ToolCompact{
+		CallID:    "call_1",
+		Name:      "custom_tool",
+		Lifecycle: "executing",
+		Status:    protocol.StepStatusStarted,
+		Summary:   "started custom_tool",
+		Hints:     []string{"safe"},
+	}
+	p.Apply(protocol.Event{Seq: 1, Type: protocol.EventToolCallProgress, Data: protocol.ToolProgressEvent{
+		CallID:  "call_1",
+		Name:    "custom_tool",
+		Phase:   "executing",
+		Status:  protocol.StepStatusStarted,
+		Compact: &progressCompact,
+	}})
+	resultCompact := protocol.ToolCompact{
+		CallID:          "call_1",
+		Name:            "custom_tool",
+		Lifecycle:       "result",
+		Status:          protocol.StepStatusCompleted,
+		Summary:         "completed custom_tool",
+		OutputRef:       "/root/billyharness/tool-output/custom.txt",
+		EstimatedTokens: 42,
+		Hints:           []string{"output_ref"},
+	}
+	snap := p.Apply(protocol.Event{Seq: 2, Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
+		CallID:  "call_1",
+		Name:    "custom_tool",
+		Content: "compact output",
+		Compact: &resultCompact,
+	}})
+	item := snap.ToolsByCallID["call_1"]
+	if item.Compact == nil || item.Compact.OutputRef != resultCompact.OutputRef || item.Compact.EstimatedTokens != 42 {
+		t.Fatalf("tool item compact = %#v", item.Compact)
+	}
+	item.Compact.Hints[0] = "mutated"
+	if got := p.Snapshot().ToolsByCallID["call_1"].Compact.Hints[0]; got != "output_ref" {
+		t.Fatalf("compact hints were not cloned: %q", got)
+	}
+}
+
 func TestGoldenTraceProjectsClientSnapshot(t *testing.T) {
 	p := New()
 	var snap Snapshot
