@@ -242,6 +242,10 @@ type ReplaySummary struct {
 	ParallelBatchLatencyMS int64                `json:"parallel_batch_latency_ms,omitempty"`
 	ModelCallsStarted      int                  `json:"model_calls_started,omitempty"`
 	ModelCallsFinished     int                  `json:"model_calls_finished,omitempty"`
+	PromptInventories      int                  `json:"prompt_inventories,omitempty"`
+	PromptCacheInitial     int                  `json:"prompt_cache_initial,omitempty"`
+	PromptCacheUnchanged   int                  `json:"prompt_cache_unchanged,omitempty"`
+	PromptCacheBreaks      int                  `json:"prompt_cache_breaks,omitempty"`
 	ToolCallsStarted       int                  `json:"tool_calls_started,omitempty"`
 	ToolCallProgress       int                  `json:"tool_call_progress,omitempty"`
 	ToolCallsFinished      int                  `json:"tool_calls_finished,omitempty"`
@@ -257,29 +261,32 @@ type ReplaySummary struct {
 }
 
 type ReplayTimelineItem struct {
-	Seq          int64  `json:"seq"`
-	TaskID       string `json:"task_id,omitempty"`
-	EventType    string `json:"event_type"`
-	Source       string `json:"source,omitempty"`
-	SubmissionID string `json:"submission_id,omitempty"`
-	RunID        string `json:"run_id,omitempty"`
-	TurnID       string `json:"turn_id,omitempty"`
-	StepID       string `json:"step_id,omitempty"`
-	ParentStepID string `json:"parent_step_id,omitempty"`
-	CallID       string `json:"call_id,omitempty"`
-	AttemptID    string `json:"attempt_id,omitempty"`
-	ProfileHash  string `json:"profile_hash,omitempty"`
-	Round        int    `json:"round,omitempty"`
-	Index        int    `json:"index,omitempty"`
-	Kind         string `json:"kind,omitempty"`
-	Phase        string `json:"phase,omitempty"`
-	Status       string `json:"status,omitempty"`
-	Name         string `json:"name,omitempty"`
-	StopReason   string `json:"stop_reason,omitempty"`
-	BatchID      string `json:"batch_id,omitempty"`
-	BatchSize    int    `json:"batch_size,omitempty"`
-	Parallel     bool   `json:"parallel,omitempty"`
-	DurationMS   int64  `json:"duration_ms,omitempty"`
+	Seq                 int64  `json:"seq"`
+	TaskID              string `json:"task_id,omitempty"`
+	EventType           string `json:"event_type"`
+	Source              string `json:"source,omitempty"`
+	SubmissionID        string `json:"submission_id,omitempty"`
+	RunID               string `json:"run_id,omitempty"`
+	TurnID              string `json:"turn_id,omitempty"`
+	StepID              string `json:"step_id,omitempty"`
+	ParentStepID        string `json:"parent_step_id,omitempty"`
+	CallID              string `json:"call_id,omitempty"`
+	AttemptID           string `json:"attempt_id,omitempty"`
+	ProfileHash         string `json:"profile_hash,omitempty"`
+	Round               int    `json:"round,omitempty"`
+	Index               int    `json:"index,omitempty"`
+	Kind                string `json:"kind,omitempty"`
+	Phase               string `json:"phase,omitempty"`
+	Status              string `json:"status,omitempty"`
+	Name                string `json:"name,omitempty"`
+	StopReason          string `json:"stop_reason,omitempty"`
+	BatchID             string `json:"batch_id,omitempty"`
+	BatchSize           int    `json:"batch_size,omitempty"`
+	Parallel            bool   `json:"parallel,omitempty"`
+	DurationMS          int64  `json:"duration_ms,omitempty"`
+	PromptInventoryHash string `json:"prompt_inventory_hash,omitempty"`
+	PromptCacheStatus   string `json:"prompt_cache_status,omitempty"`
+	PromptCacheReason   string `json:"prompt_cache_reason,omitempty"`
 }
 
 func ReplayEvents(path string) (ReplaySummary, error) {
@@ -458,6 +465,9 @@ func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEve
 	case protocol.EventModelCallStarted:
 		s.ModelCallsStarted++
 		s.usage.Reset()
+		if err := s.observePromptDiagnostics(event); err != nil {
+			return err
+		}
 	case protocol.EventModelCallFinished:
 		s.ModelCallsFinished++
 	case protocol.EventToolCallStarted:
@@ -480,6 +490,28 @@ func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEve
 		s.OutputTokens += delta.OutputTokens
 		s.CacheHitTokens += delta.CacheHitTokens
 		s.CacheMissTokens += delta.CacheMissTokens
+	}
+	return nil
+}
+
+func (s *ReplaySummary) observePromptDiagnostics(event protocol.Event) error {
+	model, err := modelCallFromEvent(event)
+	if err != nil {
+		return err
+	}
+	if model.PromptInventory != nil {
+		s.PromptInventories++
+	}
+	if model.PromptCacheBreak == nil {
+		return nil
+	}
+	switch model.PromptCacheBreak.Status {
+	case "initial":
+		s.PromptCacheInitial++
+	case "unchanged":
+		s.PromptCacheUnchanged++
+	case "changed":
+		s.PromptCacheBreaks++
 	}
 	return nil
 }
@@ -731,6 +763,28 @@ func applyTimelineMap(item *ReplayTimelineItem, m map[string]any) {
 	item.Status = firstString(mapString(m, "status"), item.Status)
 	item.Name = firstString(item.Name, firstString(mapString(m, "name"), mapString(m, "tool_name"), mapString(m, "model")))
 	item.DurationMS = firstInt64(item.DurationMS, mapInt64(m, "duration_ms"))
+	item.PromptInventoryHash = firstString(item.PromptInventoryHash, mapString(m, "prompt_inventory_hash"))
+	item.PromptCacheStatus = firstString(item.PromptCacheStatus, mapString(m, "prompt_cache_status"))
+	item.PromptCacheReason = firstString(item.PromptCacheReason, mapString(m, "prompt_cache_reason"))
+	if nested, ok := m["prompt_cache_break"].(map[string]any); ok {
+		item.PromptCacheStatus = firstString(item.PromptCacheStatus, mapString(nested, "status"))
+		item.PromptCacheReason = firstString(item.PromptCacheReason, mapString(nested, "reason"))
+	}
+	if nested, ok := m["prompt_inventory"].(map[string]any); ok {
+		item.PromptInventoryHash = firstString(item.PromptInventoryHash, mapString(nested, "hash"))
+	}
+}
+
+func modelCallFromEvent(event protocol.Event) (protocol.ModelCallEvent, error) {
+	bytes, err := json.Marshal(event.Data)
+	if err != nil {
+		return protocol.ModelCallEvent{}, fmt.Errorf("invalid model call event: %w", err)
+	}
+	var model protocol.ModelCallEvent
+	if err := json.Unmarshal(bytes, &model); err != nil {
+		return protocol.ModelCallEvent{}, fmt.Errorf("invalid model call event: %w", err)
+	}
+	return model, nil
 }
 
 func firstString(values ...string) string {

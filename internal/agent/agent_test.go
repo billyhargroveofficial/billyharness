@@ -75,7 +75,7 @@ func TestRunMessagesEmitsTypedTurnAndModelStepEvents(t *testing.T) {
 	if !ok || started.TurnID != "turn-001" || started.Round != 1 || started.Status != protocol.TurnStatusStarted || started.Model != "mock" {
 		t.Fatalf("turn started = %#v ok=%v", started, ok)
 	}
-	for _, key := range []string{"provider_id", "model_id", "tool_snapshot_hash", "mcp_status_snapshot_hash", "profile_instruction_hash", "dangerous_permission_mode", "access_mode"} {
+	for _, key := range []string{"provider_id", "model_id", "tool_snapshot_hash", "mcp_status_snapshot_hash", "profile_instruction_hash", "prompt_inventory_hash", "prompt_cache_status", "prompt_cache_reason", "dangerous_permission_mode", "access_mode"} {
 		if started.Metadata[key] == nil {
 			t.Fatalf("turn snapshot missing %s: %#v", key, started.Metadata)
 		}
@@ -91,6 +91,15 @@ func TestRunMessagesEmitsTypedTurnAndModelStepEvents(t *testing.T) {
 	callStarted, ok := firstEventData(events, protocol.EventModelCallStarted)
 	if !ok || callStarted["request_id"] == "" || callStarted["provider_id"] != "mock" || callStarted["model_id"] != "mock" || callStarted["status"] != protocol.StepStatusStarted {
 		t.Fatalf("model call started = %#v ok=%v", callStarted, ok)
+	}
+	typedCallStarted, ok := firstModelCallEvent(events, protocol.EventModelCallStarted)
+	if !ok ||
+		typedCallStarted.PromptInventoryHash == "" ||
+		typedCallStarted.PromptInventory == nil ||
+		typedCallStarted.PromptCacheBreak == nil ||
+		typedCallStarted.PromptCacheBreak.Status != "initial" ||
+		typedCallStarted.PromptCacheBreak.Reason != "initial_request" {
+		t.Fatalf("typed model call started = %#v ok=%v", typedCallStarted, ok)
 	}
 	callFinished, ok := firstEventData(events, protocol.EventModelCallFinished)
 	if !ok ||

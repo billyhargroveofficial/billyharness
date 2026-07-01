@@ -665,6 +665,9 @@ func modelCallEventData(base map[string]any, status string, totalLatencyMS, firs
 		ToolSnapshotHash:        metadataString(base, "tool_snapshot_hash"),
 		MCPStatusSnapshotHash:   metadataString(base, "mcp_status_snapshot_hash"),
 		ProfileInstructionHash:  metadataString(base, "profile_instruction_hash"),
+		PromptInventoryHash:     metadataString(base, "prompt_inventory_hash"),
+		PromptInventory:         metadataPromptInventory(base, "prompt_inventory"),
+		PromptCacheBreak:        metadataPromptCacheBreak(base, "prompt_cache_break"),
 		DangerousPermissionMode: metadataString(base, "dangerous_permission_mode"),
 		AccessMode:              metadataString(base, "access_mode"),
 		Status:                  status,
@@ -734,6 +737,15 @@ func modelCallEventMetadata(data protocol.ModelCallEvent) map[string]any {
 	addStringMetadata(metadata, "tool_snapshot_hash", data.ToolSnapshotHash)
 	addStringMetadata(metadata, "mcp_status_snapshot_hash", data.MCPStatusSnapshotHash)
 	addStringMetadata(metadata, "profile_instruction_hash", data.ProfileInstructionHash)
+	addStringMetadata(metadata, "prompt_inventory_hash", data.PromptInventoryHash)
+	if data.PromptInventory != nil {
+		metadata["prompt_inventory"] = data.PromptInventory
+	}
+	if data.PromptCacheBreak != nil {
+		metadata["prompt_cache_break"] = data.PromptCacheBreak
+		addStringMetadata(metadata, "prompt_cache_status", data.PromptCacheBreak.Status)
+		addStringMetadata(metadata, "prompt_cache_reason", data.PromptCacheBreak.Reason)
+	}
 	addStringMetadata(metadata, "provider_request_id", data.ProviderRequestID)
 	addIntMetadata(metadata, "attempts", data.Attempts)
 	addIntMetadata(metadata, "status_code", data.StatusCode)
@@ -769,6 +781,28 @@ func addInt64Metadata(metadata map[string]any, key string, value int64) {
 func addOptionalInt64Metadata(metadata map[string]any, key string, value *int64) {
 	if value != nil {
 		metadata[key] = *value
+	}
+}
+
+func metadataPromptInventory(metadata map[string]any, key string) *protocol.PromptInventory {
+	switch value := metadata[key].(type) {
+	case *protocol.PromptInventory:
+		return value
+	case protocol.PromptInventory:
+		return &value
+	default:
+		return nil
+	}
+}
+
+func metadataPromptCacheBreak(metadata map[string]any, key string) *protocol.PromptCacheBreak {
+	switch value := metadata[key].(type) {
+	case *protocol.PromptCacheBreak:
+		return value
+	case protocol.PromptCacheBreak:
+		return &value
+	default:
+		return nil
 	}
 }
 

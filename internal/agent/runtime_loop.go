@@ -75,6 +75,7 @@ func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []pro
 	defer cleanupMCPStatusHook()
 	messages = a.withMCPInstructions(messages)
 	var lastPromptTokens int64
+	var previousTurnSnapshot *runstate.Snapshot
 	emittedContextThresholds := map[int]bool{}
 	emitContextThresholdEvents(messages, a.runtime, 0, "initial", emittedContextThresholds, emit)
 	for round := 0; round < a.runtime.MaxToolRounds; round++ {
@@ -93,7 +94,7 @@ func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []pro
 		toolSpecs := toolSet.Specs()
 		snapshotInput := a.snapshotInput()
 		snapshotInput.MCPStatusSnapshotHash = toolSet.MCPStatusSnapshotHash()
-		turnSnapshot := runstate.NewSnapshot(snapshotInput, messages, toolSpecs)
+		turnSnapshot := runstate.NewSnapshot(snapshotInput, messages, toolSpecs).WithPromptCacheBreak(previousTurnSnapshot)
 		a.emitTurnStarted(emit, turnID, roundNum, messages, turnSnapshot)
 		if err := validateTranscriptPairing(messages); err != nil {
 			err = a.failTurn(ctx, hookRunner, run, turnID, roundNum, turnStarted, err, emit)
@@ -109,6 +110,8 @@ func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []pro
 		if modelStep.PromptTokens > 0 {
 			lastPromptTokens = modelStep.PromptTokens
 		}
+		previous := turnSnapshot
+		previousTurnSnapshot = &previous
 		if err := modelStep.Err; err != nil {
 			err = a.failTurn(ctx, hookRunner, run, turnID, roundNum, turnStarted, err, emit)
 			return messages, err

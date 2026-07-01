@@ -1,6 +1,8 @@
 package runstate
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
@@ -125,6 +127,114 @@ func TestSnapshotInstructionHashIncludesProtectedUserContext(t *testing.T) {
 	if got := NewSnapshot(snapshotInput(cfg), instructionsChanged, nil); got.ProfileInstructionHash == original.ProfileInstructionHash {
 		t.Fatalf("AGENTS change did not affect instruction hash")
 	}
+}
+
+func TestPromptInventoryIsStableAndOmitsArbitraryUserText(t *testing.T) {
+	cfg := config.Config{Model: "mock", Provider: "mock", Profile: "billy"}
+	messages := []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "# Project context\n<PROJECT_CONTEXT>\nenv_vars: API_TOKEN\n</PROJECT_CONTEXT>"},
+		{Role: protocol.RoleUser, Content: "ordinary prompt with fake secret sk-test-123"},
+	}
+	specsA := []protocol.ToolSpec{
+		{Name: "z", Description: "last", Parameters: []byte(`{"z":true}`), Risk: protocol.RiskReadOnly},
+		{Name: "a", Description: "first", Parameters: []byte(`{"a":true}`), Risk: protocol.RiskNetwork},
+	}
+	specsB := []protocol.ToolSpec{
+		{Name: "a", Description: "first", Parameters: []byte(`{"a":true}`), Risk: protocol.RiskNetwork},
+		{Name: "z", Description: "last", Parameters: []byte(`{"z":true}`), Risk: protocol.RiskReadOnly},
+	}
+
+	a := NewSnapshot(snapshotInput(cfg), messages, specsA)
+	b := NewSnapshot(snapshotInput(cfg), messages, specsB)
+	if a.PromptInventory == nil || b.PromptInventory == nil {
+		t.Fatalf("missing prompt inventory: %#v %#v", a.PromptInventory, b.PromptInventory)
+	}
+	if a.PromptInventory.Hash != b.PromptInventory.Hash {
+		t.Fatalf("inventory hashes differ: %s != %s", a.PromptInventory.Hash, b.PromptInventory.Hash)
+	}
+	if !hasPromptSection(a.PromptInventory, "system_prompt") ||
+		!hasPromptSection(a.PromptInventory, "project_context") ||
+		!hasPromptSection(a.PromptInventory, "tool_schemas") {
+		t.Fatalf("inventory missing expected sections: %#v", a.PromptInventory.Sections)
+	}
+	if hasPromptSection(a.PromptInventory, "user_prompt") {
+		t.Fatalf("ordinary user prompt should not be inventoried: %#v", a.PromptInventory.Sections)
+	}
+	body, err := json.Marshal(a.PromptInventory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "sk-test-123") || strings.Contains(string(body), "ordinary prompt") {
+		t.Fatalf("inventory leaked arbitrary prompt text: %s", body)
+	}
+}
+
+func TestPromptCacheBreakReasonsForModelToolAndContextChanges(t *testing.T) {
+	cfg := config.Config{Model: "mock", Provider: "mock", Profile: "billy"}
+	messages := []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "# Project context\n<PROJECT_CONTEXT>\ncwd: /repo\n</PROJECT_CONTEXT>"},
+		{Role: protocol.RoleUser, Content: "prompt"},
+	}
+	specs := []protocol.ToolSpec{{Name: "fs_read_file", Parameters: []byte(`{"type":"object"}`), Risk: protocol.RiskReadOnly}}
+	base := NewSnapshot(snapshotInput(cfg), messages, specs)
+
+	initial := base.WithPromptCacheBreak(nil)
+	if initial.PromptCacheBreak == nil || initial.PromptCacheBreak.Status != "initial" || initial.PromptCacheBreak.Reason != "initial_request" {
+		t.Fatalf("initial cache diagnostic = %#v", initial.PromptCacheBreak)
+	}
+	unchanged := NewSnapshot(snapshotInput(cfg), messages, specs).WithPromptCacheBreak(&base)
+	if unchanged.PromptCacheBreak == nil || unchanged.PromptCacheBreak.Status != "unchanged" {
+		t.Fatalf("unchanged cache diagnostic = %#v", unchanged.PromptCacheBreak)
+	}
+
+	modelCfg := cfg
+	modelCfg.Model = "mock-large"
+	modelChanged := NewSnapshot(snapshotInput(modelCfg), messages, specs).WithPromptCacheBreak(&base)
+	if !cacheBreakContains(modelChanged.PromptCacheBreak, "model_changed") {
+		t.Fatalf("model cache diagnostic = %#v", modelChanged.PromptCacheBreak)
+	}
+
+	toolChanged := NewSnapshot(snapshotInput(cfg), messages, []protocol.ToolSpec{{
+		Name:       "fs_read_file",
+		Parameters: []byte(`{"type":"object","properties":{"path":{"type":"string"}}}`),
+		Risk:       protocol.RiskReadOnly,
+	}}).WithPromptCacheBreak(&base)
+	if !cacheBreakContains(toolChanged.PromptCacheBreak, "tool_schema_changed") {
+		t.Fatalf("tool cache diagnostic = %#v", toolChanged.PromptCacheBreak)
+	}
+
+	contextMessages := append([]protocol.Message(nil), messages...)
+	contextMessages[1].Content = "# Project context updated\n<PROJECT_CONTEXT>\ncwd: /repo\ncap_flags: rendered_capped\n</PROJECT_CONTEXT>"
+	contextChanged := NewSnapshot(snapshotInput(cfg), contextMessages, specs).WithPromptCacheBreak(&base)
+	if !cacheBreakContains(contextChanged.PromptCacheBreak, "prompt_section:project_context") {
+		t.Fatalf("context cache diagnostic = %#v", contextChanged.PromptCacheBreak)
+	}
+}
+
+func hasPromptSection(inventory *protocol.PromptInventory, name string) bool {
+	if inventory == nil {
+		return false
+	}
+	for _, section := range inventory.Sections {
+		if section.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func cacheBreakContains(breakInfo *protocol.PromptCacheBreak, want string) bool {
+	if breakInfo == nil {
+		return false
+	}
+	for _, field := range breakInfo.ChangedFields {
+		if field == want {
+			return true
+		}
+	}
+	return strings.Contains(breakInfo.Reason, want)
 }
 
 func snapshotInput(cfg config.Config) SnapshotInput {

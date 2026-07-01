@@ -198,7 +198,30 @@ func TestReplayEventsAggregatesUsageCumulativeAndEventCounters(t *testing.T) {
 		{Type: protocol.EventRunStarted},
 		{Type: protocol.EventTurnStarted, Data: protocol.TurnEvent{TurnID: "turn-001", Round: 1, Status: protocol.TurnStatusStarted, Metadata: map[string]any{"profile_instruction_hash": profileHash}}},
 		{Type: protocol.EventStepStarted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:model-call-001", Round: 1, Kind: protocol.StepKindModelCall, Status: protocol.StepStatusStarted}},
-		{Type: protocol.EventModelCallStarted, TurnID: "turn-001", StepID: "turn-001:model-call-001"},
+		{Type: protocol.EventModelCallStarted, TurnID: "turn-001", StepID: "turn-001:model-call-001", Data: protocol.ModelCallEvent{
+			RequestID:           "request-1",
+			Status:              protocol.StepStatusStarted,
+			PromptInventoryHash: "prompt-inventory-sha",
+			PromptInventory: &protocol.PromptInventory{
+				Hash:         "prompt-inventory-sha",
+				TotalBytes:   120,
+				ApproxTokens: 30,
+				Sections: []protocol.PromptSection{{
+					Name:         "system_prompt",
+					Role:         protocol.RoleSystem,
+					Index:        0,
+					ByteCount:    80,
+					ApproxTokens: 20,
+					SHA256:       "system-sha",
+				}},
+			},
+			PromptCacheBreak: &protocol.PromptCacheBreak{
+				Status:           "changed",
+				Reason:           "tool_schema_changed",
+				ChangedFields:    []string{"tool_schema_changed"},
+				CurrentSignature: "cache-signature",
+			},
+		}},
 		{Type: protocol.EventProviderUsageUpdate, Data: map[string]any{
 			"input_tokens":      100,
 			"output_tokens":     7,
@@ -260,6 +283,7 @@ func TestReplayEventsAggregatesUsageCumulativeAndEventCounters(t *testing.T) {
 		summary.StepsStarted != 2 || summary.StepsCompleted != 2 || summary.StepsFailed != 0 ||
 		summary.ParallelBatches != 1 ||
 		summary.ModelCallsStarted != 1 || summary.ModelCallsFinished != 1 ||
+		summary.PromptInventories != 1 || summary.PromptCacheBreaks != 1 ||
 		summary.ToolCallsStarted != 1 || summary.ToolCallProgress != 1 || summary.ToolCallsFinished != 1 ||
 		summary.ContextThresholds != 1 || summary.ContextCompactions != 1 {
 		t.Fatalf("event counters = %#v", summary)
@@ -310,6 +334,11 @@ func TestReplayEventsAggregatesUsageCumulativeAndEventCounters(t *testing.T) {
 		summary.Timeline[2].Kind != protocol.StepKindModelCall ||
 		summary.Timeline[2].Status != protocol.StepStatusStarted {
 		t.Fatalf("model step timeline item = %#v", summary.Timeline[2])
+	}
+	if summary.Timeline[3].PromptInventoryHash != "prompt-inventory-sha" ||
+		summary.Timeline[3].PromptCacheStatus != "changed" ||
+		summary.Timeline[3].PromptCacheReason != "tool_schema_changed" {
+		t.Fatalf("model prompt diagnostic timeline item = %#v", summary.Timeline[3])
 	}
 	if summary.Timeline[4].Seq != 7 || summary.Timeline[4].Kind != "context_threshold" {
 		t.Fatalf("threshold timeline item = %#v", summary.Timeline[4])

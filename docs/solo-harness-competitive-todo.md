@@ -169,7 +169,7 @@ Goal: make every expensive model request understandable: what prompt sections
 were included, what changed, what helper model was used, and how close the turn
 is to compaction.
 
-- [ ] SH-01.1 Add prompt section inventory and cache-break diagnostics.
+- [x] SH-01.1 Add prompt section inventory and cache-break diagnostics.
   - inspiration: Claude Code prompt-cache break detection and OpenCode context
     epochs.
   - target files: `internal/instructions`, `internal/projectcontext`,
@@ -181,7 +181,26 @@ is to compaction.
   - acceptance: secrets and `.env` values are never included in diagnostics.
   - verification: focused tests for prompt inventory hash stability and a cache
     break caused by model/tool/context change.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: added protocol prompt-inventory/cache-break structs, runstate
+    prompt-section and tool-schema inventory hashing, per-turn cache signature
+    comparison, model-call event metadata, and trace replay counters/timeline
+    fields. Diagnostics include section names, roles, indexes, byte counts,
+    approximate token counts, and SHA-256 hashes only; arbitrary user/chat text
+    is not inventoried, and project context still records `.env` variable names
+    without values.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*Prompt.*|Test.*Cache.*Break.*' -count=1 ./internal/runstate
+    ./internal/agent ./internal/trace` passed;
+    `/root/.local/go/bin/go test -run
+    'Test.*Prompt.*|Test.*Cache.*Break.*|TestReplayEventsAggregatesUsageCumulativeAndEventCounters'
+    -count=1 ./internal/runstate ./internal/agent ./internal/trace` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/instructions
+    ./internal/projectcontext ./internal/runstate ./internal/agent
+    ./internal/protocol ./internal/trace` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] SH-01.2 Add `/context` report v2 for CLI, TUI, and Telegram.
   - inspiration: Codex/OpenCode context-window metadata and the user's current
