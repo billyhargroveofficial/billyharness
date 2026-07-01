@@ -11,6 +11,7 @@ type RuntimeDiffSettings struct {
 	Profile     ProfileSelection
 	Runtime     RuntimeLimits
 	ToolPolicy  ToolPolicySettings
+	Diagnostics DiagnosticsSettings
 	MCP         MCPSettings
 	Hooks       HookSettings
 	GatewayAddr string
@@ -32,6 +33,7 @@ func RuntimeDiffSettingsFromConfig(cfg Config) RuntimeDiffSettings {
 		Profile:     cfg.ProfileSelection(),
 		Runtime:     cfg.RuntimeLimits(),
 		ToolPolicy:  cfg.ToolPolicySettings(),
+		Diagnostics: cfg.DiagnosticsSettings(),
 		MCP:         cfg.MCPSettings(),
 		Hooks:       cfg.HookSettings(),
 		GatewayAddr: cfg.GatewayAddr,
@@ -154,6 +156,9 @@ func runtimeDiffConfigFromSettings(base Config, settings RuntimeDiffSettings) Co
 	cfg.ProjectDocMaxBytes = settings.ToolPolicy.ProjectDocMaxBytes
 	cfg.ProjectDocFallbacks = cloneStrings(settings.ToolPolicy.ProjectDocFallbacks)
 	cfg.MaxToolOutputBytes = settings.ToolPolicy.MaxToolOutputBytes
+	cfg.DiagnosticsEnabled = settings.Diagnostics.Enabled
+	cfg.DiagnosticsConfigFiles = cloneStrings(settings.Diagnostics.ConfigFiles)
+	cfg.DiagnosticsCommands = cloneDiagnosticCommands(settings.Diagnostics.Commands)
 	cfg.AutoApproveDangerous = settings.ToolPolicy.AutoApproveDangerous
 	cfg.AccessMode = NormalizeAccessMode(settings.ToolPolicy.AccessMode)
 	cfg.StoreReasoningContent = settings.ToolPolicy.StoreReasoningContent

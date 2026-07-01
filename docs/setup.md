@@ -113,6 +113,11 @@ servers and watchers. A background `shell_exec` returns a Billy-owned
 {"process_id":"shell-1"}
 ```
 
+Command-based diagnostics are exposed through `diagnostics_run`. The tool only
+runs named commands from diagnostics settings or the built-in `go-test`
+default, parses common compiler locations, and stores raw output as an
+`output_ref`. See `docs/diagnostics.md`.
+
 Audit status is visible through:
 
 ```sh

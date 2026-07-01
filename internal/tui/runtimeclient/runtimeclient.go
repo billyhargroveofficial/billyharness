@@ -16,6 +16,7 @@ type Settings struct {
 	Profile         config.ProfileSelection
 	Runtime         config.RuntimeLimits
 	ToolPolicy      config.ToolPolicySettings
+	Diagnostics     config.DiagnosticsSettings
 	MCP             config.MCPSettings
 	Hooks           config.HookSettings
 	Instructions    config.InstructionSettings
@@ -58,9 +59,10 @@ func MCPStatus(ctx context.Context, settings Settings) (mcpstatus.Response, erro
 
 func registrySettings(settings Settings) tools.RegistrySettings {
 	return tools.RegistrySettings{
-		Provider:   settings.ProviderBinding,
-		ToolPolicy: settings.ToolPolicy,
-		MCP:        settings.MCP,
+		Provider:    settings.ProviderBinding,
+		ToolPolicy:  settings.ToolPolicy,
+		Diagnostics: settings.Diagnostics,
+		MCP:         settings.MCP,
 	}
 }
 

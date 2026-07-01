@@ -43,6 +43,7 @@ type Server struct {
 	profile         config.ProfileSelection
 	runtime         config.RuntimeLimits
 	toolPolicy      config.ToolPolicySettings
+	diagnostics     config.DiagnosticsSettings
 	mcpSettings     config.MCPSettings
 	hookSettings    config.HookSettings
 	instructions    config.InstructionSettings
@@ -68,6 +69,7 @@ type ServerSettings struct {
 	Profile         config.ProfileSelection
 	Runtime         config.RuntimeLimits
 	ToolPolicy      config.ToolPolicySettings
+	Diagnostics     config.DiagnosticsSettings
 	MCP             config.MCPSettings
 	Hooks           config.HookSettings
 	Instructions    config.InstructionSettings
@@ -112,6 +114,7 @@ type runSettings struct {
 	profile      config.ProfileSelection
 	runtime      config.RuntimeLimits
 	toolPolicy   config.ToolPolicySettings
+	diagnostics  config.DiagnosticsSettings
 	mcp          config.MCPSettings
 	hooks        config.HookSettings
 	instructions config.InstructionSettings
@@ -132,6 +135,7 @@ func ServerSettingsFromConfig(cfg config.Config) ServerSettings {
 		Profile:         cfg.ProfileSelection(),
 		Runtime:         cfg.RuntimeLimits(),
 		ToolPolicy:      cfg.ToolPolicySettings(),
+		Diagnostics:     cfg.DiagnosticsSettings(),
 		MCP:             cfg.MCPSettings(),
 		Hooks:           cfg.HookSettings(),
 		Instructions:    cfg.InstructionSettings(),
@@ -152,6 +156,7 @@ func NewServerWithOptionsFromSettings(settings ServerSettings, prov provider.Pro
 		profile:         settings.Profile,
 		runtime:         settings.Runtime,
 		toolPolicy:      settings.ToolPolicy,
+		diagnostics:     settings.Diagnostics,
 		mcpSettings:     settings.MCP,
 		hookSettings:    settings.Hooks,
 		instructions:    settings.Instructions,
@@ -194,6 +199,11 @@ func agentSettingsFromServerSettings(settings ServerSettings) agent.Settings {
 func cloneServerSettings(settings ServerSettings) ServerSettings {
 	settings.ToolPolicy.WorkspaceRoots = append([]string(nil), settings.ToolPolicy.WorkspaceRoots...)
 	settings.ToolPolicy.ProjectDocFallbacks = append([]string(nil), settings.ToolPolicy.ProjectDocFallbacks...)
+	settings.Diagnostics = config.Config{
+		DiagnosticsEnabled:     settings.Diagnostics.Enabled,
+		DiagnosticsConfigFiles: settings.Diagnostics.ConfigFiles,
+		DiagnosticsCommands:    settings.Diagnostics.Commands,
+	}.DiagnosticsSettings()
 	settings.MCP = config.Config{
 		MCPEnabled:        settings.MCP.Enabled,
 		MCPConfigFiles:    settings.MCP.ConfigFiles,
@@ -1150,6 +1160,7 @@ type sessionSnapshotProjection struct {
 	Profile      config.ProfileSelection
 	Runtime      config.RuntimeLimits
 	ToolPolicy   config.ToolPolicySettings
+	Diagnostics  config.DiagnosticsSettings
 	MCP          config.MCPSettings
 	GatewayAddr  string
 }
@@ -1161,6 +1172,7 @@ func (s *Server) sessionSnapshot(session *Session) sessionSnapshotProjection {
 		Profile:      s.profile,
 		Runtime:      s.runtime,
 		ToolPolicy:   s.toolPolicy,
+		Diagnostics:  s.diagnostics,
 		MCP:          s.mcpSettings,
 		GatewayAddr:  s.gatewayAddr,
 	}
@@ -1305,6 +1317,7 @@ func (s *Server) runtimeDiffSettings() config.RuntimeDiffSettings {
 		Profile:     s.profile,
 		Runtime:     s.runtime,
 		ToolPolicy:  s.toolPolicy,
+		Diagnostics: s.diagnostics,
 		MCP:         s.mcpSettings,
 		Hooks:       s.hookSettings,
 		GatewayAddr: s.gatewayAddr,
@@ -1323,6 +1336,7 @@ func runSettingsFromRuntimeDiffSettings(settings config.RuntimeDiffSettings) run
 		profile:      settings.Profile,
 		runtime:      settings.Runtime,
 		toolPolicy:   settings.ToolPolicy,
+		diagnostics:  settings.Diagnostics,
 		mcp:          settings.MCP,
 		hooks:        settings.Hooks,
 		instructions: instructions,

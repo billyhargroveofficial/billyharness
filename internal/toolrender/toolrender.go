@@ -510,6 +510,22 @@ var callRenderers = map[string]callRenderer{
 			return "⚙️ shell kill " + CompactArg(args["process_id"], 64)
 		}),
 	},
+	"diagnostics_run": {
+		tui: staticCallLine(func(args map[string]any) string {
+			name := firstArg(args, "name")
+			if name == "" {
+				name = "default"
+			}
+			return "Ran diagnostics " + name
+		}),
+		telegram: staticCallLine(func(args map[string]any) string {
+			name := CompactArg(args["name"], 64)
+			if name == "" || name == "-" {
+				name = "default"
+			}
+			return "🩺 diagnostics " + name
+		}),
+	},
 	"fs_read_file": {
 		tui:      staticCallLine(fsReadTUILine),
 		telegram: staticCallLine(fsReadTelegramLine),

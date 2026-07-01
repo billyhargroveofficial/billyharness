@@ -669,11 +669,31 @@ abuse.
     `/root/.local/go/bin/go test -count=1 ./internal/toolrender` passed.
   - commit: pending.
 
-- [ ] HR-03.8 Command-based diagnostics feedback.
+- [x] HR-03.8 Command-based diagnostics feedback.
   - maps to: `competitive-improvements-todo.md` A9.
   - acceptance: configured commands produce structured bounded diagnostics with
     raw output refs and no full LSP platform.
   - verification: `go test -count=1 ./internal/diagnostics ./internal/tools ./internal/agent ./internal/toolrender ./internal/tui/transcript ./internal/telegrambot ./internal/config`.
+  - status: completed 2026-07-01.
+  - evidence: added a command-based `diagnostics_run` tool backed by
+    diagnostics settings and an optional `diagnostics.config.toml`; the tool
+    only runs named configured/default commands, captures combined stdout/stderr
+    into a bounded buffer, stores raw output with `output_ref`, parses common
+    `file:line:col` and `file(line,col)` diagnostics with raw fallback, caps
+    issues globally and per file, sorts errors before warnings, and returns a
+    compact `<diagnostics>` block plus bounded metadata. The implementation is
+    local command feedback only; no LSP, watcher, scheduler, auto-install, or
+    provider call was added.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/diagnostics
+    ./internal/tools ./internal/agent ./internal/toolrender
+    ./internal/tui/transcript ./internal/telegrambot ./internal/config`
+    passed; `/root/.local/go/bin/go test -count=1 ./internal/tui
+    ./internal/gateway ./internal/architecture` passed;
+    `/root/.local/go/bin/go test -run
+    'Test.*Diagnostics.*|Test.*Compiler.*|Test.*OutputRef.*' -count=1
+    ./internal/...` passed.
+  - commit: pending.
 
 - [ ] HR-03.9 Local custom slash prompt commands.
   - maps to: `competitive-improvements-todo.md` A10.

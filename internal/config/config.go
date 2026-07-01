@@ -44,6 +44,9 @@ type Config struct {
 	ProjectDocMaxBytes            int
 	ProjectDocFallbacks           []string
 	MaxToolOutputBytes            int
+	DiagnosticsEnabled            bool
+	DiagnosticsConfigFiles        []string
+	DiagnosticsCommands           []DiagnosticCommand
 	AutoApproveDangerous          bool
 	AccessMode                    string
 	StoreReasoningContent         bool

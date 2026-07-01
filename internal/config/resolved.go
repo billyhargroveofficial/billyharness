@@ -205,6 +205,8 @@ func configSpecs() []configSpec {
 		intSpec("project_doc_max_bytes", []string{"FAST_AGENT_PROJECT_DOC_MAX_BYTES"}, func(c Config) any { return c.ProjectDocMaxBytes }, func(c *Config, v int) { c.ProjectDocMaxBytes = v }),
 		stringListSpec("project_doc_fallback_filenames", []string{"FAST_AGENT_PROJECT_DOC_FALLBACK_FILENAMES"}, func(c Config) any { return c.ProjectDocFallbacks }, func(c *Config, v []string) { c.ProjectDocFallbacks = v }),
 		intSpec("max_tool_output_bytes", []string{"FAST_AGENT_MAX_TOOL_OUTPUT_BYTES"}, func(c Config) any { return c.MaxToolOutputBytes }, func(c *Config, v int) { c.MaxToolOutputBytes = v }),
+		boolSpec("diagnostics_enabled", []string{"BILLYHARNESS_DIAGNOSTICS_ENABLED", "FAST_AGENT_DIAGNOSTICS_ENABLED"}, func(c Config) any { return c.DiagnosticsEnabled }, func(c *Config, v bool) { c.DiagnosticsEnabled = v }),
+		stringListSpec("diagnostics_config_files", []string{"BILLYHARNESS_DIAGNOSTICS_CONFIG_FILES", "FAST_AGENT_DIAGNOSTICS_CONFIG_FILES"}, func(c Config) any { return c.DiagnosticsConfigFiles }, func(c *Config, v []string) { c.DiagnosticsConfigFiles = v }),
 		boolSpec("auto_approve_dangerous", []string{"FAST_AGENT_AUTO_APPROVE_DANGEROUS"}, func(c Config) any { return c.AutoApproveDangerous }, func(c *Config, v bool) { c.AutoApproveDangerous = v }),
 		stringSpec("access_mode", []string{"BILLYHARNESS_ACCESS_MODE", "FAST_AGENT_ACCESS_MODE"}, func(c Config) any { return NormalizeAccessMode(c.AccessMode) }, func(c *Config, v string) { c.AccessMode = NormalizeAccessMode(v) }),
 		boolSpec("store_reasoning", []string{"FAST_AGENT_STORE_REASONING"}, func(c Config) any { return c.StoreReasoningContent }, func(c *Config, v bool) { c.StoreReasoningContent = v }),

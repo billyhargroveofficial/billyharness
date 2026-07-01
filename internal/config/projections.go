@@ -69,6 +69,12 @@ type ToolPolicySettings struct {
 	WebCacheMaxBytes          int64
 }
 
+type DiagnosticsSettings struct {
+	Enabled     bool
+	ConfigFiles []string
+	Commands    []DiagnosticCommand
+}
+
 type MCPSettings struct {
 	Enabled        bool
 	ConfigFiles    []string
@@ -177,6 +183,14 @@ func (c Config) ToolPolicySettings() ToolPolicySettings {
 	}
 }
 
+func (c Config) DiagnosticsSettings() DiagnosticsSettings {
+	return DiagnosticsSettings{
+		Enabled:     c.DiagnosticsEnabled,
+		ConfigFiles: cloneStrings(c.DiagnosticsConfigFiles),
+		Commands:    cloneDiagnosticCommands(c.DiagnosticsCommands),
+	}
+}
+
 func (c Config) MCPSettings() MCPSettings {
 	return MCPSettings{
 		Enabled:        c.MCPEnabled,
@@ -252,6 +266,26 @@ func cloneMCPServers(in []MCPServer) []MCPServer {
 		out = append(out, server)
 	}
 	return out
+}
+
+func cloneDiagnosticCommands(in []DiagnosticCommand) []DiagnosticCommand {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]DiagnosticCommand, 0, len(in))
+	for _, command := range in {
+		command.Args = cloneStrings(command.Args)
+		out = append(out, command)
+	}
+	return out
+}
+
+func cloneDiagnosticsSettings(settings DiagnosticsSettings) DiagnosticsSettings {
+	return DiagnosticsSettings{
+		Enabled:     settings.Enabled,
+		ConfigFiles: cloneStrings(settings.ConfigFiles),
+		Commands:    cloneDiagnosticCommands(settings.Commands),
+	}
 }
 
 func cloneHooks(in []Hook) []Hook {

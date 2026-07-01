@@ -78,6 +78,7 @@ type Model struct {
 	profile             config.ProfileSelection
 	runtime             config.RuntimeLimits
 	toolPolicy          config.ToolPolicySettings
+	diagnosticsSettings config.DiagnosticsSettings
 	mcpSettings         config.MCPSettings
 	hookSettings        config.HookSettings
 	instructions        config.InstructionSettings
@@ -1004,6 +1005,7 @@ func (m *Model) refreshConfigProjections() {
 	m.profile = cfg.ProfileSelection()
 	m.runtime = cfg.RuntimeLimits()
 	m.toolPolicy = cfg.ToolPolicySettings()
+	m.diagnosticsSettings = cfg.DiagnosticsSettings()
 	m.mcpSettings = cfg.MCPSettings()
 	m.hookSettings = cfg.HookSettings()
 	m.instructions = cfg.InstructionSettings()
@@ -1015,6 +1017,7 @@ func (m Model) runtimeClientSettings() tuiruntime.Settings {
 		Profile:         m.profile,
 		Runtime:         m.runtime,
 		ToolPolicy:      m.toolPolicy,
+		Diagnostics:     m.diagnosticsSettings,
 		MCP:             m.mcpSettings,
 		Hooks:           m.hookSettings,
 		Instructions:    m.instructions,
@@ -1027,6 +1030,7 @@ func (m Model) runtimeDiffSettings() config.RuntimeDiffSettings {
 		Profile:     m.profile,
 		Runtime:     m.runtime,
 		ToolPolicy:  m.toolPolicy,
+		Diagnostics: m.diagnosticsSettings,
 		MCP:         m.mcpSettings,
 		Hooks:       m.hookSettings,
 		GatewayAddr: m.cfg.GatewayAddr,

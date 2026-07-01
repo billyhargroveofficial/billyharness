@@ -77,6 +77,8 @@ const (
 
 type Registry struct {
 	toolPolicy      config.ToolPolicySettings
+	diagnostics     config.DiagnosticsSettings
+	diagnosticsErr  string
 	mcpSettings     config.MCPSettings
 	tools           map[string]Tool
 	mcpTools        map[string]Tool
@@ -98,9 +100,10 @@ type Registry struct {
 type RegistryOption func(*Registry)
 
 type RegistrySettings struct {
-	Provider   config.ProviderBinding
-	ToolPolicy config.ToolPolicySettings
-	MCP        config.MCPSettings
+	Provider    config.ProviderBinding
+	ToolPolicy  config.ToolPolicySettings
+	Diagnostics config.DiagnosticsSettings
+	MCP         config.MCPSettings
 }
 
 type mcpCatalogState struct {
@@ -121,9 +124,10 @@ type modelVisibleToolCatalog struct {
 
 func RegistrySettingsFromConfig(cfg config.Config) RegistrySettings {
 	return RegistrySettings{
-		Provider:   cfg.ProviderBinding(),
-		ToolPolicy: cfg.ToolPolicySettings(),
-		MCP:        cfg.MCPSettings(),
+		Provider:    cfg.ProviderBinding(),
+		ToolPolicy:  cfg.ToolPolicySettings(),
+		Diagnostics: cfg.DiagnosticsSettings(),
+		MCP:         cfg.MCPSettings(),
 	}
 }
 
@@ -139,14 +143,19 @@ func NewRegistry(cfg config.Config, opts ...RegistryOption) *Registry {
 
 func NewRegistryFromSettings(settings RegistrySettings, opts ...RegistryOption) *Registry {
 	settings = cloneRegistrySettings(settings)
+	diagnosticSettings, diagnosticsErr := loadRegistryDiagnosticsSettings(settings.Diagnostics)
 	r := &Registry{
 		toolPolicy:      settings.ToolPolicy,
+		diagnostics:     diagnosticSettings,
 		mcpSettings:     settings.MCP,
 		tools:           map[string]Tool{},
 		mcpTools:        map[string]Tool{},
 		fileResolver:    filesearch.NewResolver(filesearch.DefaultCacheTTL),
 		shellProcesses:  map[string]*managedShellProcess{},
 		webSummarySlots: make(chan struct{}, defaultWebSummaryConcurrency),
+	}
+	if diagnosticsErr != nil {
+		r.diagnosticsErr = diagnosticsErr.Error()
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -164,6 +173,7 @@ func NewRegistryFromSettings(settings RegistrySettings, opts ...RegistryOption) 
 	r.addFSWrite()
 	r.addFSEdit()
 	r.addFSMkdir()
+	r.addDiagnostics()
 	r.addShellExec()
 	r.addWebFetch()
 	r.addWebSearch()
@@ -216,6 +226,7 @@ func NewRegistryWithMCPFromSettings(ctx context.Context, settings RegistrySettin
 
 func cloneRegistrySettings(settings RegistrySettings) RegistrySettings {
 	settings.ToolPolicy = cloneToolPolicySettings(settings.ToolPolicy)
+	settings.Diagnostics = cloneDiagnosticsSettings(settings.Diagnostics)
 	settings.MCP = cloneMCPSettings(settings.MCP)
 	return settings
 }
@@ -226,6 +237,14 @@ func cloneToolPolicySettings(settings config.ToolPolicySettings) config.ToolPoli
 	return settings
 }
 
+func cloneDiagnosticsSettings(settings config.DiagnosticsSettings) config.DiagnosticsSettings {
+	return config.Config{
+		DiagnosticsEnabled:     settings.Enabled,
+		DiagnosticsConfigFiles: settings.ConfigFiles,
+		DiagnosticsCommands:    settings.Commands,
+	}.DiagnosticsSettings()
+}
+
 func cloneMCPSettings(settings config.MCPSettings) config.MCPSettings {
 	return config.Config{
 		MCPEnabled:        settings.Enabled,
@@ -233,6 +252,10 @@ func cloneMCPSettings(settings config.MCPSettings) config.MCPSettings {
 		MCPAllowedServers: settings.AllowedServers,
 		MCPServers:        settings.Servers,
 	}.MCPSettings()
+}
+
+func loadRegistryDiagnosticsSettings(settings config.DiagnosticsSettings) (config.DiagnosticsSettings, error) {
+	return config.LoadDefaultDiagnosticsSettings(settings)
 }
 
 func (r *Registry) Instructions() []string {
@@ -553,7 +576,7 @@ func defaultParallelMetadata(name string, risk protocol.Risk) ParallelMetadata {
 		return ParallelMetadata{Policy: ParallelPolicyReadOnly, Idempotent: true, Cancellable: true}
 	case "web_search", "web_fetch", "web_extract", "web_crawl":
 		return ParallelMetadata{Policy: ParallelPolicyNetworkRateLimited, Idempotent: true, RateLimitKey: "web", Cancellable: true, MaxConcurrency: 3}
-	case "fs_write_file", "fs_edit_file", "fs_make_dir", "shell_exec", "shell_output", "shell_kill", "web_cache_clear":
+	case "fs_write_file", "fs_edit_file", "fs_make_dir", "diagnostics_run", "shell_exec", "shell_output", "shell_kill", "web_cache_clear":
 		return ParallelMetadata{Policy: ParallelPolicyExclusiveWorkspace, RequiresExclusiveWorkspace: true, Cancellable: true, MaxConcurrency: 1}
 	case "mcp_list_tools", "mcp_call":
 		return ParallelMetadata{Policy: ParallelPolicyUnknownExternal, RequiresExclusiveWorkspace: true, Cancellable: true, RateLimitKey: "mcp", MaxConcurrency: 1}

@@ -158,6 +158,7 @@ func builtInConfig() Config {
 		WorkspaceRoots:            []string{filepath.Clean(cwd)},
 		ProjectDocMaxBytes:        32 * 1024,
 		MaxToolOutputBytes:        64 * 1024,
+		DiagnosticsEnabled:        true,
 		AutoApproveDangerous:      true,
 		AccessMode:                AccessModeBuild,
 		GatewayAddr:               "127.0.0.1:8765",

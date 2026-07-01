@@ -93,6 +93,18 @@ func TestCallLineSnapshotsCommonTools(t *testing.T) {
 			expected: "⚙️ shell kill shell-1",
 		},
 		{
+			name:     "tui diagnostics",
+			call:     protocol.ToolCall{Name: "diagnostics_run", Arguments: []byte(`{"name":"go-test"}`)},
+			style:    StyleTUI,
+			expected: "Ran diagnostics go-test",
+		},
+		{
+			name:     "telegram diagnostics default",
+			call:     protocol.ToolCall{Name: "diagnostics_run", Arguments: []byte(`{}`)},
+			style:    StyleTelegram,
+			expected: "🩺 diagnostics default",
+		},
+		{
 			name:     "tui read",
 			call:     protocol.ToolCall{Name: "fs_read_file", Arguments: []byte(`{"path":"/root/billyharness/README.md"}`)},
 			style:    StyleTUI,

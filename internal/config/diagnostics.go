@@ -45,6 +45,9 @@ type RuntimeToolSnapshot struct {
 	MCPEnabled                    bool   `json:"mcp_enabled"`
 	MCPAllowedServers             string `json:"mcp_allowed_servers"`
 	MaxToolOutputBytes            int    `json:"max_tool_output_bytes"`
+	DiagnosticsEnabled            bool   `json:"diagnostics_enabled"`
+	DiagnosticsConfigFiles        string `json:"diagnostics_config_files,omitempty"`
+	DiagnosticsCommandCount       int    `json:"diagnostics_command_count"`
 	StoreReasoningContent         bool   `json:"store_reasoning_content"`
 }
 
@@ -80,6 +83,7 @@ func (c Config) ProviderAuthSnapshot() ProviderAuthSnapshot {
 func (c Config) RuntimeToolSnapshot() RuntimeToolSnapshot {
 	limits := c.RuntimeLimits()
 	tools := c.ToolPolicySettings()
+	diagnostics := c.DiagnosticsSettings()
 	mcp := c.MCPSettings()
 	return RuntimeToolSnapshot{
 		ContextWindowTokens:           limits.ContextWindowTokens,
@@ -101,6 +105,9 @@ func (c Config) RuntimeToolSnapshot() RuntimeToolSnapshot {
 		MCPEnabled:                    mcp.Enabled,
 		MCPAllowedServers:             strings.Join(mcp.AllowedServers, ","),
 		MaxToolOutputBytes:            tools.MaxToolOutputBytes,
+		DiagnosticsEnabled:            diagnostics.Enabled,
+		DiagnosticsConfigFiles:        strings.Join(diagnostics.ConfigFiles, ","),
+		DiagnosticsCommandCount:       len(diagnostics.Commands),
 		StoreReasoningContent:         tools.StoreReasoningContent,
 	}
 }
