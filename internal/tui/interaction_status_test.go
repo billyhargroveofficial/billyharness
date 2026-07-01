@@ -354,7 +354,7 @@ func TestCommandPaletteOpensSlashRegistry(t *testing.T) {
 		t.Fatalf("status = %q, want command palette", updated.status)
 	}
 	popup := stripANSITest(updated.slashPopupView())
-	for _, want := range []string{"/help", "/status", "/theme"} {
+	for _, want := range []string{"/help", "/status", "/diff"} {
 		if !strings.Contains(popup, want) {
 			t.Fatalf("command palette missing %q:\n%s", want, popup)
 		}
@@ -1011,6 +1011,59 @@ func TestContextCommandShowsGatewayContextReport(t *testing.T) {
 	for _, want := range []string{"active context: 580.0k / 1.00M", "thresholds: ●50% ○70%", "web_summaries", "top contributors"} {
 		if !strings.Contains(msg.text, want) {
 			t.Fatalf("context report missing %q:\n%s", want, msg.text)
+		}
+	}
+}
+
+func TestDiffCommandRequestsGatewayPreview(t *testing.T) {
+	var gotReq gatewayapi.SessionUndoRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/sessions/session-1/undo" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %q", r.Method)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotReq); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(gatewayapi.SessionUndoResponse{
+			ChangeID: "change-1",
+			Preview:  true,
+			Patch:    "--- before\n+++ after\n@@ -1 +1 @@\n-old\n+new\n",
+			Change: protocol.TurnChangeEvent{
+				ChangeID:       "change-1",
+				FileCount:      1,
+				Modified:       1,
+				Additions:      1,
+				Deletions:      1,
+				Reversible:     true,
+				PatchOutputRef: "/root/billyharness/tool-output/change-1.json",
+				Files: []protocol.TurnChangeFile{
+					{RelPath: "README.md", Change: "modified", Additions: 1, Deletions: 1, Reversible: true},
+				},
+			},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	m := newTestModel(t)
+	m.gatewayURL = server.URL
+	m.sessionID = "session-1"
+	handled, cmd := m.handleSlashCommand("/diff change-1")
+	if !handled || cmd == nil {
+		t.Fatalf("handled=%v cmd=%v", handled, cmd)
+	}
+	msg := cmd().(turnDiffPreviewMsg)
+	if msg.err != nil {
+		t.Fatal(msg.err)
+	}
+	if gotReq.ChangeID != "change-1" || !gotReq.Preview {
+		t.Fatalf("undo request = %#v", gotReq)
+	}
+	for _, want := range []string{"summary: 1 file", "patch_ref: /root/billyharness/tool-output/change-1.json", "preview:", "@@ -1 +1 @@", "+new"} {
+		if !strings.Contains(msg.text, want) {
+			t.Fatalf("diff preview missing %q:\n%s", want, msg.text)
 		}
 	}
 }

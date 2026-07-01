@@ -212,3 +212,41 @@ func TestProjectorReportsRunFailure(t *testing.T) {
 		t.Fatalf("snapshot = %#v", snap)
 	}
 }
+
+func TestProjectorTracksTurnDiffDisplayState(t *testing.T) {
+	p := New()
+	recorded := protocol.TurnChangeEvent{
+		ChangeID:         "change-1",
+		ToolName:         "fs_write_file",
+		FileCount:        1,
+		Modified:         1,
+		Additions:        4,
+		Deletions:        1,
+		Reversible:       true,
+		PatchOutputRef:   "/root/billyharness/tool-output/change-1.json",
+		PatchOutputRefID: "artifact-1",
+		Files: []protocol.TurnChangeFile{
+			{RelPath: "README.md", Change: "modified", Additions: 4, Deletions: 1, Reversible: true},
+		},
+	}
+	snap := p.Apply(protocol.Event{Seq: 1, Type: protocol.EventTurnChangeRecorded, Data: recorded})
+	if len(snap.TurnChanges) != 1 || snap.LatestTurnChange == nil {
+		t.Fatalf("turn changes = %#v latest=%#v", snap.TurnChanges, snap.LatestTurnChange)
+	}
+	latest := snap.LatestTurnChange
+	if latest.ChangeID != "change-1" || latest.FileCount != 1 || latest.Additions != 4 ||
+		latest.PatchOutputRef != recorded.PatchOutputRef || latest.LastEvent != protocol.EventTurnChangeRecorded {
+		t.Fatalf("latest change = %#v", latest)
+	}
+	snap.TurnChanges[0].Files[0].RelPath = "mutated"
+	if got := p.Snapshot().TurnChanges[0].Files[0].RelPath; got != "README.md" {
+		t.Fatalf("turn change files were not cloned: %q", got)
+	}
+
+	recorded.Status = "reverted"
+	snap = p.Apply(protocol.Event{Seq: 2, Type: protocol.EventTurnChangeReverted, Data: recorded})
+	if len(snap.TurnChanges) != 1 || snap.TurnChanges[0].Status != "reverted" ||
+		snap.LatestTurnChange == nil || snap.LatestTurnChange.LastEvent != protocol.EventTurnChangeReverted {
+		t.Fatalf("reverted snapshot = %#v latest=%#v", snap.TurnChanges, snap.LatestTurnChange)
+	}
+}

@@ -11,12 +11,17 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/toolrender"
 )
 
 type gatewaySessionManager interface {
 	ListSessions(context.Context) ([]gatewayapi.SessionSummary, error)
 	GetSession(context.Context, string) (gatewayapi.SessionResponse, error)
 	CreateSessionFromMessages(context.Context, string, []protocol.Message) (string, error)
+}
+
+type gatewaySessionPreviewer interface {
+	PreviewSessionUndo(context.Context, string, string) (gatewayapi.SessionUndoResponse, error)
 }
 
 type telegramCommandHandler func(*Bot, context.Context, Message, ChatScope, string)
@@ -72,6 +77,10 @@ func telegramCommands() []telegramCommandSpec {
 		telegramActionCommand("context.show", telegramCommandSpec{
 			bypassRunLock: true,
 			handler:       (*Bot).handleContextCommand,
+		}),
+		telegramActionCommand("diff.preview", telegramCommandSpec{
+			bypassRunLock: true,
+			handler:       (*Bot).handleDiffCommand,
 		}),
 		telegramActionCommand("auth.configure", telegramCommandSpec{
 			bypassRunLock: true,
@@ -282,6 +291,62 @@ func (b *Bot) handleContextCommand(ctx context.Context, msg Message, scope ChatS
 		return
 	}
 	_ = b.sendHTML(ctx, msg, "<b>Context</b>\n<pre>"+esc(status)+"</pre>")
+}
+
+func (b *Bot) handleDiffCommand(ctx context.Context, msg Message, scope ChatScope, arg string) {
+	previewer, ok := b.harness.(gatewaySessionPreviewer)
+	if !ok {
+		_ = b.sendPlain(ctx, msg, "Diff preview is not available in this harness.")
+		return
+	}
+	state := b.chatStateWithLegacy(scope.Key(), scope.LegacyKey())
+	if state.SessionID == "" {
+		_ = b.sendPlain(ctx, msg, "No active session. Send a message first or use /new.")
+		return
+	}
+	out, err := previewer.PreviewSessionUndo(ctx, state.SessionID, strings.TrimSpace(arg))
+	if err != nil {
+		_ = b.sendPlain(ctx, msg, "Diff preview failed: "+err.Error())
+		return
+	}
+	_ = b.sendHTML(ctx, msg, formatTurnDiffPreviewHTML(out))
+}
+
+func formatTurnDiffPreviewHTML(out gatewayapi.SessionUndoResponse) string {
+	body := formatTurnDiffPreviewText(out)
+	return trimTelegram("<b>Turn diff</b>\n<pre>" + esc(body) + "</pre>")
+}
+
+func formatTurnDiffPreviewText(out gatewayapi.SessionUndoResponse) string {
+	var lines []string
+	if strings.TrimSpace(out.Change.ChangeID) != "" {
+		lines = append(lines, toolrender.TurnChangeDetails(out.Change))
+	} else if strings.TrimSpace(out.ChangeID) != "" {
+		lines = append(lines, "change: "+strings.TrimSpace(out.ChangeID))
+	}
+	patch := strings.TrimRight(out.Patch, "\n")
+	if patch != "" {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, "preview:", patch)
+	}
+	if out.PatchTruncated {
+		lines = append(lines, "[preview truncated]")
+	}
+	if len(out.Conflicts) > 0 {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, "conflicts:")
+		for _, conflict := range out.Conflicts {
+			lines = append(lines, "- "+conflict)
+		}
+	}
+	if len(lines) == 0 {
+		return "No turn diff preview is available."
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (b *Bot) handleCancelCommand(ctx context.Context, msg Message, scope ChatScope, _ string) {

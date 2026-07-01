@@ -188,6 +188,11 @@ type contextStatusMsg struct {
 	err  error
 }
 
+type turnDiffPreviewMsg struct {
+	text string
+	err  error
+}
+
 type clipboardCopiedMsg struct {
 	chars  int
 	method string
@@ -538,6 +543,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.addInfoBlock("CONTEXT", msg.text)
 			m.status = "context shown"
+		}
+		reflow = true
+		gotoBottom = m.followOutput
+	case turnDiffPreviewMsg:
+		if msg.err != nil {
+			m.addBlock("error", "DIFF", msg.err.Error())
+			m.status = "diff preview failed"
+		} else {
+			m.addInfoBlock("DIFF", msg.text)
+			m.status = "diff preview shown"
 		}
 		reflow = true
 		gotoBottom = m.followOutput

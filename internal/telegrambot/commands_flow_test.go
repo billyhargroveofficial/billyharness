@@ -144,6 +144,69 @@ func TestTelegramToolViewShowsCompactLastRunTools(t *testing.T) {
 	}
 }
 
+func TestTelegramDiffCommandPreviewsTurnDiff(t *testing.T) {
+	var sentText string
+	var parseMode string
+	harness := &telegramSessionHarness{
+		preview: gatewayapi.SessionUndoResponse{
+			ChangeID: "change-1",
+			Preview:  true,
+			Patch:    "--- before\n+++ after\n@@ -1 +1 @@\n-old\n+new\n",
+			Change: protocol.TurnChangeEvent{
+				ChangeID:       "change-1",
+				ToolName:       "fs_write_file",
+				FileCount:      1,
+				Modified:       1,
+				Additions:      1,
+				Deletions:      1,
+				Reversible:     true,
+				PatchOutputRef: "/root/billyharness/tool-output/change-1.json",
+				Files: []protocol.TurnChangeFile{
+					{RelPath: "README.md", Change: "modified", Additions: 1, Deletions: 1, Reversible: true},
+				},
+			},
+		},
+	}
+	client := newTelegramAPIClient(t, "bottoken", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			sentText, _ = payload["text"].(string)
+			parseMode, _ = payload["parse_mode"].(string)
+			writeTelegramResult(w, SentMessage{MessageID: 12, Chat: Chat{ID: 123}})
+		},
+	})
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      t.TempDir() + "/state.json",
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bot.setChatState(userChatKey(123, 0, 1001), ChatState{SessionID: "session-1"})
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, From: &User{ID: 1001}, Text: "/diff change-1"})
+
+	if parseMode != "HTML" || !strings.Contains(sentText, "<b>Turn diff</b>") {
+		t.Fatalf("diff preview parse=%q text=%q", parseMode, sentText)
+	}
+	for _, want := range []string{"summary: 1 file", "patch_ref: /root/billyharness/tool-output/change-1.json", "preview:", "@@ -1 +1 @@", "+new"} {
+		if !strings.Contains(sentText, want) {
+			t.Fatalf("diff preview missing %q:\n%s", want, sentText)
+		}
+	}
+	harness.mu.Lock()
+	sessionID := harness.previewSession
+	changeID := harness.previewChangeID
+	harness.mu.Unlock()
+	if sessionID != "session-1" || changeID != "change-1" {
+		t.Fatalf("preview request session=%q change=%q", sessionID, changeID)
+	}
+}
+
 func TestTelegramResumeListsAndSelectsGatewaySession(t *testing.T) {
 	var sentTexts []string
 	statePath := t.TempDir() + "/state.json"

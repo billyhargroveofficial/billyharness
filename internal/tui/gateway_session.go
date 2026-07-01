@@ -16,6 +16,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/toolrender"
 )
 
 type sessionReadyMsg struct {
@@ -115,6 +116,68 @@ func (m Model) gatewayRunRequest(prompt string) gatewayapi.RunRequest {
 		ReasoningEffort: thinking.effort,
 		MaxToolRounds:   m.maxRounds,
 	}
+}
+
+func (m Model) turnDiffPreviewCmd(changeID string) tea.Cmd {
+	return func() tea.Msg {
+		text, err := m.loadTurnDiffPreview(changeID)
+		return turnDiffPreviewMsg{text: text, err: err}
+	}
+}
+
+func (m Model) loadTurnDiffPreview(changeID string) (string, error) {
+	if strings.TrimSpace(m.gatewayURL) == "" {
+		return "", fmt.Errorf("diff preview requires gateway mode")
+	}
+	sessionID := strings.TrimSpace(m.sessionID)
+	if sessionID == "" {
+		return "", fmt.Errorf("gateway session is not ready")
+	}
+	body, err := json.Marshal(gatewayapi.SessionUndoRequest{
+		ChangeID: strings.TrimSpace(changeID),
+		Preview:  true,
+	})
+	if err != nil {
+		return "", err
+	}
+	var out gatewayapi.SessionUndoResponse
+	path := fmt.Sprintf("/v1/sessions/%s/undo", url.PathEscape(sessionID))
+	if err := m.gatewayJSON(http.MethodPost, path, body, &out); err != nil {
+		return "", err
+	}
+	return formatTurnDiffPreview(out), nil
+}
+
+func formatTurnDiffPreview(out gatewayapi.SessionUndoResponse) string {
+	var lines []string
+	if strings.TrimSpace(out.Change.ChangeID) != "" {
+		lines = append(lines, toolrender.TurnChangeDetails(out.Change))
+	} else if strings.TrimSpace(out.ChangeID) != "" {
+		lines = append(lines, "change: "+strings.TrimSpace(out.ChangeID))
+	}
+	patch := strings.TrimRight(out.Patch, "\n")
+	if patch != "" {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, "preview:", patch)
+	}
+	if out.PatchTruncated {
+		lines = append(lines, "[preview truncated]")
+	}
+	if len(out.Conflicts) > 0 {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, "conflicts:")
+		for _, conflict := range out.Conflicts {
+			lines = append(lines, "- "+conflict)
+		}
+	}
+	if len(lines) == 0 {
+		return "No turn diff preview is available."
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) runGateway(prompt string) {

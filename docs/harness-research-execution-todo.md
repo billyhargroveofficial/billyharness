@@ -428,11 +428,28 @@ Goal: add rollback and compact display invariants before expanding edit power.
     ./internal/architecture` passed.
   - commit: pending.
 
-- [ ] HR-02.3 Minimal turn diff display and revert preview UX.
+- [x] HR-02.3 Minimal turn diff display and revert preview UX.
   - maps to: `competitive-improvements-todo.md` B11.
   - acceptance: transcript shows compact file/stat summary; full patch is
     available by output ref/API/command; Telegram/TUI can request preview.
   - verification: `go test -count=1 ./internal/clientux/projector ./internal/tui ./internal/telegrambot ./internal/toolrender ./internal/checkpoint`.
+  - status: completed 2026-07-01.
+  - evidence: added shared turn-change rendering for compact file/stat
+    summaries, including additions/deletions, binary/large markers, shell
+    change hints, and patch output refs. The client projector now reconstructs
+    turn-change state from durable `turn.change_recorded` and
+    `turn.change_reverted` events, TUI transcript replay shows `CHANGES` and
+    `REVERTED` cells, Telegram progress shows the same compact summaries, and
+    TUI/Telegram `/diff [change_id]` request gateway preview-only undo output
+    without restoring files.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/clientux/projector
+    ./internal/tui ./internal/telegrambot ./internal/toolrender
+    ./internal/checkpoint` passed; `/root/.local/go/bin/go test -run
+    'Test.*Turn.*Diff.*Display.*|Test.*Revert.*Preview.*|Test.*Patch.*OutputRef.*'
+    -count=1 ./internal/...` passed; `/root/.local/go/bin/go test -count=1
+    ./internal/architecture ./internal/tui/transcript` passed.
+  - commit: pending.
 
 - [ ] HR-02.4 Shared ToolCompact display contract.
   - maps to: `competitive-improvements-todo.md` P1-7.

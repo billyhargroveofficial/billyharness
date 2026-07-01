@@ -285,6 +285,8 @@ func blockKindForEvent(eventType protocol.EventType) string {
 		return "audit"
 	case protocol.EventContextThreshold:
 		return "status"
+	case protocol.EventTurnChangeRecorded, protocol.EventTurnChangeReverted:
+		return "status"
 	case protocol.EventRunFailed:
 		return "error"
 	default:
@@ -489,6 +491,8 @@ func transcriptProjectsEvent(eventType protocol.EventType) bool {
 		protocol.EventStepCompleted,
 		protocol.EventContextCompacted,
 		protocol.EventContextThreshold,
+		protocol.EventTurnChangeRecorded,
+		protocol.EventTurnChangeReverted,
 		protocol.EventRunCompleted,
 		protocol.EventRunFailed:
 		return true
@@ -533,6 +537,10 @@ func (m *Model) applyEvent(event protocol.Event) {
 		m.status = "context compacted"
 	case protocol.EventContextThreshold:
 		m.status = "context threshold crossed"
+	case protocol.EventTurnChangeRecorded:
+		m.status = "turn changes recorded"
+	case protocol.EventTurnChangeReverted:
+		m.status = "turn changes reverted"
 	case protocol.EventProviderUsageUpdate:
 	case protocol.EventRunCompleted:
 		m.status = "completed"
@@ -566,7 +574,8 @@ func shouldFlushStreamEvent(event protocol.Event) bool {
 		protocol.EventToolCallRequested, protocol.EventToolCallStarted,
 		protocol.EventToolCallFinished, protocol.EventToolCallFailed,
 		protocol.EventToolCallAborted, protocol.EventToolOutputRefCreated,
-		protocol.EventStepStarted, protocol.EventStepCompleted:
+		protocol.EventStepStarted, protocol.EventStepCompleted,
+		protocol.EventTurnChangeRecorded, protocol.EventTurnChangeReverted:
 		return true
 	default:
 		return false

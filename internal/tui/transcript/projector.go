@@ -61,6 +61,10 @@ func (p *Projector) Apply(event protocol.Event) []Cell {
 		p.addCell("status", CellTypeCompaction, "COMPACT", CompactEventText(event.Data), event.Type)
 	case protocol.EventContextThreshold:
 		p.addCell("status", CellTypeStatus, "CONTEXT", ContextThresholdEventText(event.Data), event.Type)
+	case protocol.EventTurnChangeRecorded:
+		p.addProtocolCell(event, "status", CellTypeStatus, "CHANGES", TurnChangeEventText(event.Data))
+	case protocol.EventTurnChangeReverted:
+		p.addProtocolCell(event, "status", CellTypeStatus, "REVERTED", TurnChangeEventText(event.Data))
 	case protocol.EventRunStarted:
 		p.finishLiveCells()
 	case protocol.EventRunCompleted, protocol.EventRunFailed:
@@ -383,6 +387,14 @@ func toolResultTitle(value any, base string) string {
 		return summary.Line
 	}
 	return base
+}
+
+func TurnChangeEventText(value any) string {
+	change, ok := toolrender.DecodeTurnChange(value)
+	if !ok {
+		return oneLineJSON(value)
+	}
+	return toolrender.TurnChangeDetails(change)
 }
 
 func toolName(value any) string {

@@ -95,6 +95,17 @@ var sharedActionDefinitions = []ActionDefinition{
 		TelegramSummary: "active context and contributors",
 	},
 	{
+		ID:              "diff.preview",
+		Title:           "Preview Diff",
+		Category:        "session",
+		Slash:           "/diff",
+		SlashArgs:       "[change_id]",
+		TelegramAliases: []string{"/diff"},
+		TelegramUsage:   "/diff [change_id]",
+		Summary:         "preview latest turn diff before undo",
+		TelegramSummary: "preview latest turn diff",
+	},
+	{
 		ID:              "config.show",
 		Title:           "Show Config",
 		Category:        "setup",

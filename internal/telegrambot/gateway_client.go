@@ -79,6 +79,10 @@ func (c *GatewayClient) ReplaySessionEvents(ctx context.Context, sessionID strin
 	return c.gatewayClient().ReplaySessionEvents(ctx, sessionID, afterSeq, emit)
 }
 
+func (c *GatewayClient) PreviewSessionUndo(ctx context.Context, sessionID, changeID string) (gatewayapi.SessionUndoResponse, error) {
+	return c.gatewayClient().PreviewSessionUndo(ctx, sessionID, changeID)
+}
+
 func (c *GatewayClient) MCPStatus(ctx context.Context) (string, error) {
 	resp, err := gatewayclient.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/mcp", nil)

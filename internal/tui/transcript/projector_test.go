@@ -176,6 +176,56 @@ func TestProjectorApplyContextDiagnosticCells(t *testing.T) {
 	}
 }
 
+func TestProjectorApplyTurnDiffDisplayCell(t *testing.T) {
+	p := NewProjector()
+	cells := p.Apply(protocol.Event{
+		Type:   protocol.EventTurnChangeRecorded,
+		TurnID: "turn-1",
+		Data: protocol.TurnChangeEvent{
+			ChangeID:       "change-1",
+			TurnID:         "turn-1",
+			ToolName:       "shell_exec",
+			FileCount:      2,
+			Added:          1,
+			Modified:       1,
+			Additions:      9,
+			Deletions:      2,
+			BinaryFiles:    1,
+			Reversible:     true,
+			PatchOutputRef: "/root/billyharness/tool-output/change-1.json",
+			Files: []protocol.TurnChangeFile{
+				{RelPath: "internal/a.go", Change: "modified", Additions: 9, Deletions: 2, Reversible: true},
+				{RelPath: "asset.bin", Change: "added", Binary: true, Reversible: true},
+			},
+		},
+	})
+	if len(cells) != 1 {
+		t.Fatalf("cells = %d, want 1", len(cells))
+	}
+	got := cells[0]
+	if got.Kind != "status" || got.CellType != CellTypeStatus || got.Title != "CHANGES" || got.TurnID != "turn-1" {
+		t.Fatalf("turn diff cell = %#v", got)
+	}
+	for _, want := range []string{"summary: 2 files", "+9 -2", "shell changes", "patch_ref: /root/billyharness/tool-output/change-1.json", "M internal/a.go +9 -2", "A asset.bin binary"} {
+		if !strings.Contains(got.Content, want) {
+			t.Fatalf("turn diff cell missing %q:\n%s", want, got.Content)
+		}
+	}
+}
+
+func TestProjectorApplyTurnDiffRevertedCell(t *testing.T) {
+	p := NewProjector()
+	cells := p.Apply(protocol.Event{Type: protocol.EventTurnChangeReverted, Data: protocol.TurnChangeEvent{
+		ChangeID:  "change-1",
+		Status:    "reverted",
+		FileCount: 1,
+		Deleted:   1,
+	}})
+	if len(cells) != 1 || cells[0].Title != "REVERTED" || !strings.Contains(cells[0].Content, "reverted") {
+		t.Fatalf("reverted cell = %#v", cells)
+	}
+}
+
 func TestProjectorApplyRunSummaryUpsertsLatestSummary(t *testing.T) {
 	p := NewProjector()
 	p.ApplyRunSummary(RunSummary{EventType: protocol.EventRunStarted, State: "running", SessionModelCalls: 1})

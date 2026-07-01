@@ -48,6 +48,8 @@ type Snapshot struct {
 
 	ToolsByCallID     map[string]ToolItem
 	ContextThresholds []ContextThreshold
+	TurnChanges       []TurnChangeItem
+	LatestTurnChange  *TurnChangeItem
 }
 
 type ToolItem struct {
@@ -70,6 +72,28 @@ type ContextThreshold struct {
 	RemainingTokens     int64
 	MessageCount        int
 	Stage               string
+}
+
+type TurnChangeItem struct {
+	ChangeID         string
+	Status           string
+	Summary          string
+	ToolName         string
+	FileCount        int
+	Added            int
+	Modified         int
+	Deleted          int
+	Directories      int
+	Additions        int
+	Deletions        int
+	BinaryFiles      int
+	LargeFiles       int
+	Reversible       bool
+	PatchOutputRef   string
+	PatchOutputRefID string
+	PreviewTruncated bool
+	Files            []protocol.TurnChangeFile
+	LastEvent        protocol.EventType
 }
 
 type EventSeqGap struct {
@@ -167,6 +191,14 @@ func (p *Projector) Apply(event protocol.Event) Snapshot {
 				Stage:               threshold.Stage,
 			})
 		}
+	case protocol.EventTurnChangeRecorded:
+		if change, ok := decodeData[protocol.TurnChangeEvent](event.Data); ok {
+			p.upsertTurnChange(change, event.Type)
+		}
+	case protocol.EventTurnChangeReverted:
+		if change, ok := decodeData[protocol.TurnChangeEvent](event.Data); ok {
+			p.upsertTurnChange(change, event.Type)
+		}
 	case protocol.EventProviderUsageUpdate:
 		delta := p.usage.Apply(parseUsage(event.Data))
 		current := p.usage.Current()
@@ -202,6 +234,11 @@ func (p *Projector) Snapshot() Snapshot {
 		out.ToolsByCallID[key] = cloneToolItem(value)
 	}
 	out.ContextThresholds = append([]ContextThreshold(nil), p.snapshot.ContextThresholds...)
+	out.TurnChanges = cloneTurnChangeItems(p.snapshot.TurnChanges)
+	if p.snapshot.LatestTurnChange != nil {
+		latest := cloneTurnChangeItem(*p.snapshot.LatestTurnChange)
+		out.LatestTurnChange = &latest
+	}
 	out.Errors = append([]string(nil), p.snapshot.Errors...)
 	if p.snapshot.SeqGap != nil {
 		gap := *p.snapshot.SeqGap
@@ -223,6 +260,63 @@ func (p *Projector) resetRun() {
 	}
 	p.usage.Reset()
 	p.pendingAssistantBreak = false
+}
+
+func (p *Projector) upsertTurnChange(change protocol.TurnChangeEvent, eventType protocol.EventType) {
+	change.ChangeID = strings.TrimSpace(change.ChangeID)
+	if change.ChangeID == "" {
+		return
+	}
+	item := turnChangeItemFromEvent(change, eventType)
+	for i := range p.snapshot.TurnChanges {
+		if p.snapshot.TurnChanges[i].ChangeID != item.ChangeID {
+			continue
+		}
+		p.snapshot.TurnChanges[i] = item
+		latest := cloneTurnChangeItem(item)
+		p.snapshot.LatestTurnChange = &latest
+		return
+	}
+	p.snapshot.TurnChanges = append(p.snapshot.TurnChanges, item)
+	latest := cloneTurnChangeItem(item)
+	p.snapshot.LatestTurnChange = &latest
+}
+
+func turnChangeItemFromEvent(change protocol.TurnChangeEvent, eventType protocol.EventType) TurnChangeItem {
+	return TurnChangeItem{
+		ChangeID:         change.ChangeID,
+		Status:           change.Status,
+		Summary:          change.Summary,
+		ToolName:         change.ToolName,
+		FileCount:        change.FileCount,
+		Added:            change.Added,
+		Modified:         change.Modified,
+		Deleted:          change.Deleted,
+		Directories:      change.Directories,
+		Additions:        change.Additions,
+		Deletions:        change.Deletions,
+		BinaryFiles:      change.BinaryFiles,
+		LargeFiles:       change.LargeFiles,
+		Reversible:       change.Reversible,
+		PatchOutputRef:   change.PatchOutputRef,
+		PatchOutputRefID: change.PatchOutputRefID,
+		PreviewTruncated: change.PreviewTruncated,
+		Files:            append([]protocol.TurnChangeFile(nil), change.Files...),
+		LastEvent:        eventType,
+	}
+}
+
+func cloneTurnChangeItems(items []TurnChangeItem) []TurnChangeItem {
+	out := make([]TurnChangeItem, len(items))
+	for i, item := range items {
+		out[i] = cloneTurnChangeItem(item)
+	}
+	return out
+}
+
+func cloneTurnChangeItem(item TurnChangeItem) TurnChangeItem {
+	item.Files = append([]protocol.TurnChangeFile(nil), item.Files...)
+	return item
 }
 
 func (p *Projector) upsertToolCall(event protocol.Event) {

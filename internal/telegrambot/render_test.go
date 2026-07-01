@@ -668,6 +668,33 @@ func TestToolProgressUpdatesToolLineOnFinish(t *testing.T) {
 	}
 }
 
+func TestRendererShowsTurnDiffDisplaySummary(t *testing.T) {
+	rendered := NewRenderer().Apply(protocol.Event{Type: protocol.EventTurnChangeRecorded, Data: protocol.TurnChangeEvent{
+		ChangeID:       "change-1",
+		ToolName:       "shell_exec",
+		FileCount:      2,
+		Added:          1,
+		Modified:       1,
+		Additions:      8,
+		Deletions:      3,
+		BinaryFiles:    1,
+		Reversible:     true,
+		PatchOutputRef: "/root/billyharness/tool-output/change-1.json",
+	}})
+	if len(rendered) != 1 || rendered[0].Kind != "status" || rendered[0].Title != "Changes" || rendered[0].Key != "change-1" {
+		t.Fatalf("rendered = %#v", rendered)
+	}
+	for _, want := range []string{"2 files", "+8 -3", "1 added", "1 modified", "1 binary", "shell changes", "patch ref change-1.json"} {
+		if !strings.Contains(rendered[0].Body, want) {
+			t.Fatalf("turn diff summary missing %q: %q", want, rendered[0].Body)
+		}
+	}
+	html := ToolMessageHTML(rendered[0])
+	if !strings.Contains(html, "<b>Changes</b>") || !strings.Contains(html, "2 files") {
+		t.Fatalf("html = %q", html)
+	}
+}
+
 func TestToolProgressUpdatesOutOfOrderByCallID(t *testing.T) {
 	progress := NewToolProgress()
 	renderer := NewRenderer()

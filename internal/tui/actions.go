@@ -100,6 +100,18 @@ func actionRegistry() []actionSpec {
 			},
 		},
 		{
+			id:        "diff.preview",
+			title:     "Preview Diff",
+			category:  "session",
+			slash:     "/diff",
+			slashArgs: "[change_id]",
+			summary:   "preview latest turn diff before undo",
+			run: func(m *Model, arg string) (bool, tea.Cmd) {
+				m.status = "loading diff preview"
+				return true, m.turnDiffPreviewCmd(arg)
+			},
+		},
+		{
 			id:       "config.show",
 			title:    "Show Config",
 			category: "setup",

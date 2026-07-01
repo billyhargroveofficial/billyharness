@@ -345,6 +345,10 @@ type telegramSessionHarness struct {
 	mu              sync.Mutex
 	sessions        []gatewayapi.SessionSummary
 	full            map[string]gatewayapi.SessionResponse
+	preview         gatewayapi.SessionUndoResponse
+	previewErr      error
+	previewSession  string
+	previewChangeID string
 	createdProfile  string
 	createdMessages []protocol.Message
 	createdOwner    gatewayapi.SessionOwner
@@ -372,6 +376,17 @@ func (h *telegramSessionHarness) GetSession(_ context.Context, sessionID string)
 		return gatewayapi.SessionResponse{}, fmt.Errorf("session %s missing", sessionID)
 	}
 	return session, nil
+}
+
+func (h *telegramSessionHarness) PreviewSessionUndo(_ context.Context, sessionID, changeID string) (gatewayapi.SessionUndoResponse, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.previewSession = sessionID
+	h.previewChangeID = changeID
+	if h.previewErr != nil {
+		return gatewayapi.SessionUndoResponse{}, h.previewErr
+	}
+	return h.preview, nil
 }
 
 func (h *telegramSessionHarness) CreateSessionFromMessages(_ context.Context, profile string, messages []protocol.Message) (string, error) {

@@ -206,3 +206,39 @@ func TestResultKeyAndLineCompactsMetadata(t *testing.T) {
 		t.Fatalf("summary = %#v ok=%v line=%q", summary, ok, line)
 	}
 }
+
+func TestTurnChangeSummaryAndDetailsExposePatchRef(t *testing.T) {
+	change := protocol.TurnChangeEvent{
+		ChangeID:       "change-1",
+		TurnID:         "turn-1",
+		ToolName:       "shell_exec",
+		FileCount:      2,
+		Added:          1,
+		Modified:       1,
+		Additions:      12,
+		Deletions:      3,
+		BinaryFiles:    1,
+		LargeFiles:     1,
+		Reversible:     true,
+		PatchOutputRef: "/root/billyharness/tool-output/20260701/change-1.patch.json",
+		Files: []protocol.TurnChangeFile{
+			{RelPath: "internal/a.go", Change: "modified", Additions: 12, Deletions: 3, Reversible: true},
+			{RelPath: "asset.bin", Change: "added", Binary: true, Large: true, Reversible: true},
+		},
+	}
+	summary := TurnChangeSummary(change)
+	for _, want := range []string{"2 files", "+12 -3", "1 added", "1 modified", "1 binary", "1 large", "shell changes", "patch ref change-1.patch.json"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q: %q", want, summary)
+		}
+	}
+	details := TurnChangeDetails(change)
+	for _, want := range []string{"change: change-1", "turn: turn-1", "patch_ref: /root/billyharness/tool-output/20260701/change-1.patch.json", "M internal/a.go +12 -3", "A asset.bin binary large"} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("details missing %q:\n%s", want, details)
+		}
+	}
+	if strings.Contains(details, "@@ ") {
+		t.Fatalf("details should not inline a patch:\n%s", details)
+	}
+}
