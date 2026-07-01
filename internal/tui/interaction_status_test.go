@@ -1074,6 +1074,32 @@ func TestProcessesCommandShowsGatewayDashboard(t *testing.T) {
 	}
 }
 
+func TestMemoryCommandManagesLocalMemory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	m := newTestModel(t)
+	m.instructions = config.Default().InstructionSettings()
+
+	handled, cmd := m.handleSlashCommand(`/memory add type=user topic=style summary="Prefers concise evidence" path=topics/style.md body="Concise evidence only" confirm=true`)
+	if !handled || cmd != nil {
+		t.Fatalf("handled=%v cmd=%v", handled, cmd)
+	}
+	if len(m.blocks) == 0 || m.blocks[len(m.blocks)-1].Title != "MEMORY" {
+		t.Fatalf("memory add did not append memory block")
+	}
+	if body := m.blocks[len(m.blocks)-1].Content; !strings.Contains(body, "written=true") {
+		t.Fatalf("memory add block = %s", body)
+	}
+	handled, cmd = m.handleSlashCommand(`/memory list`)
+	if !handled || cmd != nil {
+		t.Fatalf("handled=%v cmd=%v", handled, cmd)
+	}
+	body := m.blocks[len(m.blocks)-1].Content
+	if !strings.Contains(body, "topic=style") || !strings.Contains(body, "prefers concise evidence") {
+		t.Fatalf("memory list block = %s", body)
+	}
+}
+
 func TestDiffCommandRequestsGatewayPreview(t *testing.T) {
 	var gotReq gatewayapi.SessionUndoRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

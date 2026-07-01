@@ -10,6 +10,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/clientux"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
+	"github.com/billyhargroveofficial/billyharness/internal/memory"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/toolrender"
 )
@@ -93,6 +94,10 @@ func telegramCommands() []telegramCommandSpec {
 		telegramActionCommand("context.show", telegramCommandSpec{
 			bypassRunLock: true,
 			handler:       (*Bot).handleContextCommand,
+		}),
+		telegramActionCommand("memory.manage", telegramCommandSpec{
+			bypassRunLock: true,
+			handler:       (*Bot).handleMemoryCommand,
 		}),
 		telegramActionCommand("diff.preview", telegramCommandSpec{
 			bypassRunLock: true,
@@ -356,6 +361,25 @@ func (b *Bot) handleContextCommand(ctx context.Context, msg Message, scope ChatS
 		return
 	}
 	_ = b.sendHTML(ctx, msg, "<b>Context</b>\n<pre>"+esc(status)+"</pre>")
+}
+
+func (b *Bot) handleMemoryCommand(ctx context.Context, msg Message, scope ChatScope, arg string) {
+	out, err := memory.RunCommand(b.memorySettings(scope), arg)
+	if err != nil {
+		_ = b.sendPlain(ctx, msg, "Memory failed: "+err.Error())
+		return
+	}
+	_ = b.sendHTML(ctx, msg, trimTelegram("<b>Memory</b>\n<pre>"+esc(out)+"</pre>"))
+}
+
+func (b *Bot) memorySettings(scope ChatScope) config.InstructionSettings {
+	cfg := config.Default()
+	state := b.chatStateWithLegacy(scope.Key(), scope.LegacyKey())
+	profile := fallback(state.Profile, b.opts.Profile)
+	if strings.TrimSpace(profile) != "" {
+		cfg.Profile = config.NormalizeProfileName(profile)
+	}
+	return cfg.InstructionSettings()
 }
 
 func (b *Bot) handleDiffCommand(ctx context.Context, msg Message, scope ChatScope, arg string) {

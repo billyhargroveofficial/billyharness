@@ -155,6 +155,18 @@ func TestCallLineSnapshotsCommonTools(t *testing.T) {
 			expected: "🔎 web_search agent loop benchmark",
 		},
 		{
+			name:     "tui memory list",
+			call:     protocol.ToolCall{Name: "memory_list", Arguments: []byte(`{"source":"profile","query":"style"}`)},
+			style:    StyleTUI,
+			expected: "Listed memory source=profile query=style",
+		},
+		{
+			name:     "telegram memory add",
+			call:     protocol.ToolCall{Name: "memory_add", Arguments: []byte(`{"topic":"style","path":"topics/style.md"}`)},
+			style:    StyleTelegram,
+			expected: "🧠 memory add topic=style path=topics/style.md",
+		},
+		{
 			name:     "tui mcp call",
 			call:     protocol.ToolCall{Name: "mcp_call", Arguments: []byte(`{"name":"mcp__server__tool"}`)},
 			style:    StyleTUI,

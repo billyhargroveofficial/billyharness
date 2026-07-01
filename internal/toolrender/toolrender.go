@@ -652,6 +652,42 @@ var callRenderers = map[string]callRenderer{
 		tui:      staticCallLine(func(map[string]any) string { return "Updated plan" }),
 		telegram: staticCallLine(func(map[string]any) string { return "📝 plan update" }),
 	},
+	"memory_list": {
+		tui: staticCallLine(func(args map[string]any) string {
+			return "Listed memory " + JoinParts(OptionalPart("source", args["source"], 32), OptionalPart("query", args["query"], 56))
+		}),
+		telegram: staticCallLine(func(args map[string]any) string {
+			return "🧠 memory list " + JoinParts(OptionalPart("source", args["source"], 32), OptionalPart("query", args["query"], 56))
+		}),
+	},
+	"memory_search": {
+		tui: staticCallLine(func(args map[string]any) string {
+			return "Searched memory " + CompactArg(args["query"], 72)
+		}),
+		telegram: staticCallLine(func(args map[string]any) string {
+			return "🧠 memory search " + CompactArg(args["query"], 72)
+		}),
+	},
+	"memory_read": {
+		tui: staticCallLine(func(args map[string]any) string {
+			return "Read memory " + memoryTarget(args)
+		}),
+		telegram: staticCallLine(func(args map[string]any) string {
+			return "🧠 memory read " + CompactText(memoryTarget(args), 72)
+		}),
+	},
+	"memory_add": {
+		tui:      staticCallLine(func(args map[string]any) string { return "Added memory " + memoryTarget(args) }),
+		telegram: staticCallLine(func(args map[string]any) string { return "🧠 memory add " + CompactText(memoryTarget(args), 72) }),
+	},
+	"memory_replace": {
+		tui:      staticCallLine(func(args map[string]any) string { return "Replaced memory " + memoryTarget(args) }),
+		telegram: staticCallLine(func(args map[string]any) string { return "🧠 memory replace " + CompactText(memoryTarget(args), 72) }),
+	},
+	"memory_remove": {
+		tui:      staticCallLine(func(args map[string]any) string { return "Removed memory " + memoryTarget(args) }),
+		telegram: staticCallLine(func(args map[string]any) string { return "🧠 memory remove " + CompactText(memoryTarget(args), 72) }),
+	},
 	"mcp_list_tools": {
 		tui: staticCallLine(func(args map[string]any) string {
 			return "Listed MCP tools " + JoinParts("server="+CompactArg(args["server"], 32), OptionalPart("query", args["query"], 48))
@@ -688,6 +724,14 @@ func registeredCallLine(call protocol.ToolCall, args map[string]any, style Style
 		return "", false
 	}
 	return render(call, args)
+}
+
+func memoryTarget(args map[string]any) string {
+	target := JoinParts(OptionalPart("topic", args["topic"], 48), OptionalPart("path", args["path"], 72), OptionalPart("source", args["source"], 32))
+	if target == "" {
+		return "memory"
+	}
+	return target
 }
 
 func fallbackCallLine(call protocol.ToolCall, args map[string]any, style Style) string {

@@ -128,6 +128,51 @@ func TestTelegramProcessesCommandShowsManagedProcessDashboard(t *testing.T) {
 	}
 }
 
+func TestTelegramMemoryCommandManagesLocalMemory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	var sentTexts []string
+	var parseModes []string
+	client := newTelegramAPIClient(t, "bottoken", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			text, _ := payload["text"].(string)
+			mode, _ := payload["parse_mode"].(string)
+			sentTexts = append(sentTexts, text)
+			parseModes = append(parseModes, mode)
+			writeTelegramResult(w, SentMessage{MessageID: len(sentTexts), Chat: Chat{ID: 123}})
+		},
+	})
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      t.TempDir() + "/state.json",
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, scriptedHarness{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: `/memory add type=user topic=style summary="Prefers concise evidence" path=topics/style.md body="Concise evidence only" confirm=true`})
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/memory list"})
+	if len(sentTexts) != 2 {
+		t.Fatalf("sent texts = %#v", sentTexts)
+	}
+	for i, mode := range parseModes {
+		if mode != "HTML" || !strings.Contains(sentTexts[i], "<b>Memory</b>") {
+			t.Fatalf("memory response %d parse=%q text=%q", i, mode, sentTexts[i])
+		}
+	}
+	if !strings.Contains(sentTexts[0], "written=true") {
+		t.Fatalf("memory add response = %q", sentTexts[0])
+	}
+	if !strings.Contains(sentTexts[1], "topic=style") || !strings.Contains(sentTexts[1], "Prefers concise evidence") {
+		t.Fatalf("memory list response = %q", sentTexts[1])
+	}
+}
+
 func TestTelegramModeCommandSetsPlanModeRunRequest(t *testing.T) {
 	var sentTexts []string
 	client := newTelegramAPIClient(t, "bottoken", map[string]telegramAPIHandler{

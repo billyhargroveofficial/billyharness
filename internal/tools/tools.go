@@ -77,6 +77,7 @@ const (
 
 type Registry struct {
 	toolPolicy      config.ToolPolicySettings
+	profile         config.ProfileSelection
 	diagnostics     config.DiagnosticsSettings
 	diagnosticsErr  string
 	mcpSettings     config.MCPSettings
@@ -101,6 +102,7 @@ type RegistryOption func(*Registry)
 
 type RegistrySettings struct {
 	Provider    config.ProviderBinding
+	Profile     config.ProfileSelection
 	ToolPolicy  config.ToolPolicySettings
 	Diagnostics config.DiagnosticsSettings
 	MCP         config.MCPSettings
@@ -125,6 +127,7 @@ type modelVisibleToolCatalog struct {
 func RegistrySettingsFromConfig(cfg config.Config) RegistrySettings {
 	return RegistrySettings{
 		Provider:    cfg.ProviderBinding(),
+		Profile:     cfg.ProfileSelection(),
 		ToolPolicy:  cfg.ToolPolicySettings(),
 		Diagnostics: cfg.DiagnosticsSettings(),
 		MCP:         cfg.MCPSettings(),
@@ -146,6 +149,7 @@ func NewRegistryFromSettings(settings RegistrySettings, opts ...RegistryOption) 
 	diagnosticSettings, diagnosticsErr := loadRegistryDiagnosticsSettings(settings.Diagnostics)
 	r := &Registry{
 		toolPolicy:      settings.ToolPolicy,
+		profile:         settings.Profile,
 		diagnostics:     diagnosticSettings,
 		mcpSettings:     settings.MCP,
 		tools:           map[string]Tool{},
@@ -181,6 +185,7 @@ func NewRegistryFromSettings(settings RegistrySettings, opts ...RegistryOption) 
 	r.addWebCrawl()
 	r.addWebExtract()
 	r.addWebCache()
+	r.addMemory()
 	r.addToolSearch()
 	r.addSkills()
 	return r
@@ -226,6 +231,7 @@ func NewRegistryWithMCPFromSettings(ctx context.Context, settings RegistrySettin
 }
 
 func cloneRegistrySettings(settings RegistrySettings) RegistrySettings {
+	settings.Profile = config.ProfileSelection{Profile: config.NormalizeProfileName(settings.Profile.Profile)}
 	settings.ToolPolicy = cloneToolPolicySettings(settings.ToolPolicy)
 	settings.Diagnostics = cloneDiagnosticsSettings(settings.Diagnostics)
 	settings.MCP = cloneMCPSettings(settings.MCP)

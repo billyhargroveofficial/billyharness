@@ -426,6 +426,19 @@ Content here...
 
 ### 8.5 Layer 3: Memory Tools with Audit
 
+**2026-07-01 SH-04.2 implementation note:** Billyharness now has the first
+manual memory command/tool layer over the SH-04.1 file store. The shared
+operation contract supports `list`, `search`, `read`, `add`, `replace`, and
+`remove` for home and active-profile memory roots. Mutation operations are
+preview-only unless the caller passes `confirm=true`, and topic path/safety caps
+are still enforced by `internal/memory`. The model-visible tool layer exposes
+read-only list/search/read tools plus write-risk add/replace/remove tools that
+are hidden and denied in plan mode through the existing tool policy. TUI,
+Telegram, and `fast-agent-harness memory ...` call the same operation layer.
+This slice intentionally does not add pending queues, auto extraction, audit
+event types beyond existing tool permission/result events, FTS/vector search,
+or background memory writes.
+
 **Tools:**
 ```
 memory_list    — list entries by scope/kind, bounded output, no full content

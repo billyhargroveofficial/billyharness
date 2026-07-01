@@ -95,6 +95,17 @@ var sharedActionDefinitions = []ActionDefinition{
 		TelegramSummary: "active context and contributors",
 	},
 	{
+		ID:              "memory.manage",
+		Title:           "Manage Memory",
+		Category:        "runtime",
+		Slash:           "/memory",
+		SlashArgs:       "list|search|read|add|replace|remove",
+		TelegramAliases: []string{"/memory"},
+		TelegramUsage:   "/memory list|search|read|add|replace|remove",
+		Summary:         "manage local memory entries",
+		TelegramSummary: "manage local memory",
+	},
+	{
 		ID:              "diff.preview",
 		Title:           "Preview Diff",
 		Category:        "session",

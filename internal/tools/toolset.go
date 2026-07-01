@@ -77,6 +77,7 @@ func (r *Registry) SnapshotWithToolPolicy(ctx context.Context, policy config.Too
 
 	snapshot := &Registry{
 		toolPolicy:      cloneToolPolicySettings(policy),
+		profile:         r.profile,
 		mcpSettings:     cloneMCPSettings(r.mcpSettings),
 		tools:           cloneToolMap(r.tools),
 		mcpTools:        map[string]Tool{},

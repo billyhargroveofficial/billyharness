@@ -138,6 +138,47 @@ func TestConfigInspectJSONDoesNotLeakDotenvSecrets(t *testing.T) {
 	}
 }
 
+func TestMemoryCommandAddAndList(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	out := captureStdout(t, func() {
+		if err := memoryCmd([]string{"add", "type=user", "topic=style", `summary="Prefers concise output"`, "path=topics/style.md", `body="Concise body"`, "confirm=true"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(out, "written=true") {
+		t.Fatalf("add output = %s", out)
+	}
+	out = captureStdout(t, func() {
+		if err := memoryCmd([]string{"list"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(out, "topic=style") || !strings.Contains(out, "Prefers concise output") {
+		t.Fatalf("list output = %s", out)
+	}
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = write
+	defer func() { os.Stdout = old }()
+	fn()
+	if err := write.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if _, err := out.ReadFrom(read); err != nil {
+		t.Fatal(err)
+	}
+	return out.String()
+}
+
 func TestSessionsCommandListsAndInspectsStore(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"

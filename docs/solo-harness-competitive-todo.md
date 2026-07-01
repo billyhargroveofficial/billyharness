@@ -606,9 +606,9 @@ Goal: add useful memory without background magic or prompt bloat.
     ./internal/agent ./internal/runstate ./internal/clientux
     ./internal/architecture` passed;
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `ba176c47d5156f6a5fa0168dcdf3b6495ab8f62f`.
 
-- [ ] SH-04.2 Add manual memory commands and tools.
+- [x] SH-04.2 Add manual memory commands and tools.
   - inspiration: Claude `/memory` UX but without React dialogs or auto writes.
   - target files: `internal/tools`, `internal/promptcommands`,
     `internal/tui/commands.go`, `internal/telegrambot/commands.go`,
@@ -616,7 +616,30 @@ Goal: add useful memory without background magic or prompt bloat.
   - acceptance: commands/tools support list/search/read/add/replace/remove with
     preview and confirmation boundaries appropriate for TUI/Telegram.
   - verification: command/tool tests.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: added shared manual memory operations in `internal/memory` for
+    list, search, read, add, replace, and remove over the existing home/profile
+    file store. Add/replace/remove are preview-only unless `confirm=true`;
+    topic paths remain rooted under the memory directory, summaries still pass
+    prompt-like rejection, and no automatic extraction, database, vector index,
+    or background write path was added. `internal/tools` now exposes read-only
+    memory list/search/read tools and write-risk memory add/replace/remove
+    tools through the existing policy and plan-mode filtering. CLI
+    `fast-agent-harness memory ...`, TUI `/memory ...`, Telegram `/memory ...`,
+    shared action metadata, and `toolrender` compact call labels use the same
+    operation contract. Architecture import guards were updated for the new
+    `memory` edges from tools, TUI, and Telegram.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*Memory.*|TestCallLineSnapshotsCommonTools|TestActionRegistryBacksSlashCommandsAndHelp|TestTelegramCommandMetadataDrivesHelpAndBypass'
+    -count=1 ./internal/memory ./internal/tools ./internal/toolrender
+    ./internal/tui ./internal/telegrambot ./cmd/fast-agent-harness
+    ./internal/architecture` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/memory ./internal/tools
+    ./internal/toolrender ./internal/promptcommands ./internal/tui
+    ./internal/telegrambot ./cmd/fast-agent-harness ./internal/architecture`
+    passed.
+  - commit: pending.
 
 - [ ] SH-04.3 Defer automatic memory extraction behind explicit command.
   - inspiration: Codex/Claude extraction pipelines, rejected as default.

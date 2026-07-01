@@ -8,6 +8,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/clientux"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/memory"
 	"github.com/billyhargroveofficial/billyharness/internal/promptcommands"
 )
 
@@ -99,6 +100,35 @@ func actionRegistry() []actionSpec {
 			run: func(m *Model, _ string) (bool, tea.Cmd) {
 				m.status = "loading context"
 				return true, m.contextStatusCmd()
+			},
+		},
+		{
+			id:        "memory.manage",
+			title:     "Manage Memory",
+			category:  "runtime",
+			slash:     "/memory",
+			slashArgs: "list|search|read|add|replace|remove",
+			summary:   "manage local memory entries",
+			args: func(Model) []slashArg {
+				return []slashArg{
+					{"list", "list summaries"},
+					{"search query=", "search memory"},
+					{"read topic=", "read one topic"},
+					{"add type=user topic= summary=\"\" path=topics/name.md body=\"\" confirm=true", "add memory"},
+					{"replace type=user topic= summary=\"\" path=topics/name.md body=\"\" confirm=true", "replace memory"},
+					{"remove topic= confirm=true", "remove memory"},
+				}
+			},
+			run: func(m *Model, arg string) (bool, tea.Cmd) {
+				out, err := memory.RunCommand(m.instructions, arg)
+				if err != nil {
+					m.addInfoBlock("MEMORY", "Memory failed: "+err.Error())
+					m.status = "memory failed"
+					return true, nil
+				}
+				m.addInfoBlock("MEMORY", out)
+				m.status = "memory shown"
+				return true, nil
 			},
 		},
 		{
