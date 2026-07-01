@@ -446,14 +446,14 @@ make silent stalls diagnosable.
     ./internal/gateway ./internal/gatewayclient ./internal/tui
     ./internal/telegrambot ./internal/agent` passed;
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `b7c0c5a169ab55aee1503d18deba60ed9128ad27`.
 
 ## Milestone 3 - Golden Replay And Adapter Parity (P0)
 
 Goal: prove TUI, Telegram, CLI, gateway, and trace all agree on the same
 canonical event stream.
 
-- [ ] SH-03.1 Create a canonical golden run bundle.
+- [x] SH-03.1 Create a canonical golden run bundle.
   - inspiration: Codex rollout/session exports and OpenCode replay tests.
   - target files: `internal/trace`, `internal/eventlog`,
     `internal/testkit`, `internal/clientux/projector`,
@@ -463,7 +463,30 @@ canonical event stream.
     compaction threshold, and final usage.
   - acceptance: the bundle can be replayed without provider/network access.
   - verification: `go test -run 'Test.*Golden.*Trace|Test.*Replay.*'`.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: extended the existing canonical agent-loop JSONL fixture into a
+    replay bundle with explicit offline replay metadata and the system/user
+    messages used to seed the run. The fixture now covers assistant content
+    streaming, reasoning/thinking, web-summary output with a 524k expected
+    output-ref artifact, MCP output, an interrupted `shell_exec` cleanup path,
+    compaction threshold/compaction events, final provider usage, and terminal
+    run completion. Shared testkit helpers load the bundle without adding
+    runtime imports, and trace/projector/TUI/Telegram golden tests replay the
+    same durable events without provider or network access.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*Golden.*Trace|Test.*Replay.*|TestGoldenRunBundleIncludesReplayInputs'
+    -count=1 ./internal/testkit ./internal/trace
+    ./internal/clientux/projector ./internal/tui ./internal/telegrambot`
+    passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/testkit
+    ./internal/trace ./internal/eventlog ./internal/clientux/projector
+    ./internal/tui ./internal/telegrambot` passed;
+    `/root/.local/go/bin/go test -run
+    'Test.*Golden.*Trace|Test.*Replay.*|TestGoldenRunBundleIncludesReplayInputs'
+    -count=1 ./cmd/fast-agent-harness` passed with no matching tests to run;
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] SH-03.2 Add adapter parity snapshot tests.
   - inspiration: shared adapter event translation in OpenCode and Billy's

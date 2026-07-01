@@ -475,7 +475,7 @@ func TestGoldenTraceReplayCanonicalAgentLoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.RunID != "run-golden-agent-loop" || summary.Records != 36 || summary.FirstSeq != 1 || summary.LastSeq != 36 {
+	if summary.RunID != "run-golden-agent-loop" || summary.Records != 39 || summary.FirstSeq != 1 || summary.LastSeq != 39 {
 		t.Fatalf("summary identity = %#v", summary)
 	}
 	if summary.RunStarted != 1 || summary.RunCompleted != 1 || summary.RunFailed != 0 ||
@@ -483,7 +483,7 @@ func TestGoldenTraceReplayCanonicalAgentLoop(t *testing.T) {
 		summary.StepsStarted != 5 || summary.StepsCompleted != 5 || summary.StepsFailed != 0 ||
 		summary.ParallelBatches != 1 ||
 		summary.ModelCallsStarted != 2 || summary.ModelCallsFinished != 2 ||
-		summary.ToolCallsStarted != 2 || summary.ToolCallProgress != 2 || summary.ToolCallsFinished != 2 ||
+		summary.ToolCallsStarted != 3 || summary.ToolCallProgress != 2 || summary.ToolCallsFinished != 2 ||
 		summary.ContextThresholds != 1 || summary.ContextCompactions != 1 {
 		t.Fatalf("summary counters = %#v", summary)
 	}
@@ -500,6 +500,47 @@ func TestGoldenTraceReplayCanonicalAgentLoop(t *testing.T) {
 	}
 	if len(summary.Timeline) == 0 {
 		t.Fatal("timeline is empty")
+	}
+	var aborted bool
+	for _, item := range summary.Timeline {
+		if item.EventType == string(protocol.EventToolCallAborted) && item.CallID == "call-shell" && item.Status == "aborted" {
+			aborted = true
+			break
+		}
+	}
+	if !aborted {
+		t.Fatalf("timeline missing aborted shell interruption: %#v", summary.Timeline)
+	}
+	if summary.OutputRefs != 1 || summary.OutputRefBytes != 0 || summary.MissingOutputRefs != 1 {
+		t.Fatalf("output ref audit = %#v", summary)
+	}
+	if len(summary.OutputRefWarnings) != 1 ||
+		summary.OutputRefWarnings[0].ExpectedBytes != 524288 ||
+		summary.OutputRefWarnings[0].Reason != "missing" {
+		t.Fatalf("output ref warnings = %#v", summary.OutputRefWarnings)
+	}
+}
+
+func TestGoldenRunBundleIncludesReplayInputs(t *testing.T) {
+	bundle := testkit.ReadCanonicalAgentLoopBundle(t)
+	if bundle.Name != "canonical-agent-loop" || bundle.Trace != testkit.CanonicalAgentLoopTrace || !bundle.OfflineReplay {
+		t.Fatalf("bundle identity = %#v", bundle)
+	}
+	if len(bundle.Messages) != 2 ||
+		bundle.Messages[0].Role != string(protocol.RoleSystem) ||
+		bundle.Messages[1].Role != string(protocol.RoleUser) ||
+		!strings.Contains(bundle.Messages[1].Content, "web context") {
+		t.Fatalf("bundle messages = %#v", bundle.Messages)
+	}
+	coverage := strings.Join(bundle.Coverage, "\n")
+	for _, want := range []string{"assistant streaming", "web summary", "aborted shell", "compaction", "final provider usage"} {
+		if !strings.Contains(coverage, want) {
+			t.Fatalf("bundle coverage missing %q: %#v", want, bundle.Coverage)
+		}
+	}
+	records := testkit.ReadTraceRecords(t, filepath.Join(filepath.Dir(testkit.CanonicalAgentLoopBundlePath(t)), bundle.Trace))
+	if len(records) != 39 || records[len(records)-1].Seq != 39 {
+		t.Fatalf("bundle trace records = %d last=%#v", len(records), records[len(records)-1])
 	}
 }
 

@@ -66,14 +66,14 @@ func TestGoldenTraceRendersTelegram(t *testing.T) {
 	for _, event := range goldenTraceEvents(t) {
 		progress = append(progress, r.Apply(event)...)
 	}
-	if !r.Done || r.ModelCalls != 2 || r.ToolCalls != 2 {
+	if !r.Done || r.ModelCalls != 2 || r.ToolCalls != 3 {
 		t.Fatalf("renderer state done=%v model=%d tools=%d", r.Done, r.ModelCalls, r.ToolCalls)
 	}
 	if r.InputTokens != 2100 || r.OutputTokens != 135 || r.CacheHit != 1100 || r.CacheMiss != 1000 || r.Reasoning != 20 {
 		t.Fatalf("usage = input %d output %d hit %d miss %d reasoning %d", r.InputTokens, r.OutputTokens, r.CacheHit, r.CacheMiss, r.Reasoning)
 	}
 	progressText := renderEventsText(progress)
-	for _, want := range []string{"web_fetch", "mcp call", "ref web_fetch.txt", "Context"} {
+	for _, want := range []string{"web_fetch", "mcp call", "ref web_fetch.txt", "shell_exec", "interrupted by newer user input", "Context"} {
 		if !strings.Contains(progressText, want) {
 			t.Fatalf("progress missing %q in:\n%s", want, progressText)
 		}
@@ -83,7 +83,7 @@ func TestGoldenTraceRendersTelegram(t *testing.T) {
 		t.Fatal("final chunks empty")
 	}
 	finalText := strings.Join(chunks, "\n")
-	for _, want := range []string{"Final answer: web context", "agent turns 2", "tools 2", "💾 hit"} {
+	for _, want := range []string{"Final answer: web context", "agent turns 2", "tools 3", "💾 hit"} {
 		if !strings.Contains(finalText, want) {
 			t.Fatalf("final output missing %q in:\n%s", want, finalText)
 		}

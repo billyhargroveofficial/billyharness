@@ -1,0 +1,24 @@
+{
+  "name": "canonical-agent-loop",
+  "trace": "agent_loop_full.jsonl",
+  "offline_replay": true,
+  "messages": [
+    {
+      "role": "system",
+      "content": "Golden system prompt: keep Billyharness local, JSONL-backed, and replayable."
+    },
+    {
+      "role": "user",
+      "content": "Check web context, MCP state, and process interruption behavior, then answer from the replayable evidence."
+    }
+  ],
+  "coverage": [
+    "assistant streaming chunks",
+    "reasoning/thinking delta",
+    "web summary with output_ref",
+    "MCP tool result",
+    "aborted shell interruption cleanup",
+    "context threshold and compaction boundary",
+    "final provider usage and terminal run completion"
+  ]
+}

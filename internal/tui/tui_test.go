@@ -70,13 +70,13 @@ func TestGoldenTraceProjectsIntoTUI(t *testing.T) {
 	for _, event := range goldenTraceEvents(t) {
 		m.applyEvent(event)
 	}
-	if m.status != "completed" || m.modelCalls != 2 || m.toolCalls != 2 || m.lastGatewayEventSeq != 36 {
+	if m.status != "completed" || m.modelCalls != 2 || m.toolCalls != 3 || m.lastGatewayEventSeq != 39 {
 		t.Fatalf("model state status=%q model=%d tools=%d seq=%d", m.status, m.modelCalls, m.toolCalls, m.lastGatewayEventSeq)
 	}
 	if m.inputTok != 2100 || m.outputTok != 135 || m.cacheHitTok != 1100 || m.cacheMissTok != 1000 || m.reasoningTok != 20 {
 		t.Fatalf("usage = input %d output %d hit %d miss %d reasoning %d", m.inputTok, m.outputTok, m.cacheHitTok, m.cacheMissTok, m.reasoningTok)
 	}
-	var assistant, reasoning, web, mcp, compaction, summary bool
+	var assistant, reasoning, web, mcp, shell, compaction, summary bool
 	for _, block := range m.blocks {
 		if block.CellType == cellTypeAssistantFinal && strings.Contains(block.Content, "Final answer: web context") {
 			assistant = true
@@ -90,6 +90,9 @@ func TestGoldenTraceProjectsIntoTUI(t *testing.T) {
 		if block.CallID == "call-mcp" && block.ToolName == "mcp_call" && strings.Contains(block.Content, "MCP catalog") {
 			mcp = true
 		}
+		if block.CallID == "call-shell" && strings.Contains(block.Content, "interrupted by newer user input") {
+			shell = true
+		}
 		if block.CellType == cellTypeCompaction && strings.Contains(block.Content, "compact-golden-001") {
 			compaction = true
 		}
@@ -97,8 +100,8 @@ func TestGoldenTraceProjectsIntoTUI(t *testing.T) {
 			summary = true
 		}
 	}
-	if !assistant || !reasoning || !web || !mcp || !compaction || !summary {
-		t.Fatalf("golden trace cells assistant=%v reasoning=%v web=%v mcp=%v compaction=%v summary=%v blocks=%#v", assistant, reasoning, web, mcp, compaction, summary, m.blocks)
+	if !assistant || !reasoning || !web || !mcp || !shell || !compaction || !summary {
+		t.Fatalf("golden trace cells assistant=%v reasoning=%v web=%v mcp=%v shell=%v compaction=%v summary=%v blocks=%#v", assistant, reasoning, web, mcp, shell, compaction, summary, m.blocks)
 	}
 }
 

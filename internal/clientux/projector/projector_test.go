@@ -229,7 +229,7 @@ func TestGoldenTraceProjectsClientSnapshot(t *testing.T) {
 	for _, event := range goldenTraceEvents(t) {
 		snap = p.Apply(event)
 	}
-	if snap.RunState != RunStateCompleted || snap.LastSeq != 36 || snap.SeqGap != nil {
+	if snap.RunState != RunStateCompleted || snap.LastSeq != 39 || snap.SeqGap != nil {
 		t.Fatalf("terminal snapshot = %#v", snap)
 	}
 	for _, want := range []string{
@@ -243,7 +243,7 @@ func TestGoldenTraceProjectsClientSnapshot(t *testing.T) {
 	if !strings.Contains(snap.ReasoningText, "Need web context") {
 		t.Fatalf("reasoning text = %q", snap.ReasoningText)
 	}
-	if snap.ModelCalls != 2 || snap.ToolCalls != 2 {
+	if snap.ModelCalls != 2 || snap.ToolCalls != 3 {
 		t.Fatalf("call counts = model %d tool %d", snap.ModelCalls, snap.ToolCalls)
 	}
 	if snap.InputTokens != 2100 || snap.OutputTokens != 135 ||
@@ -261,6 +261,11 @@ func TestGoldenTraceProjectsClientSnapshot(t *testing.T) {
 	mcp := snap.ToolsByCallID["call-mcp"]
 	if mcp.Name != "mcp_call" || mcp.Status != "finished" || !strings.Contains(mcp.Content, "MCP catalog") {
 		t.Fatalf("mcp tool = %#v", mcp)
+	}
+	shell := snap.ToolsByCallID["call-shell"]
+	if shell.Name != "shell_exec" || shell.Status != "aborted" || !shell.IsError ||
+		!strings.Contains(shell.Content, "interrupted by newer user input") {
+		t.Fatalf("shell interruption tool = %#v", shell)
 	}
 	if len(snap.ContextThresholds) != 1 || snap.ContextThresholds[0].Percent != 70 ||
 		snap.ContextThresholds[0].Stage != "before_turn" {
