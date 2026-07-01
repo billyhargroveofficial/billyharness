@@ -143,6 +143,42 @@ type StreamStillRunningEvent struct {
 	Message    string `json:"message,omitempty"`
 }
 
+type ManagedProcessList struct {
+	GeneratedAt string                 `json:"generated_at,omitempty"`
+	Running     int                    `json:"running,omitempty"`
+	Exited      int                    `json:"exited,omitempty"`
+	Limit       int                    `json:"limit,omitempty"`
+	Truncated   bool                   `json:"truncated,omitempty"`
+	Processes   []ManagedProcessStatus `json:"processes,omitempty"`
+}
+
+type ManagedProcessStatus struct {
+	ID                string   `json:"id"`
+	Kind              string   `json:"kind,omitempty"`
+	Argv              []string `json:"argv,omitempty"`
+	Command           string   `json:"command,omitempty"`
+	CWD               string   `json:"cwd,omitempty"`
+	PID               int      `json:"pid,omitempty"`
+	Running           bool     `json:"running"`
+	Exited            bool     `json:"exited,omitempty"`
+	ExitCode          int      `json:"exit_code,omitempty"`
+	ExitError         string   `json:"exit_error,omitempty"`
+	StartedAt         string   `json:"started_at,omitempty"`
+	EndedAt           string   `json:"ended_at,omitempty"`
+	ElapsedMS         int64    `json:"elapsed_ms,omitempty"`
+	RetainedBytes     int64    `json:"retained_bytes,omitempty"`
+	BaseCursor        int64    `json:"base_cursor,omitempty"`
+	NextCursor        int64    `json:"next_cursor,omitempty"`
+	DroppedBytes      int64    `json:"dropped_bytes,omitempty"`
+	OutputRef         string   `json:"output_ref,omitempty"`
+	OutputRefID       string   `json:"output_ref_id,omitempty"`
+	OutputRefBytes    int64    `json:"output_ref_bytes,omitempty"`
+	OutputRefAt       string   `json:"output_ref_at,omitempty"`
+	DetectedPorts     []int    `json:"detected_ports,omitempty"`
+	DetectedURLs      []string `json:"detected_urls,omitempty"`
+	OutputTailPreview string   `json:"output_tail_preview,omitempty"`
+}
+
 type ProviderHelperUsageEvent struct {
 	Kind            string  `json:"kind"`
 	Provider        string  `json:"provider,omitempty"`

@@ -405,9 +405,9 @@ make silent stalls diagnosable.
     ./internal/agent ./internal/telegrambot ./internal/tui ./internal/provider`
     passed;
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `6a7a26b9ec91f1b3facee90b60485dd7dfe0dc77`.
 
-- [ ] SH-02.4 Add managed-process dashboard polish.
+- [x] SH-02.4 Add managed-process dashboard polish.
   - inspiration: Claude tool progress and OpenCode process/output refs.
   - target files: `internal/tools/shell_process.go`,
     `internal/tools/diagnostics.go`, `internal/toolrender`,
@@ -416,7 +416,37 @@ make silent stalls diagnosable.
     and rendered with stable IDs, ports/URLs when detected, elapsed time, and
     output refs.
   - verification: shell process tests and command renderer tests.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: added a `shell_processes` process-dashboard tool over the
+    existing Billy-owned background shell registry, while keeping
+    `shell_output` as the bounded tail/read primitive and `shell_kill` as the
+    scoped stop primitive. Process snapshots now carry stable shell ids,
+    command/cwd/pid, running or exited state, elapsed time, retained output
+    cursors, bounded tail preview, detected localhost URLs/ports from retained
+    output, and the latest output-ref artifact created by `shell_output`.
+    Gateway exposes the same read-only dashboard at `/v1/processes`, and TUI
+    `/processes` plus Telegram `/processes` render the compact shared status.
+    `toolrender` also has deterministic compact call labels for
+    `shell_processes`.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*Shell.*(Background|Output|Kill|Process|Dashboard|RegistryClose|MaxLive).*|TestPlanModeFiltersAndDeniesWriteExecuteExternalTools'
+    -count=1 ./internal/tools` passed;
+    `/root/.local/go/bin/go test -run
+    'TestCallLine.*|Test.*ToolRender.*Shell.*|TestCallLineSnapshotsCommonTools'
+    -count=1 ./internal/toolrender` passed;
+    `/root/.local/go/bin/go test -run
+    'TestGatewayManagedProcessesEndpointUsesSharedRegistry|TestGatewayToolsExposeMCPRegistry'
+    -count=1 ./internal/gateway` passed;
+    `/root/.local/go/bin/go test -run
+    'TestProcessesCommandShowsGatewayDashboard|TestTelegramProcessesCommandShowsManagedProcessDashboard|TestGatewayClientProcessStatusReturnsDashboardText|TestTelegramCommandMetadataDrivesHelpAndBypass'
+    -count=1 ./internal/tui ./internal/telegrambot` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/protocol
+    ./internal/tools ./internal/toolrender ./internal/gatewayapi
+    ./internal/gateway ./internal/gatewayclient ./internal/tui
+    ./internal/telegrambot ./internal/agent` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 ## Milestone 3 - Golden Replay And Adapter Parity (P0)
 

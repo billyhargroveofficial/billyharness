@@ -87,6 +87,37 @@ func TestGatewayClientContextStatusUsesSharedFormatter(t *testing.T) {
 	}
 }
 
+func TestGatewayClientProcessStatusReturnsDashboardText(t *testing.T) {
+	server := testkit.NewRouteServer(t, testkit.Route{
+		Method: http.MethodGet,
+		Path:   "/v1/processes",
+		Handler: func(w http.ResponseWriter, r *http.Request) {
+			if got := r.URL.Query().Get("include_exited"); got != "true" {
+				t.Fatalf("include_exited = %q", got)
+			}
+			testkit.WriteJSON(t, w, gatewayapi.ManagedProcessResponse{
+				Processes: protocol.ManagedProcessList{
+					Running: 1,
+					Processes: []protocol.ManagedProcessStatus{{
+						ID:            "shell-1",
+						Running:       true,
+						DetectedPorts: []int{5173},
+					}},
+				},
+				Text: "managed shell processes: 1 running, 0 exited\n- shell-1 running ports=5173",
+			})
+		},
+	})
+
+	text, err := NewGatewayClient(server.URL).ProcessStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "shell-1") || !strings.Contains(text, "ports=5173") {
+		t.Fatalf("process status = %q", text)
+	}
+}
+
 func TestGatewayClientReplaySessionEventsUsesOneShotCursor(t *testing.T) {
 	server := testkit.NewRouteServer(t, testkit.Route{
 		Method: http.MethodGet,

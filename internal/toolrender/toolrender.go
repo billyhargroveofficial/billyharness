@@ -541,6 +541,14 @@ var callRenderers = map[string]callRenderer{
 			return "⚙️ shell kill " + CompactArg(args["process_id"], 64)
 		}),
 	},
+	"shell_processes": {
+		tui: staticCallLine(func(map[string]any) string {
+			return "Listed shell processes"
+		}),
+		telegram: staticCallLine(func(map[string]any) string {
+			return "⚙️ shell processes"
+		}),
+	},
 	"diagnostics_run": {
 		tui: staticCallLine(func(args map[string]any) string {
 			name := firstArg(args, "name")

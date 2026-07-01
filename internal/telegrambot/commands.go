@@ -29,6 +29,10 @@ type gatewaySessionUndoer interface {
 	RedoSession(context.Context, string) (gatewayapi.SessionUndoResponse, error)
 }
 
+type managedProcessReporter interface {
+	ProcessStatus(context.Context) (string, error)
+}
+
 type telegramCommandHandler func(*Bot, context.Context, Message, ChatScope, string)
 
 type telegramCommandSpec struct {
@@ -73,6 +77,10 @@ func telegramCommands() []telegramCommandSpec {
 		}),
 		telegramActionCommand("mcp.show", telegramCommandSpec{
 			handler: (*Bot).handleMCPCommand,
+		}),
+		telegramActionCommand("processes.show", telegramCommandSpec{
+			bypassRunLock: true,
+			handler:       (*Bot).handleProcessesCommand,
 		}),
 		telegramActionCommand("tool.view", telegramCommandSpec{
 			bypassRunLock: true,
@@ -297,6 +305,20 @@ func (b *Bot) handleMCPCommand(ctx context.Context, msg Message, _ ChatScope, _ 
 		return
 	}
 	_ = b.sendHTML(ctx, msg, "<b>MCP</b>\n<pre>"+esc(status)+"</pre>")
+}
+
+func (b *Bot) handleProcessesCommand(ctx context.Context, msg Message, _ ChatScope, _ string) {
+	reporter, ok := b.harness.(managedProcessReporter)
+	if !ok {
+		_ = b.sendPlain(ctx, msg, "Process dashboard is not available in this harness.")
+		return
+	}
+	status, err := reporter.ProcessStatus(ctx)
+	if err != nil {
+		_ = b.sendPlain(ctx, msg, "Process status failed: "+err.Error())
+		return
+	}
+	_ = b.sendHTML(ctx, msg, "<b>Processes</b>\n<pre>"+esc(status)+"</pre>")
 }
 
 func (b *Bot) handleToolViewCommand(ctx context.Context, msg Message, scope ChatScope, _ string) {

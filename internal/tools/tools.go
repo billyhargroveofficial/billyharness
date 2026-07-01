@@ -577,7 +577,7 @@ func defaultParallelMetadata(name string, risk protocol.Risk) ParallelMetadata {
 		return ParallelMetadata{Policy: ParallelPolicyReadOnly, Idempotent: true, Cancellable: true}
 	case "web_search", "web_fetch", "web_extract", "web_crawl":
 		return ParallelMetadata{Policy: ParallelPolicyNetworkRateLimited, Idempotent: true, RateLimitKey: "web", Cancellable: true, MaxConcurrency: 3}
-	case AskUserToolName, "fs_write_file", "fs_edit_file", "fs_make_dir", "diagnostics_run", "shell_exec", "shell_output", "shell_kill", "web_cache_clear":
+	case AskUserToolName, "fs_write_file", "fs_edit_file", "fs_make_dir", "diagnostics_run", "shell_exec", "shell_output", "shell_kill", "shell_processes", "web_cache_clear":
 		return ParallelMetadata{Policy: ParallelPolicyExclusiveWorkspace, RequiresExclusiveWorkspace: true, Cancellable: true, MaxConcurrency: 1}
 	case "mcp_list_tools", "mcp_call":
 		return ParallelMetadata{Policy: ParallelPolicyUnknownExternal, RequiresExclusiveWorkspace: true, Cancellable: true, RateLimitKey: "mcp", MaxConcurrency: 1}
@@ -820,6 +820,15 @@ func (r *Registry) addShellExec() {
 			Risk:        protocol.RiskExecute,
 		},
 		Handler: r.handleShellKill,
+	})
+	r.add(Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "shell_processes",
+			Description: "List Billy-owned background shell processes with stable ids, running/exited state, elapsed time, retained output cursors, detected ports/URLs, and latest output_ref when available.",
+			Parameters:  raw(`{"type":"object","properties":{"include_exited":{"type":"boolean","default":false},"limit":{"type":"integer","default":50}},"additionalProperties":false}`),
+			Risk:        protocol.RiskExecute,
+		},
+		Handler: r.handleShellProcesses,
 	})
 }
 

@@ -263,6 +263,17 @@ func actionRegistry() []actionSpec {
 			},
 		},
 		{
+			id:       "processes.show",
+			title:    "Show Processes",
+			category: "runtime",
+			slash:    "/processes",
+			summary:  "show managed shell processes",
+			run: func(m *Model, _ string) (bool, tea.Cmd) {
+				m.status = "loading processes"
+				return true, m.processStatusCmd()
+			},
+		},
+		{
 			id:        "reasoning.set",
 			title:     "Set Reasoning",
 			category:  "runtime",

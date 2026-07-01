@@ -6,18 +6,30 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/tooloutput"
 )
 
 const (
 	maxManagedShellProcesses = 8
 	maxManagedShellBuffer    = 1024 * 1024
+	maxManagedShellList      = 50
+	maxManagedShellPreview   = 240
 	shellTerminateGrace      = 200 * time.Millisecond
+)
+
+var (
+	managedShellURLRE      = regexp.MustCompile(`https?://[^\s<>"'()]+`)
+	managedShellHostPortRE = regexp.MustCompile(`(?i)\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):(\d{2,5})\b`)
+	managedShellPortRE     = regexp.MustCompile(`(?i)\b(?:port|listening on|serving on|server on)\D{0,24}(\d{2,5})\b`)
 )
 
 type shellExecInput struct {
@@ -41,6 +53,11 @@ type managedShellProcess struct {
 	exitCode int
 	exitErr  string
 	endedAt  time.Time
+
+	lastOutputRef   string
+	lastOutputRefID string
+	lastOutputBytes int64
+	lastOutputRefAt time.Time
 }
 
 type shellOutputBuffer struct {
@@ -330,6 +347,7 @@ func (r *Registry) handleShellOutput(_ context.Context, args json.RawMessage) (R
 		})
 		if err == nil && ref.Path != "" {
 			ref.AddMetadata(metadata)
+			proc.setLastOutputRef(ref)
 		}
 	}
 	return Result{Content: slice.Content, Metadata: metadata, Truncated: slice.Truncated, OutputRef: metadataStringValue(metadata, tooloutput.MetadataOutputRef)}, nil
@@ -360,6 +378,82 @@ func (r *Registry) handleShellKill(_ context.Context, args json.RawMessage) (Res
 	metadata := proc.metadata()
 	metadata["process_id"] = proc.id
 	return Result{Content: "terminated " + proc.id, Metadata: metadata}, nil
+}
+
+func (r *Registry) handleShellProcesses(_ context.Context, args json.RawMessage) (Result, error) {
+	var in struct {
+		IncludeExited bool `json:"include_exited"`
+		Limit         int  `json:"limit"`
+	}
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &in); err != nil {
+			return Result{}, err
+		}
+	}
+	processes := r.ManagedShellProcesses(in.IncludeExited, in.Limit)
+	metadata := map[string]any{
+		"managed_processes": processes,
+		"process_count":     len(processes.Processes),
+		"running":           processes.Running,
+		"exited":            processes.Exited,
+		"display_summary":   managedShellProcessSummary(processes),
+		"display_group":     "shell_processes",
+		"display_target":    "managed shell processes",
+		"display_preview":   managedShellProcessPreview(processes),
+		"collapse_default":  true,
+	}
+	return Result{Content: FormatManagedShellProcesses(processes), Metadata: metadata}, nil
+}
+
+func (r *Registry) ManagedShellProcesses(includeExited bool, limit int) protocol.ManagedProcessList {
+	if limit <= 0 || limit > maxManagedShellList {
+		limit = maxManagedShellList
+	}
+	now := time.Now().UTC()
+	var procs []*managedShellProcess
+	if r != nil {
+		r.shellMu.Lock()
+		procs = make([]*managedShellProcess, 0, len(r.shellProcesses))
+		for _, proc := range r.shellProcesses {
+			if proc != nil {
+				procs = append(procs, proc)
+			}
+		}
+		r.shellMu.Unlock()
+	}
+	sort.Slice(procs, func(i, j int) bool {
+		return managedShellIDNumber(procs[i].id) < managedShellIDNumber(procs[j].id)
+	})
+	out := protocol.ManagedProcessList{
+		GeneratedAt: now.Format(time.RFC3339Nano),
+		Limit:       limit,
+	}
+	for _, proc := range procs {
+		status := proc.status(now)
+		if status.Running {
+			out.Running++
+		} else {
+			out.Exited++
+		}
+		if !includeExited && !status.Running {
+			continue
+		}
+		if len(out.Processes) >= limit {
+			out.Truncated = true
+			continue
+		}
+		out.Processes = append(out.Processes, status)
+	}
+	return out
+}
+
+func managedShellIDNumber(id string) int64 {
+	id = strings.TrimPrefix(strings.TrimSpace(id), "shell-")
+	n, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return 1<<62 - 1
+	}
+	return n
 }
 
 func (r *Registry) managedShell(id string) (*managedShellProcess, error) {
@@ -460,6 +554,225 @@ func (p *managedShellProcess) metadata() map[string]any {
 	return metadata
 }
 
+func (p *managedShellProcess) setLastOutputRef(ref tooloutput.Ref) {
+	if p == nil || ref.Path == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.lastOutputRef = ref.Path
+	p.lastOutputRefID = ref.ID
+	p.lastOutputBytes = ref.Bytes
+	p.lastOutputRefAt = time.Now().UTC()
+}
+
+func (p *managedShellProcess) status(now time.Time) protocol.ManagedProcessStatus {
+	p.mu.Lock()
+	id := p.id
+	argv := append([]string(nil), p.argv...)
+	cwd := p.cwd
+	startedAt := p.startedAt
+	cmd := p.cmd
+	exited := p.exited
+	exitCode := p.exitCode
+	exitErr := p.exitErr
+	endedAt := p.endedAt
+	outputRef := p.lastOutputRef
+	outputRefID := p.lastOutputRefID
+	outputRefBytes := p.lastOutputBytes
+	outputRefAt := p.lastOutputRefAt
+	p.mu.Unlock()
+
+	slice := p.output.tail(maxManagedShellPreview)
+	ports, urls := detectManagedShellEndpoints(slice.Content)
+	end := now
+	if exited && !endedAt.IsZero() {
+		end = endedAt
+	}
+	elapsed := end.Sub(startedAt)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	status := protocol.ManagedProcessStatus{
+		ID:                id,
+		Kind:              "shell",
+		Argv:              argv,
+		Command:           strings.Join(argv, " "),
+		CWD:               cwd,
+		Running:           !exited,
+		Exited:            exited,
+		StartedAt:         startedAt.Format(time.RFC3339Nano),
+		ElapsedMS:         elapsed.Milliseconds(),
+		RetainedBytes:     slice.RetainedEnd - slice.BaseCursor,
+		BaseCursor:        slice.BaseCursor,
+		NextCursor:        slice.RetainedEnd,
+		DroppedBytes:      slice.BaseCursor,
+		OutputRef:         outputRef,
+		OutputRefID:       outputRefID,
+		OutputRefBytes:    outputRefBytes,
+		DetectedPorts:     ports,
+		DetectedURLs:      urls,
+		OutputTailPreview: compactManagedShellPreview(slice.Content),
+	}
+	if cmd != nil && cmd.Process != nil {
+		status.PID = cmd.Process.Pid
+	}
+	if exited {
+		status.ExitCode = exitCode
+		status.EndedAt = endedAt.Format(time.RFC3339Nano)
+		status.ExitError = exitErr
+	}
+	if !outputRefAt.IsZero() {
+		status.OutputRefAt = outputRefAt.Format(time.RFC3339Nano)
+	}
+	return status
+}
+
+func FormatManagedShellProcesses(processes protocol.ManagedProcessList) string {
+	if len(processes.Processes) == 0 {
+		if processes.Running == 0 && processes.Exited == 0 {
+			return "no managed shell processes"
+		}
+		return fmt.Sprintf("managed shell processes: %d running, %d exited (none shown)", processes.Running, processes.Exited)
+	}
+	lines := []string{fmt.Sprintf("managed shell processes: %d running, %d exited", processes.Running, processes.Exited)}
+	for _, proc := range processes.Processes {
+		lines = append(lines, "- "+managedShellProcessLine(proc))
+	}
+	if processes.Truncated {
+		lines = append(lines, fmt.Sprintf("... truncated at %d processes", processes.Limit))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func managedShellProcessSummary(processes protocol.ManagedProcessList) string {
+	return fmt.Sprintf("managed shell processes %d running %d exited", processes.Running, processes.Exited)
+}
+
+func managedShellProcessPreview(processes protocol.ManagedProcessList) string {
+	if len(processes.Processes) == 0 {
+		return "no managed shell processes"
+	}
+	var parts []string
+	for i, proc := range processes.Processes {
+		if i >= 3 {
+			break
+		}
+		parts = append(parts, proc.ID+" "+managedShellProcessState(proc))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func managedShellProcessLine(proc protocol.ManagedProcessStatus) string {
+	parts := []string{proc.ID, managedShellProcessState(proc)}
+	if proc.PID > 0 {
+		parts = append(parts, fmt.Sprintf("pid=%d", proc.PID))
+	}
+	if proc.ElapsedMS > 0 {
+		parts = append(parts, "elapsed="+compactManagedShellDuration(proc.ElapsedMS))
+	}
+	if proc.CWD != "" {
+		parts = append(parts, "cwd="+proc.CWD)
+	}
+	if proc.Command != "" {
+		parts = append(parts, "cmd="+truncate(proc.Command, 120))
+	}
+	if len(proc.DetectedPorts) > 0 {
+		parts = append(parts, "ports="+joinPorts(proc.DetectedPorts))
+	}
+	if len(proc.DetectedURLs) > 0 {
+		parts = append(parts, "urls="+strings.Join(proc.DetectedURLs, ","))
+	}
+	if proc.OutputRef != "" {
+		parts = append(parts, "output_ref="+proc.OutputRef)
+	}
+	parts = append(parts, fmt.Sprintf("cursor=%d", proc.NextCursor))
+	if proc.OutputTailPreview != "" {
+		parts = append(parts, "tail="+strconv.Quote(proc.OutputTailPreview))
+	}
+	return strings.Join(parts, " ")
+}
+
+func managedShellProcessState(proc protocol.ManagedProcessStatus) string {
+	if proc.Running {
+		return "running"
+	}
+	if proc.ExitError != "" {
+		return fmt.Sprintf("exited(%d)", proc.ExitCode)
+	}
+	if proc.Exited {
+		return fmt.Sprintf("exited(%d)", proc.ExitCode)
+	}
+	return "unknown"
+}
+
+func compactManagedShellDuration(ms int64) string {
+	d := time.Duration(ms) * time.Millisecond
+	switch {
+	case d >= time.Hour:
+		return fmt.Sprintf("%.1fh", d.Hours())
+	case d >= time.Minute:
+		return fmt.Sprintf("%.1fm", d.Minutes())
+	case d >= time.Second:
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	default:
+		return fmt.Sprintf("%dms", ms)
+	}
+}
+
+func joinPorts(ports []int) string {
+	parts := make([]string, 0, len(ports))
+	for _, port := range ports {
+		parts = append(parts, strconv.Itoa(port))
+	}
+	return strings.Join(parts, ",")
+}
+
+func compactManagedShellPreview(text string) string {
+	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	return truncate(text, maxManagedShellPreview)
+}
+
+func detectManagedShellEndpoints(text string) ([]int, []string) {
+	portsSeen := map[int]bool{}
+	var ports []int
+	addPort := func(value string) {
+		port, err := strconv.Atoi(value)
+		if err != nil || port <= 0 || port > 65535 || portsSeen[port] {
+			return
+		}
+		portsSeen[port] = true
+		ports = append(ports, port)
+	}
+	for _, match := range managedShellHostPortRE.FindAllStringSubmatch(text, -1) {
+		if len(match) > 1 {
+			addPort(match[1])
+		}
+	}
+	for _, match := range managedShellPortRE.FindAllStringSubmatch(text, -1) {
+		if len(match) > 1 {
+			addPort(match[1])
+		}
+	}
+	urlSeen := map[string]bool{}
+	var urls []string
+	for _, rawURL := range managedShellURLRE.FindAllString(text, -1) {
+		clean := strings.TrimRight(rawURL, ".,;:")
+		if clean == "" || urlSeen[clean] {
+			continue
+		}
+		urlSeen[clean] = true
+		urls = append(urls, clean)
+	}
+	if len(ports) > 6 {
+		ports = ports[:6]
+	}
+	if len(urls) > 6 {
+		urls = urls[:6]
+	}
+	return ports, urls
+}
+
 func (b *shellOutputBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -517,6 +830,10 @@ func (b *shellOutputBuffer) read(cursor int64, maxBytes int, tailBytes int) shel
 		Truncated:   truncated,
 		RetainedEnd: b.next,
 	}
+}
+
+func (b *shellOutputBuffer) tail(maxBytes int) shellOutputSlice {
+	return b.read(0, maxBytes, maxBytes)
 }
 
 func terminateManagedShell(proc *managedShellProcess) error {

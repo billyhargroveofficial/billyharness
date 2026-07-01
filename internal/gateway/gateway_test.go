@@ -715,6 +715,52 @@ func TestGatewayToolsExposeMCPRegistry(t *testing.T) {
 	}
 }
 
+func TestGatewayManagedProcessesEndpointUsesSharedRegistry(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.WorkspaceRoots = []string{root}
+	registry := tools.NewRegistry(cfg)
+	defer registry.Close()
+	server := NewServer(cfg, provider.Mock{}, registry)
+
+	start, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "shell_exec",
+		Arguments: json.RawMessage(`{"argv":["sh","-c","printf 'server http://127.0.0.1:5432\n'; sleep 10"],"background":true}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processID := start.Metadata["process_id"].(string)
+	waitForGatewayShellOutput(t, registry, processID, "5432")
+	defer func() {
+		_, _ = registry.Call(context.Background(), protocol.ToolCall{
+			Name:      "shell_kill",
+			Arguments: json.RawMessage(fmt.Sprintf(`{"process_id":%q}`, processID)),
+		})
+	}()
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/processes?include_exited=true", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var out ManagedProcessResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Processes.Running != 1 || len(out.Processes.Processes) != 1 {
+		t.Fatalf("process response = %#v", out)
+	}
+	proc := out.Processes.Processes[0]
+	if proc.ID != processID || !proc.Running || proc.OutputRef == "" || !strings.Contains(out.Text, "ports=5432") {
+		t.Fatalf("process response = %#v text=%s", out, out.Text)
+	}
+}
+
 func TestGatewayFakeStdioMCPServer(t *testing.T) {
 	if os.Getenv("BILLYHARNESS_GATEWAY_MCP_HELPER") != "1" {
 		return
@@ -864,6 +910,25 @@ func waitProtocolEvent(t *testing.T, events <-chan protocol.Event) protocol.Even
 		t.Fatal("timed out waiting for event")
 		return protocol.Event{}
 	}
+}
+
+func waitForGatewayShellOutput(t *testing.T, registry *tools.Registry, processID, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err := registry.Call(context.Background(), protocol.ToolCall{
+			Name:      "shell_output",
+			Arguments: json.RawMessage(fmt.Sprintf(`{"process_id":%q,"cursor":0,"max_output_bytes":512}`, processID)),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(result.Content, want) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for shell output %q", want)
 }
 
 func eventStatus(t *testing.T, event protocol.Event) SessionStatus {

@@ -79,6 +79,11 @@ type ConfigStatusResponse struct {
 	Warnings    []string                  `json:"warnings,omitempty"`
 }
 
+type ManagedProcessResponse struct {
+	Processes protocol.ManagedProcessList `json:"processes"`
+	Text      string                      `json:"text,omitempty"`
+}
+
 type SessionStatus struct {
 	ID              string       `json:"id"`
 	Created         time.Time    `json:"created"`

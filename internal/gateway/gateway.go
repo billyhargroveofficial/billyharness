@@ -112,6 +112,7 @@ type UserInputRejectRequest = gatewayapi.UserInputRejectRequest
 type UserInputResponse = gatewayapi.UserInputResponse
 type BenchmarkListResponse = gatewayapi.BenchmarkListResponse
 type BenchmarkRunSummary = gatewayapi.BenchmarkRunSummary
+type ManagedProcessResponse = gatewayapi.ManagedProcessResponse
 
 type runSettings struct {
 	provider     config.ProviderBinding
@@ -297,6 +298,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/benchmarks", s.handleBenchmarks)
 	s.mux.HandleFunc("GET /v1/tools", s.handleTools)
 	s.mux.HandleFunc("GET /v1/mcp", s.handleMCP)
+	s.mux.HandleFunc("GET /v1/processes", s.handleManagedProcesses)
 	s.mux.HandleFunc("POST /v1/run", s.handleRun)
 	s.mux.HandleFunc("GET /v1/sessions", s.handleListSessions)
 	s.mux.HandleFunc("POST /v1/sessions", s.handleCreateSession)
@@ -417,6 +419,25 @@ func (s *Server) handleMCP(w http.ResponseWriter, _ *http.Request) {
 		"enabled":      mcpSettings.Enabled,
 		"servers":      s.registry.MCPStatuses(),
 	})
+}
+
+func (s *Server) handleManagedProcesses(w http.ResponseWriter, r *http.Request) {
+	includeExited := parseBoolQuery(r.URL.Query().Get("include_exited"))
+	limit, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("limit")))
+	processes := s.registry.ManagedShellProcesses(includeExited, limit)
+	writeJSON(w, http.StatusOK, ManagedProcessResponse{
+		Processes: processes,
+		Text:      tools.FormatManagedShellProcesses(processes),
+	})
+}
+
+func parseBoolQuery(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {

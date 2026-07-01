@@ -90,6 +90,44 @@ func TestTelegramContextCommandShowsSessionContext(t *testing.T) {
 	}
 }
 
+type processStatusHarness struct {
+	scriptedHarness
+	status string
+}
+
+func (h processStatusHarness) ProcessStatus(context.Context) (string, error) {
+	return h.status, nil
+}
+
+func TestTelegramProcessesCommandShowsManagedProcessDashboard(t *testing.T) {
+	var sentText string
+	var parseMode string
+	client := newTelegramAPIClient(t, "bottoken", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			sentText, _ = payload["text"].(string)
+			parseMode, _ = payload["parse_mode"].(string)
+			writeTelegramResult(w, SentMessage{MessageID: 12, Chat: Chat{ID: 123}})
+		},
+	})
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      t.TempDir() + "/state.json",
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, processStatusHarness{status: "managed shell processes: 1 running, 0 exited\n- shell-1 running ports=5173 output_ref=/tmp/tool-output/shell.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/processes"})
+	if parseMode != "HTML" || !strings.Contains(sentText, "<b>Processes</b>") || !strings.Contains(sentText, "shell-1") || !strings.Contains(sentText, "ports=5173") {
+		t.Fatalf("process message parse=%q text=%q", parseMode, sentText)
+	}
+}
+
 func TestTelegramModeCommandSetsPlanModeRunRequest(t *testing.T) {
 	var sentTexts []string
 	client := newTelegramAPIClient(t, "bottoken", map[string]telegramAPIHandler{

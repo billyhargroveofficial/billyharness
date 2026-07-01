@@ -116,6 +116,73 @@ func TestShellOutputCursorTailAndExitedState(t *testing.T) {
 	}
 }
 
+func TestShellProcessesListIncludesDashboardMetadata(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	registry := NewRegistry(cfg)
+	defer registry.Close()
+
+	start, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "shell_exec",
+		Arguments: rawArgs(map[string]any{
+			"argv":       []string{"sh", "-c", "printf 'ready http://127.0.0.1:4321\\n'; sleep 10"},
+			"background": true,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processID := start.Metadata["process_id"].(string)
+	output := waitForShellOutput(t, registry, processID, 0, 512, 0, "4321")
+	if output.OutputRef == "" {
+		t.Fatalf("expected output ref from shell_output: %#v", output)
+	}
+
+	list, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "shell_processes",
+		Arguments: rawArgs(map[string]any{"include_exited": true}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, ok := list.Metadata["managed_processes"].(protocol.ManagedProcessList)
+	if !ok {
+		t.Fatalf("managed process metadata = %#v", list.Metadata["managed_processes"])
+	}
+	if status.Running != 1 || len(status.Processes) != 1 {
+		t.Fatalf("process list = %#v content=%s", status, list.Content)
+	}
+	proc := status.Processes[0]
+	if proc.ID != processID || !proc.Running || proc.ElapsedMS < 0 || proc.NextCursor <= 0 {
+		t.Fatalf("process status = %#v", proc)
+	}
+	if proc.OutputRef != output.OutputRef || !strings.Contains(proc.OutputTailPreview, "4321") {
+		t.Fatalf("process output metadata = %#v output=%#v", proc, output)
+	}
+	if !containsInt(proc.DetectedPorts, 4321) || !containsString(proc.DetectedURLs, "http://127.0.0.1:4321") {
+		t.Fatalf("detected endpoints = ports %#v urls %#v content=%s", proc.DetectedPorts, proc.DetectedURLs, list.Content)
+	}
+	for _, want := range []string{processID, "running", "ports=4321", "output_ref=", "cursor="} {
+		if !strings.Contains(list.Content, want) {
+			t.Fatalf("process list missing %q:\n%s", want, list.Content)
+		}
+	}
+	if list.Metadata["display_group"] != "shell_processes" || list.Metadata["collapse_default"] != true {
+		t.Fatalf("display metadata = %#v", list.Metadata)
+	}
+
+	if _, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "shell_kill",
+		Arguments: rawArgs(map[string]any{"process_id": processID}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitForManagedShellExit(t, registry, processID)
+}
+
 func TestRegistryCloseTerminatesManagedShellProcesses(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Default()
@@ -131,6 +198,24 @@ func TestRegistryCloseTerminatesManagedShellProcesses(t *testing.T) {
 	processID := start.Metadata["process_id"].(string)
 	registry.Close()
 	waitForManagedShellExit(t, registry, processID)
+}
+
+func containsInt(values []int, want int) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func waitForShellOutput(t *testing.T, registry *Registry, processID string, cursor int64, maxBytes int, tailBytes int, want string) Result {

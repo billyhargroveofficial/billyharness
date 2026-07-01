@@ -216,6 +216,11 @@ type contextStatusMsg struct {
 	err  error
 }
 
+type processStatusMsg struct {
+	text string
+	err  error
+}
+
 type turnDiffPreviewMsg struct {
 	text string
 	err  error
@@ -600,6 +605,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.addInfoBlock("CONTEXT", msg.text)
 			m.status = "context shown"
+		}
+		reflow = true
+		gotoBottom = m.followOutput
+	case processStatusMsg:
+		if msg.err != nil {
+			m.addBlock("error", "PROCESSES", msg.err.Error())
+			m.status = "processes failed"
+		} else {
+			m.addInfoBlock("PROCESSES", msg.text)
+			m.status = "processes shown"
 		}
 		reflow = true
 		gotoBottom = m.followOutput
@@ -998,6 +1013,13 @@ func (m Model) contextStatusCmd() tea.Cmd {
 	}
 }
 
+func (m Model) processStatusCmd() tea.Cmd {
+	return func() tea.Msg {
+		text, err := m.loadProcessStatus()
+		return processStatusMsg{text: text, err: err}
+	}
+}
+
 func (m Model) loadContextStatus() (string, error) {
 	if m.gatewayURL != "" {
 		if m.sessionID == "" {
@@ -1039,6 +1061,20 @@ func (m Model) loadContextStatus() (string, error) {
 		},
 	})
 	return gatewayclient.FormatSessionContext(resp), nil
+}
+
+func (m Model) loadProcessStatus() (string, error) {
+	if m.gatewayURL == "" {
+		return "", fmt.Errorf("process dashboard requires gateway mode")
+	}
+	var out gatewayapi.ManagedProcessResponse
+	if err := m.gatewayJSON(http.MethodGet, "/v1/processes?include_exited=true", nil, &out); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(out.Text) != "" {
+		return out.Text, nil
+	}
+	return "no managed shell processes", nil
 }
 
 func (m Model) loadConfigSummary() (string, error) {

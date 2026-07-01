@@ -93,6 +93,18 @@ func TestCallLineSnapshotsCommonTools(t *testing.T) {
 			expected: "⚙️ shell kill shell-1",
 		},
 		{
+			name:     "tui shell processes",
+			call:     protocol.ToolCall{Name: "shell_processes", Arguments: []byte(`{"include_exited":true}`)},
+			style:    StyleTUI,
+			expected: "Listed shell processes",
+		},
+		{
+			name:     "telegram shell processes",
+			call:     protocol.ToolCall{Name: "shell_processes", Arguments: []byte(`{}`)},
+			style:    StyleTelegram,
+			expected: "⚙️ shell processes",
+		},
+		{
 			name:     "tui diagnostics",
 			call:     protocol.ToolCall{Name: "diagnostics_run", Arguments: []byte(`{"name":"go-test"}`)},
 			style:    StyleTUI,

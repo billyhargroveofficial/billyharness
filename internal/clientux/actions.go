@@ -191,6 +191,17 @@ var sharedActionDefinitions = []ActionDefinition{
 		TelegramSummary: "MCP status",
 	},
 	{
+		ID:              "processes.show",
+		Title:           "Show Processes",
+		Category:        "runtime",
+		Slash:           "/processes",
+		SlashAliases:    []string{"/ps"},
+		TelegramAliases: []string{"/processes", "/ps"},
+		TelegramUsage:   "/processes",
+		Summary:         "show managed shell processes",
+		TelegramSummary: "managed shell processes",
+	},
+	{
 		ID:              "reasoning.set",
 		Title:           "Set Reasoning",
 		Category:        "runtime",

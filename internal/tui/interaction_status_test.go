@@ -1036,6 +1036,44 @@ func TestContextCommandShowsGatewayContextReport(t *testing.T) {
 	}
 }
 
+func TestProcessesCommandShowsGatewayDashboard(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/processes" || r.URL.Query().Get("include_exited") != "true" {
+			t.Fatalf("url = %s", r.URL.String())
+		}
+		_ = json.NewEncoder(w).Encode(gatewayapi.ManagedProcessResponse{
+			Processes: protocol.ManagedProcessList{
+				Running: 1,
+				Processes: []protocol.ManagedProcessStatus{{
+					ID:            "shell-1",
+					Running:       true,
+					ElapsedMS:     2500,
+					DetectedPorts: []int{5173},
+					OutputRef:     "/tmp/tool-output/shell.txt",
+				}},
+			},
+			Text: "managed shell processes: 1 running, 0 exited\n- shell-1 running ports=5173 output_ref=/tmp/tool-output/shell.txt",
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	m := newTestModel(t)
+	m.gatewayURL = server.URL
+	handled, cmd := m.handleSlashCommand("/processes")
+	if !handled || cmd == nil {
+		t.Fatalf("handled=%v cmd=%v", handled, cmd)
+	}
+	msg := cmd().(processStatusMsg)
+	if msg.err != nil {
+		t.Fatal(msg.err)
+	}
+	for _, want := range []string{"managed shell processes", "shell-1", "ports=5173", "output_ref="} {
+		if !strings.Contains(msg.text, want) {
+			t.Fatalf("process dashboard missing %q:\n%s", want, msg.text)
+		}
+	}
+}
+
 func TestDiffCommandRequestsGatewayPreview(t *testing.T) {
 	var gotReq gatewayapi.SessionUndoRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

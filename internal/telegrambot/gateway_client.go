@@ -154,6 +154,17 @@ func (c *GatewayClient) ContextStatus(ctx context.Context, sessionID string) (st
 	return gatewayclient.FormatSessionContext(out), nil
 }
 
+func (c *GatewayClient) ProcessStatus(ctx context.Context) (string, error) {
+	var out gatewayapi.ManagedProcessResponse
+	if err := c.gatewayJSON(ctx, http.MethodGet, "/v1/processes?include_exited=true", nil, &out); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(out.Text) != "" {
+		return out.Text, nil
+	}
+	return "no managed shell processes", nil
+}
+
 func (c *GatewayClient) AuthStatus(ctx context.Context) (credentials.Status, error) {
 	var out credentials.Status
 	if err := c.gatewayJSON(ctx, http.MethodGet, "/v1/auth/status", nil, &out); err != nil {
