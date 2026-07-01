@@ -73,6 +73,7 @@ func usage() {
 	fmt.Println("  sessions context [-dir DIR] [-json] SESSION_ID")
 	fmt.Println("  sessions index rebuild|show|delete [-dir DIR] [-json]")
 	fmt.Println("  sessions search|tools|errors|usage|runs [-dir DIR] [-limit N] [-json]")
+	fmt.Println("  sessions import [-input FILE] [-format auto|jsonl|markdown] [-json]")
 	fmt.Println("  memory list|search|read|add|replace|remove")
 	fmt.Println("  bench run -tasks tasks.jsonl -out runs [-model deepseek-v4-flash] [-max-rounds 100]")
 	fmt.Println("  bench terminal-bench export -tasks tasks.jsonl -out tb-dataset")

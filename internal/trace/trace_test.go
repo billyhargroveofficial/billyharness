@@ -91,6 +91,28 @@ func TestEventWriterRecordsContiguousEventsAndPayloadRefs(t *testing.T) {
 	}
 }
 
+func TestReplayEventsCountsImportedSessionMarker(t *testing.T) {
+	var out bytes.Buffer
+	writer := NewEventWriter("import-1", &out, WithNow(func() time.Time { return time.Unix(10, 0).UTC() }))
+	if _, err := writer.Record("", protocol.Event{
+		Type: protocol.EventSessionImported,
+		Data: protocol.SessionImportedEvent{Source: "codex.jsonl", Format: "jsonl", ImportedMessages: 2, MessageCount: 3, ApproxTokens: 12},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := ReplayEvents(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.EventTypes[string(protocol.EventSessionImported)] != 1 || summary.RunStarted != 0 || summary.RunCompleted != 0 {
+		t.Fatalf("summary = %#v", summary)
+	}
+}
+
 func TestEventWriterConcurrentRecordsStayContiguous(t *testing.T) {
 	var out bytes.Buffer
 	writer := NewEventWriter("run-1", &out)

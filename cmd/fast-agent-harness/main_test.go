@@ -159,6 +159,41 @@ func TestMemoryCommandAddAndList(t *testing.T) {
 	}
 }
 
+func TestSessionsImportCommandConvertsExternalTranscript(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "codex.jsonl")
+	body := strings.Join([]string{
+		`{"role":"user","content":"import me"}`,
+		`{"role":"assistant","content":"imported","tool_calls":[{"name":"shell"}]}`,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := sessionsCommand([]string{"import", "-input", path}, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"billyharness session import", "messages: 2 imported + 1 marker = 3", "unsupported_tool_call"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("import output missing %q:\n%s", want, out.String())
+		}
+	}
+
+	out.Reset()
+	if err := sessionsCommand([]string{"import", "-input", path, "-json"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Messages []protocol.Message `json:"messages"`
+		Events   []protocol.Event   `json:"events"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Messages) != 3 || result.Messages[0].Role != protocol.RoleSystem || result.Events[0].Type != protocol.EventSessionImported {
+		t.Fatalf("json import result = %#v", result)
+	}
+}
+
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	old := os.Stdout

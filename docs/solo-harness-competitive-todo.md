@@ -692,7 +692,7 @@ Milestone 4 final verification:
 Goal: import useful data from other agents and configs without becoming a
 compatibility platform.
 
-- [ ] SH-05.1 Add external session import/export diagnostics.
+- [x] SH-05.1 Add external session import/export diagnostics.
   - inspiration: Codex external-agent session importer.
   - target files: `internal/session`, `internal/trace`,
     `cmd/fast-agent-harness/sessions.go`.
@@ -701,7 +701,27 @@ compatibility platform.
     approximate token counts.
   - acceptance: unsupported tool-call formats are reported, not guessed.
   - verification: import tests with Codex/OpenCode/Claude-style simple samples.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: added `internal/session` import diagnostics for external
+    JSONL/JSON and markdown transcripts. The importer converts simple
+    user/assistant/system records into Billy `protocol.Message` values, inserts
+    an explicit `# Imported external session` system marker, emits a
+    `session.imported` diagnostic event, and reports approximate token counts,
+    role counts, source/format, and warnings. It handles simple nested
+    Claude/Codex/OpenCode-style text shapes, and it reports unsupported
+    tool-call/tool-result records instead of guessing tool-call pairing. CLI
+    `sessions import [-input FILE] [-format auto|jsonl|markdown] [-json]`
+    prints human diagnostics by default or JSON messages/events for explicit
+    handoff/import use. No gateway store mutation, provider call, compatibility
+    server, or broad app protocol was added.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'TestImport.*|TestSessionsImportCommandConvertsExternalTranscript|TestReplayEventsCountsImportedSessionMarker'
+    -count=1 ./internal/session ./cmd/fast-agent-harness ./internal/trace`
+    passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/session
+    ./internal/protocol ./internal/trace ./cmd/fast-agent-harness` passed.
+  - commit: pending.
 
 - [ ] SH-05.2 Add MCP config migration diagnostics.
   - inspiration: Codex external MCP config migration tests.

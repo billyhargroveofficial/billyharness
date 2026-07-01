@@ -14,6 +14,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
+	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
 )
 
 func sessionsCmd(args []string) error {
@@ -43,6 +44,8 @@ func sessionsCommand(args []string, out io.Writer) error {
 		return sessionsUsageCommand(args[1:], out)
 	case "runs":
 		return sessionsRunsCommand(args[1:], out)
+	case "import":
+		return sessionsImportCommand(args[1:], out)
 	default:
 		return fmt.Errorf("unknown sessions command %q", args[0])
 	}
@@ -514,6 +517,56 @@ func sessionsRunsCommand(args []string, out io.Writer) error {
 			emptyDash(snippet(row.Error, 120)),
 		)
 	}
+	return nil
+}
+
+func sessionsImportCommand(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("sessions import", flag.ExitOnError)
+	input := fs.String("input", "", "external transcript file")
+	format := fs.String("format", sessionpkg.ImportFormatAuto, "input format: auto, jsonl, or markdown")
+	jsonOut := fs.Bool("json", false, "print converted messages/events as JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *input == "" && fs.NArg() == 1 {
+		*input = fs.Arg(0)
+	}
+	if *input == "" || fs.NArg() > 1 {
+		return fmt.Errorf("usage: sessions import [-input FILE] [-format auto|jsonl|markdown] [-json]")
+	}
+	raw, err := os.ReadFile(*input)
+	if err != nil {
+		return err
+	}
+	result, err := sessionpkg.ImportTranscript(raw, sessionpkg.ImportOptions{
+		Source: *input,
+		Format: *format,
+	})
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(out, result)
+	}
+	fmt.Fprintln(out, "billyharness session import")
+	fmt.Fprintf(out, "source: %s\n", result.Source)
+	fmt.Fprintf(out, "format: %s\n", result.Format)
+	fmt.Fprintf(out, "messages: %d imported + 1 marker = %d\n", result.Diagnostics.ImportedMessages, result.Diagnostics.MessageCount)
+	fmt.Fprintf(out, "approx_tokens: %d\n", result.Diagnostics.ApproxTokens)
+	fmt.Fprintf(out, "roles: user=%d assistant=%d system=%d\n", result.Diagnostics.UserMessages, result.Diagnostics.AssistantMessages, result.Diagnostics.SystemMessages)
+	if len(result.Diagnostics.Warnings) == 0 {
+		fmt.Fprintln(out, "warnings: none")
+	} else {
+		fmt.Fprintln(out, "warnings:")
+		for _, warning := range result.Diagnostics.Warnings {
+			if warning.Line > 0 {
+				fmt.Fprintf(out, "- line=%d reason=%s detail=%s\n", warning.Line, warning.Reason, emptyDash(warning.Detail))
+			} else {
+				fmt.Fprintf(out, "- reason=%s detail=%s\n", warning.Reason, emptyDash(warning.Detail))
+			}
+		}
+	}
+	fmt.Fprintln(out, "json: rerun with -json to print converted messages/events")
 	return nil
 }
 

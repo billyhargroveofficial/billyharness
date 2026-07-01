@@ -118,10 +118,20 @@ const (
 	EventSessionStatus           EventType = "session.status"
 	EventGatewayStreamGap        EventType = "gateway.stream_gap"
 	EventStreamStillRunning      EventType = "stream.still_running"
+	EventSessionImported         EventType = "session.imported"
 	EventUserInputRequested      EventType = "user_input.requested"
 	EventUserInputAnswered       EventType = "user_input.answered"
 	EventUserInputRejected       EventType = "user_input.rejected"
 )
+
+type SessionImportedEvent struct {
+	Source           string   `json:"source,omitempty"`
+	Format           string   `json:"format,omitempty"`
+	ImportedMessages int      `json:"imported_messages,omitempty"`
+	MessageCount     int      `json:"message_count,omitempty"`
+	ApproxTokens     int      `json:"approx_tokens,omitempty"`
+	Warnings         []string `json:"warnings,omitempty"`
+}
 
 type GatewayStreamGapEvent struct {
 	DroppedEvents  int64  `json:"dropped_events"`
