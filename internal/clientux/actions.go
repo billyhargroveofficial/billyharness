@@ -77,6 +77,17 @@ var sharedActionDefinitions = []ActionDefinition{
 		TelegramSummary: "show commands",
 	},
 	{
+		ID:              "commands.search",
+		Title:           "Search Commands",
+		Category:        "session",
+		Slash:           "/commands",
+		SlashArgs:       "[query]",
+		TelegramAliases: []string{"/commands"},
+		TelegramUsage:   "/commands [query]",
+		Summary:         "search command registry",
+		TelegramSummary: "search command registry",
+	},
+	{
 		ID:              "status.show",
 		Title:           "Show Status",
 		Category:        "session",

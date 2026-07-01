@@ -219,6 +219,59 @@ Review $ARGUMENTS carefully. First target: $1
 	}
 }
 
+func TestCommandRegistryBacksTUICommandsPopupAndProfiles(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	writePromptCommand(t, filepath.Join(home, "commands", "review.md"), `---
+description: Review with focus
+argument_hint: <path>
+---
+Review $ARGUMENTS carefully.
+`)
+	if err := os.MkdirAll(filepath.Join(home, "profiles", "teacher"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "profiles", "teacher", "profile.toml"), []byte(`name = "teacher"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	m := NewModel(cfg, Options{})
+	m.width = 100
+
+	m.textarea.SetValue("/rev")
+	popup := stripANSITest(m.slashPopupView())
+	if !strings.Contains(popup, "/review <path>") || !strings.Contains(popup, "[home]") {
+		t.Fatalf("popup missing registry source label:\n%s", popup)
+	}
+
+	handled, cmd := m.handleSlashCommand("/commands review")
+	if !handled || cmd != nil {
+		t.Fatalf("/commands handled=%v cmd=%v", handled, cmd)
+	}
+	if len(m.blocks) == 0 {
+		t.Fatal("/commands did not add an info block")
+	}
+	last := m.blocks[len(m.blocks)-1]
+	if !strings.EqualFold(last.Title, "COMMANDS") ||
+		!strings.Contains(last.Content, "/review <path> [home/prompt_command]") ||
+		!strings.Contains(last.Content, "Review with focus") {
+		t.Fatalf("commands block = %#v", last)
+	}
+
+	args := m.profileSlashArgs()
+	foundTeacher := false
+	for _, arg := range args {
+		if arg.value == "teacher" {
+			foundTeacher = strings.Contains(arg.summary, "profile")
+		}
+	}
+	if !foundTeacher {
+		t.Fatalf("profile args missing teacher: %#v", args)
+	}
+}
+
 func TestActionRegistryBacksSlashCommandsAndHelp(t *testing.T) {
 	commands := slashCommands()
 	byName := make(map[string]slashCommand, len(commands))

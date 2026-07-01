@@ -35,15 +35,30 @@ type ExternalTool struct {
 	Handler func(context.Context, json.RawMessage) (string, error)
 }
 
+type Prompt struct {
+	Server      string           `json:"server"`
+	Name        string           `json:"name"`
+	Description string           `json:"description,omitempty"`
+	Arguments   []PromptArgument `json:"arguments,omitempty"`
+}
+
+type PromptArgument struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
+}
+
 type CatalogChange struct {
-	Version    int64    `json:"version"`
-	ToolCount  int      `json:"tool_count"`
-	Collisions []string `json:"collisions,omitempty"`
+	Version     int64    `json:"version"`
+	ToolCount   int      `json:"tool_count"`
+	PromptCount int      `json:"prompt_count,omitempty"`
+	Collisions  []string `json:"collisions,omitempty"`
 }
 
 type CatalogSnapshot struct {
 	Version      int64
 	Tools        []ExternalTool
+	Prompts      []Prompt
 	Instructions []string
 	Collisions   []string
 }

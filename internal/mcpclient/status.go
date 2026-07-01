@@ -38,6 +38,18 @@ func cloneCatalogChange(change CatalogChange) CatalogChange {
 	return out
 }
 
+func clonePrompts(prompts []Prompt) []Prompt {
+	if len(prompts) == 0 {
+		return nil
+	}
+	out := make([]Prompt, 0, len(prompts))
+	for _, prompt := range prompts {
+		prompt.Arguments = append([]PromptArgument(nil), prompt.Arguments...)
+		out = append(out, prompt)
+	}
+	return out
+}
+
 func mcpStatusChanged(before, after ServerStatus) bool {
 	return before.Connected != after.Connected ||
 		before.State != after.State ||

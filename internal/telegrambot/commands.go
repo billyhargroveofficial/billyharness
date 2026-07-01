@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/clientux"
+	"github.com/billyhargroveofficial/billyharness/internal/commandregistry"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/memory"
@@ -50,6 +51,10 @@ func telegramCommands() []telegramCommandSpec {
 		telegramActionCommand("help.show", telegramCommandSpec{
 			bypassRunLock: true,
 			handler:       (*Bot).handleHelpCommand,
+		}),
+		telegramActionCommand("commands.search", telegramCommandSpec{
+			bypassRunLock: true,
+			handler:       (*Bot).handleCommandsCommand,
 		}),
 		telegramActionCommand("chat.new", telegramCommandSpec{
 			handler: (*Bot).handleNewCommand,
@@ -194,6 +199,24 @@ func telegramCommandHelpHTML() string {
 
 func (b *Bot) handleHelpCommand(ctx context.Context, msg Message, _ ChatScope, _ string) {
 	_ = b.sendHTML(ctx, msg, HelpHTML())
+}
+
+func (b *Bot) handleCommandsCommand(ctx context.Context, msg Message, scope ChatScope, arg string) {
+	state := b.chatStateWithLegacy(scope.Key(), scope.LegacyKey())
+	current := fallback(state.Profile, b.opts.Profile)
+	profiles, err := commandregistry.ProfilesFromHome(config.BillyHomeDir(), current)
+	if err != nil {
+		profiles = []commandregistry.Profile{{Name: current, Current: true, Available: false, Availability: err.Error()}}
+	}
+	registry := commandregistry.Build(commandregistry.BuildOptions{Profiles: profiles})
+	query := strings.TrimSpace(arg)
+	var entries []commandregistry.Entry
+	if query != "" {
+		entries = registry.Search(query, 50)
+	} else {
+		entries = registry.Entries()
+	}
+	_ = b.sendPlain(ctx, msg, commandregistry.FormatEntries(entries))
 }
 
 func (b *Bot) handleNewCommand(ctx context.Context, msg Message, scope ChatScope, _ string) {

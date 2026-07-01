@@ -20,6 +20,7 @@ type managedServer struct {
 	client           *stdioClient
 	status           ServerStatus
 	specs            []protocol.ToolSpec
+	prompts          []Prompt
 	instructions     string
 	onStatus         func(ServerStatus)
 	onCatalogChanged func()
@@ -70,7 +71,7 @@ func unsupportedRemoteReason(server config.MCPServer) string {
 	return "streamable HTTP MCP is not implemented in billyharness yet; use stdio MCP or remove the url server"
 }
 
-func (s *managedServer) start(ctx context.Context, reconnect bool) ([]protocol.ToolSpec, string, error) {
+func (s *managedServer) start(ctx context.Context, reconnect bool) ([]protocol.ToolSpec, []Prompt, string, error) {
 	s.mu.Lock()
 	if !s.reconnectable {
 		err := fmt.Errorf("MCP %s cannot reconnect with transport %s", s.server.Name, mcpTransport(s.server))
@@ -82,7 +83,7 @@ func (s *managedServer) start(ctx context.Context, reconnect bool) ([]protocol.T
 		if catalogChanged {
 			s.publishCatalogChanged()
 		}
-		return nil, "", err
+		return nil, nil, "", err
 	}
 	if s.closed {
 		err := fmt.Errorf("MCP %s manager is closed", s.server.Name)
@@ -94,7 +95,7 @@ func (s *managedServer) start(ctx context.Context, reconnect bool) ([]protocol.T
 		if catalogChanged {
 			s.publishCatalogChanged()
 		}
-		return nil, "", err
+		return nil, nil, "", err
 	}
 	return s.startLocked(ctx, reconnect)
 }
@@ -142,17 +143,17 @@ func (s *managedServer) ensureConnected(ctx context.Context) (*stdioClient, erro
 		s.mu.Unlock()
 		return nil, fmt.Errorf("MCP %s reconnect backoff active until %s after last error: %s", s.server.Name, s.status.NextRetryAt.Format(time.RFC3339Nano), s.status.LastError)
 	}
-	_, _, err := s.startLocked(ctx, true)
+	_, _, _, err := s.startLocked(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 	return s.client, nil
 }
 
-func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]protocol.ToolSpec, string, error) {
+func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]protocol.ToolSpec, []Prompt, string, error) {
 	if s.starting {
 		s.mu.Unlock()
-		return nil, "", fmt.Errorf("MCP %s reconnect already in progress", s.server.Name)
+		return nil, nil, "", fmt.Errorf("MCP %s reconnect already in progress", s.server.Name)
 	}
 	oldClient := s.client
 	s.client = nil
@@ -180,7 +181,7 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 	if oldClient != nil {
 		oldClient.close()
 	}
-	client, specs, instructions, err := startStdio(ctx, s.settings, s.server, s.handleNotification)
+	client, specs, prompts, instructions, err := startStdio(ctx, s.settings, s.server, s.handleNotification)
 	s.mu.Lock()
 	s.starting = false
 	if s.closed {
@@ -196,7 +197,7 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 		if client != nil {
 			client.close()
 		}
-		return nil, "", closedErr
+		return nil, nil, "", closedErr
 	}
 	if err != nil {
 		s.recordFailureLocked(mcpStateFailed, err, reconnect)
@@ -207,7 +208,7 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 		if catalogChanged {
 			s.publishCatalogChanged()
 		}
-		return nil, "", err
+		return nil, nil, "", err
 	}
 	s.client = client
 	now = time.Now().UTC()
@@ -217,6 +218,7 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 		s.status.RestartCount++
 	}
 	s.specs = append([]protocol.ToolSpec(nil), specs...)
+	s.prompts = clonePrompts(prompts)
 	s.instructions = instructions
 	s.status.Connected = true
 	s.status.State = state
@@ -236,7 +238,7 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 	s.mu.Unlock()
 	s.publishStatus(status)
 	s.publishCatalogChanged()
-	return specs, instructions, nil
+	return specs, prompts, instructions, nil
 }
 
 func (s *managedServer) callTool(ctx context.Context, name string, args json.RawMessage) (string, error) {
@@ -304,6 +306,19 @@ func (s *managedServer) refreshCatalog(ctx context.Context) error {
 		}
 		return err
 	}
+	prompts, err := client.listPrompts(ctx)
+	if err != nil && !client.connected.Load() {
+		s.mu.Lock()
+		status, changed, catalogChanged := s.absorbClientLocked()
+		s.mu.Unlock()
+		if changed {
+			s.publishStatus(status)
+		}
+		if catalogChanged {
+			s.publishCatalogChanged()
+		}
+		return err
+	}
 
 	s.mu.Lock()
 	if s.closed || s.client != client {
@@ -311,6 +326,7 @@ func (s *managedServer) refreshCatalog(ctx context.Context) error {
 		return nil
 	}
 	s.specs = append([]protocol.ToolSpec(nil), specs...)
+	s.prompts = clonePrompts(prompts)
 	s.status.ToolCount = len(specs)
 	s.status.LastEventAt = timePtr(time.Now().UTC())
 	status := cloneStatus(s.status)
@@ -346,6 +362,7 @@ func (s *managedServer) catalogSnapshot() serverCatalog {
 		runtime:      s,
 		server:       s.server,
 		specs:        append([]protocol.ToolSpec(nil), s.specs...),
+		prompts:      clonePrompts(s.prompts),
 		instructions: s.instructions,
 	}
 }
@@ -412,8 +429,9 @@ func (s *managedServer) recordFailureLocked(state string, err error, retryable b
 }
 
 func (s *managedServer) clearCatalogLocked() bool {
-	changed := len(s.specs) > 0 || strings.TrimSpace(s.instructions) != ""
+	changed := len(s.specs) > 0 || len(s.prompts) > 0 || strings.TrimSpace(s.instructions) != ""
 	s.specs = nil
+	s.prompts = nil
 	s.instructions = ""
 	s.status.ToolCount = 0
 	return changed

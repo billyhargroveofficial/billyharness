@@ -80,6 +80,19 @@ func actionRegistry() []actionSpec {
 			},
 		},
 		{
+			id:        "commands.search",
+			title:     "Search Commands",
+			category:  "session",
+			slash:     "/commands",
+			slashArgs: "[query]",
+			summary:   "search command registry",
+			run: func(m *Model, arg string) (bool, tea.Cmd) {
+				m.addInfoBlock("COMMANDS", m.commandsText(arg))
+				m.status = "commands shown"
+				return true, nil
+			},
+		},
+		{
 			id:       "status.show",
 			title:    "Show Status",
 			category: "session",
@@ -272,10 +285,7 @@ func actionRegistry() []actionSpec {
 			slashArgs: "billy|name",
 			summary:   "switch SOUL.md system profile",
 			args: func(m Model) []slashArg {
-				return []slashArg{
-					{m.currentProfile(), "current SOUL.md profile"},
-					{"billy", "teacher-style default profile"},
-				}
+				return m.profileSlashArgs()
 			},
 			run: func(m *Model, arg string) (bool, tea.Cmd) {
 				return true, m.setProfile(arg)

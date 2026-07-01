@@ -749,9 +749,9 @@ compatibility platform.
     `/root/.local/go/bin/go test -count=1 ./internal/config
     ./cmd/fast-agent-harness` passed;
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `32ed3bcf98b9674db61cdb194f632e6c1b052f60`.
 
-- [ ] SH-05.3 Unify command registry/search.
+- [x] SH-05.3 Unify command registry/search.
   - inspiration: OpenCode command registry.
   - target files: `internal/promptcommands`, `internal/mcpclient`,
     `internal/tui/commands.go`, `internal/telegrambot/commands.go`,
@@ -760,7 +760,31 @@ compatibility platform.
     profiles, and built-in actions show through one registry with source,
     description, argument hints, and availability.
   - verification: command registry tests and TUI/Telegram menu tests.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: added `internal/commandregistry` as a presentation-neutral
+    metadata/search registry for built-in `clientux` actions, local Markdown
+    prompt commands, Billy profile entries, and MCP prompt metadata from
+    `prompts/list`. Registry entries carry kind, source, description,
+    argument hints, source path/profile/MCP identifiers, and explicit
+    availability. MCP prompts are listed as metadata-only because Billy does
+    not yet implement MCP prompt invocation. CLI `commands list|search
+    [-json]`, TUI `/commands [query]`, and Telegram `/commands [query]` use
+    the shared formatter; the TUI slash popup now derives model-level command
+    rows from the registry with compact source labels, and `/profile`
+    completion scans local profile directories without reading SOUL bodies.
+    Local prompt-command shadowing now uses the same built-in action alias set
+    across CLI/TUI loading.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*Command.*Registry.*|Test.*Commands.*(List|Search).*|Test.*MCP.*Prompt.*|TestActionRegistryBacksSlashCommandsAndHelp|TestTelegramCommandMetadataDrivesHelpAndBypass|TestCommandRegistryBacksTUICommandsPopupAndProfiles|TestTelegramCommandsCommandShowsRegistryAndProfiles|TestCommandsCommandListsAndSearchesRegistry'
+    -count=1 ./internal/commandregistry ./internal/mcpclient ./internal/tui
+    ./internal/telegrambot ./cmd/fast-agent-harness ./internal/architecture`
+    passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/commandregistry
+    ./internal/mcpclient ./internal/promptcommands ./internal/clientux
+    ./internal/tui ./internal/telegrambot ./cmd/fast-agent-harness
+    ./internal/architecture` passed.
+  - commit: pending.
 
 ## Milestone 6 - UX Polish With Hard Boundaries (P1)
 

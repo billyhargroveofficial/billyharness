@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/billyhargroveofficial/billyharness/internal/commandregistry"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/promptcommands"
 )
@@ -20,6 +21,8 @@ type slashCommand struct {
 	args     string
 	summary  string
 	aliases  []string
+	source   string
+	kind     string
 }
 
 type slashArg struct {
@@ -275,7 +278,7 @@ func (m *Model) loadPromptCommands() {
 	commands, err := promptcommands.Load(promptcommands.LoadOptions{
 		HomeDir:        config.BillyHomeDir(),
 		WorkspaceRoots: m.toolPolicy.WorkspaceRoots,
-		BuiltIns:       builtInSlashNameSet(),
+		BuiltIns:       commandregistry.BuiltInPromptCommandNameSet(nil),
 	})
 	m.promptCommands = commands
 	m.promptCommandErr = ""
@@ -288,19 +291,67 @@ func (m *Model) loadPromptCommands() {
 }
 
 func (m Model) slashCommands() []slashCommand {
-	commands := slashCommands()
-	for _, command := range m.promptCommands {
-		name := "/" + command.Name
+	entries := m.commandRegistry().Entries()
+	commands := make([]slashCommand, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Kind != commandregistry.KindAction && entry.Kind != commandregistry.KindPromptCommand {
+			continue
+		}
+		if !strings.HasPrefix(entry.Name, "/") {
+			continue
+		}
 		commands = append(commands, slashCommand{
-			id:       "prompt." + command.Name,
-			title:    command.Name,
-			category: "custom",
-			name:     name,
-			args:     command.ArgumentHint,
-			summary:  command.Description,
+			id:       entry.ID,
+			title:    entry.Name,
+			category: entry.Category,
+			name:     entry.Name,
+			args:     entry.ArgumentHint,
+			summary:  entry.Description,
+			aliases:  append([]string(nil), entry.Aliases...),
+			source:   entry.Source,
+			kind:     entry.Kind,
 		})
 	}
 	return commands
+}
+
+func (m Model) commandRegistry() commandregistry.Registry {
+	profiles, err := commandregistry.ProfilesFromHome(config.BillyHomeDir(), m.currentProfile())
+	if err != nil {
+		profiles = []commandregistry.Profile{{Name: m.currentProfile(), Current: true, Available: false, Availability: err.Error()}}
+	}
+	return commandregistry.Build(commandregistry.BuildOptions{
+		PromptCommands: m.promptCommands,
+		Profiles:       profiles,
+	})
+}
+
+func (m Model) commandsText(query string) string {
+	registry := m.commandRegistry()
+	query = strings.TrimSpace(query)
+	if query != "" {
+		return commandregistry.FormatEntries(registry.Search(query, 50))
+	}
+	return commandregistry.FormatEntries(registry.Entries())
+}
+
+func (m Model) profileSlashArgs() []slashArg {
+	profiles, err := commandregistry.ProfilesFromHome(config.BillyHomeDir(), m.currentProfile())
+	if err != nil {
+		return []slashArg{{m.currentProfile(), err.Error()}}
+	}
+	args := make([]slashArg, 0, len(profiles))
+	for _, profile := range profiles {
+		summary := "profile"
+		if profile.Current {
+			summary = "current profile"
+		}
+		if !profile.Available {
+			summary = profile.Availability
+		}
+		args = append(args, slashArg{profile.Name, summary})
+	}
+	return args
 }
 
 func (m Model) promptCommand(token string) (promptcommands.Command, bool) {
@@ -423,6 +474,9 @@ func (m Model) slashPopupView() string {
 			label += " " + command.args
 		}
 		line := padRight(truncateRunes(label, nameW), nameW) + "  " + truncateRunes(command.summary, summaryW)
+		if command.source != "" {
+			line = padRight(truncateRunes(label, nameW), nameW) + "  " + truncateRunes(command.summary+" ["+command.source+"]", summaryW)
+		}
 		if i == index {
 			lines = append(lines, styles.popupSelected.Width(contentW).Render(line))
 		} else {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -55,6 +57,48 @@ func TestTelegramConfigCommandSendsSanitizedSummary(t *testing.T) {
 	}
 	if strings.Contains(sentText, "sk-secret") {
 		t.Fatalf("config leaked secret: %q", sentText)
+	}
+}
+
+func TestTelegramCommandsCommandShowsRegistryAndProfiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, "profiles", "teacher"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "profiles", "teacher", "SOUL.md"), []byte("teach"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var sentText string
+	var parseMode string
+	client := newTelegramAPIClient(t, "bottoken", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			sentText, _ = payload["text"].(string)
+			parseMode, _ = payload["parse_mode"].(string)
+			writeTelegramResult(w, SentMessage{MessageID: 13, Chat: Chat{ID: 123}})
+		},
+	})
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      t.TempDir() + "/state.json",
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, scriptedHarness{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/commands"})
+	if parseMode != "" {
+		t.Fatalf("commands should send plain text, parse mode=%q", parseMode)
+	}
+	if !strings.Contains(sentText, "/commands [query] [builtin/action]") ||
+		!strings.Contains(sentText, "/profile teacher [profile/profile]") {
+		t.Fatalf("commands output:\n%s", sentText)
 	}
 }
 

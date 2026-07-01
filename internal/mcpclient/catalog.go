@@ -17,6 +17,7 @@ type serverCatalog struct {
 	runtime      *managedServer
 	server       config.MCPServer
 	specs        []protocol.ToolSpec
+	prompts      []Prompt
 	instructions string
 }
 
@@ -91,6 +92,23 @@ func buildCatalog(catalogs []serverCatalog) ([]ExternalTool, []string, []string)
 		})
 	}
 	return tools, instructions, collisions
+}
+
+func buildPromptCatalog(catalogs []serverCatalog) []Prompt {
+	var prompts []Prompt
+	for _, catalog := range catalogs {
+		for _, prompt := range catalog.prompts {
+			prompt.Server = catalog.server.Name
+			prompt.Arguments = append([]PromptArgument(nil), prompt.Arguments...)
+			prompts = append(prompts, prompt)
+		}
+	}
+	sort.Slice(prompts, func(i, j int) bool {
+		left := prompts[i].Server + "/" + prompts[i].Name
+		right := prompts[j].Server + "/" + prompts[j].Name
+		return left < right
+	})
+	return prompts
 }
 
 func toolAllowed(server config.MCPServer, name string) bool {

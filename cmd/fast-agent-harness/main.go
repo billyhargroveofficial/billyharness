@@ -42,6 +42,8 @@ func run() error {
 		return sessionsCmd(os.Args[2:])
 	case "memory":
 		return memoryCmd(os.Args[2:])
+	case "commands", "command":
+		return commandsCmd(os.Args[2:])
 	case "tools":
 		return printTools()
 	case "doctor", "health":
@@ -76,6 +78,7 @@ func usage() {
 	fmt.Println("  sessions search|tools|errors|usage|runs [-dir DIR] [-limit N] [-json]")
 	fmt.Println("  sessions import [-input FILE] [-format auto|jsonl|markdown] [-json]")
 	fmt.Println("  memory list|search|read|add|replace|remove")
+	fmt.Println("  commands list|search [-limit N] [-json]")
 	fmt.Println("  bench run -tasks tasks.jsonl -out runs [-model deepseek-v4-flash] [-max-rounds 100]")
 	fmt.Println("  bench terminal-bench export -tasks tasks.jsonl -out tb-dataset")
 	fmt.Println("  bench terminal-bench import -dataset tb-dataset [-out tasks.jsonl]")

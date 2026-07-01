@@ -48,6 +48,17 @@ func TestStdioLifecycleCallEnvAndRedaction(t *testing.T) {
 	if len(statuses) != 1 || statuses[0].Name != "fake" || !statuses[0].Connected || statuses[0].ToolCount != 3 {
 		t.Fatalf("statuses = %#v", statuses)
 	}
+	snapshot := manager.CatalogSnapshot()
+	if len(snapshot.Prompts) != 1 {
+		t.Fatalf("prompts = %#v", snapshot.Prompts)
+	}
+	prompt := snapshot.Prompts[0]
+	if prompt.Server != "fake" || prompt.Name != "review" || prompt.Description != "Review a target" {
+		t.Fatalf("prompt metadata = %#v", prompt)
+	}
+	if len(prompt.Arguments) != 1 || prompt.Arguments[0].Name != "target" || !prompt.Arguments[0].Required {
+		t.Fatalf("prompt arguments = %#v", prompt.Arguments)
+	}
 
 	echo := findTool(t, manager, "mcp__fake__echo")
 	text, err := echo.Handler(context.Background(), json.RawMessage(`{"text":"hello mcp"}`))
@@ -77,6 +88,36 @@ func TestStdioLifecycleCallEnvAndRedaction(t *testing.T) {
 	}
 	if strings.Contains(failText, "sk-test-secret") || strings.Contains(err.Error(), "sk-test-secret") {
 		t.Fatalf("error leaked secret: text=%q err=%v", failText, err)
+	}
+}
+
+func TestMCPPromptCatalogSnapshotFromStdio(t *testing.T) {
+	root := t.TempDir()
+	manager, err := NewManager(context.Background(), config.Config{
+		WorkspaceRoots:     []string{root},
+		MaxToolOutputBytes: 64 * 1024,
+		MCPServers: []config.MCPServer{{
+			Name:           "fake",
+			Command:        os.Args[0],
+			Args:           []string{"-test.run=TestFakeStdioMCPServer"},
+			Env:            helperEnv("normal", nil),
+			CWD:            root,
+			Enabled:        true,
+			StartupTimeout: 2 * time.Second,
+			EnabledTools:   []string{"echo"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	snapshot := manager.CatalogSnapshot()
+	if len(snapshot.Prompts) != 1 {
+		t.Fatalf("prompts = %#v", snapshot.Prompts)
+	}
+	prompt := snapshot.Prompts[0]
+	if prompt.Server != "fake" || prompt.Name != "review" || len(prompt.Arguments) != 1 || prompt.Arguments[0].Name != "target" || !prompt.Arguments[0].Required {
+		t.Fatalf("prompt = %#v", prompt)
 	}
 }
 
@@ -922,6 +963,8 @@ func runFakeMCPServer() {
 				time.Sleep(250 * time.Millisecond)
 			}
 			_ = enc.Encode(response(req.ID, map[string]any{"tools": fakeToolsForMode(mode)}))
+		case "prompts/list":
+			_ = enc.Encode(response(req.ID, map[string]any{"prompts": fakePromptsForMode(mode)}))
 		case "tools/call":
 			call := struct {
 				Name      string         `json:"name"`
@@ -975,6 +1018,29 @@ func runFakeMCPServer() {
 			_ = enc.Encode(rpcErrorResponse(req.ID, -32601, "method not found"))
 		}
 	}
+}
+
+func fakePromptsForMode(mode string) []map[string]any {
+	if (mode == "close_once_then_new_tool" || mode == "notify_list_changed") && phaseExists() {
+		return []map[string]any{{
+			"name":        "new_review",
+			"description": "Review after catalog refresh",
+			"arguments": []map[string]any{{
+				"name":        "target",
+				"description": "path or topic",
+				"required":    true,
+			}},
+		}}
+	}
+	return []map[string]any{{
+		"name":        "review",
+		"description": "Review a target",
+		"arguments": []map[string]any{{
+			"name":        "target",
+			"description": "path or topic",
+			"required":    true,
+		}},
+	}}
 }
 
 func sleepForever() {

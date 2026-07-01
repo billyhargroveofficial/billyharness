@@ -45,6 +45,10 @@ type listToolsResult struct {
 	Tools []mcpTool `json:"tools"`
 }
 
+type listPromptsResult struct {
+	Prompts []mcpPrompt `json:"prompts"`
+}
+
 type initializeResult struct {
 	Instructions string `json:"instructions"`
 }
@@ -55,7 +59,19 @@ type mcpTool struct {
 	InputSchema json.RawMessage `json:"inputSchema"`
 }
 
-func startStdio(parent context.Context, settings ManagerSettings, server config.MCPServer, onNotification func(string, json.RawMessage)) (*stdioClient, []protocol.ToolSpec, string, error) {
+type mcpPrompt struct {
+	Name        string              `json:"name"`
+	Description string              `json:"description"`
+	Arguments   []mcpPromptArgument `json:"arguments"`
+}
+
+type mcpPromptArgument struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Required    bool   `json:"required"`
+}
+
+func startStdio(parent context.Context, settings ManagerSettings, server config.MCPServer, onNotification func(string, json.RawMessage)) (*stdioClient, []protocol.ToolSpec, []Prompt, string, error) {
 	timeout := server.StartupTimeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
@@ -63,11 +79,11 @@ func startStdio(parent context.Context, settings ManagerSettings, server config.
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	if disallowedShell(server.Command) {
-		return nil, nil, "", fmt.Errorf("MCP %s command %q is not allowed; use direct argv commands, not shells", server.Name, server.Command)
+		return nil, nil, nil, "", fmt.Errorf("MCP %s command %q is not allowed; use direct argv commands, not shells", server.Name, server.Command)
 	}
 	cwd, err := mcpCWD(settings, server)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("MCP %s cwd: %w", server.Name, err)
+		return nil, nil, nil, "", fmt.Errorf("MCP %s cwd: %w", server.Name, err)
 	}
 
 	cmd := exec.Command(server.Command, server.Args...)
@@ -76,22 +92,22 @@ func startStdio(parent context.Context, settings ManagerSettings, server config.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("MCP %s stdin: %w", server.Name, err)
+		return nil, nil, nil, "", fmt.Errorf("MCP %s stdin: %w", server.Name, err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("MCP %s stdout: %w", server.Name, err)
+		return nil, nil, nil, "", fmt.Errorf("MCP %s stdout: %w", server.Name, err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("MCP %s stderr: %w", server.Name, err)
+		return nil, nil, nil, "", fmt.Errorf("MCP %s stderr: %w", server.Name, err)
 	}
 	stderrBuf := &limitedBuffer{limit: 8192}
 	go func() {
 		_, _ = io.Copy(stderrBuf, stderr)
 	}()
 	if err := cmd.Start(); err != nil {
-		return nil, nil, "", fmt.Errorf("MCP %s start: %w", server.Name, err)
+		return nil, nil, nil, "", fmt.Errorf("MCP %s start: %w", server.Name, err)
 	}
 	client := &stdioClient{
 		server:         server,
@@ -117,20 +133,25 @@ func startStdio(parent context.Context, settings ManagerSettings, server config.
 	})
 	if err != nil {
 		client.close()
-		return nil, nil, "", err
+		return nil, nil, nil, "", err
 	}
 	var init initializeResult
 	_ = json.Unmarshal(initResult, &init)
 	if err := client.notify(ctx, "notifications/initialized", nil); err != nil {
 		client.close()
-		return nil, nil, "", err
+		return nil, nil, nil, "", err
 	}
 	specs, err := client.listTools(ctx)
 	if err != nil {
 		client.close()
-		return nil, nil, "", err
+		return nil, nil, nil, "", err
 	}
-	return client, specs, init.Instructions, nil
+	prompts, err := client.listPrompts(ctx)
+	if err != nil && !client.connected.Load() {
+		client.close()
+		return nil, nil, nil, "", err
+	}
+	return client, specs, prompts, init.Instructions, nil
 }
 
 func (c *stdioClient) listTools(ctx context.Context) ([]protocol.ToolSpec, error) {
@@ -159,6 +180,46 @@ func (c *stdioClient) listTools(ctx context.Context) ([]protocol.ToolSpec, error
 		})
 	}
 	return specs, nil
+}
+
+func (c *stdioClient) listPrompts(ctx context.Context) ([]Prompt, error) {
+	result, err := c.request(ctx, "prompts/list", map[string]any{})
+	if err != nil {
+		if !c.connected.Load() {
+			return nil, err
+		}
+		return nil, nil
+	}
+	var listed listPromptsResult
+	if err := json.Unmarshal(result, &listed); err != nil {
+		return nil, fmt.Errorf("MCP %s prompts/list decode: %w", c.server.Name, err)
+	}
+	prompts := make([]Prompt, 0, len(listed.Prompts))
+	for _, prompt := range listed.Prompts {
+		name := strings.TrimSpace(prompt.Name)
+		if name == "" {
+			continue
+		}
+		out := Prompt{
+			Server:      c.server.Name,
+			Name:        name,
+			Description: strings.TrimSpace(prompt.Description),
+			Arguments:   make([]PromptArgument, 0, len(prompt.Arguments)),
+		}
+		for _, arg := range prompt.Arguments {
+			argName := strings.TrimSpace(arg.Name)
+			if argName == "" {
+				continue
+			}
+			out.Arguments = append(out.Arguments, PromptArgument{
+				Name:        argName,
+				Description: strings.TrimSpace(arg.Description),
+				Required:    arg.Required,
+			})
+		}
+		prompts = append(prompts, out)
+	}
+	return prompts, nil
 }
 
 func mcpCWD(settings ManagerSettings, server config.MCPServer) (string, error) {

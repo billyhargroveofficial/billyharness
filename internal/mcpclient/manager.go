@@ -12,6 +12,7 @@ import (
 
 type Manager struct {
 	tools            []ExternalTool
+	prompts          []Prompt
 	instructions     []string
 	collisions       []string
 	catalogVersion   int64
@@ -68,7 +69,7 @@ func NewManagerFromSettings(ctx context.Context, settings ManagerSettings) (*Man
 			}
 			continue
 		}
-		_, _, err := runtime.start(ctx, false)
+		_, _, _, err := runtime.start(ctx, false)
 		if err != nil {
 			if server.Required {
 				errs = append(errs, err.Error())
@@ -182,6 +183,7 @@ func (m *Manager) CatalogSnapshot() CatalogSnapshot {
 	return CatalogSnapshot{
 		Version:      m.catalogVersion,
 		Tools:        append([]ExternalTool(nil), m.tools...),
+		Prompts:      clonePrompts(m.prompts),
 		Instructions: append([]string(nil), m.instructions...),
 		Collisions:   append([]string(nil), m.collisions...),
 	}
@@ -253,13 +255,16 @@ func (m *Manager) rebuildCatalog() CatalogChange {
 		}
 	}
 	tools, instructions, collisions := buildCatalog(catalogs)
+	prompts := buildPromptCatalog(catalogs)
 	m.catalogVersion++
 	change := CatalogChange{
-		Version:    m.catalogVersion,
-		ToolCount:  len(tools),
-		Collisions: append([]string(nil), collisions...),
+		Version:     m.catalogVersion,
+		ToolCount:   len(tools),
+		PromptCount: len(prompts),
+		Collisions:  append([]string(nil), collisions...),
 	}
 	m.tools = tools
+	m.prompts = prompts
 	m.instructions = instructions
 	m.collisions = append([]string(nil), collisions...)
 	m.mu.Unlock()

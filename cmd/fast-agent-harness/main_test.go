@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/commandregistry"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
@@ -57,6 +58,59 @@ func TestGatewayRunSendsFullRunRequest(t *testing.T) {
 		captured.MaxToolRounds != 42 ||
 		captured.Prompt != "ping" {
 		t.Fatalf("captured = %#v", captured)
+	}
+}
+
+func TestCommandsCommandListsAndSearchesRegistry(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, "commands"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "commands", "review.md"), []byte(`---
+description: Review with focus
+argument_hint: <path>
+---
+Review $ARGUMENTS
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, "profiles", "teacher"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "profiles", "teacher", "profile.toml"), []byte(`name = "teacher"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := commandsCommand([]string{"search", "review"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "/review <path> [home/prompt_command]") {
+		t.Fatalf("search output:\n%s", out.String())
+	}
+
+	out.Reset()
+	if err := commandsCommand([]string{"list", "-json"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var entries []commandregistry.Entry
+	if err := json.Unmarshal(out.Bytes(), &entries); err != nil {
+		t.Fatal(err)
+	}
+	var sawCommands, sawReview, sawProfile bool
+	for _, entry := range entries {
+		switch entry.Name {
+		case "/commands":
+			sawCommands = entry.Kind == commandregistry.KindAction && entry.Source == "builtin"
+		case "/review":
+			sawReview = entry.Kind == commandregistry.KindPromptCommand && entry.Source == "home" && entry.ArgumentHint == "<path>"
+		case "/profile teacher":
+			sawProfile = entry.Kind == commandregistry.KindProfile && entry.Source == "profile" && entry.Available
+		}
+	}
+	if !sawCommands || !sawReview || !sawProfile {
+		t.Fatalf("registry entries commands=%v review=%v profile=%v entries=%#v", sawCommands, sawReview, sawProfile, entries)
 	}
 }
 
