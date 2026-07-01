@@ -1317,6 +1317,7 @@ func sessionConfigSnapshot(providerAuth config.ProviderAuthSnapshot, limits conf
 		"web_cache_ttl_ms":                 toolPolicy.WebCacheTTL.Milliseconds(),
 		"web_cache_max_bytes":              toolPolicy.WebCacheMaxBytes,
 		"workspace_roots":                  append([]string(nil), toolPolicy.WorkspaceRoots...),
+		"project_context_max_bytes":        toolPolicy.ProjectContextMaxBytes,
 		"max_tool_output_bytes":            toolPolicy.MaxToolOutputBytes,
 		"auto_approve_dangerous":           toolPolicy.AutoApproveDangerous,
 		"access_mode":                      toolPolicy.AccessMode,

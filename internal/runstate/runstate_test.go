@@ -102,6 +102,31 @@ func TestSnapshotHashesAreStableForEquivalentToolAndMCPOrder(t *testing.T) {
 	}
 }
 
+func TestSnapshotInstructionHashIncludesProtectedUserContext(t *testing.T) {
+	cfg := config.Config{Model: "mock", Provider: "mock", Profile: "billy"}
+	base := []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "# Project context\n<PROJECT_CONTEXT>\ncwd: /repo\n</PROJECT_CONTEXT>"},
+		{Role: protocol.RoleUser, Content: "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nold rules\n</INSTRUCTIONS>"},
+		{Role: protocol.RoleUser, Content: "prompt"},
+	}
+	contextChanged := append([]protocol.Message(nil), base...)
+	contextChanged[1].Content = "# Project context updated\n<PROJECT_CONTEXT>\ncwd: /repo\ncap_flags: rendered_capped\n</PROJECT_CONTEXT>"
+	instructionsChanged := append([]protocol.Message(nil), base...)
+	instructionsChanged[2].Content = "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nnew rules\n</INSTRUCTIONS>"
+
+	original := NewSnapshot(snapshotInput(cfg), base, nil)
+	if original.ProfileInstructionHash == "" {
+		t.Fatal("missing instruction hash")
+	}
+	if got := NewSnapshot(snapshotInput(cfg), contextChanged, nil); got.ProfileInstructionHash == original.ProfileInstructionHash {
+		t.Fatalf("project context change did not affect instruction hash")
+	}
+	if got := NewSnapshot(snapshotInput(cfg), instructionsChanged, nil); got.ProfileInstructionHash == original.ProfileInstructionHash {
+		t.Fatalf("AGENTS change did not affect instruction hash")
+	}
+}
+
 func snapshotInput(cfg config.Config) SnapshotInput {
 	return SnapshotInput{
 		Provider:   cfg.ProviderBinding(),

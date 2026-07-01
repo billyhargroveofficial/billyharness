@@ -154,11 +154,24 @@ func instructionHash(profile config.ProfileSelection, messages []protocol.Messag
 		Messages []instructionMessage `json:"messages,omitempty"`
 	}{Profile: profile.Profile}
 	for _, msg := range messages {
-		if msg.Role == protocol.RoleSystem {
+		if instructionHashMessage(msg) {
 			payload.Messages = append(payload.Messages, instructionMessage{Role: msg.Role, Name: msg.Name, Content: msg.Content})
 		}
 	}
 	return hashJSON(payload)
+}
+
+func instructionHashMessage(msg protocol.Message) bool {
+	if msg.Role == protocol.RoleSystem {
+		return true
+	}
+	if msg.Role != protocol.RoleUser {
+		return false
+	}
+	content := strings.TrimSpace(msg.Content)
+	return strings.HasPrefix(content, "# Project context") ||
+		strings.HasPrefix(content, "# AGENTS.md instructions") ||
+		strings.HasPrefix(content, "# MCP server instructions")
 }
 
 func toolSnapshotHash(specs []protocol.ToolSpec) string {

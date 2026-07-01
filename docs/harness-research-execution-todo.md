@@ -858,11 +858,30 @@ platform.
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
   - commit: pending.
 
-- [ ] HR-04.5 Context epoch reconcile.
+- [x] HR-04.5 Context epoch reconcile.
   - maps to: `competitive-improvements-todo.md` B9.
   - acceptance: unchanged project context injects nothing; changed context
     injects one bounded update; restart reuses stored epoch.
   - verification: `go test -count=1 ./internal/runstate ./internal/session ./internal/gateway ./internal/agent ./internal/clientux`.
+  - status: completed 2026-07-01.
+  - evidence: project context reconciliation now hashes the rendered
+    `<PROJECT_CONTEXT>` body already present in the transcript, preserves the
+    current epoch when unchanged, and replaces it with one bounded
+    `# Project context updated` fragment when metadata changes. Disabled or
+    failed observation leaves the prior fragment untouched. Because the active
+    epoch lives in persisted session messages, gateway restart/load reuses it
+    without adding another update, while runstate turn metadata now hashes
+    protected user instruction/context fragments so AGENTS and project-context
+    changes are visible in `profile_instruction_hash`.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/projectcontext
+    ./internal/agent ./internal/runstate ./internal/gateway` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/runstate
+    ./internal/session ./internal/gateway ./internal/agent
+    ./internal/clientux` passed; `/root/.local/go/bin/go test -run
+    'Test.*ContextEpoch.*|Test.*ProjectContext.*|Test.*Instruction.*Hash.*'
+    -count=1 ./internal/...` passed.
+  - commit: pending.
 
 - [ ] HR-04.6 Delta coalescing before durable append and render.
   - maps to: `competitive-improvements-todo.md` B10.

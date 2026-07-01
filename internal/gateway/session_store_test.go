@@ -248,6 +248,86 @@ func TestGatewaySessionStoreRestoresSessionAfterRestart(t *testing.T) {
 	}
 }
 
+func TestGatewaySessionProjectContextEpochReusedAfterRestart(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex-empty"))
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/app\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.WorkspaceRoots = []string{root}
+	cfg.ProjectContextMaxBytes = 2048
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+
+	create := httptest.NewRecorder()
+	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", nil))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var created struct {
+		ID       string             `json:"id"`
+		Messages []protocol.Message `json:"messages"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if contexts := projectContextMessages(created.Messages); len(contexts) != 0 {
+		t.Fatalf("create response should omit messages by default: %#v", contexts)
+	}
+	getCreated := httptest.NewRecorder()
+	server.Handler().ServeHTTP(getCreated, httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID, nil))
+	if getCreated.Code != http.StatusOK {
+		t.Fatalf("get created status = %d body=%s", getCreated.Code, getCreated.Body.String())
+	}
+	var createdSession struct {
+		Messages []protocol.Message `json:"messages"`
+	}
+	if err := json.Unmarshal(getCreated.Body.Bytes(), &createdSession); err != nil {
+		t.Fatal(err)
+	}
+	if contexts := projectContextMessages(createdSession.Messages); len(contexts) != 1 || !strings.HasPrefix(contexts[0].Content, "# Project context") {
+		t.Fatalf("created project contexts = %#v", contexts)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, ".env.example"), []byte("NEW_FLAG=true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	firstRun := httptest.NewRecorder()
+	server.Handler().ServeHTTP(firstRun, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/run", bytes.NewBufferString(`{"prompt":"notice context"}`)))
+	if firstRun.Code != http.StatusOK {
+		t.Fatalf("first run status = %d body=%s", firstRun.Code, firstRun.Body.String())
+	}
+	restarted := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+	secondRun := httptest.NewRecorder()
+	restarted.Handler().ServeHTTP(secondRun, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/run", bytes.NewBufferString(`{"prompt":"reuse context"}`)))
+	if secondRun.Code != http.StatusOK {
+		t.Fatalf("second run status = %d body=%s", secondRun.Code, secondRun.Body.String())
+	}
+	get := httptest.NewRecorder()
+	restarted.Handler().ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID, nil))
+	if get.Code != http.StatusOK {
+		t.Fatalf("get status = %d body=%s", get.Code, get.Body.String())
+	}
+	var got struct {
+		Messages []protocol.Message `json:"messages"`
+	}
+	if err := json.Unmarshal(get.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	contexts := projectContextMessages(got.Messages)
+	if len(contexts) != 1 || !strings.HasPrefix(contexts[0].Content, "# Project context updated") || !strings.Contains(contexts[0].Content, "NEW_FLAG") {
+		t.Fatalf("stored project contexts after restart = %#v", contexts)
+	}
+}
+
 func TestStoredSessionDiagnosticsIndexUsageCumulativeMatchesProjector(t *testing.T) {
 	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
 	store := newSessionStore(storeDir)
@@ -423,6 +503,16 @@ func TestStoredSessionDiagnosticsIndexUsageCumulativeMatchesProjector(t *testing
 	if _, err := os.Stat(diagnosticsIndexPath(storeDir)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("diagnostics index after delete err = %v", err)
 	}
+}
+
+func projectContextMessages(messages []protocol.Message) []protocol.Message {
+	var out []protocol.Message
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, "<PROJECT_CONTEXT>") {
+			out = append(out, msg)
+		}
+	}
+	return out
 }
 
 func TestGatewaySessionInputAdmissionDurableAndIdempotent(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
 func TestProjectContextSnapshotDetectsBoundedLocalHints(t *testing.T) {
@@ -73,6 +74,86 @@ func TestProjectContextRenderCapsOutput(t *testing.T) {
 	}
 	if len(rendered) > 120 || !strings.Contains(rendered, "truncated") {
 		t.Fatalf("rendered len=%d:\n%s", len(rendered), rendered)
+	}
+}
+
+func TestProjectContextReconcileNoopsWhenUnchanged(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex-empty"))
+	root := t.TempDir()
+	mustMkdir(t, filepath.Join(root, ".git"))
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n")
+
+	settings := config.InstructionSettings{
+		WorkspaceRoots:         []string{root},
+		ProjectDocMaxBytes:     32 * 1024,
+		ProjectContextMaxBytes: 2048,
+	}
+	msg, ok := Message(settings)
+	if !ok {
+		t.Fatal("Message returned false")
+	}
+	messages := []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		msg,
+		{Role: protocol.RoleUser, Content: "prompt"},
+	}
+	next, changed := ReconcileMessages(settings, messages)
+	if changed || len(next) != len(messages) || next[1].Content != msg.Content {
+		t.Fatalf("reconcile changed unchanged context changed=%v next=%#v", changed, next)
+	}
+}
+
+func TestProjectContextReconcileUpdatesChangedContextOnce(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex-empty"))
+	root := t.TempDir()
+	mustMkdir(t, filepath.Join(root, ".git"))
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n")
+
+	settings := config.InstructionSettings{
+		WorkspaceRoots:         []string{root},
+		ProjectDocMaxBytes:     32 * 1024,
+		ProjectContextMaxBytes: 2048,
+	}
+	msg, ok := Message(settings)
+	if !ok {
+		t.Fatal("Message returned false")
+	}
+	messages := []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		msg,
+		{Role: protocol.RoleUser, Content: "prompt"},
+	}
+	mustWrite(t, filepath.Join(root, ".env.example"), "NEW_FLAG=true\n")
+	updated, changed := ReconcileMessages(settings, messages)
+	if !changed {
+		t.Fatal("expected changed context to reconcile")
+	}
+	if len(updated) != len(messages) || !strings.HasPrefix(updated[1].Content, updateMarker) || !strings.Contains(updated[1].Content, "NEW_FLAG") {
+		t.Fatalf("updated messages = %#v", updated)
+	}
+	if ContentHash(updated[1].Content) == ContentHash(msg.Content) {
+		t.Fatalf("context hash did not change")
+	}
+	reused, changed := ReconcileMessages(settings, updated)
+	if changed || len(reused) != len(updated) || reused[1].Content != updated[1].Content {
+		t.Fatalf("second reconcile should reuse stored epoch changed=%v reused=%#v", changed, reused)
+	}
+}
+
+func TestProjectContextReconcileObservationFailurePreservesPriorContext(t *testing.T) {
+	old := protocol.Message{Role: protocol.RoleUser, Content: "# Project context\n<PROJECT_CONTEXT>\ncwd: /repo\n</PROJECT_CONTEXT>"}
+	messages := []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		old,
+		{Role: protocol.RoleUser, Content: "prompt"},
+	}
+	next, changed := ReconcileMessages(config.InstructionSettings{ProjectContextMaxBytes: 0}, messages)
+	if changed || next[1].Content != old.Content {
+		t.Fatalf("disabled observation should preserve context changed=%v next=%#v", changed, next)
 	}
 }
 

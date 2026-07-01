@@ -7,6 +7,7 @@ import (
 	"time"
 
 	runtimehooks "github.com/billyhargroveofficial/billyharness/internal/hooks"
+	"github.com/billyhargroveofficial/billyharness/internal/projectcontext"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/runstate"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
@@ -69,6 +70,7 @@ func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []pro
 		emitAgentRunFailed(err, emit)
 		return messages, err
 	}
+	messages, _ = projectcontext.ReconcileMessages(a.instructions, messages)
 	cleanupMCPStatusHook := a.installMCPStatusHook(ctx, hookRunner, run, emit)
 	defer cleanupMCPStatusHook()
 	messages = a.withMCPInstructions(messages)

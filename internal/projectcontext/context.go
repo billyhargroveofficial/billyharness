@@ -2,6 +2,8 @@ package projectcontext
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -17,6 +19,7 @@ import (
 
 const (
 	startMarker       = "# Project context"
+	updateMarker      = "# Project context updated"
 	openMarker        = "<PROJECT_CONTEXT>"
 	endMarker         = "</PROJECT_CONTEXT>"
 	defaultMaxBytes   = 4 * 1024
@@ -87,6 +90,66 @@ func Message(settings config.InstructionSettings) (protocol.Message, bool) {
 	return protocol.Message{Role: protocol.RoleUser, Content: content}, true
 }
 
+func ReconcileMessages(settings config.InstructionSettings, messages []protocol.Message) ([]protocol.Message, bool) {
+	if settings.ProjectContextMaxBytes <= 0 {
+		return messages, false
+	}
+	index := lastProjectContextIndex(messages)
+	if index < 0 {
+		return messages, false
+	}
+	snapshot := SnapshotFromSettings(settings)
+	current, ok := Render(snapshot, settings.ProjectContextMaxBytes)
+	if !ok {
+		return messages, false
+	}
+	currentHash := ContentHash(current)
+	if currentHash == "" || currentHash == ContentHash(messages[index].Content) {
+		return messages, false
+	}
+	updated, ok := render(snapshot, settings.ProjectContextMaxBytes, updateMarker)
+	if !ok {
+		return messages, false
+	}
+	next := make([]protocol.Message, len(messages))
+	copy(next, messages)
+	next[index] = protocol.Message{Role: protocol.RoleUser, Content: updated}
+	return next, true
+}
+
+func ContentHash(content string) string {
+	body := projectContextBody(content)
+	if strings.TrimSpace(body) == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(body))
+	return hex.EncodeToString(sum[:])
+}
+
+func IsMessage(msg protocol.Message) bool {
+	content := strings.TrimSpace(msg.Content)
+	return msg.Role == protocol.RoleUser && strings.HasPrefix(content, startMarker) && ContentHash(content) != ""
+}
+
+func lastProjectContextIndex(messages []protocol.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if IsMessage(messages[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
+func projectContextBody(content string) string {
+	start := strings.Index(content, openMarker)
+	end := strings.Index(content, endMarker)
+	if start < 0 || end < start {
+		return ""
+	}
+	end += len(endMarker)
+	return strings.TrimSpace(content[start:end])
+}
+
 func SnapshotFromSettings(settings config.InstructionSettings) Snapshot {
 	cwd := contextCWD(settings.WorkspaceRoots)
 	root := findGitRoot(cwd)
@@ -118,8 +181,15 @@ func SnapshotFromSettings(settings config.InstructionSettings) Snapshot {
 }
 
 func Render(snapshot Snapshot, maxBytes int) (string, bool) {
+	return render(snapshot, maxBytes, startMarker)
+}
+
+func render(snapshot Snapshot, maxBytes int, marker string) (string, bool) {
 	if strings.TrimSpace(snapshot.CWD) == "" {
 		return "", false
+	}
+	if strings.TrimSpace(marker) == "" {
+		marker = startMarker
 	}
 	if maxBytes < 0 {
 		maxBytes = 0
@@ -129,7 +199,7 @@ func Render(snapshot Snapshot, maxBytes int) (string, bool) {
 	}
 	snapshot.Caps.MaxBytes = maxBytes
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n%s\n", startMarker, openMarker)
+	fmt.Fprintf(&b, "%s\n%s\n", marker, openMarker)
 	writeLine(&b, "cwd", snapshot.CWD)
 	if len(snapshot.WorkspaceRoots) > 0 {
 		b.WriteString("workspace_roots:\n")
@@ -180,14 +250,14 @@ func Render(snapshot Snapshot, maxBytes int) (string, bool) {
 	content := b.String()
 	if len(content) > maxBytes && !snapshot.Caps.RenderedCapped {
 		snapshot.Caps.RenderedCapped = true
-		return Render(snapshot, maxBytes)
+		return render(snapshot, maxBytes, marker)
 	}
 	if len(content) <= maxBytes {
 		return content, true
 	}
 	suffix := "\n[project context truncated]\n" + endMarker
 	limit := maxBytes - len(suffix)
-	if limit < len(startMarker)+len(openMarker)+8 {
+	if limit < len(marker)+len(openMarker)+8 {
 		limit = maxBytes
 		suffix = ""
 	}
