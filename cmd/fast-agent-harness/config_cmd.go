@@ -18,6 +18,8 @@ func configCommand(args []string, stdout io.Writer) error {
 	switch args[0] {
 	case "inspect", "status":
 		return configInspectCommand(args[1:], stdout)
+	case "mcp-migrate", "mcp-migration":
+		return configMCPMigrateCommand(args[1:], stdout)
 	default:
 		configUsage(stdout)
 		return fmt.Errorf("unknown config command %q", args[0])
@@ -108,8 +110,33 @@ func emptyConfigInspectValue(value string) string {
 	return value
 }
 
+func configMCPMigrateCommand(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("config mcp-migrate", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "print migration diagnostics as JSON")
+	var files repeatedStringFlag
+	fs.Var(&files, "file", "external MCP config file to inspect; repeatable")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("usage: config mcp-migrate [-file FILE] [-json]")
+	}
+	report, err := config.ScanMCPMigration(config.MCPMigrationOptions{Files: []string(files)})
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(report)
+	}
+	fmt.Fprintln(stdout, config.FormatMCPMigrationReport(report))
+	return nil
+}
+
 func configUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: fast-agent-harness config inspect [-json]")
+	fmt.Fprintln(w, "       fast-agent-harness config mcp-migrate [-file FILE] [-json]")
 }
 
 func truncateConfigInspectValue(value string, maxLen int) string {
@@ -121,4 +148,18 @@ func truncateConfigInspectValue(value string, maxLen int) string {
 		return value[:maxLen]
 	}
 	return value[:maxLen-3] + "..."
+}
+
+type repeatedStringFlag []string
+
+func (f *repeatedStringFlag) String() string {
+	return strings.Join(*f, ",")
+}
+
+func (f *repeatedStringFlag) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		*f = append(*f, value)
+	}
+	return nil
 }

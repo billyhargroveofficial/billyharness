@@ -68,6 +68,7 @@ func usage() {
 	fmt.Println("  serve|gateway [-mock] [-addr 127.0.0.1:8765]")
 	fmt.Println("  mcp")
 	fmt.Println("  config inspect [-json]")
+	fmt.Println("  config mcp-migrate [-file FILE] [-json]")
 	fmt.Println("  sessions list [-dir DIR] [-json]")
 	fmt.Println("  sessions inspect [-dir DIR] [-json] SESSION_ID")
 	fmt.Println("  sessions context [-dir DIR] [-json] SESSION_ID")

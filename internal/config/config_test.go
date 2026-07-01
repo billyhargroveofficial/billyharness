@@ -732,6 +732,98 @@ env_http_headers = { Authorization = "REMOTE_MCP_AUTH_HEADER" }
 	}
 }
 
+func TestScanMCPMigrationReportsSuggestionsAndRedactsValues(t *testing.T) {
+	root := t.TempDir()
+	codexPath := filepath.Join(root, "codex.toml")
+	if err := os.WriteFile(codexPath, []byte(`
+[mcp_servers.github]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env = { GITHUB_PERSONAL_ACCESS_TOKEN = "ghp-secret-value" }
+env_vars = ["PATH"]
+startup_timeout_sec = 1.0
+tool_timeout_sec = 2.0
+
+[mcp_servers.remote]
+url = "https://example.com/mcp"
+bearer_token_env_var = "REMOTE_TOKEN"
+env_http_headers = { Authorization = "REMOTE_AUTH" }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	jsonPath := filepath.Join(root, "claude.json")
+	if err := os.WriteFile(jsonPath, []byte(`{
+  "mcpServers": {
+    "filesystem": {
+      "command": "node",
+      "args": ["server.js"],
+      "env": { "FS_TOKEN": "fs-secret-value" }
+    },
+    "disabled": {
+      "command": "node",
+      "enabled": false
+    }
+  }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := filepath.Join(root, "opencode.json")
+	if err := os.WriteFile(opencodePath, []byte(`{
+  "mcp": {
+    "servers": {
+      "search": {
+        "type": "local",
+        "command": ["uvx", "search-mcp", "--stdio"],
+        "environment": { "SEARCH_TOKEN": "search-secret-value" },
+        "timeout": { "startup": 1500, "request": 2500 }
+      }
+    }
+  }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := ScanMCPMigration(MCPMigrationOptions{Files: []string{codexPath, jsonPath, opencodePath}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Servers) != 4 || len(report.Suggestions) != 4 {
+		t.Fatalf("report = %#v", report)
+	}
+	body, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leaked := range []string{"ghp-secret-value", "fs-secret-value", "search-secret-value"} {
+		if strings.Contains(string(body), leaked) {
+			t.Fatalf("migration report leaked %q:\n%s", leaked, string(body))
+		}
+	}
+	text := FormatMCPMigrationReport(report)
+	for _, leaked := range []string{"ghp-secret-value", "fs-secret-value", "search-secret-value"} {
+		if strings.Contains(text, leaked) {
+			t.Fatalf("migration text leaked %q:\n%s", leaked, text)
+		}
+	}
+	for _, want := range []string{
+		"[mcp_servers.github]",
+		`env_vars = ["PATH", "GITHUB_PERSONAL_ACCESS_TOKEN"]`,
+		"[mcp_servers.remote]",
+		`bearer_token_env_var = "REMOTE_TOKEN"`,
+		"[mcp_servers.filesystem]",
+		`env_vars = ["FS_TOKEN"]`,
+		"[mcp_servers.search]",
+		`command = "uvx"`,
+		`args = ["search-mcp", "--stdio"]`,
+		`env_vars = ["SEARCH_TOKEN"]`,
+		"streamable HTTP MCP is parsed for diagnostics",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("migration text missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestLoadHooksParsesCommandHooks(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "hooks.toml")

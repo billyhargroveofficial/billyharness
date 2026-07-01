@@ -45,6 +45,23 @@ args = ["-y", "@modelcontextprotocol/server-github"]
 env_vars = ["GITHUB_PERSONAL_ACCESS_TOKEN"]
 ```
 
+## Migration Diagnostics
+
+Billyharness can inspect common Codex, Claude-style, OpenCode-style, and
+workspace MCP config files and print redacted suggestions for
+`$BILLYHARNESS_HOME/mcp.config.toml`.
+
+```sh
+fast-agent-harness config mcp-migrate
+fast-agent-harness config mcp-migrate -file /path/to/external-mcp.json
+fast-agent-harness config mcp-migrate -json
+```
+
+This command is read-only. It does not copy or overwrite configs, and it never
+prints static environment or HTTP header values from external configs. When it
+finds inline env values, it suggests `env_vars` names instead; put the actual
+values in the process environment or `$BILLYHARNESS_HOME/.env`.
+
 ## Status
 
 Use `/mcp` in TUI or Telegram, or call the gateway:

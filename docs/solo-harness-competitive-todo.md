@@ -721,9 +721,9 @@ compatibility platform.
     passed;
     `/root/.local/go/bin/go test -count=1 ./internal/session
     ./internal/protocol ./internal/trace ./cmd/fast-agent-harness` passed.
-  - commit: pending.
+  - commit: `593f2714ee384870bb277097614c4268e5f9e23c`.
 
-- [ ] SH-05.2 Add MCP config migration diagnostics.
+- [x] SH-05.2 Add MCP config migration diagnostics.
   - inspiration: Codex external MCP config migration tests.
   - target files: `internal/config/mcp.go`,
     `cmd/fast-agent-harness/config*`, docs.
@@ -731,7 +731,25 @@ compatibility platform.
     stdio/http MCP servers, redacts env values, and prints Billy config
     suggestions without auto-overwriting.
   - verification: config migration fixture tests.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: added read-only MCP migration diagnostics in `internal/config`
+    and CLI `config mcp-migrate [-file FILE] [-json]`. The scanner checks
+    known local Codex, Claude-style, OpenCode-style, and workspace MCP config
+    locations by default, and accepts explicit fixture files for deterministic
+    review. It parses Codex-style TOML plus common `mcpServers` JSON shapes,
+    reports stdio servers as runtime-supported, reports streamable HTTP servers
+    as parsed but not runtime-started, skips disabled entries with warnings, and
+    prints Billy `mcp.config.toml` snippets without writing files. Inline env
+    and static HTTP header values are never emitted; env names are suggested via
+    `env_vars`, and bearer/header env references stay name-only.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*MCP.*Migration.*|TestConfigMCPMigrateCommandPrintsRedactedSuggestions|TestScanMCPMigrationReportsSuggestionsAndRedactsValues'
+    -count=1 ./internal/config ./cmd/fast-agent-harness` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/config
+    ./cmd/fast-agent-harness` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] SH-05.3 Unify command registry/search.
   - inspiration: OpenCode command registry.

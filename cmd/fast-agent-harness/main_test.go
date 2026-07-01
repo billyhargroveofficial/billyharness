@@ -138,6 +138,50 @@ func TestConfigInspectJSONDoesNotLeakDotenvSecrets(t *testing.T) {
 	}
 }
 
+func TestConfigMCPMigrateCommandPrintsRedactedSuggestions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	if err := os.WriteFile(path, []byte(`{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp-cli-secret" }
+    }
+  }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := configCommand([]string{"mcp-migrate", "-file", path}, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"billyharness MCP migration diagnostics",
+		"github source=explicit transport=stdio status=supported",
+		"[mcp_servers.github]",
+		`env_vars = ["GITHUB_PERSONAL_ACCESS_TOKEN"]`,
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("mcp migrate output missing %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "ghp-cli-secret") {
+		t.Fatalf("mcp migrate output leaked secret:\n%s", out.String())
+	}
+
+	out.Reset()
+	if err := configCommand([]string{"mcp-migrate", "-file", path, "-json"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var report config.MCPMigrationReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Servers) != 1 || report.Servers[0].Name != "github" || strings.Contains(out.String(), "ghp-cli-secret") {
+		t.Fatalf("json report = %s", out.String())
+	}
+}
+
 func TestMemoryCommandAddAndList(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", home)
