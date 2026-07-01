@@ -628,12 +628,22 @@ abuse.
     ./internal/checkpoint` passed.
   - commit: pending.
 
-- [ ] HR-03.6 Structured patch tool.
+- [-] HR-03.6 Structured patch tool.
   - maps to: `competitive-improvements-todo.md` A13.
   - dependency: HR-02.2 and HR-03.5.
   - acceptance: clean-room parser; all hunks verify before write; invalid patch
     never mutates files.
   - verification: `go test -count=1 ./internal/tools`.
+  - status: deferred 2026-07-01.
+  - blocker: A13 is marked P2 in `competitive-improvements-todo.md`, and the
+    active execution goal says to defer P2 unless explicitly unblocked and
+    justified by tests or benchmarks. HR-03.5 now provides exact atomic edits,
+    so there is no failing test or benchmark that requires a structured patch
+    parser ahead of the remaining P1 Milestone 3 items.
+  - next action: revisit after HR-03.7 through HR-03.10, or earlier only if a
+    focused test/benchmark demonstrates exact edits are insufficient for a
+    required workflow.
+  - commit: pending.
 
 - [ ] HR-03.7 Managed shell runtime for dev servers.
   - maps to: `competitive-improvements-todo.md` A8.
