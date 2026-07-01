@@ -546,6 +546,27 @@ canonical event stream.
     passed;
     `/root/.local/go/bin/go test -count=1 ./internal/bench` passed;
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: `24335a14059ee84bf35d026edd5155d0ad630f44`.
+
+P0 broad verification:
+
+- [x] Run required P0 package suite:
+  - `go test -count=1 ./internal/agent ./internal/provider ./internal/config ./internal/modelinfo ./internal/tools ./internal/toolrender ./internal/tooloutput ./internal/clientux ./internal/clientux/projector ./internal/gateway ./internal/gatewayclient ./internal/tui ./internal/telegrambot ./internal/trace ./internal/eventlog`
+  - status: completed 2026-07-01.
+  - evidence: `/root/.local/go/bin/go test -count=1 ./internal/agent
+    ./internal/provider ./internal/config ./internal/modelinfo ./internal/tools
+    ./internal/toolrender ./internal/tooloutput ./internal/clientux
+    ./internal/clientux/projector ./internal/gateway ./internal/gatewayclient
+    ./internal/tui ./internal/telegrambot ./internal/trace ./internal/eventlog`
+    passed on pushed `HEAD` `24335a14059ee84bf35d026edd5155d0ad630f44`.
+
+- [x] Run required P0 targeted regex suite:
+  - `go test -run 'Test.*Prompt.*|Test.*Cache.*Break.*|Test.*Context.*Report.*|Test.*Capability.*|Test.*Helper.*Usage.*|Test.*ToolRender.*|Test.*Output.*Ref.*|Test.*Replay.*|Test.*Resume.*|Test.*Liveness.*|Test.*Golden.*|Test.*Adapter.*Parity.*|Test.*Fake.*Provider.*' -count=1 ./internal/...`
+  - status: completed 2026-07-01.
+  - evidence: `/root/.local/go/bin/go test -run
+    'Test.*Prompt.*|Test.*Cache.*Break.*|Test.*Context.*Report.*|Test.*Capability.*|Test.*Helper.*Usage.*|Test.*ToolRender.*|Test.*Output.*Ref.*|Test.*Replay.*|Test.*Resume.*|Test.*Liveness.*|Test.*Golden.*|Test.*Adapter.*Parity.*|Test.*Fake.*Provider.*'
+    -count=1 ./internal/...` passed on pushed `HEAD`
+    `24335a14059ee84bf35d026edd5155d0ad630f44`.
   - commit: pending.
 
 ## Milestone 4 - Manual Solo Memory MVP (P1)
