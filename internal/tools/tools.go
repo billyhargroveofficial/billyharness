@@ -152,6 +152,8 @@ func NewRegistryFromSettings(settings RegistrySettings, opts ...RegistryOption) 
 	r.addFSRead()
 	r.addFSList()
 	r.addFSSearch()
+	r.addFSGrep()
+	r.addFSGlob()
 	r.addFSWrite()
 	r.addFSMkdir()
 	r.addShellExec()
@@ -524,7 +526,7 @@ func normalizeParallelMetadata(name string, risk protocol.Risk, meta ParallelMet
 
 func defaultParallelMetadata(name string, risk protocol.Risk) ParallelMetadata {
 	switch name {
-	case "time_now", "fs_read_file", "fs_list", "fs_search", "tool_search", "skill_list", "skill_read", "web_cache_status":
+	case "time_now", "fs_read_file", "fs_list", "fs_search", "fs_grep", "fs_glob", "tool_search", "skill_list", "skill_read", "web_cache_status":
 		return ParallelMetadata{Policy: ParallelPolicyReadOnly, Idempotent: true, Cancellable: true}
 	case "web_search", "web_fetch", "web_extract", "web_crawl":
 		return ParallelMetadata{Policy: ParallelPolicyNetworkRateLimited, Idempotent: true, RateLimitKey: "web", Cancellable: true, MaxConcurrency: 3}

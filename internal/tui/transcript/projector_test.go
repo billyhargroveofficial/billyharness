@@ -163,6 +163,39 @@ func TestProjectorApplyTodoPlanStateWithoutRawArgs(t *testing.T) {
 	}
 }
 
+func TestProjectorToolRenderFSGrepGlob(t *testing.T) {
+	p := NewProjector()
+	cells := p.Apply(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{
+			ID:        "call_grep",
+			Name:      "fs_grep",
+			Arguments: json.RawMessage(`{"pattern":"TODO|FIXME","path":"internal","include":"*.go","context":2}`),
+		},
+	})
+	if len(cells) != 1 || !strings.Contains(cells[0].Title, "Grepped TODO|FIXME in internal") {
+		t.Fatalf("grep cell = %#v", cells)
+	}
+	if strings.Contains(cells[0].Content, `"pattern"`) || strings.Contains(cells[0].Content, `"context"`) {
+		t.Fatalf("grep cell leaked raw args: %#v", cells[0])
+	}
+
+	cells = p.Apply(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{
+			ID:        "call_glob",
+			Name:      "fs_glob",
+			Arguments: json.RawMessage(`{"pattern":"**/*.go","path":"internal/tools","sort":"modified"}`),
+		},
+	})
+	if len(cells) != 2 || !strings.Contains(cells[1].Title, "Globbed **/*.go in internal/tools") {
+		t.Fatalf("glob cells = %#v", cells)
+	}
+	if strings.Contains(cells[1].Content, `"pattern"`) || strings.Contains(cells[1].Content, `"sort"`) {
+		t.Fatalf("glob cell leaked raw args: %#v", cells[1])
+	}
+}
+
 func TestProjectorApplyUsesCompactToolAuditText(t *testing.T) {
 	p := NewProjector()
 	cells := p.Apply(protocol.Event{Type: protocol.EventToolAudit, Data: map[string]any{

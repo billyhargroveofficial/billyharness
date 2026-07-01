@@ -509,6 +509,22 @@ var callRenderers = map[string]callRenderer{
 			return "🔍 search " + CompactArg(args["query"], 56) + " in " + CompactArg(args["path"], 56)
 		}),
 	},
+	"fs_grep": {
+		tui: staticCallLine(func(args map[string]any) string {
+			return "Grepped " + CompactArg(args["pattern"], 72) + " in " + firstArgDefault(args, ".", "path")
+		}),
+		telegram: staticCallLine(func(args map[string]any) string {
+			return "🔍 grep " + CompactArg(args["pattern"], 56) + " in " + CompactArg(args["path"], 56)
+		}),
+	},
+	"fs_glob": {
+		tui: staticCallLine(func(args map[string]any) string {
+			return "Globbed " + CompactArg(args["pattern"], 72) + " in " + firstArgDefault(args, ".", "path")
+		}),
+		telegram: staticCallLine(func(args map[string]any) string {
+			return "🧭 glob " + CompactArg(args["pattern"], 56) + " in " + CompactArg(args["path"], 56)
+		}),
+	},
 	"fs_write_file": {
 		tui:      staticCallLine(func(args map[string]any) string { return "Wrote " + firstArg(args, "path", "file") }),
 		telegram: staticCallLine(func(args map[string]any) string { return "✍️ write " + CompactArg(args["path"], 96) }),

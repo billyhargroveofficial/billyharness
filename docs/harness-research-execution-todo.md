@@ -525,11 +525,27 @@ abuse.
     ./internal/protocol ./internal/agent ./internal/architecture` passed.
   - commit: pending.
 
-- [ ] HR-03.2 Native grep and glob tools.
+- [x] HR-03.2 Native grep and glob tools.
   - maps to: `competitive-improvements-todo.md` A5.
   - acceptance: bounded regex/glob search with context, limits, binary skip,
     sensitive-path skip, deterministic truncation, and compact rendering.
   - verification: `go test -count=1 ./internal/tools ./internal/toolrender ./internal/tui/transcript`.
+  - status: completed 2026-07-01.
+  - evidence: added native read-only `fs_grep` and `fs_glob` tools with
+    workspace/symlink safety, sensitive-path skips, bounded regex search,
+    include globs, `content`/`files_with_matches`/`count` output modes,
+    context lines, offsets, limits, binary and large-file skips, recursive glob
+    matching, file/dir/both filters, name/modified sorting, deterministic
+    truncation markers, metadata summaries, read-only parallel metadata, and
+    compact TUI/Telegram call rendering without raw JSON argument fallback.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'TestFS(Grep|Glob).*|TestFSSearchToolsParallelMetadata' -count=1
+    ./internal/tools` passed; `/root/.local/go/bin/go test -run
+    'Test.*ToolRender.*(Grep|Glob)' -count=1 ./internal/toolrender
+    ./internal/tui/transcript` passed; `/root/.local/go/bin/go test -count=1
+    ./internal/tools ./internal/toolrender ./internal/tui/transcript` passed.
+  - commit: pending.
 
 - [ ] HR-03.3 Fuzzy file resolver and TUI `@file`.
   - maps to: `competitive-improvements-todo.md` A6.

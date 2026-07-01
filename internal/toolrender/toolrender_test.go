@@ -128,6 +128,18 @@ func TestCallLineSnapshotsCommonTools(t *testing.T) {
 			style:    StyleTelegram,
 			expected: "📝 plan update",
 		},
+		{
+			name:     "tui fs grep",
+			call:     protocol.ToolCall{Name: "fs_grep", Arguments: []byte(`{"pattern":"TODO|FIXME","path":"internal","include":"*.go"}`)},
+			style:    StyleTUI,
+			expected: "Grepped TODO|FIXME in internal",
+		},
+		{
+			name:     "telegram fs glob",
+			call:     protocol.ToolCall{Name: "fs_glob", Arguments: []byte(`{"pattern":"**/*.go","path":"internal/tools"}`)},
+			style:    StyleTelegram,
+			expected: "🧭 glob **/*.go in internal/tools",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -187,6 +199,38 @@ func TestTelegramCallLineCoversCommonToolTargets(t *testing.T) {
 				t.Fatalf("line leaked URL query: %q", got)
 			}
 		})
+	}
+}
+
+func TestToolRenderFSGrepGlob(t *testing.T) {
+	grep := CallLine(protocol.ToolCall{
+		Name:      "fs_grep",
+		Arguments: []byte(`{"pattern":"secret raw pattern","path":"internal","include":"*.go","context":2}`),
+	}, StyleTelegram)
+	for _, want := range []string{"🔍 grep", "secret raw pattern", "internal"} {
+		if !strings.Contains(grep, want) {
+			t.Fatalf("grep line missing %q: %q", want, grep)
+		}
+	}
+	for _, notWant := range []string{`"pattern"`, `"context"`} {
+		if strings.Contains(grep, notWant) {
+			t.Fatalf("grep line leaked raw args: %q", grep)
+		}
+	}
+
+	glob := CallLine(protocol.ToolCall{
+		Name:      "fs_glob",
+		Arguments: []byte(`{"pattern":"**/*.go","path":"internal/tools","sort":"modified"}`),
+	}, StyleTUI)
+	for _, want := range []string{"Globbed", "**/*.go", "internal/tools"} {
+		if !strings.Contains(glob, want) {
+			t.Fatalf("glob line missing %q: %q", want, glob)
+		}
+	}
+	for _, notWant := range []string{`"pattern"`, `"sort"`} {
+		if strings.Contains(glob, notWant) {
+			t.Fatalf("glob line leaked raw args: %q", glob)
+		}
 	}
 }
 
