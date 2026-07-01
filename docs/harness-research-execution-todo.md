@@ -1023,11 +1023,21 @@ need.
     changed for this deferral.
   - commit: pending.
 
-- [ ] HR-05.4 MCP elicitation bridge.
+- [-] HR-05.4 MCP elicitation bridge.
   - maps to: `competitive-improvements-todo.md` B13.
   - dependency: HR-04.3.
   - acceptance: simple MCP elicitation maps to common pending input events;
     unsupported forms decline cleanly.
+  - status: deferred 2026-07-01.
+  - blocker: B13 is marked P2 in `competitive-improvements-todo.md`, and the
+    active execution goal defers P2 unless a test or benchmark justifies it.
+    HR-04.3 provides the local `ask_user` path, but no current MCP server test
+    or user workflow requires elicitation bridging before the remaining work.
+  - next action: revisit after a concrete stdio MCP server scenario needs
+    simple accept/decline or text elicitation through TUI/Telegram.
+  - verification evidence: source-priority check only; no code changed for this
+    deferral.
+  - commit: pending.
 
 - [ ] HR-05.5 Last Billy commands project context source.
   - maps to: `competitive-improvements-todo.md` B14.
