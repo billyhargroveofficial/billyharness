@@ -127,7 +127,7 @@ func (a *Agent) snapshotToolSet(ctx context.Context) tools.ToolSet {
 	if a == nil || a.tools == nil {
 		return tools.ToolSet{}
 	}
-	return a.tools.Snapshot(ctx)
+	return a.tools.SnapshotWithToolPolicy(ctx, a.toolPolicy)
 }
 
 func (a *Agent) executeToolCalls(ctx context.Context, hookRunner *runtimehooks.Runner, toolSet tools.ToolSet, turnID string, round int, calls []protocol.ToolCall, emit func(protocol.Event)) []toolExecutionResult {

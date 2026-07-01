@@ -43,6 +43,7 @@ func TestGatewayRunSendsFullRunRequest(t *testing.T) {
 		Thinking:        "enabled",
 		ReasoningEffort: "xhigh",
 		MaxToolRounds:   42,
+		AccessMode:      "plan",
 	}, func(protocol.Event) {})
 	if err != nil {
 		t.Fatal(err)
@@ -51,6 +52,7 @@ func TestGatewayRunSendsFullRunRequest(t *testing.T) {
 		captured.Model != "gpt-5.5" ||
 		captured.Profile != "billy" ||
 		captured.ReasoningEffort != "xhigh" ||
+		captured.AccessMode != "plan" ||
 		captured.MaxToolRounds != 42 ||
 		captured.Prompt != "ping" {
 		t.Fatalf("captured = %#v", captured)

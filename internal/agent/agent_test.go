@@ -75,7 +75,7 @@ func TestRunMessagesEmitsTypedTurnAndModelStepEvents(t *testing.T) {
 	if !ok || started.TurnID != "turn-001" || started.Round != 1 || started.Status != protocol.TurnStatusStarted || started.Model != "mock" {
 		t.Fatalf("turn started = %#v ok=%v", started, ok)
 	}
-	for _, key := range []string{"provider_id", "model_id", "tool_snapshot_hash", "mcp_status_snapshot_hash", "profile_instruction_hash", "dangerous_permission_mode"} {
+	for _, key := range []string{"provider_id", "model_id", "tool_snapshot_hash", "mcp_status_snapshot_hash", "profile_instruction_hash", "dangerous_permission_mode", "access_mode"} {
 		if started.Metadata[key] == nil {
 			t.Fatalf("turn snapshot missing %s: %#v", key, started.Metadata)
 		}
@@ -586,6 +586,29 @@ func sawPermissionDecision(events []protocol.Event, name, decision, source, reas
 		}
 	}
 	return false
+}
+
+func firstModelCallEvent(events []protocol.Event, typ protocol.EventType) (protocol.ModelCallEvent, bool) {
+	for _, event := range events {
+		if event.Type != typ {
+			continue
+		}
+		switch data := event.Data.(type) {
+		case protocol.ModelCallEvent:
+			return data, true
+		default:
+			body, err := json.Marshal(data)
+			if err != nil {
+				return protocol.ModelCallEvent{}, false
+			}
+			var out protocol.ModelCallEvent
+			if err := json.Unmarshal(body, &out); err != nil {
+				return protocol.ModelCallEvent{}, false
+			}
+			return out, true
+		}
+	}
+	return protocol.ModelCallEvent{}, false
 }
 
 func toolProgressEvents(events []protocol.Event, callID string) []protocol.ToolProgressEvent {

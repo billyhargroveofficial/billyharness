@@ -10,8 +10,15 @@ import (
 
 func (m Model) inlineStatusView() string {
 	styles := m.styles()
-	access := "Guarded"
-	if m.dangerous || m.toolPolicy.AutoApproveDangerous {
+	access := "Build"
+	switch m.currentAccessMode() {
+	case "plan":
+		access = "Plan"
+	case "guarded":
+		access = "Guarded"
+	default:
+	}
+	if access == "Build" && (m.dangerous || m.toolPolicy.AutoApproveDangerous) {
 		access = "Full Access"
 	}
 	top := []statusSegment{

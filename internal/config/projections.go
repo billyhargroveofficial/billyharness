@@ -56,6 +56,7 @@ type ToolPolicySettings struct {
 	ProjectDocFallbacks       []string
 	MaxToolOutputBytes        int
 	AutoApproveDangerous      bool
+	AccessMode                string
 	StoreReasoningContent     bool
 	WebSummaryMode            string
 	WebSummaryProvider        string
@@ -162,6 +163,7 @@ func (c Config) ToolPolicySettings() ToolPolicySettings {
 		ProjectDocFallbacks:       cloneStrings(cfg.ProjectDocFallbacks),
 		MaxToolOutputBytes:        cfg.MaxToolOutputBytes,
 		AutoApproveDangerous:      cfg.AutoApproveDangerous,
+		AccessMode:                NormalizeAccessMode(cfg.AccessMode),
 		StoreReasoningContent:     cfg.StoreReasoningContent,
 		WebSummaryMode:            cfg.WebSummaryMode,
 		WebSummaryProvider:        cfg.WebSummaryProvider,

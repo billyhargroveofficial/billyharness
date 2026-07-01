@@ -38,6 +38,39 @@ func TestConfigProjectionsNormalizeModelRoutingAndSparkDisablement(t *testing.T)
 	}
 }
 
+func TestAccessModeNormalizesAndProjects(t *testing.T) {
+	if NormalizeAccessMode("") != AccessModeBuild ||
+		NormalizeAccessMode("SAFE") != AccessModeGuarded ||
+		NormalizeAccessMode("read-only") != AccessModePlan {
+		t.Fatalf("unexpected access mode normalization")
+	}
+	if _, ok := ParseAccessMode("plna"); ok {
+		t.Fatalf("invalid access mode parsed successfully")
+	}
+
+	cfg := Config{AccessMode: "READONLY", AutoApproveDangerous: true}
+	toolPolicy := cfg.ToolPolicySettings()
+	if toolPolicy.AccessMode != AccessModePlan {
+		t.Fatalf("tool policy access mode = %q", toolPolicy.AccessMode)
+	}
+	if snapshot := cfg.RuntimeToolSnapshot(); snapshot.AccessMode != AccessModePlan {
+		t.Fatalf("runtime tool snapshot access mode = %q", snapshot.AccessMode)
+	}
+
+	settings, err := RuntimeDiffSettingsWithRunOverrides(RuntimeDiffSettingsFromConfig(builtInConfig()), RunOverrideSettings{
+		AccessMode: "guarded",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.ToolPolicy.AccessMode != AccessModeGuarded {
+		t.Fatalf("override access mode = %q", settings.ToolPolicy.AccessMode)
+	}
+	if _, err := RuntimeDiffSettingsWithRunOverrides(RuntimeDiffSettingsFromConfig(builtInConfig()), RunOverrideSettings{AccessMode: "plna"}); err == nil {
+		t.Fatalf("invalid runtime access mode override did not fail")
+	}
+}
+
 func TestHookSettingsProjectionClonesHookData(t *testing.T) {
 	cfg := Config{
 		HooksEnabled:    true,

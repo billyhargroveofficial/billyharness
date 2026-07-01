@@ -37,6 +37,7 @@ type Options struct {
 	Model         string
 	Dangerous     bool
 	MaxRounds     int
+	AccessMode    string
 	Plain         bool
 	Version       string
 }
@@ -95,6 +96,7 @@ type Model struct {
 	thinkView    string
 	showThinking bool
 	dangerous    bool
+	accessMode   string
 	maxRounds    int
 	followOutput bool
 	plain        bool
@@ -223,6 +225,9 @@ func Run(opts Options) error {
 	if opts.Dangerous {
 		cfg.AutoApproveDangerous = true
 	}
+	if opts.AccessMode != "" {
+		cfg.AccessMode = config.NormalizeAccessMode(opts.AccessMode)
+	}
 	if opts.MaxRounds > 0 {
 		cfg.MaxToolRounds = opts.MaxRounds
 	}
@@ -252,6 +257,9 @@ func NewModel(cfg config.Config, opts Options) Model {
 	if settings.LastReasoningKind != "" {
 		cfg.Thinking = settings.LastReasoningKind
 		cfg.ReasoningEffort = settings.LastReasoningEffort
+	}
+	if opts.AccessMode == "" && settings.LastAccessMode != "" {
+		cfg.AccessMode = config.NormalizeAccessMode(settings.LastAccessMode)
 	}
 	models := []string{
 		"deepseek-v4-flash",
@@ -336,6 +344,7 @@ func NewModel(cfg config.Config, opts Options) Model {
 		thinkView:           thinkView,
 		showThinking:        thinkView != "hidden",
 		dangerous:           opts.Dangerous || cfg.AutoApproveDangerous,
+		accessMode:          config.NormalizeAccessMode(cfg.AccessMode),
 		maxRounds:           cfg.MaxToolRounds,
 		followOutput:        true,
 		plain:               plain,
@@ -982,6 +991,7 @@ func (m Model) selectedConfig() config.Config {
 	cfg.ReasoningEffort = m.currentThinking().effort
 	cfg.StoreReasoningContent = true
 	cfg.AutoApproveDangerous = cfg.AutoApproveDangerous || m.dangerous
+	cfg.AccessMode = config.NormalizeAccessMode(m.accessMode)
 	cfg.MaxToolRounds = m.maxRounds
 	cfg.ApplyModelProviderDefaults()
 	return cfg
@@ -1043,6 +1053,10 @@ func (m Model) currentProfile() string {
 
 func (m Model) currentThinking() thinkingMode {
 	return m.thinking[m.thinkingIdx]
+}
+
+func (m Model) currentAccessMode() string {
+	return config.NormalizeAccessMode(m.accessMode)
 }
 
 func (m *Model) setTheme(value string) bool {
@@ -1156,6 +1170,30 @@ func (m *Model) applyConfigSelection(cfg config.Config) {
 			return
 		}
 	}
+}
+
+func (m *Model) setAccessMode(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "", "next", "toggle":
+		switch m.currentAccessMode() {
+		case config.AccessModeBuild:
+			value = config.AccessModeGuarded
+		case config.AccessModeGuarded:
+			value = config.AccessModePlan
+		default:
+			value = config.AccessModeBuild
+		}
+	case config.AccessModeBuild, config.AccessModeGuarded, config.AccessModePlan, "safe", "readonly", "read-only", "read_only", "analysis":
+	default:
+		m.status = "unknown access mode " + value
+		return false
+	}
+	m.accessMode = config.NormalizeAccessMode(value)
+	m.refreshConfigProjections()
+	m.status = "mode " + m.accessMode
+	_ = m.saveSettings()
+	return true
 }
 
 func (m *Model) cycleReasoning() {

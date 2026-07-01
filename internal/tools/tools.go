@@ -420,10 +420,25 @@ func (r *Registry) hasMCPServer(server string) bool {
 func (r *Registry) Specs() []protocol.ToolSpec {
 	specs := make([]protocol.ToolSpec, 0, len(r.tools))
 	for _, tool := range r.tools {
+		if !toolVisibleForPolicy(tool.Spec, r.toolPolicy) {
+			continue
+		}
 		specs = append(specs, tool.Spec)
 	}
 	sort.Slice(specs, func(i, j int) bool { return specs[i].Name < specs[j].Name })
 	return specs
+}
+
+func toolVisibleForPolicy(spec protocol.ToolSpec, policy config.ToolPolicySettings) bool {
+	if config.NormalizeAccessMode(policy.AccessMode) != config.AccessModePlan {
+		return true
+	}
+	switch spec.Risk {
+	case protocol.RiskReadOnly, protocol.RiskNetwork:
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *Registry) Call(ctx context.Context, call protocol.ToolCall) (Result, error) {

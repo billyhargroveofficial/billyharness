@@ -41,6 +41,7 @@ func TestNewSnapshotCapturesTurnRuntimeState(t *testing.T) {
 		snapshot.ReasoningMode != "enabled/high" ||
 		snapshot.ContextBudgetTokens != 1_000_000 ||
 		snapshot.DangerousPermissionMode != "auto_approve_dangerous" ||
+		snapshot.AccessMode != config.AccessModeBuild ||
 		snapshot.ToolSnapshotHash == "" ||
 		snapshot.MCPStatusSnapshotHash == "" ||
 		snapshot.ProfileInstructionHash == "" {
@@ -55,6 +56,7 @@ func TestNewSnapshotCapturesTurnRuntimeState(t *testing.T) {
 		"mcp_status_snapshot_hash",
 		"profile_instruction_hash",
 		"dangerous_permission_mode",
+		"access_mode",
 	} {
 		if metadata[key] == nil {
 			t.Fatalf("metadata missing %s: %#v", key, metadata)

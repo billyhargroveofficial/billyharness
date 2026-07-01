@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
@@ -228,6 +229,7 @@ func (s *Session) beginRunStatus(req RunRequest) {
 	s.status.Provider = req.Provider
 	s.status.Profile = req.Profile
 	s.status.ReasoningEffort = req.ReasoningEffort
+	s.status.AccessMode = config.NormalizeAccessMode(req.AccessMode)
 	s.status.MessageCount = len(s.messages())
 	s.status.ModelCalls = 0
 	s.status.ToolCalls = 0

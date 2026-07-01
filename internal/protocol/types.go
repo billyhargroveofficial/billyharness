@@ -225,6 +225,7 @@ type ModelCallEvent struct {
 	MCPStatusSnapshotHash   string `json:"mcp_status_snapshot_hash,omitempty"`
 	ProfileInstructionHash  string `json:"profile_instruction_hash,omitempty"`
 	DangerousPermissionMode string `json:"dangerous_permission_mode,omitempty"`
+	AccessMode              string `json:"access_mode,omitempty"`
 	Status                  string `json:"status"`
 	ProviderRequestID       string `json:"provider_request_id,omitempty"`
 	Attempts                int    `json:"attempts,omitempty"`

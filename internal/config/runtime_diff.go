@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 )
@@ -22,6 +23,7 @@ type RunOverrideSettings struct {
 	Thinking        string
 	ReasoningEffort string
 	MaxToolRounds   int
+	AccessMode      string
 }
 
 func RuntimeDiffSettingsFromConfig(cfg Config) RuntimeDiffSettings {
@@ -59,6 +61,13 @@ func RuntimeDiffSettingsWithRunOverrides(settings RuntimeDiffSettings, overrides
 	}
 	if overrides.MaxToolRounds > 0 {
 		cfg.MaxToolRounds = overrides.MaxToolRounds
+	}
+	if strings.TrimSpace(overrides.AccessMode) != "" {
+		mode, ok := ParseAccessMode(overrides.AccessMode)
+		if !ok {
+			return RuntimeDiffSettings{}, fmt.Errorf("unsupported access_mode %q", overrides.AccessMode)
+		}
+		cfg.AccessMode = mode
 	}
 	return RuntimeDiffSettingsFromConfig(cfg), nil
 }
@@ -146,6 +155,7 @@ func runtimeDiffConfigFromSettings(base Config, settings RuntimeDiffSettings) Co
 	cfg.ProjectDocFallbacks = cloneStrings(settings.ToolPolicy.ProjectDocFallbacks)
 	cfg.MaxToolOutputBytes = settings.ToolPolicy.MaxToolOutputBytes
 	cfg.AutoApproveDangerous = settings.ToolPolicy.AutoApproveDangerous
+	cfg.AccessMode = NormalizeAccessMode(settings.ToolPolicy.AccessMode)
 	cfg.StoreReasoningContent = settings.ToolPolicy.StoreReasoningContent
 	cfg.GatewayAddr = settings.GatewayAddr
 	cfg.MCPEnabled = settings.MCP.Enabled

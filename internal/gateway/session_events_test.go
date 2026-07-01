@@ -699,6 +699,25 @@ func TestGatewaySessionStatusEndpoint(t *testing.T) {
 	}
 }
 
+func TestGatewaySessionStatusIncludesAccessMode(t *testing.T) {
+	session := newGatewaySession("access-mode-status", time.Now().UTC(), []protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	session.beginRunStatus(RunRequest{
+		Provider:        "mock",
+		Model:           "mock",
+		Profile:         "billy",
+		ReasoningEffort: "high",
+		AccessMode:      "read-only",
+	})
+	status := session.Status()
+	if status.AccessMode != config.AccessModePlan {
+		t.Fatalf("status access mode = %q", status.AccessMode)
+	}
+	summary := sessionSummary(session)
+	if summary.AccessMode != config.AccessModePlan {
+		t.Fatalf("summary access mode = %q", summary.AccessMode)
+	}
+}
+
 func TestGatewaySessionListEndpointReturnsTypedSummaries(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"

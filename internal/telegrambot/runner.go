@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
@@ -86,6 +87,7 @@ func (b *Bot) handleMessageWithAdmission(parent context.Context, msg Message, ad
 		Profile:         state.Profile,
 		ReasoningEffort: state.ReasoningEffort,
 		MaxToolRounds:   b.opts.MaxToolRounds,
+		AccessMode:      config.NormalizeAccessMode(state.AccessMode),
 		InterruptPolicy: gatewayapi.InterruptPolicyInterrupt,
 	}
 	runStarted := time.Now()
@@ -402,6 +404,10 @@ func (b *Bot) resolveRunState(ctx context.Context, msg Message, scope ChatScope)
 	if state.ReasoningEffort == "" {
 		state.ReasoningEffort = b.opts.ReasoningEffort
 	}
+	if state.AccessMode == "" {
+		state.AccessMode = b.opts.AccessMode
+	}
+	state.AccessMode = config.NormalizeAccessMode(state.AccessMode)
 	if state.SessionID == "" {
 		id, err := b.createOwnedSession(ctx, msg, state)
 		if err != nil {

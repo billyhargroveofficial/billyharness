@@ -9,10 +9,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
+
+type accessModeCaptureHarness struct {
+	scriptedHarness
+	run gatewayapi.RunRequest
+}
+
+func (h *accessModeCaptureHarness) RunSession(_ context.Context, _ string, req gatewayapi.RunRequest, emit func(protocol.Event)) error {
+	h.run = req
+	emit(protocol.Event{Type: protocol.EventRunCompleted})
+	return nil
+}
 
 func TestTelegramConfigCommandSendsSanitizedSummary(t *testing.T) {
 	var sentText string
@@ -75,6 +87,51 @@ func TestTelegramContextCommandShowsSessionContext(t *testing.T) {
 	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/context"})
 	if parseMode != "HTML" || !strings.Contains(sentText, "<b>Context</b>") || !strings.Contains(sentText, "web_summaries") {
 		t.Fatalf("context message parse=%q text=%q", parseMode, sentText)
+	}
+}
+
+func TestTelegramModeCommandSetsPlanModeRunRequest(t *testing.T) {
+	var sentTexts []string
+	client := newTelegramAPIClient(t, "bottoken", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			text, _ := payload["text"].(string)
+			sentTexts = append(sentTexts, text)
+			writeTelegramResult(w, SentMessage{MessageID: len(sentTexts), Chat: Chat{ID: 123}})
+		},
+		"editMessageText": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			text, _ := payload["text"].(string)
+			sentTexts = append(sentTexts, text)
+			writeTelegramResult(w, SentMessage{MessageID: len(sentTexts), Chat: Chat{ID: 123}})
+		},
+		"sendChatAction": func(w http.ResponseWriter, _ *http.Request, _ map[string]any) {
+			writeTelegramResult(w, true)
+		},
+	})
+	harness := &accessModeCaptureHarness{}
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      t.TempDir() + "/state.json",
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AccessMode:     config.AccessModeBuild,
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/mode plan"})
+	if state := bot.chatState(chatKey(123, 0)); state.AccessMode != config.AccessModePlan {
+		t.Fatalf("chat state access mode = %q", state.AccessMode)
+	}
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "inspect before editing"})
+	if harness.run.AccessMode != config.AccessModePlan {
+		t.Fatalf("run access mode = %q", harness.run.AccessMode)
+	}
+	if len(sentTexts) == 0 || !strings.Contains(sentTexts[0], "Access mode: plan") {
+		t.Fatalf("mode command response = %#v", sentTexts)
 	}
 }
 

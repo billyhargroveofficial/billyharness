@@ -66,10 +66,17 @@ func (r *Registry) Snapshot(ctx context.Context) ToolSet {
 	if r == nil {
 		return ToolSet{}
 	}
+	return r.SnapshotWithToolPolicy(ctx, r.toolPolicy)
+}
+
+func (r *Registry) SnapshotWithToolPolicy(ctx context.Context, policy config.ToolPolicySettings) ToolSet {
+	if r == nil {
+		return ToolSet{}
+	}
 	r.refreshMCPTools(ctx)
 
 	snapshot := &Registry{
-		toolPolicy:      cloneToolPolicySettings(r.toolPolicy),
+		toolPolicy:      cloneToolPolicySettings(policy),
 		mcpSettings:     cloneMCPSettings(r.mcpSettings),
 		tools:           cloneToolMap(r.tools),
 		mcpTools:        map[string]Tool{},

@@ -563,6 +563,24 @@ func TestStatusCommandShowsDetailedStatusBlock(t *testing.T) {
 	}
 }
 
+func TestAccessModeSlashCommandUpdatesRunRequest(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 180
+	handled, cmd := m.handleSlashCommand("/mode plan")
+	if !handled || cmd != nil {
+		t.Fatalf("/mode handled=%v cmd=%v, want handled without async command", handled, cmd)
+	}
+	if m.currentAccessMode() != config.AccessModePlan || m.toolPolicy.AccessMode != config.AccessModePlan {
+		t.Fatalf("access mode=%q tool policy=%q", m.currentAccessMode(), m.toolPolicy.AccessMode)
+	}
+	if got := m.gatewayRunRequest("inspect").AccessMode; got != config.AccessModePlan {
+		t.Fatalf("gateway run access mode = %q", got)
+	}
+	if status := m.inlineStatusView(); !strings.Contains(status, "Plan") {
+		t.Fatalf("status missing Plan: %q", status)
+	}
+}
+
 func TestCompactEventTextShowsStructuredCompactionFields(t *testing.T) {
 	text := compactEventText(map[string]any{
 		"compaction_id":               "abc123",

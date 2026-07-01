@@ -313,6 +313,53 @@ func TestRunMessagesToolOrchestratorDeniesDangerousToolBeforeExecution(t *testin
 	}
 }
 
+func TestRunMessagesPlanModeFiltersSpecsAndDeniesDangerousTool(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.MaxToolRounds = 2
+	cfg.AutoApproveDangerous = true
+	cfg.AccessMode = config.AccessModePlan
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_write", ToolName: "fs_write_file", ArgsDelta: `{"path":"out.txt","content":"blocked"}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "finished"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	a := New(cfg, prov, tools.NewRegistry(cfg))
+	var events []protocol.Event
+	_, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "plan only"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAgentLifecycleValid(t, events)
+	if hasToolSpec(prov.requests[0].Tools, "fs_write_file") || hasToolSpec(prov.requests[0].Tools, "shell_exec") {
+		t.Fatalf("plan mode provider tools include dangerous specs: %#v", prov.requests[0].Tools)
+	}
+	if !hasToolSpec(prov.requests[0].Tools, "fs_read_file") || !hasToolSpec(prov.requests[0].Tools, "todo_write") {
+		t.Fatalf("plan mode provider tools missing read/plan specs: %#v", prov.requests[0].Tools)
+	}
+	if _, err := os.Stat(filepath.Join(root, "out.txt")); !os.IsNotExist(err) {
+		t.Fatalf("plan-mode denied tool should not write file, stat err=%v", err)
+	}
+	if !sawPermissionDecision(events, "fs_write_file", "deny", "access_mode", "plan_mode_read_only") {
+		t.Fatalf("plan-mode deny permission decision missing: %#v", events)
+	}
+	started, ok := firstModelCallEvent(events, protocol.EventModelCallStarted)
+	if !ok || started.AccessMode != config.AccessModePlan || started.DangerousPermissionMode != "plan_mode_read_only" {
+		t.Fatalf("model call access metadata = %#v ok=%v", started, ok)
+	}
+}
+
 func TestRunMessagesExecutesParallelSafeToolsConcurrentlyAndPreservesOrder(t *testing.T) {
 	cfg := config.Default()
 	cfg.MaxToolRounds = 3

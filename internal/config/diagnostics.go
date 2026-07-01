@@ -41,6 +41,7 @@ type RuntimeToolSnapshot struct {
 	MaxParallelTools              int    `json:"max_parallel_tools"`
 	GatewayAddr                   string `json:"gateway_addr"`
 	AutoApproveDangerous          bool   `json:"auto_approve_dangerous"`
+	AccessMode                    string `json:"access_mode"`
 	MCPEnabled                    bool   `json:"mcp_enabled"`
 	MCPAllowedServers             string `json:"mcp_allowed_servers"`
 	MaxToolOutputBytes            int    `json:"max_tool_output_bytes"`
@@ -96,6 +97,7 @@ func (c Config) RuntimeToolSnapshot() RuntimeToolSnapshot {
 		MaxParallelTools:              limits.MaxParallelTools,
 		GatewayAddr:                   c.GatewayAddr,
 		AutoApproveDangerous:          tools.AutoApproveDangerous,
+		AccessMode:                    tools.AccessMode,
 		MCPEnabled:                    mcp.Enabled,
 		MCPAllowedServers:             strings.Join(mcp.AllowedServers, ","),
 		MaxToolOutputBytes:            tools.MaxToolOutputBytes,

@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	uxprojector "github.com/billyhargroveofficial/billyharness/internal/clientux/projector"
+	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/toolrender"
@@ -118,6 +119,7 @@ func (m *Model) saveSettings() error {
 	m.settings.LastGatewaySessionID = m.sessionID
 	m.settings.LastSelectedModel = m.currentModel()
 	m.settings.LastProfile = m.currentProfile()
+	m.settings.LastAccessMode = config.NormalizeAccessMode(m.accessMode)
 	m.settings.LastReasoningKind = m.currentThinking().kind
 	m.settings.LastReasoningEffort = m.currentThinking().effort
 	return saveAppSettings(m.settingsPath, m.settings)
@@ -323,12 +325,13 @@ func (m Model) statusText() string {
 		follow = "on"
 	}
 	return fmt.Sprintf(
-		"mode: %s\nchat: %s\nprovider: %s\nmodel: %s\nprofile: %s\nreasoning: %s / %s\nthinking blocks: %s\ntool blocks: %s\ntheme: %s\ngateway: %s\ngateway session: %s\nlocal settings: %s\ntools: %s, max rounds %d\ncalls: model %d, tools %d\ntokens: input %d, output %d\ncontext: %s\ncost: %s\nfollow output: %s",
+		"mode: %s\nchat: %s\nprovider: %s\nmodel: %s\nprofile: %s\naccess mode: %s\nreasoning: %s / %s\nthinking blocks: %s\ntool blocks: %s\ntheme: %s\ngateway: %s\ngateway session: %s\nlocal settings: %s\ntools: %s, max rounds %d\ncalls: model %d, tools %d\ntokens: input %d, output %d\ncontext: %s\ncost: %s\nfollow output: %s",
 		mode,
 		m.localChatID,
 		m.currentProvider(),
 		m.currentModel(),
 		m.currentProfile(),
+		m.currentAccessMode(),
 		m.currentThinking().kind,
 		m.currentThinking().effort,
 		thinkingDisplay,

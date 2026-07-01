@@ -45,6 +45,7 @@ type Config struct {
 	ProjectDocFallbacks           []string
 	MaxToolOutputBytes            int
 	AutoApproveDangerous          bool
+	AccessMode                    string
 	StoreReasoningContent         bool
 	GatewayAddr                   string
 	MCPEnabled                    bool

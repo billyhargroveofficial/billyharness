@@ -16,9 +16,10 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
-func chatGateway(baseURL string, noReasoning bool, model, profile string, mock bool) error {
+func chatGateway(baseURL string, noReasoning bool, model, profile, accessMode string, mock bool) error {
 	baseURL = normalizeGatewayURL(baseURL)
 	profile = config.NormalizeProfileName(profile)
+	accessMode = strings.TrimSpace(accessMode)
 	sessionID, err := gatewayCreateSession(context.Background(), baseURL, profile)
 	if err != nil {
 		return err
@@ -40,6 +41,9 @@ func chatGateway(baseURL string, noReasoning bool, model, profile string, mock b
 		}
 		path := "/v1/sessions/" + sessionID + "/run"
 		req := gateway.RunRequest{Prompt: prompt, Model: model, Profile: profile}
+		if accessMode != "" {
+			req.AccessMode = config.NormalizeAccessMode(accessMode)
+		}
 		if mock {
 			req.Provider = "mock"
 			req.Model = "mock"

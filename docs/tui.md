@@ -26,6 +26,7 @@ Slash commands open an autocomplete popup. Use `Tab`, `Up`, and `Down` to move t
 /theme light|dark
 /model flash|pro|gpt|spark|<model-id>
 /reasoning low|medium|high|xhigh|max|off
+/mode build|guarded|plan
 /profile PROFILE
 /toolview auto|expanded|collapsed|current|errors|hidden
 /thinkview expanded|collapsed|hidden
@@ -73,6 +74,16 @@ Reasoning:
 ```
 
 The footer shows active model, reasoning, access mode, active context tokens/percent, session turn/tool totals, web summary metrics, cache metrics where meaningful, cost/subscription marker, theme, and chat/profile.
+
+Access modes:
+
+```text
+/mode build
+/mode guarded
+/mode plan
+```
+
+`plan` advertises only read/search tools to the model and hard-denies write, shell, and external MCP calls. `todo_write` remains available for progress tracking; it does not grant write-tool access.
 
 ## Tool And Thinking Views
 

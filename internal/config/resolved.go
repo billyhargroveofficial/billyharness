@@ -206,6 +206,7 @@ func configSpecs() []configSpec {
 		stringListSpec("project_doc_fallback_filenames", []string{"FAST_AGENT_PROJECT_DOC_FALLBACK_FILENAMES"}, func(c Config) any { return c.ProjectDocFallbacks }, func(c *Config, v []string) { c.ProjectDocFallbacks = v }),
 		intSpec("max_tool_output_bytes", []string{"FAST_AGENT_MAX_TOOL_OUTPUT_BYTES"}, func(c Config) any { return c.MaxToolOutputBytes }, func(c *Config, v int) { c.MaxToolOutputBytes = v }),
 		boolSpec("auto_approve_dangerous", []string{"FAST_AGENT_AUTO_APPROVE_DANGEROUS"}, func(c Config) any { return c.AutoApproveDangerous }, func(c *Config, v bool) { c.AutoApproveDangerous = v }),
+		stringSpec("access_mode", []string{"BILLYHARNESS_ACCESS_MODE", "FAST_AGENT_ACCESS_MODE"}, func(c Config) any { return NormalizeAccessMode(c.AccessMode) }, func(c *Config, v string) { c.AccessMode = NormalizeAccessMode(v) }),
 		boolSpec("store_reasoning", []string{"FAST_AGENT_STORE_REASONING"}, func(c Config) any { return c.StoreReasoningContent }, func(c *Config, v bool) { c.StoreReasoningContent = v }),
 		stringSpec("gateway_addr", []string{"FAST_AGENT_GATEWAY_ADDR"}, func(c Config) any { return c.GatewayAddr }, func(c *Config, v string) { c.GatewayAddr = v }),
 		boolSpec("mcp_enabled", []string{"FAST_AGENT_MCP_ENABLED"}, func(c Config) any { return c.MCPEnabled }, func(c *Config, v bool) { c.MCPEnabled = v }),

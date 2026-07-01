@@ -180,6 +180,18 @@ var sharedActionDefinitions = []ActionDefinition{
 		Summary:         "set provider reasoning effort",
 	},
 	{
+		ID:              "access.mode",
+		Title:           "Set Access Mode",
+		Category:        "runtime",
+		Slash:           "/mode",
+		SlashArgs:       "build|guarded|plan",
+		SlashAliases:    []string{"/access"},
+		TelegramAliases: []string{"/mode", "/access"},
+		TelegramUsage:   "/mode build|guarded|plan",
+		Summary:         "set run access mode",
+		TelegramSummary: "set run access mode",
+	},
+	{
 		ID:        "thinking.view",
 		Title:     "Set Thinking View",
 		Category:  "ui",

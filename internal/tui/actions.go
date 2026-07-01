@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/billyhargroveofficial/billyharness/internal/clientux"
+	"github.com/billyhargroveofficial/billyharness/internal/config"
 )
 
 type actionSpec struct {
@@ -263,6 +264,25 @@ func actionRegistry() []actionSpec {
 			keyRun: func(m *Model, _ tea.KeyPressMsg) keyActionResult {
 				m.cycleReasoning()
 				return keyActionResult{skipTextareaUpdate: true}
+			},
+		},
+		{
+			id:           "access.mode",
+			title:        "Set Access Mode",
+			category:     "runtime",
+			slash:        "/mode",
+			slashArgs:    "build|guarded|plan",
+			slashAliases: []string{"/access"},
+			summary:      "set run access mode",
+			args: func(m Model) []slashArg {
+				return rotateSlashArgs([]slashArg{
+					{config.AccessModeBuild, "allow normal build tools"},
+					{config.AccessModeGuarded, "deny write and shell tools"},
+					{config.AccessModePlan, "read/search planning mode"},
+				}, config.NormalizeAccessMode(m.accessMode))
+			},
+			run: func(m *Model, arg string) (bool, tea.Cmd) {
+				return m.setAccessMode(arg), nil
 			},
 		},
 		{

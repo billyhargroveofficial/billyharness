@@ -62,6 +62,7 @@ type Snapshot struct {
 	MCPStatusSnapshotHash   string `json:"mcp_status_snapshot_hash,omitempty"`
 	ProfileInstructionHash  string `json:"profile_instruction_hash,omitempty"`
 	DangerousPermissionMode string `json:"dangerous_permission_mode,omitempty"`
+	AccessMode              string `json:"access_mode,omitempty"`
 }
 
 type SnapshotInput struct {
@@ -87,6 +88,7 @@ func NewSnapshot(input SnapshotInput, messages []protocol.Message, specs []proto
 		MCPStatusSnapshotHash:   mcpHash,
 		ProfileInstructionHash:  instructionHash(input.Profile, messages),
 		DangerousPermissionMode: dangerousPermissionMode(input.ToolPolicy),
+		AccessMode:              config.NormalizeAccessMode(input.ToolPolicy.AccessMode),
 	}
 }
 
@@ -95,6 +97,7 @@ func (s Snapshot) Metadata() map[string]any {
 		"provider_id":               s.ProviderID,
 		"model_id":                  s.ModelID,
 		"dangerous_permission_mode": s.DangerousPermissionMode,
+		"access_mode":               s.AccessMode,
 	}
 	if s.ReasoningMode != "" {
 		metadata["reasoning_mode"] = s.ReasoningMode
@@ -128,6 +131,12 @@ func reasoningMode(model config.ModelSelection) string {
 }
 
 func dangerousPermissionMode(policy config.ToolPolicySettings) string {
+	switch config.NormalizeAccessMode(policy.AccessMode) {
+	case config.AccessModePlan:
+		return "plan_mode_read_only"
+	case config.AccessModeGuarded:
+		return "guarded_mode"
+	}
 	if policy.AutoApproveDangerous {
 		return "auto_approve_dangerous"
 	}

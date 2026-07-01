@@ -63,6 +63,9 @@ func telegramCommands() []telegramCommandSpec {
 		telegramActionCommand("reasoning.set", telegramCommandSpec{
 			handler: (*Bot).handleReasoningCommand,
 		}),
+		telegramActionCommand("access.mode", telegramCommandSpec{
+			handler: (*Bot).handleModeCommand,
+		}),
 		telegramActionCommand("mcp.show", telegramCommandSpec{
 			handler: (*Bot).handleMCPCommand,
 		}),
@@ -173,6 +176,10 @@ func (b *Bot) handleNewCommand(ctx context.Context, msg Message, scope ChatScope
 	if state.Profile == "" {
 		state.Profile = b.opts.Profile
 	}
+	if state.AccessMode == "" {
+		state.AccessMode = b.opts.AccessMode
+	}
+	state.AccessMode = config.NormalizeAccessMode(state.AccessMode)
 	id, err := b.createOwnedSession(ctx, msg, state)
 	if err != nil {
 		_ = b.sendPlain(ctx, msg, "Gateway session failed: "+err.Error())
@@ -245,6 +252,29 @@ func (b *Bot) handleReasoningCommand(ctx context.Context, msg Message, scope Cha
 	state.UpdatedAt = time.Now().UTC()
 	b.setChatState(key, state)
 	_ = b.sendPlain(ctx, msg, "Reasoning: "+state.ReasoningEffort)
+}
+
+func (b *Bot) handleModeCommand(ctx context.Context, msg Message, scope ChatScope, arg string) {
+	key := scope.Key()
+	state := b.chatStateWithLegacy(key, scope.LegacyKey())
+	if state.AccessMode == "" {
+		state.AccessMode = b.opts.AccessMode
+	}
+	if strings.TrimSpace(arg) == "" {
+		_ = b.sendPlain(ctx, msg, "Current access mode: "+config.NormalizeAccessMode(state.AccessMode))
+		return
+	}
+	mode := strings.ToLower(strings.TrimSpace(arg))
+	switch mode {
+	case config.AccessModeBuild, config.AccessModeGuarded, config.AccessModePlan, "safe", "readonly", "read-only", "read_only", "analysis":
+	default:
+		_ = b.sendPlain(ctx, msg, "Unknown access mode. Use build, guarded, or plan.")
+		return
+	}
+	state.AccessMode = config.NormalizeAccessMode(mode)
+	state.UpdatedAt = time.Now().UTC()
+	b.setChatState(key, state)
+	_ = b.sendPlain(ctx, msg, "Access mode: "+state.AccessMode)
 }
 
 func (b *Bot) handleMCPCommand(ctx context.Context, msg Message, _ ChatScope, _ string) {
@@ -399,6 +429,9 @@ func (b *Bot) handleResumeCommand(ctx context.Context, msg Message, scope ChatSc
 	}
 	if session.ReasoningEffort != "" {
 		state.ReasoningEffort = session.ReasoningEffort
+	}
+	if session.AccessMode != "" {
+		state.AccessMode = config.NormalizeAccessMode(session.AccessMode)
 	}
 	if session.RunSeq > 0 {
 		state.AgentTurns = int(session.RunSeq)

@@ -229,6 +229,71 @@ func TestRegistryPolicyDeniesRiskBeforeHandlerRuns(t *testing.T) {
 	}
 }
 
+func TestPlanModeFiltersAndDeniesWriteExecuteExternalTools(t *testing.T) {
+	cfg := config.Default()
+	cfg.AccessMode = config.AccessModePlan
+	cfg.AutoApproveDangerous = true
+	registry := NewRegistry(cfg)
+	var externalCalled bool
+	if err := registry.Register(Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "external_custom",
+			Description: "External test tool.",
+			Parameters:  raw(`{"type":"object","properties":{},"additionalProperties":false}`),
+			Risk:        protocol.RiskExternal,
+		},
+		Handler: func(context.Context, json.RawMessage) (Result, error) {
+			externalCalled = true
+			return Result{Content: "ran"}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	specs := registry.Specs()
+	for _, hidden := range []string{"fs_write_file", "shell_exec", "external_custom"} {
+		if hasSpec(specs, hidden) {
+			t.Fatalf("plan mode spec %s should be hidden: %#v", hidden, specs)
+		}
+	}
+	for _, visible := range []string{"fs_read_file", "fs_grep", "fs_find_files", "todo_write", "web_search"} {
+		if !hasSpec(specs, visible) {
+			t.Fatalf("plan mode spec %s should remain visible: %#v", visible, specs)
+		}
+	}
+
+	result, err := registry.Call(context.Background(), protocol.ToolCall{Name: "external_custom"})
+	if err == nil || !strings.Contains(err.Error(), "plan mode") {
+		t.Fatalf("expected plan-mode denial, got result=%#v err=%v", result, err)
+	}
+	if externalCalled {
+		t.Fatal("external handler ran despite plan-mode denial")
+	}
+	if result.Metadata["permission_reason"] != "plan_mode_read_only" ||
+		result.Metadata["permission_source"] != "access_mode" ||
+		result.Metadata["access_mode"] != config.AccessModePlan {
+		t.Fatalf("plan denial metadata = %#v", result.Metadata)
+	}
+}
+
+func TestGuardedModeDeniesDangerousToolsEvenWhenAutoApproved(t *testing.T) {
+	cfg := config.Default()
+	cfg.AccessMode = config.AccessModeGuarded
+	cfg.AutoApproveDangerous = true
+	registry := NewRegistry(cfg)
+	result, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "shell_exec",
+		Arguments: rawArgs(map[string]any{"argv": []string{"sh", "-c", "true"}}),
+	})
+	if err == nil || !strings.Contains(err.Error(), "guarded mode") {
+		t.Fatalf("expected guarded-mode denial, got result=%#v err=%v", result, err)
+	}
+	if result.Metadata["permission_reason"] != "guarded_mode_dangerous_tools_disabled" ||
+		result.Metadata["access_mode"] != config.AccessModeGuarded {
+		t.Fatalf("guarded denial metadata = %#v", result.Metadata)
+	}
+}
+
 func TestWriteToolEnabledByDefault(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Default()

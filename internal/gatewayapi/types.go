@@ -18,6 +18,7 @@ type RunRequest struct {
 	Thinking        string `json:"thinking,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	MaxToolRounds   int    `json:"max_tool_rounds,omitempty"`
+	AccessMode      string `json:"access_mode,omitempty"`
 	InterruptPolicy string `json:"interrupt_policy,omitempty"`
 }
 
@@ -90,6 +91,7 @@ type SessionStatus struct {
 	Provider        string       `json:"provider,omitempty"`
 	Profile         string       `json:"profile,omitempty"`
 	ReasoningEffort string       `json:"reasoning_effort,omitempty"`
+	AccessMode      string       `json:"access_mode,omitempty"`
 	Owner           SessionOwner `json:"owner,omitempty"`
 	MessageCount    int          `json:"message_count"`
 	ModelCalls      int          `json:"model_calls"`
@@ -115,6 +117,7 @@ type SessionSummary struct {
 	Provider        string       `json:"provider,omitempty"`
 	Profile         string       `json:"profile,omitempty"`
 	ReasoningEffort string       `json:"reasoning_effort,omitempty"`
+	AccessMode      string       `json:"access_mode,omitempty"`
 	Owner           SessionOwner `json:"owner,omitempty"`
 	LastError       string       `json:"last_error,omitempty"`
 }

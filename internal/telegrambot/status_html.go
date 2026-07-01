@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 )
 
@@ -78,6 +79,7 @@ func StatusHTML(state ChatState, opts Options) string {
 		"session: <code>" + esc(short(state.SessionID)) + "</code>\n" +
 		"model: <code>" + esc(fallback(state.Model, opts.Model)) + "</code>\n" +
 		"profile: <code>" + esc(fallback(state.Profile, opts.Profile)) + "</code>\n" +
+		"access mode: <code>" + esc(config.NormalizeAccessMode(fallback(state.AccessMode, opts.AccessMode))) + "</code>\n" +
 		"reasoning: <code>" + esc(fallback(state.ReasoningEffort, opts.ReasoningEffort)) + "</code>\n" +
 		"agent turns: <code>" + esc(strconv.Itoa(state.AgentTurns)) + "</code>\n" +
 		"tools: <code>" + esc(strconv.Itoa(state.ToolCalls)) + "</code>\n" +

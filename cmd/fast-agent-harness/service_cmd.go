@@ -29,8 +29,13 @@ func tuiCmd(args []string) error {
 	model := fs.String("model", "", "initial model: deepseek-v4-flash or deepseek-v4-pro")
 	dangerous := fs.Bool("dangerous", true, "enable write and shell tools for local TUI runs")
 	maxRounds := fs.Int("max-rounds", 0, "max model/tool rounds per request; 0 uses config default")
+	accessMode := fs.String("access-mode", "", "run access mode: build, guarded, or plan")
 	plain := fs.Bool("plain", false, "compatibility mode for SSH/dumb terminals: no alt-screen, mouse, or bracketed paste")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	mode, err := parseAccessModeFlag(*accessMode)
+	if err != nil {
 		return err
 	}
 	gatewayNotice := ""
@@ -53,6 +58,7 @@ func tuiCmd(args []string) error {
 		Model:         *model,
 		Dangerous:     *dangerous,
 		MaxRounds:     *maxRounds,
+		AccessMode:    mode,
 		Plain:         *plain,
 		Version:       version,
 	})
@@ -67,6 +73,7 @@ func telegramCmd(args []string) error {
 	model := fs.String("model", cfg.Model, "initial model for new Telegram chats")
 	profile := fs.String("profile", cfg.Profile, "system profile for new Telegram chats")
 	reasoning := fs.String("reasoning", cfg.ReasoningEffort, "initial reasoning effort")
+	accessMode := fs.String("access-mode", cfg.AccessMode, "run access mode for new Telegram chats: build, guarded, or plan")
 	statePath := fs.String("state", telegrambot.DefaultStatePath(), "Telegram gateway state JSON path")
 	allowedRaw := fs.String("allow-chat", lookupEnvAny("BILLYHARNESS_TELEGRAM_ALLOWED_CHAT_IDS", "TELEGRAM_ALLOWED_CHAT_IDS"), "comma-separated allowed Telegram chat IDs")
 	allowedUsersRaw := fs.String("allow-user", lookupEnvAny("BILLYHARNESS_TELEGRAM_ALLOWED_USER_IDS", "TELEGRAM_ALLOWED_USER_IDS"), "comma-separated allowed Telegram user IDs")
@@ -78,6 +85,10 @@ func telegramCmd(args []string) error {
 	editIntervalMS := fs.Int("edit-interval-ms", envIntAnyDefault(700, "BILLYHARNESS_TELEGRAM_EDIT_INTERVAL_MS", "TELEGRAM_EDIT_INTERVAL_MS"), "minimum interval between live edits per message")
 	maxRounds := fs.Int("max-rounds", cfg.MaxToolRounds, "max model/tool rounds per Telegram request")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	mode, err := parseAccessModeFlag(*accessMode)
+	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(*token) == "" {
@@ -118,6 +129,7 @@ func telegramCmd(args []string) error {
 		Model:            modelAliasForTelegram(*model),
 		Profile:          config.NormalizeProfileName(*profile),
 		ReasoningEffort:  strings.ToLower(strings.TrimSpace(*reasoning)),
+		AccessMode:       mode,
 		MaxToolRounds:    *maxRounds,
 		ContextWindow:    cfg.ContextWindowTokens,
 		PollTimeoutSec:   *pollTimeout,

@@ -21,6 +21,7 @@ func runOnce(args []string) error {
 	mock := fs.Bool("mock", false, "use mock provider")
 	model := fs.String("model", "", "model override")
 	profile := fs.String("profile", "", "system profile override")
+	accessMode := fs.String("access-mode", "", "run access mode: build, guarded, or plan")
 	gatewayURL := fs.String("gateway", "", "gateway base URL, for example http://127.0.0.1:8765")
 	noReasoning := fs.Bool("hide-reasoning", true, "do not print reasoning deltas")
 	if err := fs.Parse(args); err != nil {
@@ -30,8 +31,15 @@ func runOnce(args []string) error {
 	if prompt == "" {
 		return fmt.Errorf("prompt required")
 	}
+	mode, err := parseAccessModeFlag(*accessMode)
+	if err != nil {
+		return err
+	}
 	if *gatewayURL != "" {
 		req := gateway.RunRequest{Prompt: prompt, Model: *model, Profile: config.NormalizeProfileName(*profile)}
+		if mode != "" {
+			req.AccessMode = mode
+		}
 		if *mock {
 			req.Provider = "mock"
 			req.Model = "mock"
@@ -48,6 +56,9 @@ func runOnce(args []string) error {
 	}
 	if *profile != "" {
 		cfg.Profile = config.NormalizeProfileName(*profile)
+	}
+	if mode != "" {
+		cfg.AccessMode = mode
 	}
 	cfg.ApplyModelProviderDefaults()
 	prov, err := provider.NewFromBinding(cfg.ProviderBinding())
@@ -68,13 +79,18 @@ func chat(args []string) error {
 	mock := fs.Bool("mock", false, "use mock provider")
 	model := fs.String("model", "", "model override")
 	profile := fs.String("profile", "", "system profile override")
+	accessMode := fs.String("access-mode", "", "run access mode: build, guarded, or plan")
 	gatewayURL := fs.String("gateway", "", "gateway base URL, for example http://127.0.0.1:8765")
 	noReasoning := fs.Bool("hide-reasoning", true, "do not print reasoning deltas")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	mode, err := parseAccessModeFlag(*accessMode)
+	if err != nil {
+		return err
+	}
 	if *gatewayURL != "" {
-		return chatGateway(*gatewayURL, *noReasoning, *model, *profile, *mock)
+		return chatGateway(*gatewayURL, *noReasoning, *model, *profile, mode, *mock)
 	}
 	cfg := config.Default()
 	if *mock {
@@ -86,6 +102,9 @@ func chat(args []string) error {
 	}
 	if *profile != "" {
 		cfg.Profile = config.NormalizeProfileName(*profile)
+	}
+	if mode != "" {
+		cfg.AccessMode = mode
 	}
 	cfg.ApplyModelProviderDefaults()
 	prov, err := provider.NewFromBinding(cfg.ProviderBinding())
@@ -120,6 +139,17 @@ func chat(args []string) error {
 			return err
 		}
 	}
+}
+
+func parseAccessModeFlag(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", nil
+	}
+	mode, ok := config.ParseAccessMode(value)
+	if !ok {
+		return "", fmt.Errorf("unsupported access mode %q; use build, guarded, or plan", value)
+	}
+	return mode, nil
 }
 
 func terminalEmitter(noReasoning bool) func(protocol.Event) {

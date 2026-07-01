@@ -115,6 +115,7 @@ func (m Model) gatewayRunRequest(prompt string) gatewayapi.RunRequest {
 		Thinking:        thinking.kind,
 		ReasoningEffort: thinking.effort,
 		MaxToolRounds:   m.maxRounds,
+		AccessMode:      m.currentAccessMode(),
 	}
 }
 

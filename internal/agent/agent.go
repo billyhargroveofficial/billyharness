@@ -656,6 +656,7 @@ func modelCallEventData(base map[string]any, status string, totalLatencyMS, firs
 		MCPStatusSnapshotHash:   metadataString(base, "mcp_status_snapshot_hash"),
 		ProfileInstructionHash:  metadataString(base, "profile_instruction_hash"),
 		DangerousPermissionMode: metadataString(base, "dangerous_permission_mode"),
+		AccessMode:              metadataString(base, "access_mode"),
 		Status:                  status,
 		Retries:                 meta.Retries,
 	}
@@ -713,6 +714,7 @@ func modelCallEventMetadata(data protocol.ModelCallEvent) map[string]any {
 		"provider_id":               data.ProviderID,
 		"model_id":                  data.ModelID,
 		"dangerous_permission_mode": data.DangerousPermissionMode,
+		"access_mode":               data.AccessMode,
 		"status":                    data.Status,
 		"retries":                   data.Retries,
 	}

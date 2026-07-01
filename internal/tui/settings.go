@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/billyhargroveofficial/billyharness/internal/config"
 )
 
 const (
@@ -23,6 +25,7 @@ type appSettings struct {
 	LastGatewaySessionID      string  `json:"last_gateway_session_id,omitempty"`
 	LastSelectedModel         string  `json:"last_selected_model,omitempty"`
 	LastProfile               string  `json:"last_profile,omitempty"`
+	LastAccessMode            string  `json:"last_access_mode,omitempty"`
 	LastReasoningEffort       string  `json:"last_reasoning_effort,omitempty"`
 	LastReasoningKind         string  `json:"last_reasoning_kind,omitempty"`
 }
@@ -78,6 +81,9 @@ func (s appSettings) normalized() appSettings {
 	}
 	if s.LastProfile == "" {
 		s.LastProfile = "billy"
+	}
+	if s.LastAccessMode != "" {
+		s.LastAccessMode = config.NormalizeAccessMode(s.LastAccessMode)
 	}
 	return s
 }

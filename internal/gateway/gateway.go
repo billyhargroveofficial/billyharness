@@ -952,6 +952,7 @@ func sessionSummary(session *Session) SessionSummary {
 		Provider:        status.Provider,
 		Profile:         status.Profile,
 		ReasoningEffort: status.ReasoningEffort,
+		AccessMode:      status.AccessMode,
 		Owner:           status.Owner,
 		LastError:       status.LastError,
 	}
@@ -1127,7 +1128,7 @@ func (s *Server) refreshSessionSnapshots(session *Session) {
 	snapshot := s.sessionSnapshot(session)
 	var specs []protocol.ToolSpec
 	if s.registry != nil {
-		specs = s.registry.Specs()
+		specs = s.registry.SnapshotWithToolPolicy(context.Background(), snapshot.ToolPolicy).Specs()
 	}
 	runtimeSnapshot := runstate.NewSnapshot(runstate.SnapshotInput{
 		Provider:   snapshot.Provider,
@@ -1179,6 +1180,9 @@ func (s *Server) sessionSnapshot(session *Session) sessionSnapshotProjection {
 	if strings.TrimSpace(status.ReasoningEffort) != "" {
 		snapshot.Provider.Model.ReasoningEffort = status.ReasoningEffort
 	}
+	if strings.TrimSpace(status.AccessMode) != "" {
+		snapshot.ToolPolicy.AccessMode = config.NormalizeAccessMode(status.AccessMode)
+	}
 	return normalizeSessionSnapshot(snapshot)
 }
 
@@ -1194,6 +1198,7 @@ func normalizeSessionSnapshot(snapshot sessionSnapshotProjection) sessionSnapsho
 	snapshot.ProviderAuth.Model = model
 	snapshot.ProviderAuth.Profile = snapshot.Profile.Profile
 	snapshot.ProviderAuth.ReasoningEffort = snapshot.Provider.Model.ReasoningEffort
+	snapshot.ToolPolicy.AccessMode = config.NormalizeAccessMode(snapshot.ToolPolicy.AccessMode)
 	return snapshot
 }
 
@@ -1227,6 +1232,7 @@ func sessionConfigSnapshot(providerAuth config.ProviderAuthSnapshot, limits conf
 		"workspace_roots":                  append([]string(nil), toolPolicy.WorkspaceRoots...),
 		"max_tool_output_bytes":            toolPolicy.MaxToolOutputBytes,
 		"auto_approve_dangerous":           toolPolicy.AutoApproveDangerous,
+		"access_mode":                      toolPolicy.AccessMode,
 		"store_reasoning_content":          toolPolicy.StoreReasoningContent,
 		"gateway_addr":                     gatewayAddr,
 		"mcp_enabled":                      mcpSettings.Enabled,
@@ -1347,6 +1353,7 @@ func runRequestFromSettings(settings runSettings) RunRequest {
 		Thinking:        settings.provider.Model.Thinking,
 		ReasoningEffort: settings.provider.Model.ReasoningEffort,
 		MaxToolRounds:   settings.runtime.MaxToolRounds,
+		AccessMode:      settings.toolPolicy.AccessMode,
 	}
 }
 
@@ -1358,6 +1365,7 @@ func runOverrideSettingsFromRequest(req RunRequest) config.RunOverrideSettings {
 		Thinking:        req.Thinking,
 		ReasoningEffort: req.ReasoningEffort,
 		MaxToolRounds:   req.MaxToolRounds,
+		AccessMode:      req.AccessMode,
 	}
 }
 

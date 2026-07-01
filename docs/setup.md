@@ -89,6 +89,19 @@ To disable write/shell auto-approval for a safer session:
 FAST_AGENT_AUTO_APPROVE_DANGEROUS=false ./bin/fast-agent-harness tui -dangerous=false
 ```
 
+Run access mode can also be set explicitly:
+
+```sh
+BILLYHARNESS_ACCESS_MODE=plan ./bin/fast-agent-harness tui -access-mode plan
+./bin/fast-agent-harness run -access-mode plan "inspect the project before editing"
+./bin/fast-agent-harness telegram -access-mode plan
+```
+
+`access_mode=build` keeps the normal solo-owner behavior. `access_mode=guarded`
+keeps tools visible but denies write and shell execution. `access_mode=plan`
+advertises only read/search tools and hard-denies write, execute, and external
+tool calls even when dangerous auto-approval is enabled.
+
 Audit status is visible through:
 
 ```sh

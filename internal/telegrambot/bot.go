@@ -18,6 +18,7 @@ type Options struct {
 	Model            string
 	Profile          string
 	ReasoningEffort  string
+	AccessMode       string
 	MaxToolRounds    int
 	ContextWindow    int64
 	PollTimeoutSec   int
@@ -63,6 +64,7 @@ func New(opts Options, client *Client, harness Harness) (*Bot, error) {
 	}
 	opts = normalizeAllowlistOptions(opts)
 	opts.Profile = config.NormalizeProfileName(opts.Profile)
+	opts.AccessMode = config.NormalizeAccessMode(opts.AccessMode)
 	if client == nil {
 		client = NewClient(ClientOptions{
 			BaseURL:     opts.BotAPIBaseURL,

@@ -575,11 +575,31 @@ abuse.
     passed.
   - commit: pending.
 
-- [ ] HR-03.4 Run access modes and plan mode.
+- [x] HR-03.4 Run access modes and plan mode.
   - maps to: `competitive-improvements-todo.md` A7.
   - acceptance: `build|guarded|plan`; plan mode filters visible tools and
     hard-denies write/execute/external tools.
   - verification: `go test -count=1 ./internal/config ./internal/agent ./internal/tools ./internal/gateway ./internal/tui ./internal/telegrambot`.
+  - status: completed 2026-07-01.
+  - evidence: added normalized `access_mode=build|guarded|plan` config,
+    runtime override, gateway request/status, run snapshot, and model-call
+    event metadata. Agent tool snapshots now apply the per-run tool policy, so
+    plan-mode provider calls advertise only read/search tools while execution
+    still hard-denies write, shell/execute, and external MCP calls even when
+    dangerous auto-approval is enabled. Guarded mode denies write/execute tools
+    while leaving normal tool visibility intact. TUI/CLI/Telegram can start
+    plan-mode runs through `-access-mode`, TUI `/mode`, Telegram `/mode`, and
+    gateway JSON `access_mode`; docs now clarify that `todo_write` remains a
+    progress tracker, not access-policy escalation.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/config ./internal/agent
+    ./internal/tools ./internal/gateway ./internal/tui ./internal/telegrambot`
+    passed; `/root/.local/go/bin/go test -run
+    'Test.*AccessMode.*|Test.*PlanMode.*|Test.*ReadOnly.*|Test.*Dangerous.*Denied.*'
+    -count=1 ./internal/...` passed; `/root/.local/go/bin/go test -count=1
+    ./internal/config ./internal/tools ./internal/agent ./internal/gateway
+    ./internal/tui ./internal/telegrambot ./cmd/fast-agent-harness` passed.
+  - commit: pending.
 
 - [ ] HR-03.5 Exact file edit tool.
   - maps to: `competitive-improvements-todo.md` A4.
