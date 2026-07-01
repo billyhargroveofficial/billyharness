@@ -4,6 +4,11 @@ This is the execution checklist distilled from the competitive harness research.
 The long-form research remains the source of detail; this file is the working
 task board for implementation.
 
+Current follow-up work lives in
+`/root/billyharness/docs/solo-harness-competitive-todo.md`. Treat this file as
+the completed harness-research execution log unless that older roadmap is
+explicitly resumed.
+
 Source documents:
 
 - `/root/billyharness/docs/competitive-architecture-analysis.md`

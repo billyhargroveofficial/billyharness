@@ -151,12 +151,17 @@ roadmaps.
     `docs/solo-harness-competitive-todo.md`.
   - commit: pending.
 
-- [ ] SH-00.2 Cross-link this roadmap from the existing planning docs only if
+- [x] SH-00.2 Cross-link this roadmap from the existing planning docs only if
   it becomes the active source of truth.
   - target files: optional docs only.
   - acceptance: old TODO files are not duplicated or rewritten without need.
   - verification: manual diff review.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: added a discoverability link in `docs/README.md` and a short
+    status note in `docs/harness-research-execution-todo.md` pointing active
+    follow-up work to this roadmap. No older checklist content was duplicated
+    or rewritten.
+  - commit: pending.
 
 ## Milestone 1 - Prompt, Context, And Provider Observability (P0)
 
