@@ -149,7 +149,7 @@ roadmaps.
     baseline were untracked roadmap docs:
     `docs/solo-harness-competitive-goal.md` and
     `docs/solo-harness-competitive-todo.md`.
-  - commit: pending.
+  - commit: `01230c8c3ad2da87ebc0119ae40b04de43e3a06b`.
 
 - [x] SH-00.2 Cross-link this roadmap from the existing planning docs only if
   it becomes the active source of truth.
@@ -161,7 +161,7 @@ roadmaps.
     status note in `docs/harness-research-execution-todo.md` pointing active
     follow-up work to this roadmap. No older checklist content was duplicated
     or rewritten.
-  - commit: pending.
+  - commit: `47c3cc727a371017305e3a38b3ba60269a5995f3`.
 
 ## Milestone 1 - Prompt, Context, And Provider Observability (P0)
 
@@ -200,9 +200,9 @@ is to compaction.
     ./internal/projectcontext ./internal/runstate ./internal/agent
     ./internal/protocol ./internal/trace` passed;
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `2a185b5d4d60ecd780a1f9fdb53ebc45b3e82605`.
 
-- [ ] SH-01.2 Add `/context` report v2 for CLI, TUI, and Telegram.
+- [x] SH-01.2 Add `/context` report v2 for CLI, TUI, and Telegram.
   - inspiration: Codex/OpenCode context-window metadata and the user's current
     Telegram status-line pain.
   - target files: `internal/clientux/context.go`,
@@ -214,7 +214,27 @@ is to compaction.
     websum in/out, helper-model usage, current model, reasoning mode, and
     cache-hit/miss fields with clear labels.
   - verification: package tests plus one fixture with websum and compaction.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: extended the shared gateway context DTO and formatter with
+    runtime model/provider/profile/reasoning/access fields, model/tool activity,
+    cumulative and last-turn token/cache usage, helper/web-summary usage,
+    prompt inventory/cache-break data, last compaction details, output-ref
+    totals, and replay warnings. Gateway `/context`, TUI local/gateway
+    `/context`, Telegram gateway status, and new CLI
+    `sessions context [-dir DIR] [-json] SESSION_ID` now use the same shared
+    context builder/formatter. Stored-session context replay reads JSONL events
+    as source of truth and degrades with an explicit warning if event replay is
+    unavailable.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*Context.*Report.*|Test.*Context.*Command.*|Test.*ContextStatus.*|TestSessionsCommandListsAndInspectsStore|TestGatewayClientContextStatusUsesSharedFormatter|TestContextReportV2IncludesEventsRuntimePromptAndHelperUsage'
+    -count=1 ./internal/clientux ./internal/gateway ./internal/gatewayclient
+    ./internal/tui ./internal/telegrambot ./cmd/fast-agent-harness` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/clientux
+    ./internal/gatewayapi ./internal/gateway ./internal/gatewayclient
+    ./internal/tui ./internal/telegrambot ./cmd/fast-agent-harness` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] SH-01.3 Make provider/model capability policy explicit.
   - inspiration: Codex provider capability registry.

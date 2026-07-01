@@ -146,6 +146,65 @@ type SessionContextResponse struct {
 	Sources                 []ContextSource      `json:"sources,omitempty"`
 	Thresholds              []ContextThreshold   `json:"thresholds,omitempty"`
 	TopContributors         []ContextContributor `json:"top_contributors,omitempty"`
+	Runtime                 ContextRuntime       `json:"runtime,omitempty"`
+	Usage                   ContextUsage         `json:"usage,omitempty"`
+	Prompt                  ContextPrompt        `json:"prompt,omitempty"`
+	LastCompaction          *ContextCompaction   `json:"last_compaction,omitempty"`
+	OutputRefs              ContextOutputRefs    `json:"output_refs,omitempty"`
+	Warnings                []string             `json:"warnings,omitempty"`
+}
+
+type ContextRuntime struct {
+	Provider      string `json:"provider,omitempty"`
+	Model         string `json:"model,omitempty"`
+	Profile       string `json:"profile,omitempty"`
+	ReasoningMode string `json:"reasoning_mode,omitempty"`
+	AccessMode    string `json:"access_mode,omitempty"`
+}
+
+type ContextUsage struct {
+	ModelCalls              int   `json:"model_calls,omitempty"`
+	ToolCalls               int   `json:"tool_calls,omitempty"`
+	InputTokens             int64 `json:"input_tokens,omitempty"`
+	OutputTokens            int64 `json:"output_tokens,omitempty"`
+	CacheHitTokens          int64 `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens         int64 `json:"cache_miss_tokens,omitempty"`
+	ReasoningTokens         int64 `json:"reasoning_tokens,omitempty"`
+	LastInputTokens         int64 `json:"last_input_tokens,omitempty"`
+	LastOutputTokens        int64 `json:"last_output_tokens,omitempty"`
+	LastCacheHitTokens      int64 `json:"last_cache_hit_tokens,omitempty"`
+	LastCacheMissTokens     int64 `json:"last_cache_miss_tokens,omitempty"`
+	WebSummaryInputTokens   int64 `json:"web_summary_input_tokens,omitempty"`
+	WebSummaryOutputTokens  int64 `json:"web_summary_output_tokens,omitempty"`
+	HelperModelInputTokens  int64 `json:"helper_model_input_tokens,omitempty"`
+	HelperModelOutputTokens int64 `json:"helper_model_output_tokens,omitempty"`
+	HelperModelAPITokens    int64 `json:"helper_model_api_tokens,omitempty"`
+}
+
+type ContextPrompt struct {
+	InventoryHash string                   `json:"inventory_hash,omitempty"`
+	SectionCount  int                      `json:"section_count,omitempty"`
+	TotalBytes    int                      `json:"total_bytes,omitempty"`
+	ApproxTokens  int                      `json:"approx_tokens,omitempty"`
+	ToolSchemas   int                      `json:"tool_schemas,omitempty"`
+	Sections      []protocol.PromptSection `json:"sections,omitempty"`
+	CacheStatus   string                   `json:"cache_status,omitempty"`
+	CacheReason   string                   `json:"cache_reason,omitempty"`
+}
+
+type ContextCompaction struct {
+	Seq          int64  `json:"seq,omitempty"`
+	CompactionID string `json:"compaction_id,omitempty"`
+	Strategy     string `json:"strategy,omitempty"`
+	BeforeTokens int64  `json:"before_tokens,omitempty"`
+	AfterTokens  int64  `json:"after_tokens,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+type ContextOutputRefs struct {
+	Count             int `json:"count,omitempty"`
+	LargeInlineCount  int `json:"large_inline_count,omitempty"`
+	SourceBucketCount int `json:"source_bucket_count,omitempty"`
 }
 
 type ContextContributor struct {

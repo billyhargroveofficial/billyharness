@@ -59,3 +59,86 @@ func TestContextStatusClassifiesSourcesAndThresholds(t *testing.T) {
 		}
 	}
 }
+
+func TestContextReportV2IncludesEventsRuntimePromptAndHelperUsage(t *testing.T) {
+	cfg := config.Default()
+	cfg.ContextWindowTokens = 1000
+	cfg.ContextCompactTokens = 600
+	inventory := &protocol.PromptInventory{
+		Hash:            "inventory-sha",
+		ToolSchemaCount: 2,
+		TotalBytes:      120,
+		ApproxTokens:    30,
+		Sections: []protocol.PromptSection{{
+			Name:         "system_prompt",
+			Role:         protocol.RoleSystem,
+			Index:        0,
+			ByteCount:    80,
+			ApproxTokens: 20,
+			SHA256:       "system-sha",
+		}},
+	}
+	resp := BuildContextResponseWithOptions(cfg.RuntimeLimits(), "session-v2", []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleTool, Name: "web_fetch", Content: strings.Repeat("web ", 80) + "output_ref=/tmp/ref"},
+	}, ContextReportOptions{
+		Runtime: gatewayapi.ContextRuntime{Profile: "billy", AccessMode: "build"},
+		Events: []protocol.Event{
+			{Seq: 1, Type: protocol.EventModelCallStarted, Data: protocol.ModelCallEvent{
+				ProviderID:          "deepseek",
+				ModelID:             "deepseek-v4-flash",
+				ReasoningMode:       "enabled/high",
+				PromptInventoryHash: "inventory-sha",
+				PromptInventory:     inventory,
+				PromptCacheBreak:    &protocol.PromptCacheBreak{Status: "changed", Reason: "prompt_section:project_context"},
+			}},
+			{Seq: 2, Type: protocol.EventProviderUsageUpdate, Data: map[string]any{"input_tokens": 100, "output_tokens": 5, "cache_hit_tokens": 70, "cache_miss_tokens": 30}},
+			{Seq: 3, Type: protocol.EventProviderUsageUpdate, Data: map[string]any{"input_tokens": 125, "output_tokens": 8, "cache_hit_tokens": 90, "cache_miss_tokens": 35}},
+			{Seq: 4, Type: protocol.EventToolCallStarted},
+			{Seq: 5, Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{Name: "web_fetch", Metadata: map[string]any{
+				"tool_summary_input_tokens":  200,
+				"tool_summary_output_tokens": 25,
+			}}},
+			{Seq: 6, Type: protocol.EventToolOutputRefCreated},
+			{Seq: 7, Type: protocol.EventContextCompacted, Data: map[string]any{
+				"compaction_id":           "compact-1",
+				"summary_strategy":        "deterministic",
+				"before_estimated_tokens": 800,
+				"after_estimated_tokens":  320,
+				"reason":                  "prompt_tokens_at_or_above_threshold",
+			}},
+		},
+	})
+	if resp.Runtime.Model != "deepseek-v4-flash" || resp.Runtime.Provider != "deepseek" ||
+		resp.Runtime.Profile != "billy" || resp.Runtime.AccessMode != "build" ||
+		resp.Runtime.ReasoningMode != "enabled/high" {
+		t.Fatalf("runtime = %#v", resp.Runtime)
+	}
+	if resp.Usage.ModelCalls != 1 || resp.Usage.ToolCalls != 1 ||
+		resp.Usage.InputTokens != 125 || resp.Usage.OutputTokens != 8 ||
+		resp.Usage.CacheHitTokens != 90 || resp.Usage.CacheMissTokens != 35 ||
+		resp.Usage.LastCacheHitTokens != 90 || resp.Usage.LastCacheMissTokens != 35 {
+		t.Fatalf("usage = %#v", resp.Usage)
+	}
+	if resp.Usage.WebSummaryInputTokens != 200 || resp.Usage.WebSummaryOutputTokens != 25 ||
+		resp.Usage.HelperModelAPITokens != 225 {
+		t.Fatalf("helper usage = %#v", resp.Usage)
+	}
+	if resp.Prompt.InventoryHash != "inventory-sha" || resp.Prompt.SectionCount != 1 ||
+		resp.Prompt.CacheStatus != "changed" || resp.Prompt.CacheReason != "prompt_section:project_context" {
+		t.Fatalf("prompt = %#v", resp.Prompt)
+	}
+	if resp.LastCompaction == nil || resp.LastCompaction.CompactionID != "compact-1" ||
+		resp.LastCompaction.BeforeTokens != 800 || resp.LastCompaction.AfterTokens != 320 {
+		t.Fatalf("last compaction = %#v", resp.LastCompaction)
+	}
+	if resp.OutputRefs.Count != 1 || resp.OutputRefs.SourceBucketCount != 1 {
+		t.Fatalf("output refs = %#v", resp.OutputRefs)
+	}
+	formatted := gatewayclient.FormatSessionContext(resp)
+	for _, want := range []string{"runtime:", "cache: hit=90", "helper usage: websum=200", "prompt sections:", "prompt cache: status=changed", "last compaction:", "output refs:"} {
+		if !strings.Contains(formatted, want) {
+			t.Fatalf("formatted v2 context missing %q:\n%s", want, formatted)
+		}
+	}
+}

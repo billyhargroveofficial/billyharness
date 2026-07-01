@@ -1000,6 +1000,9 @@ func TestContextCommandShowsGatewayContextReport(t *testing.T) {
 			ContextCompactTokens: 600000,
 			PercentUsed:          58,
 			Estimator:            "chars_div_4",
+			Runtime:              gatewayapi.ContextRuntime{Model: "deepseek-v4-flash", ReasoningMode: "high", AccessMode: "build"},
+			Usage:                gatewayapi.ContextUsage{CacheHitTokens: 700, CacheMissTokens: 300, WebSummaryInputTokens: 20000, WebSummaryOutputTokens: 900, HelperModelAPITokens: 20900},
+			Prompt:               gatewayapi.ContextPrompt{SectionCount: 2, ApproxTokens: 1200, TotalBytes: 4800, CacheStatus: "changed", CacheReason: "tool_schema_changed"},
 			Sources: []gatewayapi.ContextSource{
 				{Source: "web_summaries", MessageCount: 2, EstimatedTokens: 320000, Percent: 55.2},
 				{Source: "user_messages", MessageCount: 1, EstimatedTokens: 1000, Percent: 0.2},
@@ -1026,7 +1029,7 @@ func TestContextCommandShowsGatewayContextReport(t *testing.T) {
 	if msg.err != nil {
 		t.Fatal(msg.err)
 	}
-	for _, want := range []string{"active context: 580.0k / 1.00M", "thresholds: ●50% ○70%", "web_summaries", "top contributors"} {
+	for _, want := range []string{"active context: 580.0k / 1.00M", "runtime: model=deepseek-v4-flash", "cache: hit=700", "helper usage: websum=20.0k", "prompt cache: status=changed", "thresholds: ●50% ○70%", "web_summaries", "top contributors"} {
 		if !strings.Contains(msg.text, want) {
 			t.Fatalf("context report missing %q:\n%s", want, msg.text)
 		}

@@ -492,7 +492,7 @@ func (s *Server) handleSessionContextStatus(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, sessionContextResponse(s.runtime, session))
+	writeJSON(w, http.StatusOK, s.sessionContextResponse(session))
 }
 
 func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
@@ -1124,8 +1124,32 @@ func normalizeSessionOwner(owner gatewayapi.SessionOwner) gatewayapi.SessionOwne
 	return owner
 }
 
-func sessionContextResponse(limits config.RuntimeLimits, session *Session) SessionContextResponse {
-	return clientux.BuildContextResponse(limits, session.ID, session.messages())
+func (s *Server) sessionContextResponse(session *Session) SessionContextResponse {
+	if session == nil {
+		return clientux.BuildContextResponse(s.runtime, "", nil)
+	}
+	status := session.Status()
+	var events []protocol.Event
+	var warnings []string
+	if s != nil && s.store != nil {
+		replayed, err := s.store.ReplayEventsAfter(session.ID, 0)
+		if err != nil {
+			warnings = append(warnings, "event replay unavailable: "+err.Error())
+		} else {
+			events = replayed
+		}
+	}
+	return clientux.BuildContextResponseWithOptions(s.runtime, session.ID, session.messages(), clientux.ContextReportOptions{
+		Runtime: gatewayapi.ContextRuntime{
+			Provider:      status.Provider,
+			Model:         status.Model,
+			Profile:       status.Profile,
+			ReasoningMode: status.ReasoningEffort,
+			AccessMode:    status.AccessMode,
+		},
+		Events:   events,
+		Warnings: warnings,
+	})
 }
 
 func defaultBenchmarkRunsDir() string {

@@ -68,6 +68,7 @@ func usage() {
 	fmt.Println("  config inspect [-json]")
 	fmt.Println("  sessions list [-dir DIR] [-json]")
 	fmt.Println("  sessions inspect [-dir DIR] [-json] SESSION_ID")
+	fmt.Println("  sessions context [-dir DIR] [-json] SESSION_ID")
 	fmt.Println("  sessions index rebuild|show|delete [-dir DIR] [-json]")
 	fmt.Println("  sessions search|tools|errors|usage|runs [-dir DIR] [-limit N] [-json]")
 	fmt.Println("  bench run -tasks tasks.jsonl -out runs [-model deepseek-v4-flash] [-max-rounds 100]")

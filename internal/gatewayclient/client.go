@@ -466,6 +466,43 @@ func FormatSessionContext(resp gatewayapi.SessionContextResponse) string {
 		}
 		fmt.Fprintf(&b, "compact threshold: %s (%.1f%%, %s)\n", compactContextNumber(resp.ContextCompactTokens), resp.CompactThresholdPercent, state)
 	}
+	if runtimeText := formatContextRuntime(resp.Runtime); runtimeText != "" {
+		fmt.Fprintf(&b, "runtime: %s\n", runtimeText)
+	}
+	if resp.LastCompaction != nil {
+		compaction := resp.LastCompaction
+		label := firstNonEmpty(compaction.CompactionID, "unknown")
+		if compaction.Seq > 0 {
+			label += fmt.Sprintf(" seq=%d", compaction.Seq)
+		}
+		fmt.Fprintf(&b, "last compaction: %s", label)
+		if compaction.Strategy != "" {
+			fmt.Fprintf(&b, " strategy=%s", compaction.Strategy)
+		}
+		if compaction.BeforeTokens > 0 || compaction.AfterTokens > 0 {
+			fmt.Fprintf(&b, " tokens %s→%s", compactContextNumber(compaction.BeforeTokens), compactContextNumber(compaction.AfterTokens))
+		}
+		if compaction.Reason != "" {
+			fmt.Fprintf(&b, " reason=%s", compaction.Reason)
+		}
+		b.WriteByte('\n')
+	}
+	if usageText := formatContextUsage(resp.Usage); usageText != "" {
+		b.WriteString(usageText)
+	}
+	if promptText := formatContextPrompt(resp.Prompt); promptText != "" {
+		b.WriteString(promptText)
+	}
+	if resp.OutputRefs.Count > 0 || resp.OutputRefs.LargeInlineCount > 0 {
+		fmt.Fprintf(&b, "output refs: %d", resp.OutputRefs.Count)
+		if resp.OutputRefs.SourceBucketCount > 0 {
+			fmt.Fprintf(&b, " buckets=%d", resp.OutputRefs.SourceBucketCount)
+		}
+		if resp.OutputRefs.LargeInlineCount > 0 {
+			fmt.Fprintf(&b, " large_inline=%d", resp.OutputRefs.LargeInlineCount)
+		}
+		b.WriteByte('\n')
+	}
 	if len(resp.Thresholds) > 0 {
 		var parts []string
 		for _, threshold := range resp.Thresholds {
@@ -523,7 +560,126 @@ func FormatSessionContext(resp gatewayapi.SessionContextResponse) string {
 			fmt.Fprintf(&b, "  #%d %s %s: %s%s - %s\n", contributor.Index, contributor.Role, name, compactContextNumber(contributor.EstimatedTokens), flagText, preview)
 		}
 	}
+	if len(resp.Warnings) > 0 {
+		b.WriteString("\nwarnings:\n")
+		for _, warning := range resp.Warnings {
+			if strings.TrimSpace(warning) != "" {
+				fmt.Fprintf(&b, "  %s\n", strings.TrimSpace(warning))
+			}
+		}
+	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func formatContextRuntime(runtime gatewayapi.ContextRuntime) string {
+	var parts []string
+	if runtime.Model != "" {
+		parts = append(parts, "model="+runtime.Model)
+	}
+	if runtime.Provider != "" {
+		parts = append(parts, "provider="+runtime.Provider)
+	}
+	if runtime.ReasoningMode != "" {
+		parts = append(parts, "reasoning="+runtime.ReasoningMode)
+	}
+	if runtime.AccessMode != "" {
+		parts = append(parts, "access="+runtime.AccessMode)
+	}
+	if runtime.Profile != "" {
+		parts = append(parts, "profile="+runtime.Profile)
+	}
+	return strings.Join(parts, " ")
+}
+
+func formatContextUsage(usage gatewayapi.ContextUsage) string {
+	var b strings.Builder
+	if usage.ModelCalls > 0 || usage.ToolCalls > 0 {
+		fmt.Fprintf(&b, "activity: model_calls=%d tools=%d\n", usage.ModelCalls, usage.ToolCalls)
+	}
+	if usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.ReasoningTokens > 0 {
+		fmt.Fprintf(&b, "usage: input=%s output=%s reasoning=%s\n", compactContextNumber(usage.InputTokens), compactContextNumber(usage.OutputTokens), compactContextNumber(usage.ReasoningTokens))
+	}
+	if usage.CacheHitTokens > 0 || usage.CacheMissTokens > 0 || usage.LastCacheHitTokens > 0 || usage.LastCacheMissTokens > 0 {
+		fmt.Fprintf(&b, "cache: hit=%s miss=%s last_hit=%s last_miss=%s\n",
+			compactContextNumber(usage.CacheHitTokens),
+			compactContextNumber(usage.CacheMissTokens),
+			compactContextNumber(usage.LastCacheHitTokens),
+			compactContextNumber(usage.LastCacheMissTokens),
+		)
+	}
+	if usage.WebSummaryInputTokens > 0 || usage.WebSummaryOutputTokens > 0 || usage.HelperModelAPITokens > 0 {
+		fmt.Fprintf(&b, "helper usage: websum=%s→%s helper_api=%s\n",
+			compactContextNumber(usage.WebSummaryInputTokens),
+			compactContextNumber(usage.WebSummaryOutputTokens),
+			compactContextNumber(usage.HelperModelAPITokens),
+		)
+	}
+	return b.String()
+}
+
+func formatContextPrompt(prompt gatewayapi.ContextPrompt) string {
+	if contextPromptEmpty(prompt) {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "prompt sections: %d sections %s tokens %s bytes", prompt.SectionCount, compactContextNumber(int64(prompt.ApproxTokens)), compactByteNumber(int64(prompt.TotalBytes)))
+	if prompt.ToolSchemas > 0 {
+		fmt.Fprintf(&b, " tool_schemas=%d", prompt.ToolSchemas)
+	}
+	if prompt.InventoryHash != "" {
+		fmt.Fprintf(&b, " hash=%s", shortContextHash(prompt.InventoryHash))
+	}
+	b.WriteByte('\n')
+	if prompt.CacheStatus != "" || prompt.CacheReason != "" {
+		fmt.Fprintf(&b, "prompt cache: status=%s reason=%s\n", firstNonEmpty(prompt.CacheStatus, "unknown"), firstNonEmpty(prompt.CacheReason, "unknown"))
+	}
+	if len(prompt.Sections) > 0 {
+		b.WriteString("prompt section budget:\n")
+		limit := len(prompt.Sections)
+		if limit > 6 {
+			limit = 6
+		}
+		for _, section := range prompt.Sections[:limit] {
+			fmt.Fprintf(&b, "  %s: %s tokens %s bytes hash=%s\n",
+				section.Name,
+				compactContextNumber(int64(section.ApproxTokens)),
+				compactByteNumber(int64(section.ByteCount)),
+				shortContextHash(section.SHA256),
+			)
+		}
+		if len(prompt.Sections) > limit {
+			fmt.Fprintf(&b, "  ... +%d sections\n", len(prompt.Sections)-limit)
+		}
+	}
+	return b.String()
+}
+
+func contextPromptEmpty(prompt gatewayapi.ContextPrompt) bool {
+	return prompt.InventoryHash == "" &&
+		prompt.SectionCount == 0 &&
+		prompt.TotalBytes == 0 &&
+		prompt.ApproxTokens == 0 &&
+		prompt.ToolSchemas == 0 &&
+		len(prompt.Sections) == 0 &&
+		prompt.CacheStatus == "" &&
+		prompt.CacheReason == ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func shortContextHash(hash string) string {
+	hash = strings.TrimSpace(hash)
+	if len(hash) <= 12 {
+		return hash
+	}
+	return hash[:12]
 }
 
 func statusError(resp *http.Response, method, path string) error {

@@ -188,6 +188,16 @@ func TestSessionsCommandListsAndInspectsStore(t *testing.T) {
 		t.Fatalf("inspection = %#v", inspection)
 	}
 
+	var contextOut bytes.Buffer
+	if err := sessionsCommand([]string{"context", "-dir", storeDir, created.ID}, &contextOut); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"active context:", "runtime: model=mock", "prompt sections:", "prompt cache:"} {
+		if !strings.Contains(contextOut.String(), want) {
+			t.Fatalf("context output missing %q:\n%s", want, contextOut.String())
+		}
+	}
+
 	var indexOut bytes.Buffer
 	if err := sessionsCommand([]string{"index", "rebuild", "-dir", storeDir}, &indexOut); err != nil {
 		t.Fatal(err)

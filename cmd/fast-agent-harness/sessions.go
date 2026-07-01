@@ -11,7 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
 )
 
 func sessionsCmd(args []string) error {
@@ -27,6 +29,8 @@ func sessionsCommand(args []string, out io.Writer) error {
 		return sessionsListCommand(args[1:], out)
 	case "inspect", "show":
 		return sessionsInspectCommand(args[1:], out)
+	case "context", "ctx":
+		return sessionsContextCommand(args[1:], out)
 	case "index":
 		return sessionsIndexCommand(args[1:], out)
 	case "search":
@@ -106,6 +110,30 @@ func sessionsInspectCommand(args []string, out io.Writer) error {
 		return enc.Encode(inspection)
 	}
 	printSessionInspection(out, inspection)
+	return nil
+}
+
+func sessionsContextCommand(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("sessions context", flag.ExitOnError)
+	dir := fs.String("dir", gateway.DefaultSessionStoreDir(), "gateway session store directory")
+	jsonOut := fs.Bool("json", false, "print JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: sessions context [-dir DIR] [-json] SESSION_ID")
+	}
+	cfg := config.Default()
+	resp, err := gateway.StoredSessionContext(*dir, fs.Arg(0), cfg.RuntimeLimits())
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	fmt.Fprintln(out, gatewayclient.FormatSessionContext(resp))
 	return nil
 }
 

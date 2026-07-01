@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/clientux"
+	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
@@ -238,6 +240,35 @@ func InspectStoredSession(dir, id string) (StoredSessionInspection, error) {
 		out.Warnings = append(out.Warnings, "MCP snapshot missing")
 	}
 	return out, nil
+}
+
+func StoredSessionContext(dir, id string, limits config.RuntimeLimits) (gatewayapi.SessionContextResponse, error) {
+	dir = filepath.Clean(strings.TrimSpace(dir))
+	if dir == "" || dir == "." {
+		dir = DefaultSessionStoreDir()
+	}
+	cleanID, err := cleanSessionID(id)
+	if err != nil {
+		return gatewayapi.SessionContextResponse{}, err
+	}
+	sessionDir := filepath.Join(dir, cleanID)
+	manifest, err := readSessionManifest(filepath.Join(sessionDir, sessionManifestName))
+	if err != nil {
+		return gatewayapi.SessionContextResponse{}, err
+	}
+	history, err := replaySessionHistory(filepath.Join(sessionDir, sessionFileName(manifest.HistoryJSONL, sessionHistoryJSONLName)), cleanID)
+	if err != nil {
+		return gatewayapi.SessionContextResponse{}, err
+	}
+	var warnings []string
+	events, err := replaySessionEventsAfter(filepath.Join(sessionDir, sessionFileName(manifest.EventsJSONL, sessionEventsJSONLName)), cleanID, 0)
+	if err != nil {
+		warnings = append(warnings, "event replay unavailable: "+err.Error())
+	}
+	return clientux.BuildContextResponseWithOptions(limits, cleanID, history.messages, clientux.ContextReportOptions{
+		Events:   events,
+		Warnings: warnings,
+	}), nil
 }
 
 func inspectLegacyStoredSession(dir, id string) (StoredSessionInspection, error) {

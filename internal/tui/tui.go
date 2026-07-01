@@ -1000,7 +1000,32 @@ func (m Model) loadContextStatus() (string, error) {
 		}
 		return gatewayclient.FormatSessionContext(out), nil
 	}
-	resp := clientux.BuildContextResponse(m.runtime, m.localChatID, m.messages)
+	resp := clientux.BuildContextResponseWithOptions(m.runtime, m.localChatID, m.messages, clientux.ContextReportOptions{
+		Runtime: gatewayapi.ContextRuntime{
+			Model:         m.currentModel(),
+			Profile:       m.currentProfile(),
+			ReasoningMode: m.currentThinking().effortLabel(),
+			AccessMode:    m.currentAccessMode(),
+		},
+		Usage: gatewayapi.ContextUsage{
+			ModelCalls:              m.modelCalls,
+			ToolCalls:               m.toolCalls,
+			InputTokens:             m.inputTok,
+			OutputTokens:            m.outputTok,
+			CacheHitTokens:          m.cacheHitTok,
+			CacheMissTokens:         m.cacheMissTok,
+			ReasoningTokens:         m.reasoningTok,
+			LastInputTokens:         m.lastInputTok,
+			LastOutputTokens:        m.lastOutputTok,
+			LastCacheHitTokens:      m.lastCacheHitTok,
+			LastCacheMissTokens:     m.lastCacheMissTok,
+			WebSummaryInputTokens:   m.toolSummaryInTok,
+			WebSummaryOutputTokens:  m.toolSummaryOutTok,
+			HelperModelInputTokens:  m.toolSummaryInTok,
+			HelperModelOutputTokens: m.toolSummaryOutTok,
+			HelperModelAPITokens:    m.toolSummaryAPITok,
+		},
+	})
 	return gatewayclient.FormatSessionContext(resp), nil
 }
 
