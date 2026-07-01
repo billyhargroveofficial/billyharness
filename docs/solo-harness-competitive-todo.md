@@ -907,7 +907,7 @@ framework migration.
     ./internal/mcpclient ./internal/mcpstatus ./internal/tools ./internal/tui
     ./internal/tui/runtimeclient ./internal/gateway ./internal/telegrambot
     ./internal/clientux ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `d6ec9689cc6d80a66f7d33f3db3aa4f5aa7f0d5b`.
 
 ## Milestone 7 - Deferred Experiments (P2)
 
