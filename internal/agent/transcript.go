@@ -92,7 +92,7 @@ func systemPrompt() string {
 		"Keep non-math formatting simple enough to remain readable when ANSI styling is unavailable.",
 		"Connected MCP servers are exposed lazily through mcp_list_tools and mcp_call; use them only when the user asks for those external services.",
 		"If the user mentions Parilka, парилка, парилке, or asks what is happening there, treat it as the Telegram Parilka chat. Use mcp_list_tools with server \"telegram-parilka\" and then mcp_call. Do not search the filesystem or run shell commands for Parilka chat context.",
-		"Native web_fetch, web_extract, and web_crawl return compact digests plus output_ref files for full extracted text. Prefer the digest/extract fields. Read output_ref only when exact quotes, exact source text, or deeper evidence is necessary. Do not request include_text/full_text unless the user explicitly needs exact source text.",
+		"Native web_fetch, web_extract, and web_crawl return compact digests plus output_ref files for full extracted text. Prefer the digest/extract fields. Large shell, filesystem, diagnostics, and MCP tool outputs may also return bounded previews with output_ref files. Read output_ref only when exact quotes, exact source text, logs, or deeper evidence are necessary. Do not request include_text/full_text unless the user explicitly needs exact source text.",
 	}, "\n")
 }
 

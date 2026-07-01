@@ -251,6 +251,11 @@ type ReplaySummary struct {
 	ToolCallsFinished      int                          `json:"tool_calls_finished,omitempty"`
 	ContextThresholds      int                          `json:"context_thresholds,omitempty"`
 	ContextCompactions     int                          `json:"context_compactions,omitempty"`
+	OutputRefs             int                          `json:"output_refs,omitempty"`
+	OutputRefBytes         int64                        `json:"output_ref_bytes,omitempty"`
+	MissingOutputRefs      int                          `json:"missing_output_refs,omitempty"`
+	OutputRefHashMismatch  int                          `json:"output_ref_hash_mismatch,omitempty"`
+	OutputRefWarnings      []ReplayOutputRefWarning     `json:"output_ref_warnings,omitempty"`
 	InputTokens            int64                        `json:"input_tokens,omitempty"`
 	OutputTokens           int64                        `json:"output_tokens,omitempty"`
 	CacheHitTokens         int64                        `json:"cache_hit_tokens,omitempty"`
@@ -274,6 +279,23 @@ type ReplayHelperUsage struct {
 	CacheHitTokens  int64 `json:"cache_hit_tokens,omitempty"`
 	CacheMissTokens int64 `json:"cache_miss_tokens,omitempty"`
 	APITokens       int64 `json:"api_tokens,omitempty"`
+}
+
+type ReplayOutputRefWarning struct {
+	Seq            int64  `json:"seq,omitempty"`
+	RunID          string `json:"run_id,omitempty"`
+	TurnID         string `json:"turn_id,omitempty"`
+	StepID         string `json:"step_id,omitempty"`
+	CallID         string `json:"call_id,omitempty"`
+	AttemptID      string `json:"attempt_id,omitempty"`
+	Name           string `json:"name,omitempty"`
+	OutputRef      string `json:"output_ref,omitempty"`
+	OutputRefID    string `json:"output_ref_id,omitempty"`
+	ExpectedBytes  int64  `json:"expected_bytes,omitempty"`
+	ActualBytes    int64  `json:"actual_bytes,omitempty"`
+	ExpectedSHA256 string `json:"expected_sha256,omitempty"`
+	Reason         string `json:"reason"`
+	Error          string `json:"error,omitempty"`
 }
 
 type ReplayTimelineItem struct {
@@ -493,6 +515,8 @@ func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEve
 		s.ToolCallProgress++
 	case protocol.EventToolCallFinished:
 		s.ToolCallsFinished++
+	case protocol.EventToolOutputRefCreated:
+		s.observeOutputRef(event)
 	case protocol.EventContextThreshold:
 		s.ContextThresholds++
 	case protocol.EventContextCompacted:
@@ -515,6 +539,81 @@ func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEve
 		s.observeHelperUsage(usage)
 	}
 	return nil
+}
+
+func (s *ReplaySummary) observeOutputRef(event protocol.Event) {
+	if s == nil {
+		return
+	}
+	s.OutputRefs++
+	ref, err := toolOutputRefFromEvent(event)
+	if err != nil {
+		s.MissingOutputRefs++
+		s.OutputRefWarnings = append(s.OutputRefWarnings, ReplayOutputRefWarning{
+			Seq:    event.Seq,
+			RunID:  event.RunID,
+			Reason: "invalid_event",
+			Error:  err.Error(),
+		})
+		return
+	}
+	warning := ReplayOutputRefWarning{
+		Seq:            event.Seq,
+		RunID:          event.RunID,
+		TurnID:         event.TurnID,
+		StepID:         event.StepID,
+		CallID:         firstString(ref.CallID, event.CallID),
+		AttemptID:      firstString(ref.AttemptID, event.AttemptID),
+		Name:           ref.Name,
+		OutputRef:      ref.OutputRef,
+		OutputRefID:    ref.OutputRefID,
+		ExpectedBytes:  ref.OutputRefBytes,
+		ExpectedSHA256: ref.OutputRefSHA256,
+	}
+	if strings.TrimSpace(ref.OutputRef) == "" {
+		warning.Reason = "missing_path"
+		s.MissingOutputRefs++
+		s.OutputRefWarnings = append(s.OutputRefWarnings, warning)
+		return
+	}
+	info, err := os.Stat(ref.OutputRef)
+	if err != nil {
+		warning.Reason = "missing"
+		warning.Error = err.Error()
+		s.MissingOutputRefs++
+		s.OutputRefWarnings = append(s.OutputRefWarnings, warning)
+		return
+	}
+	if info.IsDir() {
+		warning.Reason = "is_directory"
+		s.MissingOutputRefs++
+		s.OutputRefWarnings = append(s.OutputRefWarnings, warning)
+		return
+	}
+	warning.ActualBytes = info.Size()
+	s.OutputRefBytes += info.Size()
+	if ref.OutputRefBytes > 0 && info.Size() != ref.OutputRefBytes {
+		warning.Reason = "size_mismatch"
+		s.OutputRefHashMismatch++
+		s.OutputRefWarnings = append(s.OutputRefWarnings, warning)
+		return
+	}
+	if ref.OutputRefSHA256 == "" {
+		return
+	}
+	ok, err := fileSHA256Matches(ref.OutputRef, ref.OutputRefSHA256)
+	if err != nil {
+		warning.Reason = "hash_error"
+		warning.Error = err.Error()
+		s.OutputRefHashMismatch++
+		s.OutputRefWarnings = append(s.OutputRefWarnings, warning)
+		return
+	}
+	if !ok {
+		warning.Reason = "sha256_mismatch"
+		s.OutputRefHashMismatch++
+		s.OutputRefWarnings = append(s.OutputRefWarnings, warning)
+	}
 }
 
 func (s *ReplaySummary) observeHelperUsage(usage protocol.ProviderHelperUsageEvent) {
@@ -849,6 +948,27 @@ func modelCallFromEvent(event protocol.Event) (protocol.ModelCallEvent, error) {
 		return protocol.ModelCallEvent{}, fmt.Errorf("invalid model call event: %w", err)
 	}
 	return model, nil
+}
+
+func toolOutputRefFromEvent(event protocol.Event) (protocol.ToolOutputRefEvent, error) {
+	bytes, err := json.Marshal(event.Data)
+	if err != nil {
+		return protocol.ToolOutputRefEvent{}, fmt.Errorf("invalid output ref event: %w", err)
+	}
+	var ref protocol.ToolOutputRefEvent
+	if err := json.Unmarshal(bytes, &ref); err != nil {
+		return protocol.ToolOutputRefEvent{}, fmt.Errorf("invalid output ref event: %w", err)
+	}
+	return ref, nil
+}
+
+func fileSHA256Matches(path, want string) (bool, error) {
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	sum := sha256.Sum256(bytes)
+	return strings.EqualFold(hex.EncodeToString(sum[:]), strings.TrimSpace(want)), nil
 }
 
 func firstString(values ...string) string {

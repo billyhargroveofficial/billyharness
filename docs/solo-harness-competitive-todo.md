@@ -341,9 +341,9 @@ make silent stalls diagnosable.
     'Test.*ToolCompact.*|Test.*ToolRender.*|Test.*Compact.*URL.*|Test.*NoRaw.*JSON.*|Test.*Tool.*Display.*|Test.*Collapse.*|TestRendererUsesToolCompactResultSummary|TestProjectorApplyToolCompactLifecycleCells'
     -count=1 ./internal/...` passed;
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `0f2632074abbf82d5385cb01045e948fc676849b`.
 
-- [ ] SH-02.2 Audit output-ref behavior across resume/replay.
+- [x] SH-02.2 Audit output-ref behavior across resume/replay.
   - inspiration: OpenCode durable truncation directory and Codex rollout traces.
   - target files: `internal/tooloutput`, `internal/tools`,
     `internal/agent/transcript.go`, `internal/gateway/session_store.go`,
@@ -352,7 +352,28 @@ make silent stalls diagnosable.
     never re-inlines the full body, summaries carry stable refs, and missing
     refs are visible as warnings instead of silent context bloat.
   - verification: tests with at least 500k chars of tool output and resume.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: kept JSONL/session history as the source of truth while making
+    large artifact refs more diagnosable. The agent prompt now treats large
+    shell, filesystem, diagnostics, and MCP outputs like web outputs: bounded
+    previews plus lazy `output_ref` artifacts, read only when exact evidence is
+    needed. Gateway stored-session inspection now emits structured
+    `output_ref_warnings` with seq/run/tool/ref/reason details and lifts those
+    into human warnings for missing paths, directories, size mismatches, and
+    SHA-256 mismatches. Trace replay now counts output refs, bytes, missing
+    refs, hash mismatches, and warning rows from durable
+    `tool.output_ref_created` events. Regression coverage includes 500k+
+    output-ref fixtures and proves resumed session history keeps only the
+    bounded preview/ref pointer instead of re-inlining the full body.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*Output.*Ref.*|Test.*Replay.*Output.*Ref.*|TestStoredSessionResumeKeepsLargeOutputRefPreviewAndWarnsMissingArtifact|TestGatewaySessionInspectorVerifiesOutputRefs|TestRunMessagesStoresLargeToolOutputAndSendsPreview|TestSystemPromptDocumentsTerminalSafeMarkdown'
+    -count=1 ./internal/agent ./internal/gateway ./internal/trace` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/tooloutput
+    ./internal/tools ./internal/agent ./internal/gateway ./internal/trace
+    ./cmd/fast-agent-harness` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] SH-02.3 Add stream liveness watchdog events.
   - inspiration: user-observed Telegram "stuck while still working" failure and

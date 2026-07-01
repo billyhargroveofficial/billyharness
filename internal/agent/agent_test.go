@@ -137,6 +137,8 @@ func TestSystemPromptDocumentsTerminalSafeMarkdown(t *testing.T) {
 		"LaTeX",
 		"парилка",
 		"telegram-parilka",
+		"output_ref",
+		"Large shell, filesystem, diagnostics, and MCP tool outputs",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("system prompt missing %q: %s", want, prompt)

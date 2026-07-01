@@ -1041,7 +1041,109 @@ func TestGatewaySessionInspectorVerifiesOutputRefs(t *testing.T) {
 		!inspection.Events.OutputRefsVerified ||
 		inspection.Events.MissingOutputRefs != 0 ||
 		inspection.Events.OutputRefHashMismatch != 0 ||
-		inspection.Events.OutputRefBytes != int64(len(body)) {
+		inspection.Events.OutputRefBytes != int64(len(body)) ||
+		len(inspection.Events.OutputRefWarnings) != 0 {
+		t.Fatalf("inspection events = %#v", inspection.Events)
+	}
+
+	if err := os.Remove(refPath); err != nil {
+		t.Fatal(err)
+	}
+	missingInspection, err := InspectStoredSession(storeDir, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missingInspection.Events.MissingOutputRefs != 1 ||
+		missingInspection.Events.OutputRefsVerified ||
+		len(missingInspection.Events.OutputRefWarnings) != 1 ||
+		missingInspection.Events.OutputRefWarnings[0].Reason != "missing" ||
+		!strings.Contains(strings.Join(missingInspection.Warnings, "\n"), "output_ref") {
+		t.Fatalf("missing ref inspection = %#v warnings=%#v", missingInspection.Events, missingInspection.Warnings)
+	}
+
+	if err := os.WriteFile(refPath, []byte("corrupt payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mismatchInspection, err := InspectStoredSession(storeDir, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mismatchInspection.Events.OutputRefHashMismatch != 1 ||
+		mismatchInspection.Events.OutputRefsVerified ||
+		len(mismatchInspection.Events.OutputRefWarnings) != 1 ||
+		mismatchInspection.Events.OutputRefWarnings[0].Reason != "size_mismatch" {
+		t.Fatalf("mismatched ref inspection = %#v", mismatchInspection.Events)
+	}
+}
+
+func TestStoredSessionResumeKeepsLargeOutputRefPreviewAndWarnsMissingArtifact(t *testing.T) {
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	refDir := filepath.Join(t.TempDir(), "tool-output")
+	if err := os.MkdirAll(refDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fullOutput := strings.Repeat("fs-output-", 56_000)
+	if len(fullOutput) < 500_000 {
+		t.Fatalf("test fixture must exercise at least 500k chars, got %d", len(fullOutput))
+	}
+	refPath := filepath.Join(refDir, "fs-read-large.txt")
+	if err := os.WriteFile(refPath, []byte(fullOutput), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(fullOutput))
+	preview := fullOutput[:512] + "\n...[truncated; full tool output saved as plaintext to " + refPath + "]"
+	session := newGatewaySession("resume-output-ref", time.Now().UTC(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "read large file"},
+		{Role: protocol.RoleAssistant, Content: "", ToolCalls: []protocol.ToolCall{{ID: "call-fs", Name: "fs_read_file", Arguments: json.RawMessage(`{"path":"large.txt"}`)}}},
+		{Role: protocol.RoleTool, ToolCallID: "call-fs", Name: "fs_read_file", Content: preview},
+	})
+	store := newSessionStore(storeDir)
+	if err := store.Save(session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventToolOutputRefCreated, Data: protocol.ToolOutputRefEvent{
+		CallID:               "call-fs",
+		Name:                 "fs_read_file",
+		AttemptID:            "turn-001:tool-call-001:attempt-001",
+		OutputRef:            refPath,
+		OutputRefID:          filepath.Base(refPath),
+		OutputRefBytes:       int64(len(fullOutput)),
+		OutputRefSHA256:      hex.EncodeToString(sum[:]),
+		OutputRefPermissions: "0600",
+		OutputRefPlaintext:   true,
+		Truncated:            true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := newSessionStore(storeDir).LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("loaded sessions = %d", len(loaded))
+	}
+	messages := loaded[0].messages()
+	if len(messages) != 4 {
+		t.Fatalf("messages = %#v", messages)
+	}
+	toolContent := messages[3].Content
+	if !strings.Contains(toolContent, refPath) || strings.Contains(toolContent, fullOutput) || len(toolContent) >= len(fullOutput) {
+		t.Fatalf("resumed tool content should be bounded preview with ref, len=%d ref=%q", len(toolContent), refPath)
+	}
+
+	if err := os.Remove(refPath); err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := InspectStoredSession(storeDir, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.Events.MissingOutputRefs != 1 ||
+		len(inspection.Events.OutputRefWarnings) != 1 ||
+		inspection.Events.OutputRefWarnings[0].CallID != "call-fs" ||
+		inspection.Events.OutputRefWarnings[0].Reason != "missing" {
 		t.Fatalf("inspection events = %#v", inspection.Events)
 	}
 }

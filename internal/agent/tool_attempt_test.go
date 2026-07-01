@@ -1196,7 +1196,10 @@ func TestRunMessagesStoresLargeToolOutputAndSendsPreview(t *testing.T) {
 	cfg.MaxToolRounds = 3
 	cfg.MaxToolOutputBytes = 512
 	registry := tools.NewRegistry(cfg)
-	fullOutput := strings.Repeat("large-output-", 80)
+	fullOutput := strings.Repeat("large-output-", 42_000)
+	if len(fullOutput) < 500_000 {
+		t.Fatalf("test fixture must exercise at least 500k chars, got %d", len(fullOutput))
+	}
 	if err := registry.Register(tools.Tool{
 		Spec: protocol.ToolSpec{
 			Name:        "big_output",

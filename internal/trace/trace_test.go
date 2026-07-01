@@ -3,6 +3,8 @@ package trace
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -187,6 +189,72 @@ func TestReplayEventsRejectsPayloadHashMismatch(t *testing.T) {
 	_, err = ReplayEvents(eventsPath)
 	if err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
 		t.Fatalf("expected sha256 mismatch, got %v", err)
+	}
+}
+
+func TestReplayEventsAuditsToolOutputRefs(t *testing.T) {
+	root := t.TempDir()
+	validPath := filepath.Join(root, "large-tool-output.txt")
+	body := []byte(strings.Repeat("trace-output-", 42_000))
+	if len(body) < 500_000 {
+		t.Fatalf("test fixture must exercise at least 500k chars, got %d", len(body))
+	}
+	if err := os.WriteFile(validPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	missingPath := filepath.Join(root, "missing-output.txt")
+	var out bytes.Buffer
+	writer := NewEventWriter("run-refs", &out)
+	events := []protocol.Event{
+		{
+			Type: protocol.EventToolOutputRefCreated,
+			Data: protocol.ToolOutputRefEvent{
+				CallID:          "call-valid",
+				Name:            "fs_read_file",
+				AttemptID:       "turn-001:tool-call-001:attempt-001",
+				OutputRef:       validPath,
+				OutputRefID:     filepath.Base(validPath),
+				OutputRefBytes:  int64(len(body)),
+				OutputRefSHA256: hex.EncodeToString(sum[:]),
+				Truncated:       true,
+			},
+		},
+		{
+			Type: protocol.EventToolOutputRefCreated,
+			Data: protocol.ToolOutputRefEvent{
+				CallID:          "call-missing",
+				Name:            "mcp_call",
+				AttemptID:       "turn-001:tool-call-002:attempt-001",
+				OutputRef:       missingPath,
+				OutputRefID:     filepath.Base(missingPath),
+				OutputRefBytes:  123,
+				OutputRefSHA256: strings.Repeat("0", 64),
+				Truncated:       true,
+			},
+		},
+	}
+	for _, event := range events {
+		if _, err := writer.Record("task-refs", event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(root, "events.jsonl")
+	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := ReplayEvents(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.OutputRefs != 2 ||
+		summary.OutputRefBytes != int64(len(body)) ||
+		summary.MissingOutputRefs != 1 ||
+		summary.OutputRefHashMismatch != 0 ||
+		len(summary.OutputRefWarnings) != 1 ||
+		summary.OutputRefWarnings[0].CallID != "call-missing" ||
+		summary.OutputRefWarnings[0].Reason != "missing" {
+		t.Fatalf("summary output refs = %#v warnings=%#v", summary, summary.OutputRefWarnings)
 	}
 }
 

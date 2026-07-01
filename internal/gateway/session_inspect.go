@@ -97,10 +97,28 @@ type StoredSessionEventsInspection struct {
 	OutputRefBytes        int64                               `json:"output_ref_bytes,omitempty"`
 	MissingOutputRefs     int                                 `json:"missing_output_refs,omitempty"`
 	OutputRefHashMismatch int                                 `json:"output_ref_hash_mismatch,omitempty"`
+	OutputRefWarnings     []StoredSessionOutputRefWarning     `json:"output_ref_warnings,omitempty"`
 	EventTypes            map[string]int                      `json:"event_types,omitempty"`
 	TurnChanges           []StoredSessionTurnChangeInspection `json:"turn_changes,omitempty"`
 	RedoAvailable         bool                                `json:"redo_available,omitempty"`
 	RedoChangeID          string                              `json:"redo_change_id,omitempty"`
+}
+
+type StoredSessionOutputRefWarning struct {
+	Seq            int64  `json:"seq,omitempty"`
+	RunID          string `json:"run_id,omitempty"`
+	TurnID         string `json:"turn_id,omitempty"`
+	StepID         string `json:"step_id,omitempty"`
+	CallID         string `json:"call_id,omitempty"`
+	AttemptID      string `json:"attempt_id,omitempty"`
+	Name           string `json:"name,omitempty"`
+	OutputRef      string `json:"output_ref,omitempty"`
+	OutputRefID    string `json:"output_ref_id,omitempty"`
+	ExpectedBytes  int64  `json:"expected_bytes,omitempty"`
+	ActualBytes    int64  `json:"actual_bytes,omitempty"`
+	ExpectedSHA256 string `json:"expected_sha256,omitempty"`
+	Reason         string `json:"reason"`
+	Error          string `json:"error,omitempty"`
 }
 
 type StoredSessionTurnChangeInspection struct {
@@ -228,6 +246,9 @@ func InspectStoredSession(dir, id string) (StoredSessionInspection, error) {
 		return out, err
 	}
 	out.Events = inspectSessionEvents(eventsPath, events)
+	for _, warning := range out.Events.OutputRefWarnings {
+		out.Warnings = append(out.Warnings, formatStoredOutputRefWarning(warning))
+	}
 	out.MessageCount = len(history.messages)
 	out.OfflineReplayReady = out.History.Exists && out.History.Records > 0
 	if !hasExistingFile(out.Files, "config_snapshot") {
@@ -342,25 +363,19 @@ func inspectSessionEvents(path string, events []protocol.Event) StoredSessionEve
 		if event.Type == protocol.EventToolOutputRefCreated {
 			ref := outputRefFromEvent(event)
 			out.OutputRefs++
-			if ref.OutputRef == "" {
-				out.MissingOutputRefs++
+			warning, bytes, ok := inspectOutputRefEvent(event, ref)
+			if bytes > 0 {
+				out.OutputRefBytes += bytes
+			}
+			if ok {
 				continue
 			}
-			info, err := os.Stat(ref.OutputRef)
-			if err != nil || info.IsDir() {
+			out.OutputRefWarnings = append(out.OutputRefWarnings, warning)
+			switch warning.Reason {
+			case "missing_path", "missing", "is_directory":
 				out.MissingOutputRefs++
-				continue
-			}
-			out.OutputRefBytes += info.Size()
-			if ref.Bytes > 0 && info.Size() != ref.Bytes {
+			case "size_mismatch", "sha256_mismatch", "hash_error":
 				out.OutputRefHashMismatch++
-				continue
-			}
-			if ref.SHA256 != "" {
-				ok, err := fileSHA256Matches(ref.OutputRef, ref.SHA256)
-				if err != nil || !ok {
-					out.OutputRefHashMismatch++
-				}
 			}
 		}
 		switch event.Type {
@@ -386,6 +401,78 @@ func inspectSessionEvents(path string, events []protocol.Event) StoredSessionEve
 		out.EventTypes = nil
 	}
 	return out
+}
+
+func inspectOutputRefEvent(event protocol.Event, ref outputRefEventData) (StoredSessionOutputRefWarning, int64, bool) {
+	warning := StoredSessionOutputRefWarning{
+		Seq:            event.Seq,
+		RunID:          event.RunID,
+		TurnID:         event.TurnID,
+		StepID:         event.StepID,
+		CallID:         firstNonEmpty(ref.CallID, event.CallID),
+		AttemptID:      firstNonEmpty(ref.AttemptID, event.AttemptID),
+		Name:           ref.Name,
+		OutputRef:      ref.OutputRef,
+		OutputRefID:    ref.OutputRefID,
+		ExpectedBytes:  ref.Bytes,
+		ExpectedSHA256: ref.SHA256,
+	}
+	if strings.TrimSpace(ref.OutputRef) == "" {
+		warning.Reason = "missing_path"
+		return warning, 0, false
+	}
+	info, err := os.Stat(ref.OutputRef)
+	if err != nil {
+		warning.Reason = "missing"
+		warning.Error = err.Error()
+		return warning, 0, false
+	}
+	if info.IsDir() {
+		warning.Reason = "is_directory"
+		return warning, 0, false
+	}
+	warning.ActualBytes = info.Size()
+	if ref.Bytes > 0 && info.Size() != ref.Bytes {
+		warning.Reason = "size_mismatch"
+		return warning, info.Size(), false
+	}
+	if ref.SHA256 != "" {
+		ok, err := fileSHA256Matches(ref.OutputRef, ref.SHA256)
+		if err != nil {
+			warning.Reason = "hash_error"
+			warning.Error = err.Error()
+			return warning, info.Size(), false
+		}
+		if !ok {
+			warning.Reason = "sha256_mismatch"
+			return warning, info.Size(), false
+		}
+	}
+	return warning, info.Size(), true
+}
+
+func formatStoredOutputRefWarning(warning StoredSessionOutputRefWarning) string {
+	var parts []string
+	parts = append(parts, "output_ref")
+	if warning.Seq > 0 {
+		parts = append(parts, fmt.Sprintf("seq=%d", warning.Seq))
+	}
+	if warning.CallID != "" {
+		parts = append(parts, "call_id="+warning.CallID)
+	}
+	if warning.Name != "" {
+		parts = append(parts, "name="+warning.Name)
+	}
+	if warning.OutputRef != "" {
+		parts = append(parts, "path="+warning.OutputRef)
+	}
+	if warning.Reason != "" {
+		parts = append(parts, "reason="+warning.Reason)
+	}
+	if warning.Error != "" {
+		parts = append(parts, "error="+warning.Error)
+	}
+	return strings.Join(parts, " ")
 }
 
 func inspectTurnChange(event protocol.Event, change protocol.TurnChangeEvent) StoredSessionTurnChangeInspection {
@@ -415,9 +502,13 @@ func inspectTurnChange(event protocol.Event, change protocol.TurnChangeEvent) St
 }
 
 type outputRefEventData struct {
-	OutputRef string `json:"output_ref"`
-	SHA256    string `json:"output_ref_sha256"`
-	Bytes     int64  `json:"output_ref_bytes"`
+	CallID      string `json:"call_id,omitempty"`
+	AttemptID   string `json:"attempt_id,omitempty"`
+	Name        string `json:"name,omitempty"`
+	OutputRef   string `json:"output_ref"`
+	OutputRefID string `json:"output_ref_id,omitempty"`
+	SHA256      string `json:"output_ref_sha256"`
+	Bytes       int64  `json:"output_ref_bytes"`
 }
 
 func outputRefFromEvent(event protocol.Event) outputRefEventData {
