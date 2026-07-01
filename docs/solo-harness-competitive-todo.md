@@ -927,7 +927,7 @@ Milestone 6 final verification:
   - status: completed 2026-07-01.
   - evidence: the exact command above passed on pushed `HEAD`
     `165b39d5a7cda22fb817ca9e8c8a3b5c3c2f2ea1`.
-  - commit: pending.
+  - commit: `271ada9c0b6533b2952ac52a4c1a0c89077beb3f`.
 
 ## Milestone 7 - Deferred Experiments (P2)
 
