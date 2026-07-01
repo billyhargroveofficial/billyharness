@@ -664,6 +664,27 @@ Goal: add useful memory without background magic or prompt bloat.
     -count=1 ./internal/config ./cmd/fast-agent-harness` passed;
     `/root/.local/go/bin/go test -count=1 ./internal/config
     ./cmd/fast-agent-harness` passed.
+  - commit: `e346c6b8d21aa1202e0afe3207cb119711e20bf0`.
+
+Milestone 4 final verification:
+
+- [x] Run memory milestone package suite:
+  - `go test -count=1 ./internal/memory ./internal/projectcontext ./internal/tools ./internal/config ./internal/agent ./internal/runstate ./internal/clientux ./internal/toolrender ./internal/tui ./internal/telegrambot ./cmd/fast-agent-harness ./internal/architecture`
+  - status: completed 2026-07-01.
+  - evidence: `/root/.local/go/bin/go test -count=1 ./internal/memory
+    ./internal/projectcontext ./internal/tools ./internal/config
+    ./internal/agent ./internal/runstate ./internal/clientux
+    ./internal/toolrender ./internal/tui ./internal/telegrambot
+    ./cmd/fast-agent-harness ./internal/architecture` passed on pushed `HEAD`
+    `e346c6b8d21aa1202e0afe3207cb119711e20bf0`.
+
+- [x] Run memory targeted regex suite:
+  - `go test -run 'Test.*Memory.*|TestMemory.*Auto.*Extract|TestInitialMessagesInjectMemory.*|TestCompactMessagesReportsProtectedPrefixPolicyAndCompactedBudget|TestSnapshotInstructionHashIncludesProtectedUserContext|TestPromptInventoryIsStableAndOmitsArbitraryUserText|TestContextStatusClassifiesSourcesAndThresholds|TestActionRegistryBacksSlashCommandsAndHelp|TestTelegramCommandMetadataDrivesHelpAndBypass|TestCallLineSnapshotsCommonTools|TestConfigInspectJSONDoesNotLeakDotenvSecrets' -count=1 ./internal/... ./cmd/fast-agent-harness`
+  - status: completed 2026-07-01.
+  - evidence: `/root/.local/go/bin/go test -run
+    'Test.*Memory.*|TestMemory.*Auto.*Extract|TestInitialMessagesInjectMemory.*|TestCompactMessagesReportsProtectedPrefixPolicyAndCompactedBudget|TestSnapshotInstructionHashIncludesProtectedUserContext|TestPromptInventoryIsStableAndOmitsArbitraryUserText|TestContextStatusClassifiesSourcesAndThresholds|TestActionRegistryBacksSlashCommandsAndHelp|TestTelegramCommandMetadataDrivesHelpAndBypass|TestCallLineSnapshotsCommonTools|TestConfigInspectJSONDoesNotLeakDotenvSecrets'
+    -count=1 ./internal/... ./cmd/fast-agent-harness` passed on pushed
+    `HEAD` `e346c6b8d21aa1202e0afe3207cb119711e20bf0`.
   - commit: pending.
 
 ## Milestone 5 - Interop Without Platform Bloat (P1)
