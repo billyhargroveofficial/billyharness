@@ -238,6 +238,33 @@ func TestRunSessionResultReportsTerminalFailure(t *testing.T) {
 	}
 }
 
+func TestRunSessionResultReportsStreamGapHint(t *testing.T) {
+	server := testkit.NewRouteServer(t, testkit.Route{
+		Method: http.MethodPost,
+		Path:   "/v1/sessions/session-1/run",
+		Handler: func(w http.ResponseWriter, _ *http.Request) {
+			testkit.WriteJSONLines(t, w,
+				protocol.Event{Type: protocol.EventGatewayStreamGap, Data: protocol.GatewayStreamGapEvent{DroppedEvents: 17, ReplayAfterSeq: 3}},
+				protocol.Event{Seq: 4, Type: protocol.EventRunCompleted},
+			)
+		},
+	})
+
+	var events []protocol.Event
+	result, err := New(server.URL).RunSessionResult(context.Background(), "session-1", gatewayapi.RunRequest{Prompt: "ping"}, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StreamGaps != 1 || result.DroppedEvents != 17 || !result.Completed || result.LastSeq != 4 {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(events) != 2 || events[0].Type != protocol.EventGatewayStreamGap {
+		t.Fatalf("events = %#v", events)
+	}
+}
+
 func TestRunSessionResultDecodesLargeNDJSONEvents(t *testing.T) {
 	large := strings.Repeat("x", 4*1024*1024+512)
 	server := testkit.NewRouteServer(t, testkit.Route{

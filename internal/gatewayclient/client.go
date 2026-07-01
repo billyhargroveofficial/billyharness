@@ -40,6 +40,8 @@ type RunResult struct {
 	Failure       string
 	TerminalEvent protocol.Event
 	SeqGap        *EventSeqGapError
+	StreamGaps    int
+	DroppedEvents int64
 }
 
 type StatusError struct {
@@ -494,6 +496,10 @@ func decodeEvents(reader io.Reader, cursor int64, emit func(protocol.Event)) (Ru
 			result.LastSeq = event.Seq
 		}
 		result.EventCount++
+		if event.Type == protocol.EventGatewayStreamGap {
+			result.StreamGaps++
+			result.DroppedEvents += streamGapDroppedEvents(event.Data)
+		}
 		switch event.Type {
 		case protocol.EventRunCompleted:
 			result.Completed = true
@@ -510,6 +516,24 @@ func decodeEvents(reader io.Reader, cursor int64, emit func(protocol.Event)) (Ru
 			emit(event)
 		}
 	}
+}
+
+func streamGapDroppedEvents(data any) int64 {
+	switch value := data.(type) {
+	case protocol.GatewayStreamGapEvent:
+		return value.DroppedEvents
+	case map[string]any:
+		switch raw := value["dropped_events"].(type) {
+		case float64:
+			return int64(raw)
+		case int64:
+			return raw
+		case json.Number:
+			n, _ := raw.Int64()
+			return n
+		}
+	}
+	return 0
 }
 
 func healthOK(ctx context.Context, client *http.Client, baseURL string) bool {

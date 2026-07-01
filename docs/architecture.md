@@ -52,6 +52,15 @@ exceptions are allowed only when they name the phase that removes them.
 
 `internal/store` is currently an empty/reserved directory, not a Go package.
 
+## Runtime Event Delivery
+
+Gateway session JSONL is the durable source of truth. Live `/run` responses and
+`/events?follow=true` responses are progress streams only: they may drop live
+events under client backpressure, but they must not block active execution.
+When a live run stream drops events, the gateway emits a `gateway.stream_gap`
+hint and clients should recover by replaying `/v1/sessions/{id}/events` from
+their last durable `seq`.
+
 ## File Size Budget Exceptions
 
 Targets for handwritten Go files are 1,500 LOC for `.go` files and 1,200 LOC

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -119,11 +120,25 @@ func (m Model) gatewayRunRequest(prompt string) gatewayapi.RunRequest {
 func (m Model) runGateway(prompt string) {
 	runReq := m.gatewayRunRequest(prompt)
 	client := &gatewayclient.Client{BaseURL: m.gatewayURL, Client: http.DefaultClient}
-	if _, err := client.RunSessionResult(context.Background(), m.sessionID, runReq, func(event protocol.Event) {
+	result, err := client.RunSessionResult(context.Background(), m.sessionID, runReq, func(event protocol.Event) {
 		m.events <- streamEventMsg{event: event}
-	}); err != nil {
-		m.events <- runDoneMsg{err: err}
-		return
+	})
+	needsReplay := result.StreamGaps > 0
+	if err != nil {
+		var seqGap *gatewayclient.EventSeqGapError
+		if !errors.As(err, &seqGap) {
+			m.events <- runDoneMsg{err: err}
+			return
+		}
+		needsReplay = true
+	}
+	if needsReplay {
+		if replayErr := client.ReplaySessionEvents(context.Background(), m.sessionID, result.LastSeq, func(event protocol.Event) {
+			m.events <- streamEventMsg{event: event}
+		}); replayErr != nil {
+			m.events <- runDoneMsg{err: replayErr}
+			return
+		}
 	}
 	messages, err := m.fetchGatewayMessages()
 	if err != nil {

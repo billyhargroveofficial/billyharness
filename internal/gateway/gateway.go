@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/agent"
@@ -1278,20 +1279,94 @@ func runOverrideSettingsFromRequest(req RunRequest) config.RunOverrideSettings {
 	}
 }
 
+const liveRunStreamBuffer = 256
+
 func streamEvents(w http.ResponseWriter, run func(func(protocol.Event)) error) {
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
-	terminalEmitted := false
+	events := make(chan protocol.Event, liveRunStreamBuffer)
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		for event := range events {
+			if !writeNDJSONEvent(w, flusher, event) {
+				return
+			}
+		}
+	}()
+
+	var terminalEmitted atomic.Bool
+	var droppedEvents atomic.Int64
+	var lastQueuedSeq atomic.Int64
+	queue := func(event protocol.Event) bool {
+		select {
+		case <-writerDone:
+			return false
+		default:
+		}
+		select {
+		case events <- event:
+			if event.Seq > 0 {
+				lastQueuedSeq.Store(event.Seq)
+			}
+			return true
+		case <-writerDone:
+			return false
+		default:
+			return false
+		}
+	}
+	emitGap := func(block bool) {
+		dropped := droppedEvents.Swap(0)
+		if dropped <= 0 {
+			return
+		}
+		event := gatewayStreamGapEvent(dropped, lastQueuedSeq.Load())
+		if block {
+			select {
+			case events <- event:
+			case <-writerDone:
+			}
+			return
+		}
+		if !queue(event) {
+			droppedEvents.Add(dropped)
+		}
+	}
 	emit := func(event protocol.Event) {
 		if isTerminalRunEvent(event.Type) {
-			terminalEmitted = true
+			terminalEmitted.Store(true)
 		}
-		_ = writeNDJSONEvent(w, flusher, event)
+		if droppedEvents.Load() > 0 {
+			emitGap(false)
+		}
+		if !queue(event) {
+			droppedEvents.Add(1)
+		}
 	}
-	if err := run(emit); err != nil && !terminalEmitted {
+	if err := run(emit); err != nil && !terminalEmitted.Load() {
 		emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
+	}
+	if droppedEvents.Load() > 0 {
+		emitGap(true)
+	}
+	close(events)
+	<-writerDone
+}
+
+func gatewayStreamGapEvent(dropped, replayAfterSeq int64) protocol.Event {
+	return protocol.Event{
+		Type:   protocol.EventGatewayStreamGap,
+		Source: protocol.EventSourceGateway,
+		TS:     time.Now().UTC().Format(time.RFC3339Nano),
+		Data: protocol.GatewayStreamGapEvent{
+			DroppedEvents:  dropped,
+			ReplayAfterSeq: replayAfterSeq,
+			Message:        "live stream dropped events; replay /v1/sessions/{id}/events after the last durable seq",
+		},
 	}
 }
 

@@ -194,7 +194,7 @@ adding more powerful tools.
     -count=1 ./internal/telegrambot` passed.
   - commit: pending.
 
-- [ ] HR-01.5 Slow-client run/event decoupling.
+- [x] HR-01.5 Slow-client run/event decoupling.
   - maps to: `competitive-improvements-todo.md` B3.
   - target files: `internal/gateway/gateway.go`,
     `internal/gateway/session_events.go`,
@@ -205,6 +205,20 @@ adding more powerful tools.
     clients receive gap/drop/reconnect hints and can recover via
     `/events?after_seq=last_seq`.
   - verification: `go test -count=1 ./internal/gateway ./internal/gatewayclient ./internal/tui ./internal/eventlog`.
+  - status: completed 2026-07-01.
+  - evidence: gateway `/run` streams now decouple active execution from the
+    HTTP response writer with a bounded live channel, emit
+    `gateway.stream_gap` hints when live progress drops under backpressure, and
+    keep `/events?after_seq=...` as the durable replay recovery path. The shared
+    gateway client records stream-gap counts, and TUI gateway mode replays after
+    sequence-gap errors before fetching final messages.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/gateway
+    ./internal/gatewayclient ./internal/tui ./internal/eventlog` passed;
+    `/root/.local/go/bin/go test -run
+    'Test.*Slow.*Client.*|Test.*Backpressure.*|Test.*Replay.*Gap.*|Test.*Run.*Completes.*|Test.*Stream.*(Gap|Block).*'
+    -count=1 ./internal/...` passed.
+  - commit: pending.
 
 - [ ] HR-01.6 Batched TUI event apply and reflow.
   - maps to: `competitive-improvements-todo.md` B4.

@@ -87,7 +87,14 @@ const (
 	EventRunFailed               EventType = "run.failed"
 	EventProviderUsageUpdate     EventType = "provider.usage"
 	EventSessionStatus           EventType = "session.status"
+	EventGatewayStreamGap        EventType = "gateway.stream_gap"
 )
+
+type GatewayStreamGapEvent struct {
+	DroppedEvents  int64  `json:"dropped_events"`
+	ReplayAfterSeq int64  `json:"replay_after_seq,omitempty"`
+	Message        string `json:"message,omitempty"`
+}
 
 type Event struct {
 	SchemaVersion int         `json:"schema_version,omitempty"`
