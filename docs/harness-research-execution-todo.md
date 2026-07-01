@@ -1039,11 +1039,22 @@ need.
     deferral.
   - commit: pending.
 
-- [ ] HR-05.5 Last Billy commands project context source.
+- [-] HR-05.5 Last Billy commands project context source.
   - maps to: `competitive-improvements-todo.md` B14.
   - dependency: HR-04.4.
   - acceptance: only last N Billy-run shell commands, no raw logs, no shell
     history scraping.
+  - status: deferred 2026-07-01.
+  - blocker: B14 is marked P2 in `competitive-improvements-todo.md`, and no
+    current project-context test or benchmark requires command-summary context
+    ahead of the remaining work. The existing HR-04.4/HR-04.5 project-context
+    snapshot remains bounded and does not scrape shell history.
+  - next action: revisit only if a focused context-quality test proves that
+    last Billy-run command summaries materially reduce repeated verification
+    work without injecting raw logs.
+  - verification evidence: source-priority check only; no code changed for this
+    deferral.
+  - commit: pending.
 
 - [ ] HR-05.6 Deferred diagnostics, LSP, memory, and backup extensions.
   - maps to: `competitive-improvements-todo.md` A16.
