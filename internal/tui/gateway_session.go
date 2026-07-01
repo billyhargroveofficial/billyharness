@@ -131,6 +131,24 @@ func (m Model) turnDiffPreviewCmd(changeID string) tea.Cmd {
 	}
 }
 
+func (m Model) answerUserInputCmd(requestID, answer string) tea.Cmd {
+	sessionID := strings.TrimSpace(m.sessionID)
+	return func() tea.Msg {
+		if sessionID == "" {
+			return userInputAnswerMsg{requestID: requestID, err: fmt.Errorf("gateway session is not ready")}
+		}
+		client := &gatewayclient.Client{BaseURL: m.gatewayURL, Client: http.DefaultClient}
+		resp, err := client.AnswerUserInput(context.Background(), sessionID, requestID, gatewayapi.UserInputAnswerRequest{
+			Text:   answer,
+			Source: "tui",
+		})
+		if err != nil {
+			return userInputAnswerMsg{requestID: requestID, err: err}
+		}
+		return userInputAnswerMsg{requestID: resp.RequestID, status: resp.Status}
+	}
+}
+
 func (m Model) loadTurnDiffPreview(changeID string) (string, error) {
 	if strings.TrimSpace(m.gatewayURL) == "" {
 		return "", fmt.Errorf("diff preview requires gateway mode")

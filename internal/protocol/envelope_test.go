@@ -216,6 +216,37 @@ func TestEventEnricherExtractsToolOutputRefIDs(t *testing.T) {
 	}
 }
 
+func TestEventEnricherExtractsUserInputIDs(t *testing.T) {
+	request := UserInputRequestEvent{
+		RequestID: "call-question",
+		RunID:     "run-1",
+		TurnID:    "turn-001",
+		StepID:    "turn-001:tool-call-001",
+		CallID:    "call-question",
+		AttemptID: "turn-001:tool-call-001:attempt-001",
+		Questions: []UserInputQuestion{{
+			ID:       "q1",
+			Question: "Continue?",
+			Options: []UserInputOption{{ID: "yes", Label: "Yes", Description: "Continue"}},
+		}},
+	}
+	event := EnrichEvent(Event{
+		Type: EventUserInputRequested,
+		Data: request,
+	}, EventEnvelope{
+		Seq:    1,
+		Source: EventSourceAgent,
+		TS:     time.Unix(10, 0).UTC().Format(time.RFC3339Nano),
+	})
+	if event.RunID != request.RunID || event.TurnID != request.TurnID || event.StepID != request.StepID ||
+		event.CallID != request.CallID || event.AttemptID != request.AttemptID {
+		t.Fatalf("user input envelope = %#v", event)
+	}
+	if err := ValidateEventEnvelope(event); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestEventEnricherExtractsModelCallMetadata(t *testing.T) {
 	totalLatency := int64(42)
 	event := EnrichEvent(Event{

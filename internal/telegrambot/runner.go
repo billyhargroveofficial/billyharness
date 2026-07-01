@@ -2,6 +2,7 @@ package telegrambot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -22,6 +24,10 @@ type telegramPromptAdmission struct {
 	State      ChatState
 	StateReady bool
 	SkipRun    bool
+}
+
+type userInputAnswerHarness interface {
+	AnswerUserInput(context.Context, string, string, gatewayapi.UserInputAnswerRequest) (gatewayapi.UserInputResponse, error)
 }
 
 func (b *Bot) handleMessage(parent context.Context, msg Message) {
@@ -41,6 +47,15 @@ func (b *Bot) handleMessageWithAdmission(parent context.Context, msg Message, ad
 		return
 	}
 	isCommand := strings.HasPrefix(text, "/")
+	if !isCommand {
+		answered, err := b.answerPendingUserInput(parent, msg, 0)
+		if answered {
+			if err != nil {
+				log.Printf("telegram pending question answer failed chat=%d key=%s: %v", msg.Chat.ID, key, err)
+			}
+			return
+		}
+	}
 	inputSeq := admission.InputSeq
 	if inputSeq <= 0 {
 		inputSeq = b.interruptActiveRunForInput(msg, scope, isCommand)
@@ -130,6 +145,7 @@ func (b *Bot) handleMessageWithAdmission(parent context.Context, msg Message, ad
 			}
 			contentChars += len(fmt.Sprint(event.Data))
 		}
+		state = b.applyUserInputEventToState(key, state, event)
 		live.Apply(event)
 	}
 	state, err = b.runGatewaySessionWithRetry(runCtx, msg, key, state, runReq, emitEvent, func(retryState ChatState) {
@@ -230,6 +246,44 @@ func (b *Bot) admitTelegramPromptUpdate(ctx context.Context, update Update) (tel
 		StateReady: true,
 		SkipRun:    skipRun,
 	}, nil
+}
+
+func (b *Bot) answerPendingUserInput(ctx context.Context, msg Message, updateID int) (bool, error) {
+	scope := messageChatScope(msg)
+	key := scope.Key()
+	state := b.chatStateWithLegacy(key, scope.LegacyKey())
+	requestID := strings.TrimSpace(state.PendingUserInputID)
+	if requestID == "" {
+		return false, nil
+	}
+	if strings.TrimSpace(state.SessionID) == "" {
+		b.clearPendingUserInput(key, requestID)
+		return false, nil
+	}
+	answerer, ok := b.harness.(userInputAnswerHarness)
+	if !ok {
+		err := fmt.Errorf("gateway client does not support user input answers")
+		_ = b.sendPlain(ctx, msg, "Question answer failed: "+err.Error())
+		return true, err
+	}
+	answer := gatewayapi.UserInputAnswerRequest{
+		Text:   strings.TrimSpace(msg.Text),
+		Source: "telegram",
+	}
+	if updateID > 0 {
+		answer.Metadata = telegramInputMetadata(updateID, msg, scope)
+	}
+	_, err := answerer.AnswerUserInput(ctx, state.SessionID, requestID, answer)
+	if err != nil {
+		if errors.Is(err, gatewayclient.ErrSessionNotFound) {
+			b.clearPendingUserInput(key, requestID)
+			return false, nil
+		}
+		_ = b.sendPlain(ctx, msg, "Question answer failed: "+err.Error())
+		return true, err
+	}
+	b.clearPendingUserInput(key, requestID)
+	return true, nil
 }
 
 func (b *Bot) runGatewaySessionWithRetry(ctx context.Context, msg Message, key string, state ChatState, runReq gatewayapi.RunRequest, emit func(protocol.Event), beforeRetry func(ChatState)) (ChatState, error) {
@@ -435,6 +489,7 @@ func (b *Bot) replayRunCatchup(ctx context.Context, msg Message, key string, sta
 			lastEventSeq = event.Seq
 		}
 		catchupEvents++
+		state = b.applyUserInputEventToState(key, state, event)
 		catchup.Apply(event)
 	}
 	if err := b.harness.ReplaySessionEvents(ctx, state.SessionID, state.LastEventSeq, catchupEmit); err != nil {
@@ -467,4 +522,38 @@ func (b *Bot) replayRunCatchup(ctx context.Context, msg Message, key string, sta
 			msg.Chat.ID, short(state.SessionID), catchupEvents, catchup.ModelCalls, catchup.ToolCalls, lastEventSeq)
 	}
 	return state, lastEventSeq, nil
+}
+
+func (b *Bot) applyUserInputEventToState(key string, state ChatState, event protocol.Event) ChatState {
+	switch event.Type {
+	case protocol.EventUserInputRequested:
+		req, ok := protocol.DecodeUserInputRequest(event.Data)
+		if !ok || strings.TrimSpace(req.RequestID) == "" {
+			return state
+		}
+		state.PendingUserInputID = req.RequestID
+		state.UpdatedAt = time.Now().UTC()
+		b.setChatState(key, state)
+	case protocol.EventUserInputAnswered:
+		answer, ok := protocol.DecodeUserInputAnswer(event.Data)
+		if !ok {
+			return state
+		}
+		if state.PendingUserInputID == "" || state.PendingUserInputID == answer.RequestID {
+			state.PendingUserInputID = ""
+			state.UpdatedAt = time.Now().UTC()
+			b.setChatState(key, state)
+		}
+	case protocol.EventUserInputRejected, protocol.EventRunCompleted, protocol.EventRunFailed:
+		requestID := ""
+		if reject, ok := protocol.DecodeUserInputReject(event.Data); ok {
+			requestID = reject.RequestID
+		}
+		if requestID == "" || state.PendingUserInputID == requestID {
+			state.PendingUserInputID = ""
+			state.UpdatedAt = time.Now().UTC()
+			b.setChatState(key, state)
+		}
+	}
+	return state
 }

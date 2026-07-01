@@ -289,6 +289,8 @@ func blockKindForEvent(eventType protocol.EventType) string {
 		return "status"
 	case protocol.EventTurnChangeRecorded, protocol.EventTurnChangeReverted:
 		return "status"
+	case protocol.EventUserInputRequested, protocol.EventUserInputAnswered, protocol.EventUserInputRejected:
+		return "status"
 	case protocol.EventRunFailed:
 		return "error"
 	default:
@@ -545,10 +547,24 @@ func (m *Model) applyEvent(event protocol.Event) {
 	case protocol.EventTurnChangeReverted:
 		m.status = "turn changes reverted"
 	case protocol.EventProviderUsageUpdate:
+	case protocol.EventUserInputRequested:
+		if req, ok := protocol.DecodeUserInputRequest(event.Data); ok {
+			m.pendingUserInput = &req
+			m.addEventBlock(event.Type, "QUESTION", formatUserInputRequest(req))
+		}
+		m.status = "answer requested"
+	case protocol.EventUserInputAnswered:
+		m.pendingUserInput = nil
+		m.status = "answer sent"
+	case protocol.EventUserInputRejected:
+		m.pendingUserInput = nil
+		m.status = "answer rejected"
 	case protocol.EventRunCompleted:
+		m.pendingUserInput = nil
 		m.status = "completed"
 		m.upsertRunSummaryBlock(event.Type, "completed", "")
 	case protocol.EventRunFailed:
+		m.pendingUserInput = nil
 		m.upsertRunSummaryBlock(event.Type, "failed", fmt.Sprint(event.Data))
 		m.addEventBlock(event.Type, "ERROR", fmt.Sprint(event.Data))
 		m.status = "failed"
@@ -574,6 +590,7 @@ func (m *Model) flushStreamEvents() bool {
 func shouldFlushStreamEvent(event protocol.Event) bool {
 	switch event.Type {
 	case protocol.EventRunCompleted, protocol.EventRunFailed,
+		protocol.EventUserInputRequested, protocol.EventUserInputAnswered, protocol.EventUserInputRejected,
 		protocol.EventToolCallRequested, protocol.EventToolCallStarted,
 		protocol.EventToolCallFinished, protocol.EventToolCallFailed,
 		protocol.EventToolCallAborted, protocol.EventToolOutputRefCreated,

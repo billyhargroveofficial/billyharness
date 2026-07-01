@@ -131,6 +131,7 @@ type Model struct {
 	events               chan tea.Msg
 	pendingStreamEvents  []protocol.Event
 	streamBatchScheduled bool
+	pendingUserInput     *protocol.UserInputRequestEvent
 	uxProjector          *uxprojector.Projector
 	transcriptProjector  *transcript.Projector
 	transcriptStale      bool
@@ -208,6 +209,12 @@ type contextStatusMsg struct {
 type turnDiffPreviewMsg struct {
 	text string
 	err  error
+}
+
+type userInputAnswerMsg struct {
+	requestID string
+	status    string
+	err       error
 }
 
 type clipboardCopiedMsg struct {
@@ -586,6 +593,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		reflow = true
 		gotoBottom = m.followOutput
+	case userInputAnswerMsg:
+		if msg.err != nil {
+			m.addBlock("error", "ANSWER", msg.err.Error())
+			m.status = "answer failed"
+		} else {
+			if m.pendingUserInput != nil && m.pendingUserInput.RequestID == msg.requestID {
+				m.pendingUserInput = nil
+			}
+			if msg.status != "" {
+				m.status = "answer " + msg.status
+			} else {
+				m.status = "answer sent"
+			}
+		}
+		reflow = true
+		gotoBottom = m.followOutput
 	case fileMentionResultsMsg:
 		m.applyFileMentionResults(msg)
 		if m.width > 0 {
@@ -804,6 +827,9 @@ func (m *Model) send() (tea.Model, tea.Cmd) {
 		m.reflow(m.followOutput)
 		return *m, nil
 	}
+	if m.pendingUserInput != nil {
+		return m.submitUserInputAnswer(prompt)
+	}
 	if strings.HasPrefix(prompt, "/") {
 		if command, prefix, ok := m.slashArgMode(); ok {
 			args := m.filteredSlashArgs(command, prefix)
@@ -868,6 +894,21 @@ func (m *Model) submitPrompt(prompt string) (tea.Model, tea.Cmd) {
 	}
 	m.reflow(true)
 	return *m, tea.Batch(m.waitEventCmd(), m.tickCmd())
+}
+
+func (m *Model) submitUserInputAnswer(answer string) (tea.Model, tea.Cmd) {
+	if m.gatewayURL == "" || m.sessionID == "" || m.pendingUserInput == nil {
+		m.status = "no pending question"
+		m.reflow(m.followOutput)
+		return *m, nil
+	}
+	requestID := m.pendingUserInput.RequestID
+	m.textarea.SetValue("")
+	m.textarea.SetHeight(1)
+	m.addBlock("user", "ANSWER", answer)
+	m.status = "sending answer"
+	m.reflow(true)
+	return *m, m.answerUserInputCmd(requestID, answer)
 }
 
 func (m Model) waitEventCmd() tea.Cmd {

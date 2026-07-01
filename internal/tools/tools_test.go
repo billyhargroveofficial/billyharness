@@ -809,6 +809,46 @@ func TestSkillsListAndReadAreOnDemandBoundedAndCompatOptional(t *testing.T) {
 	}
 }
 
+func TestAskUserToolSchemaAndUnavailableHandler(t *testing.T) {
+	registry := NewRegistry(config.Default())
+	if !hasSpec(registry.Specs(), AskUserToolName) {
+		t.Fatalf("%s missing from specs", AskUserToolName)
+	}
+	questions, err := ParseAskUserQuestions(json.RawMessage(`{
+		"header":"Choice",
+		"questions":[{
+			"question":"Which path should I take?",
+			"options":[
+				{"id":"a","label":"A","description":"Use path A"},
+				{"id":"b","label":"B","description":"Use path B"}
+			],
+			"allow_freeform":true
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(questions) != 1 || questions[0].ID != "q1" || questions[0].Header != "Choice" ||
+		len(questions[0].Options) != 2 || !questions[0].AllowFreeform {
+		t.Fatalf("questions = %#v", questions)
+	}
+	result, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: AskUserToolName,
+		Arguments: json.RawMessage(`{
+			"questions":[{
+				"question":"Continue?",
+				"options":[
+					{"label":"Yes","description":"Continue"},
+					{"label":"No","description":"Stop"}
+				]
+			}]
+		}`),
+	})
+	if err == nil || !result.IsError || result.ErrorCode != "ask_user_unavailable" {
+		t.Fatalf("result=%#v err=%v, want unavailable error", result, err)
+	}
+}
+
 func hasSpec(specs []protocol.ToolSpec, name string) bool {
 	for _, spec := range specs {
 		if spec.Name == name {

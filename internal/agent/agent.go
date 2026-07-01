@@ -33,6 +33,7 @@ type Agent struct {
 	instructions    config.InstructionSettings
 	provider        provider.Provider
 	tools           *tools.Registry
+	askUser         AskUserHandler
 }
 
 type Settings struct {
@@ -43,7 +44,10 @@ type Settings struct {
 	MCP             config.MCPSettings
 	Hooks           config.HookSettings
 	Instructions    config.InstructionSettings
+	AskUser         AskUserHandler
 }
+
+type AskUserHandler func(context.Context, protocol.UserInputRequestEvent, func(protocol.Event)) (protocol.UserInputAnswerEvent, error)
 
 type PromptSubmitOptions struct {
 	Source   string
@@ -77,6 +81,7 @@ func NewFromSettings(settings Settings, provider provider.Provider, registry *to
 		instructions:    settings.Instructions,
 		provider:        provider,
 		tools:           registry,
+		askUser:         settings.AskUser,
 	}
 }
 
@@ -365,11 +370,11 @@ func (a *Agent) emitToolAudit(call protocol.ToolCall, toolSet tools.ToolSet, emi
 	}})
 }
 
-func (a *Agent) executeParallelToolBatch(ctx context.Context, orchestrator *toolOrchestrator, toolSet tools.ToolSet, turnID string, round int, calls []protocol.ToolCall, start, end int, results []toolExecutionResult, emit func(protocol.Event)) {
+func (a *Agent) executeParallelToolBatch(ctx context.Context, orchestrator *toolOrchestrator, toolSet tools.ToolSet, runID, turnID string, round int, calls []protocol.ToolCall, start, end int, results []toolExecutionResult, emit func(protocol.Event)) {
 	limit := a.runtime.MaxParallelTools
 	if limit <= 1 || end-start == 1 {
 		for i := start; i < end; i++ {
-			results[i] = a.executeOneTool(ctx, orchestrator, toolSet, turnID, round, i, calls[i], false, "", 0, 0, emit)
+			results[i] = a.executeOneTool(ctx, orchestrator, toolSet, runID, turnID, round, i, calls[i], false, "", 0, 0, emit)
 		}
 		return
 	}
@@ -411,7 +416,7 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, orchestrator *tool
 					done <- orchestrator.AbortBeforeExecute(idx, call, agentAttemptID(turnID, idx), ctx.Err())
 					continue
 				}
-				result := orchestrator.Execute(ctx, turnID, idx, call, agentAttemptID(turnID, idx))
+				result := orchestrator.Execute(ctx, runID, turnID, idx, call, agentAttemptID(turnID, idx))
 				if release != nil {
 					release()
 				}
@@ -451,11 +456,11 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, orchestrator *tool
 	}})
 }
 
-func (a *Agent) executeOneTool(ctx context.Context, orchestrator *toolOrchestrator, toolSet tools.ToolSet, turnID string, round, index int, call protocol.ToolCall, parallel bool, batchID string, batchSize, limit int, emit func(protocol.Event)) toolExecutionResult {
+func (a *Agent) executeOneTool(ctx context.Context, orchestrator *toolOrchestrator, toolSet tools.ToolSet, runID, turnID string, round, index int, call protocol.ToolCall, parallel bool, batchID string, batchSize, limit int, emit func(protocol.Event)) toolExecutionResult {
 	attemptID := agentAttemptID(turnID, index)
 	emitToolStepStarted(emit, turnID, round, index, call, parallel, batchID, batchSize, limit, orchestrator.StepMetadata(call, attemptID, a.toolStepMetadata(toolSet, call, parallel, batchSize)))
 	orchestrator.EmitAttemptStarted(call, attemptID)
-	result := orchestrator.Execute(ctx, turnID, index, call, attemptID)
+	result := orchestrator.Execute(ctx, runID, turnID, index, call, attemptID)
 	emitToolStepCompleted(emit, turnID, round, result, parallel, batchID, batchSize, limit)
 	orchestrator.EmitAttemptFinished(result)
 	return result

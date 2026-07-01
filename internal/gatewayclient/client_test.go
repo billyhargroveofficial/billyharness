@@ -159,6 +159,65 @@ func TestAdmitSessionInputPostsTypedRequest(t *testing.T) {
 	}
 }
 
+func TestUserInputAnsweredAndRejectedPostTypedRequests(t *testing.T) {
+	var gotAnswer gatewayapi.UserInputAnswerRequest
+	var gotReject gatewayapi.UserInputRejectRequest
+	server := testkit.NewRouteServer(t,
+		testkit.Route{
+			Method: http.MethodPost,
+			Path:   "/v1/sessions/session-1/user_input/request-1/answer",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				if !testkit.DecodeJSON(t, r, &gotAnswer) {
+					return
+				}
+				testkit.WriteJSON(t, w, gatewayapi.UserInputResponse{RequestID: "request-1", Status: "answered"})
+			},
+		},
+		testkit.Route{
+			Method: http.MethodPost,
+			Path:   "/v1/sessions/session-1/user_input/request-1/reject",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				if !testkit.DecodeJSON(t, r, &gotReject) {
+					return
+				}
+				testkit.WriteJSON(t, w, gatewayapi.UserInputResponse{RequestID: "request-1", Status: "rejected"})
+			},
+		},
+	)
+
+	client := New(server.URL)
+	answerResp, err := client.AnswerUserInput(context.Background(), "session-1", "request-1", gatewayapi.UserInputAnswerRequest{
+		Text:   "Blue",
+		Source: "tui",
+		Metadata: map[string]string{
+			"client": "test",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answerResp.RequestID != "request-1" || answerResp.Status != "answered" {
+		t.Fatalf("answer response = %#v", answerResp)
+	}
+	if gotAnswer.Text != "Blue" || gotAnswer.Source != "tui" || gotAnswer.Metadata["client"] != "test" {
+		t.Fatalf("answer request = %#v", gotAnswer)
+	}
+
+	rejectResp, err := client.RejectUserInput(context.Background(), "session-1", "request-1", gatewayapi.UserInputRejectRequest{
+		Reason: "not now",
+		Source: "telegram",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rejectResp.RequestID != "request-1" || rejectResp.Status != "rejected" {
+		t.Fatalf("reject response = %#v", rejectResp)
+	}
+	if gotReject.Reason != "not now" || gotReject.Source != "telegram" {
+		t.Fatalf("reject request = %#v", gotReject)
+	}
+}
+
 func TestReplaySessionEventsReportsSequenceGap(t *testing.T) {
 	server := testkit.NewRouteServer(t, testkit.Route{
 		Method: http.MethodGet,

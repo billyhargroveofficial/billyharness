@@ -348,6 +348,24 @@ func (c *Client) CancelSession(ctx context.Context, sessionID string) (bool, err
 	return out.Cancelled, nil
 }
 
+func (c *Client) AnswerUserInput(ctx context.Context, sessionID, requestID string, answer gatewayapi.UserInputAnswerRequest) (gatewayapi.UserInputResponse, error) {
+	var out gatewayapi.UserInputResponse
+	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/user_input/" + url.PathEscape(strings.TrimSpace(requestID)) + "/answer"
+	if err := c.JSON(ctx, http.MethodPost, path, answer, &out); err != nil {
+		return gatewayapi.UserInputResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) RejectUserInput(ctx context.Context, sessionID, requestID string, reject gatewayapi.UserInputRejectRequest) (gatewayapi.UserInputResponse, error) {
+	var out gatewayapi.UserInputResponse
+	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/user_input/" + url.PathEscape(strings.TrimSpace(requestID)) + "/reject"
+	if err := c.JSON(ctx, http.MethodPost, path, reject, &out); err != nil {
+		return gatewayapi.UserInputResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) PreviewSessionUndo(ctx context.Context, sessionID, changeID string) (gatewayapi.SessionUndoResponse, error) {
 	return c.UndoSession(ctx, sessionID, gatewayapi.SessionUndoRequest{ChangeID: changeID, Preview: true})
 }

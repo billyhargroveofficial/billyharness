@@ -82,6 +82,54 @@ func (b *Bot) clearPendingInput(key, inputID string) {
 	}
 }
 
+func (b *Bot) setPendingUserInput(key, requestID string) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return
+	}
+	b.saveMu.Lock()
+	defer b.saveMu.Unlock()
+
+	b.mu.Lock()
+	state := b.state.Chats[key]
+	state.PendingUserInputID = requestID
+	state.UpdatedAt = time.Now().UTC()
+	if b.state.Chats == nil {
+		b.state.Chats = map[string]ChatState{}
+	}
+	b.state.Chats[key] = state
+	snapshot := cloneState(b.state)
+	b.mu.Unlock()
+	if err := b.store.Save(snapshot); err != nil {
+		log.Printf("telegram state save: %v", err)
+	}
+}
+
+func (b *Bot) clearPendingUserInput(key, requestID string) {
+	requestID = strings.TrimSpace(requestID)
+	b.saveMu.Lock()
+	defer b.saveMu.Unlock()
+
+	b.mu.Lock()
+	state := b.state.Chats[key]
+	if requestID != "" && state.PendingUserInputID != requestID {
+		b.mu.Unlock()
+		return
+	}
+	if state.PendingUserInputID == "" {
+		b.mu.Unlock()
+		return
+	}
+	state.PendingUserInputID = ""
+	state.UpdatedAt = time.Now().UTC()
+	b.state.Chats[key] = state
+	snapshot := cloneState(b.state)
+	b.mu.Unlock()
+	if err := b.store.Save(snapshot); err != nil {
+		log.Printf("telegram state save: %v", err)
+	}
+}
+
 func (b *Bot) ackOffset(updateID int) {
 	b.saveMu.Lock()
 	defer b.saveMu.Unlock()

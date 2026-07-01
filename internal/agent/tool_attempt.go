@@ -89,7 +89,7 @@ func (o *toolOrchestrator) EmitAttemptStarted(call protocol.ToolCall, attemptID 
 	})
 }
 
-func (o *toolOrchestrator) Execute(ctx context.Context, turnID string, index int, call protocol.ToolCall, attemptID string) toolExecutionResult {
+func (o *toolOrchestrator) Execute(ctx context.Context, runID, turnID string, index int, call protocol.ToolCall, attemptID string) toolExecutionResult {
 	started := time.Now()
 	decision := o.decision(call)
 	executingStatus := protocol.StepStatusStarted
@@ -158,6 +158,32 @@ func (o *toolOrchestrator) Execute(ctx context.Context, turnID string, index int
 			ErrorCode: "tool_registry_unavailable",
 			Metadata:  map[string]any{},
 		}
+	} else if call.Name == tools.AskUserToolName {
+		result, err := o.executeAskUser(ctx, runID, turnID, stepID, call, attemptID)
+		out = protocol.ToolResult{
+			CallID:    call.ID,
+			Name:      call.Name,
+			Content:   result.Content,
+			IsError:   result.IsError,
+			ErrorCode: result.ErrorCode,
+			Metadata:  result.Metadata,
+			Truncated: result.Truncated,
+			OutputRef: result.OutputRef,
+		}
+		if err != nil {
+			out.IsError = true
+			if out.ErrorCode == "" {
+				if ctx.Err() != nil {
+					out.ErrorCode = "tool_aborted"
+				} else {
+					out.ErrorCode = "tool_error"
+				}
+			}
+			if out.Content == "" {
+				out.Content = err.Error()
+			}
+		}
+		o.agent.compactToolResult(index, call, &out)
 	} else {
 		result, err := o.toolSet.Call(ctx, call)
 		out = protocol.ToolResult{
@@ -263,6 +289,62 @@ func (o *toolOrchestrator) Execute(ctx context.Context, turnID string, index int
 		"rate_limit_wait_ms":      out.Metadata["rate_limit_wait_ms"],
 	})
 	return toolExecutionResult{Index: index, Call: call, Result: out, DurationMS: duration, AttemptID: attemptID}
+}
+
+func (o *toolOrchestrator) executeAskUser(ctx context.Context, runID, turnID, stepID string, call protocol.ToolCall, attemptID string) (tools.Result, error) {
+	questions, err := tools.ParseAskUserQuestions(call.Arguments)
+	if err != nil {
+		return tools.Result{Content: err.Error(), IsError: true, ErrorCode: "validation_error"}, err
+	}
+	if o == nil || o.agent == nil || o.agent.askUser == nil {
+		err := fmt.Errorf("ask_user is only available during a gateway session run")
+		return tools.Result{Content: err.Error(), IsError: true, ErrorCode: "ask_user_unavailable"}, err
+	}
+	requestID := askUserRequestID(call, attemptID)
+	request := protocol.UserInputRequestEvent{
+		RequestID: requestID,
+		RunID:     runID,
+		TurnID:    turnID,
+		StepID:    stepID,
+		CallID:    call.ID,
+		AttemptID: attemptID,
+		Source:    "tool",
+		Questions: questions,
+	}
+	answer, err := o.agent.askUser(ctx, request, o.emit)
+	if err != nil {
+		code := "user_input_rejected"
+		if ctx.Err() != nil {
+			code = "tool_aborted"
+		}
+		return tools.Result{
+			Content:   err.Error(),
+			IsError:   true,
+			ErrorCode: code,
+			Metadata: map[string]any{
+				"request_id": requestID,
+			},
+		}, err
+	}
+	answer.Status = "answered"
+	body, marshalErr := json.Marshal(answer)
+	if marshalErr != nil {
+		return tools.Result{Content: marshalErr.Error(), IsError: true, ErrorCode: "tool_error"}, marshalErr
+	}
+	return tools.Result{
+		Content: string(body),
+		Metadata: map[string]any{
+			"request_id":   answer.RequestID,
+			"answer_count": len(answer.Answers),
+		},
+	}, nil
+}
+
+func askUserRequestID(call protocol.ToolCall, attemptID string) string {
+	if id := strings.TrimSpace(call.ID); id != "" {
+		return id
+	}
+	return strings.TrimSpace(attemptID)
 }
 
 func (o *toolOrchestrator) AbortBeforeExecute(index int, call protocol.ToolCall, attemptID string, err error) toolExecutionResult {

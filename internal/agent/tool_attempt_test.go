@@ -78,6 +78,65 @@ func TestRunMessagesExecutesToolAndContinuesLoop(t *testing.T) {
 	}
 }
 
+func TestRunMessagesAskUserToolUsesHandlerAndContinuesLoop(t *testing.T) {
+	cfg := config.Default()
+	cfg.MaxToolRounds = 3
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_question", ToolName: tools.AskUserToolName, ArgsDelta: `{"questions":[{"question":"Pick a color?","options":[{"id":"blue","label":"Blue","description":"Use blue"},{"id":"green","label":"Green","description":"Use green"}],"allow_freeform":true}]}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "thanks"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	settings := SettingsFromConfig(cfg)
+	settings.AskUser = func(ctx context.Context, req protocol.UserInputRequestEvent, emit func(protocol.Event)) (protocol.UserInputAnswerEvent, error) {
+		if req.RequestID != "call_question" || req.RunID == "" || req.TurnID != "turn-001" || req.CallID != "call_question" || len(req.Questions) != 1 {
+			t.Fatalf("request = %#v", req)
+		}
+		req.SessionID = "session-1"
+		emit(protocol.Event{Type: protocol.EventUserInputRequested, RunID: req.RunID, TurnID: req.TurnID, StepID: req.StepID, CallID: req.CallID, AttemptID: req.AttemptID, Data: req})
+		answer := protocol.UserInputAnswerEvent{
+			RequestID: req.RequestID,
+			SessionID: req.SessionID,
+			RunID:     req.RunID,
+			TurnID:    req.TurnID,
+			StepID:    req.StepID,
+			CallID:    req.CallID,
+			AttemptID: req.AttemptID,
+			Source:    "test",
+			Status:    "answered",
+			Answers:   []protocol.UserInputAnswer{{QuestionID: "q1", OptionID: "blue", OptionLabel: "Blue"}},
+		}
+		emit(protocol.Event{Type: protocol.EventUserInputAnswered, RunID: answer.RunID, TurnID: answer.TurnID, StepID: answer.StepID, CallID: answer.CallID, AttemptID: answer.AttemptID, Data: answer})
+		return answer, nil
+	}
+	a := NewFromSettings(settings, prov, tools.NewRegistry(cfg))
+	var events []protocol.Event
+	next, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "ask"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next) < 5 || next[len(next)-1].Content != "thanks" {
+		t.Fatalf("messages = %#v", next)
+	}
+	if !sawEvent(events, protocol.EventUserInputRequested) || !sawEvent(events, protocol.EventUserInputAnswered) {
+		t.Fatalf("user input events missing: %#v", events)
+	}
+	result, ok := firstToolResult(events)
+	if !ok || result.Name != tools.AskUserToolName || result.IsError || !strings.Contains(result.Content, `"option_id":"blue"`) {
+		t.Fatalf("ask_user result = %#v ok=%v", result, ok)
+	}
+	assertAgentLifecycleValid(t, events)
+}
+
 func TestRunMessagesMutatingToolEmitsTurnChangeRecorded(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", home)

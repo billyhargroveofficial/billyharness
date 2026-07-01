@@ -182,6 +182,14 @@ func (c *GatewayClient) CancelSession(ctx context.Context, sessionID string) (bo
 	return c.gatewayClient().CancelSession(ctx, sessionID)
 }
 
+func (c *GatewayClient) AnswerUserInput(ctx context.Context, sessionID, requestID string, answer gatewayapi.UserInputAnswerRequest) (gatewayapi.UserInputResponse, error) {
+	return c.gatewayClient().AnswerUserInput(ctx, sessionID, requestID, answer)
+}
+
+func (c *GatewayClient) RejectUserInput(ctx context.Context, sessionID, requestID string, reject gatewayapi.UserInputRejectRequest) (gatewayapi.UserInputResponse, error) {
+	return c.gatewayClient().RejectUserInput(ctx, sessionID, requestID, reject)
+}
+
 func (c *GatewayClient) gatewayJSON(ctx context.Context, method, path string, body []byte, out any) error {
 	var payload any
 	if body != nil {

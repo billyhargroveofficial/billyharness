@@ -22,12 +22,20 @@ type telegramAdmissionHarness struct {
 	admitResp gatewayapi.SessionInputResponse
 	admitted  chan gatewayapi.SessionInputRequest
 	ran       chan gatewayapi.RunRequest
+	answered  chan telegramUserInputAnswer
+}
+
+type telegramUserInputAnswer struct {
+	SessionID string
+	RequestID string
+	Request   gatewayapi.UserInputAnswerRequest
 }
 
 func newTelegramAdmissionHarness() *telegramAdmissionHarness {
 	return &telegramAdmissionHarness{
 		admitted: make(chan gatewayapi.SessionInputRequest, 4),
 		ran:      make(chan gatewayapi.RunRequest, 4),
+		answered: make(chan telegramUserInputAnswer, 4),
 	}
 }
 
@@ -61,6 +69,11 @@ func (h *telegramAdmissionHarness) RunSession(_ context.Context, sessionID strin
 	emit(protocol.Event{Seq: 1, Type: protocol.EventRunStarted})
 	emit(protocol.Event{Seq: 2, Type: protocol.EventRunCompleted})
 	return nil
+}
+
+func (h *telegramAdmissionHarness) AnswerUserInput(_ context.Context, sessionID, requestID string, answer gatewayapi.UserInputAnswerRequest) (gatewayapi.UserInputResponse, error) {
+	h.answered <- telegramUserInputAnswer{SessionID: sessionID, RequestID: requestID, Request: answer}
+	return gatewayapi.UserInputResponse{RequestID: requestID, Status: "answered"}, nil
 }
 
 func TestTelegramPromptAdmissionAdvancesOffsetAfterGatewayAdmission(t *testing.T) {
@@ -145,6 +158,47 @@ func TestTelegramDuplicateCompletedAdmissionAcksWithoutRun(t *testing.T) {
 	}
 	if chat := state.Chats[userChatKey(123, 0, 1001)]; chat.PendingInputID != "" {
 		t.Fatalf("pending input = %q, want cleared", chat.PendingInputID)
+	}
+}
+
+func TestTelegramPendingQuestionMessageAnswersWithoutAdmissionOrRun(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "telegram-state.json")
+	if err := (Store{Path: statePath}).Save(State{Chats: map[string]ChatState{
+		userChatKey(123, 0, 1001): {
+			SessionID:          "session-1",
+			PendingUserInputID: "request-1",
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	harness := newTelegramAdmissionHarness()
+	bot := newAdmissionTestBot(t, statePath, harness)
+
+	bot.handlePolledUpdate(context.Background(), telegramTextUpdate(46, "Blue"))
+
+	answer := receive(t, harness.answered, "pending question answer")
+	if answer.SessionID != "session-1" || answer.RequestID != "request-1" {
+		t.Fatalf("answer identity = %#v", answer)
+	}
+	if answer.Request.Text != "Blue" || answer.Request.Source != "telegram" || answer.Request.Metadata["update_id"] != "46" {
+		t.Fatalf("answer request = %#v", answer.Request)
+	}
+	select {
+	case admitted := <-harness.admitted:
+		t.Fatalf("pending question should not admit prompt: %#v", admitted)
+	case <-time.After(50 * time.Millisecond):
+	}
+	select {
+	case run := <-harness.ran:
+		t.Fatalf("pending question should not start run: %#v", run)
+	case <-time.After(50 * time.Millisecond):
+	}
+	state := loadTelegramState(t, statePath)
+	if state.Offset != 47 {
+		t.Fatalf("offset = %d, want 47", state.Offset)
+	}
+	if chat := state.Chats[userChatKey(123, 0, 1001)]; chat.PendingUserInputID != "" {
+		t.Fatalf("pending request = %q, want cleared", chat.PendingUserInputID)
 	}
 }
 

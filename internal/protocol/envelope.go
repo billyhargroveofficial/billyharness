@@ -142,6 +142,8 @@ func ValidateEventEnvelope(event Event) error {
 		return requireEnvelope(event, "run_id", "call_id")
 	case EventToolCallStarted, EventToolCallFinished, EventToolCallFailed, EventToolCallAborted, EventToolOutputRefCreated:
 		return requireEnvelope(event, "run_id", "call_id", "attempt_id")
+	case EventUserInputRequested, EventUserInputAnswered, EventUserInputRejected:
+		return requireEnvelope(event, "run_id", "turn_id", "step_id", "call_id", "attempt_id")
 	case EventHookStarted, EventHookFinished, EventHookFailed:
 		return requireEnvelope(event, "run_id")
 	case EventSessionStatus:
@@ -239,6 +241,24 @@ func enrichEventIDsFromData(event *Event) {
 	case *ToolOutputRefEvent:
 		if data != nil {
 			copyToolOutputRefEnvelope(event, *data)
+		}
+	case UserInputRequestEvent:
+		copyUserInputRequestEnvelope(event, data)
+	case *UserInputRequestEvent:
+		if data != nil {
+			copyUserInputRequestEnvelope(event, *data)
+		}
+	case UserInputAnswerEvent:
+		copyUserInputAnswerEnvelope(event, data)
+	case *UserInputAnswerEvent:
+		if data != nil {
+			copyUserInputAnswerEnvelope(event, *data)
+		}
+	case UserInputRejectEvent:
+		copyUserInputRejectEnvelope(event, data)
+	case *UserInputRejectEvent:
+		if data != nil {
+			copyUserInputRejectEnvelope(event, *data)
 		}
 	case HookEvent:
 		copyHookEnvelope(event, data)
@@ -340,6 +360,36 @@ func copyToolOutputRefEnvelope(event *Event, ref ToolOutputRefEvent) {
 	}
 	if event.AttemptID == "" {
 		event.AttemptID = ref.AttemptID
+	}
+}
+
+func copyUserInputRequestEnvelope(event *Event, input UserInputRequestEvent) {
+	copyUserInputEnvelope(event, input.RunID, input.TurnID, input.StepID, input.CallID, input.AttemptID)
+}
+
+func copyUserInputAnswerEnvelope(event *Event, input UserInputAnswerEvent) {
+	copyUserInputEnvelope(event, input.RunID, input.TurnID, input.StepID, input.CallID, input.AttemptID)
+}
+
+func copyUserInputRejectEnvelope(event *Event, input UserInputRejectEvent) {
+	copyUserInputEnvelope(event, input.RunID, input.TurnID, input.StepID, input.CallID, input.AttemptID)
+}
+
+func copyUserInputEnvelope(event *Event, runID, turnID, stepID, callID, attemptID string) {
+	if event.RunID == "" {
+		event.RunID = runID
+	}
+	if event.TurnID == "" {
+		event.TurnID = turnID
+	}
+	if event.StepID == "" {
+		event.StepID = stepID
+	}
+	if event.CallID == "" {
+		event.CallID = callID
+	}
+	if event.AttemptID == "" {
+		event.AttemptID = attemptID
 	}
 }
 

@@ -813,11 +813,28 @@ platform.
     ./cmd/fast-agent-harness ./internal/gateway` passed.
   - commit: pending.
 
-- [ ] HR-04.3 Interactive `ask_user` MVP.
+- [x] HR-04.3 Interactive `ask_user` MVP.
   - maps to: `competitive-improvements-todo.md` B7.
   - acceptance: one pending request per session; TUI/Telegram answers resume the
     same run; Telegram answers do not interrupt pending question runs.
   - verification: `go test -count=1 ./internal/protocol ./internal/agent ./internal/tools ./internal/gateway ./internal/gatewayclient ./internal/tui ./internal/telegrambot`.
+  - status: completed 2026-07-01.
+  - evidence: added model-visible bounded `ask_user`, typed
+    `user_input.requested`, `user_input.answered`, and
+    `user_input.rejected` events with run/turn/tool correlation, gateway
+    answer/reject endpoints, gatewayclient helpers, TUI pending-answer submit
+    flow, and Telegram pending-question handling that answers the same
+    session request before durable prompt admission or run interruption. Pending
+    gateway/TUI/Telegram state clears on answer/reject/cancel/terminal paths,
+    and restart-loaded Telegram pending requests expire by clearing on missing
+    gateway sessions.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*AskUser.*|Test.*UserInput.*(Requested|Answered|Rejected).*|Test.*Telegram.*Pending.*Question.*'
+    -count=1 ./internal/...` passed; `/root/.local/go/bin/go test -count=1
+    ./internal/protocol ./internal/agent ./internal/tools ./internal/gateway
+    ./internal/gatewayclient ./internal/tui ./internal/telegrambot` passed.
+  - commit: pending.
 
 - [ ] HR-04.4 Minimal project context registry.
   - maps to: `competitive-improvements-todo.md` B8.

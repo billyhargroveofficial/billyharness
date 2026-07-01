@@ -112,6 +112,22 @@ func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
 		if change, ok := toolrender.DecodeTurnChange(event.Data); ok {
 			return []RenderEvent{{Kind: "status", Title: "Reverted", Body: toolrender.TurnChangeSummary(change), Key: change.ChangeID}}
 		}
+	case protocol.EventUserInputRequested:
+		if req, ok := protocol.DecodeUserInputRequest(event.Data); ok {
+			return []RenderEvent{{Kind: "status", Title: "Question", Body: telegramUserInputQuestionText(req), Key: req.RequestID}}
+		}
+	case protocol.EventUserInputAnswered:
+		if answer, ok := protocol.DecodeUserInputAnswer(event.Data); ok {
+			return []RenderEvent{{Kind: "status", Title: "Question", Body: "answered", Key: answer.RequestID}}
+		}
+	case protocol.EventUserInputRejected:
+		if reject, ok := protocol.DecodeUserInputReject(event.Data); ok {
+			body := "rejected"
+			if reject.Reason != "" {
+				body += ": " + reject.Reason
+			}
+			return []RenderEvent{{Kind: "status", Title: "Question", Body: body, Key: reject.RequestID}}
+		}
 	case protocol.EventProviderUsageUpdate:
 	case protocol.EventRunCompleted:
 	case protocol.EventRunFailed:
@@ -524,6 +540,30 @@ func telegramContextThresholdKey(value any) string {
 		return "context-threshold"
 	}
 	return fmt.Sprintf("context-threshold-%d", data.Percent)
+}
+
+func telegramUserInputQuestionText(req protocol.UserInputRequestEvent) string {
+	var lines []string
+	for i, question := range req.Questions {
+		if question.Header != "" && (i == 0 || question.Header != req.Questions[i-1].Header) {
+			lines = append(lines, question.Header)
+		}
+		lines = append(lines, question.Question)
+		for _, option := range question.Options {
+			line := option.Label
+			if option.Description != "" {
+				line += " - " + option.Description
+			}
+			lines = append(lines, line)
+		}
+		if question.AllowFreeform {
+			lines = append(lines, "Freeform answer accepted.")
+		}
+	}
+	if len(lines) == 0 {
+		return "The agent is asking for input."
+	}
+	return toolrender.CompactText(strings.Join(lines, "\n"), 900)
 }
 
 func contextThresholdData(value any) protocol.ContextThresholdEvent {

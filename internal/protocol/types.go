@@ -91,6 +91,9 @@ const (
 	EventProviderUsageUpdate     EventType = "provider.usage"
 	EventSessionStatus           EventType = "session.status"
 	EventGatewayStreamGap        EventType = "gateway.stream_gap"
+	EventUserInputRequested      EventType = "user_input.requested"
+	EventUserInputAnswered       EventType = "user_input.answered"
+	EventUserInputRejected       EventType = "user_input.rejected"
 )
 
 type GatewayStreamGapEvent struct {
@@ -312,6 +315,65 @@ type TodoState struct {
 	InProgress int        `json:"in_progress"`
 	Completed  int        `json:"completed"`
 	Blocked    int        `json:"blocked"`
+}
+
+type UserInputOption struct {
+	ID          string `json:"id,omitempty"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+type UserInputQuestion struct {
+	ID            string            `json:"id"`
+	Header        string            `json:"header,omitempty"`
+	Question      string            `json:"question"`
+	Options       []UserInputOption `json:"options,omitempty"`
+	AllowFreeform bool              `json:"allow_freeform,omitempty"`
+}
+
+type UserInputRequestEvent struct {
+	RequestID string              `json:"request_id"`
+	SessionID string              `json:"session_id,omitempty"`
+	RunID     string              `json:"run_id,omitempty"`
+	TurnID    string              `json:"turn_id,omitempty"`
+	StepID    string              `json:"step_id,omitempty"`
+	CallID    string              `json:"call_id,omitempty"`
+	AttemptID string              `json:"attempt_id,omitempty"`
+	Source    string              `json:"source,omitempty"`
+	Questions []UserInputQuestion `json:"questions"`
+}
+
+type UserInputAnswer struct {
+	QuestionID  string `json:"question_id,omitempty"`
+	OptionID    string `json:"option_id,omitempty"`
+	OptionLabel string `json:"option_label,omitempty"`
+	Text        string `json:"text,omitempty"`
+}
+
+type UserInputAnswerEvent struct {
+	RequestID string            `json:"request_id"`
+	SessionID string            `json:"session_id,omitempty"`
+	RunID     string            `json:"run_id,omitempty"`
+	TurnID    string            `json:"turn_id,omitempty"`
+	StepID    string            `json:"step_id,omitempty"`
+	CallID    string            `json:"call_id,omitempty"`
+	AttemptID string            `json:"attempt_id,omitempty"`
+	Source    string            `json:"source,omitempty"`
+	Answers   []UserInputAnswer `json:"answers,omitempty"`
+	Status    string            `json:"status,omitempty"`
+}
+
+type UserInputRejectEvent struct {
+	RequestID string `json:"request_id"`
+	SessionID string `json:"session_id,omitempty"`
+	RunID     string `json:"run_id,omitempty"`
+	TurnID    string `json:"turn_id,omitempty"`
+	StepID    string `json:"step_id,omitempty"`
+	CallID    string `json:"call_id,omitempty"`
+	AttemptID string `json:"attempt_id,omitempty"`
+	Source    string `json:"source,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	Status    string `json:"status,omitempty"`
 }
 
 type HookEvent struct {

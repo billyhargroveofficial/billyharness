@@ -128,7 +128,7 @@ func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []pro
 			return messages, nil
 		}
 		messages = a.appendModelResponse(messages, modelStep)
-		results := a.executeToolCalls(ctx, hookRunner, toolSet, turnID, roundNum, modelStep.ToolCalls, emit)
+		results := a.executeToolCalls(ctx, hookRunner, toolSet, run.ID, turnID, roundNum, modelStep.ToolCalls, emit)
 		messages = appendToolResultMessages(messages, results)
 		emitContextThresholdEvents(messages, a.runtime, roundNum, "after_tool_results", emittedContextThresholds, emit)
 		a.emitTurnCompleted(emit, turnCompletion{
@@ -251,7 +251,7 @@ func (a *Agent) snapshotToolSet(ctx context.Context) tools.ToolSet {
 	return a.tools.SnapshotWithToolPolicy(ctx, a.toolPolicy)
 }
 
-func (a *Agent) executeToolCalls(ctx context.Context, hookRunner *runtimehooks.Runner, toolSet tools.ToolSet, turnID string, round int, calls []protocol.ToolCall, emit func(protocol.Event)) []toolExecutionResult {
+func (a *Agent) executeToolCalls(ctx context.Context, hookRunner *runtimehooks.Runner, toolSet tools.ToolSet, runID, turnID string, round int, calls []protocol.ToolCall, emit func(protocol.Event)) []toolExecutionResult {
 	results := make([]toolExecutionResult, len(calls))
 	orchestrator := a.newToolOrchestrator(emit, hookRunner, toolSet)
 	for _, call := range calls {
@@ -259,7 +259,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, hookRunner *runtimehooks.R
 	}
 	for i := 0; i < len(calls); {
 		if !a.canRunToolParallel(toolSet, calls[i]) {
-			results[i] = a.executeOneTool(ctx, orchestrator, toolSet, turnID, round, i, calls[i], false, "", 0, 0, emit)
+			results[i] = a.executeOneTool(ctx, orchestrator, toolSet, runID, turnID, round, i, calls[i], false, "", 0, 0, emit)
 			i++
 			continue
 		}
@@ -267,7 +267,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, hookRunner *runtimehooks.R
 		for j < len(calls) && a.canRunToolParallel(toolSet, calls[j]) {
 			j++
 		}
-		a.executeParallelToolBatch(ctx, orchestrator, toolSet, turnID, round, calls, i, j, results, emit)
+		a.executeParallelToolBatch(ctx, orchestrator, toolSet, runID, turnID, round, calls, i, j, results, emit)
 		i = j
 	}
 	return results

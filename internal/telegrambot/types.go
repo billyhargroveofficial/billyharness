@@ -62,17 +62,18 @@ type parameters struct {
 }
 
 type ChatState struct {
-	SessionID       string    `json:"session_id,omitempty"`
-	Model           string    `json:"model,omitempty"`
-	Profile         string    `json:"profile,omitempty"`
-	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
-	AccessMode      string    `json:"access_mode,omitempty"`
-	AgentTurns      int       `json:"agent_turns,omitempty"`
-	ToolCalls       int       `json:"tool_calls,omitempty"`
-	LastEventSeq    int64     `json:"last_event_seq,omitempty"`
-	PendingInputID  string    `json:"pending_input_id,omitempty"`
-	PendingUpdateID int       `json:"pending_update_id,omitempty"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	SessionID          string    `json:"session_id,omitempty"`
+	Model              string    `json:"model,omitempty"`
+	Profile            string    `json:"profile,omitempty"`
+	ReasoningEffort    string    `json:"reasoning_effort,omitempty"`
+	AccessMode         string    `json:"access_mode,omitempty"`
+	AgentTurns         int       `json:"agent_turns,omitempty"`
+	ToolCalls          int       `json:"tool_calls,omitempty"`
+	LastEventSeq       int64     `json:"last_event_seq,omitempty"`
+	PendingInputID     string    `json:"pending_input_id,omitempty"`
+	PendingUpdateID    int       `json:"pending_update_id,omitempty"`
+	PendingUserInputID string    `json:"pending_user_input_id,omitempty"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type State struct {

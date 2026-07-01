@@ -48,6 +48,13 @@ func (b *Bot) handlePolledUpdate(ctx context.Context, update Update) {
 		b.ackIgnoredUpdate(update, "command_handled")
 		return
 	}
+	answered, answerErr := b.answerPendingUserInput(ctx, msg, update.UpdateID)
+	if answered {
+		if answerErr == nil {
+			b.ackOffset(update.UpdateID)
+		}
+		return
+	}
 	admission, err := b.admitTelegramPromptUpdate(ctx, update)
 	if err != nil {
 		log.Printf("telegram prompt admission failed update=%d chat=%d: %v", update.UpdateID, msg.Chat.ID, err)

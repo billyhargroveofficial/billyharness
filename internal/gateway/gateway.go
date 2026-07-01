@@ -87,6 +87,7 @@ type Session struct {
 	storeSnapshots sessionStoreSnapshots
 	activeRunID    string
 	terminalRunIDs map[string]struct{}
+	pendingInput   *pendingUserInput
 	mu             sync.Mutex
 	status         SessionStatus
 }
@@ -106,6 +107,9 @@ type ContextContributor = gatewayapi.ContextContributor
 type ContextSource = gatewayapi.ContextSource
 type ContextThreshold = gatewayapi.ContextThreshold
 type CancelSessionResponse = gatewayapi.CancelSessionResponse
+type UserInputAnswerRequest = gatewayapi.UserInputAnswerRequest
+type UserInputRejectRequest = gatewayapi.UserInputRejectRequest
+type UserInputResponse = gatewayapi.UserInputResponse
 type BenchmarkListResponse = gatewayapi.BenchmarkListResponse
 type BenchmarkRunSummary = gatewayapi.BenchmarkRunSummary
 
@@ -302,6 +306,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/sessions/{id}/events", s.handleSessionEvents)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/inputs", s.handleSessionInput)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/run", s.handleSessionRun)
+	s.mux.HandleFunc("POST /v1/sessions/{id}/user_input/{request_id}/answer", s.handleUserInputAnswer)
+	s.mux.HandleFunc("POST /v1/sessions/{id}/user_input/{request_id}/reject", s.handleUserInputReject)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/undo", s.handleSessionUndo)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/cancel", s.handleSessionCancel)
 }
@@ -667,7 +673,7 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		a, err := s.agentForRunSettings(settings)
+		a, err := s.agentForSessionRunSettings(session, settings)
 		if err != nil {
 			return err
 		}
@@ -741,6 +747,57 @@ func (s *Server) handleSessionInput(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusOK
 	}
 	writeJSON(w, status, resp)
+}
+
+func (s *Server) handleUserInputAnswer(w http.ResponseWriter, r *http.Request) {
+	session, ok := s.session(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	var req UserInputAnswerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	requestID := strings.TrimSpace(r.PathValue("request_id"))
+	answer, err := session.answerUserInput(requestID, req)
+	if err != nil {
+		writeUserInputError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, UserInputResponse{RequestID: answer.RequestID, Status: "answered"})
+}
+
+func (s *Server) handleUserInputReject(w http.ResponseWriter, r *http.Request) {
+	session, ok := s.session(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	var req UserInputRejectRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+	}
+	requestID := strings.TrimSpace(r.PathValue("request_id"))
+	reject, err := session.rejectUserInput(requestID, req)
+	if err != nil {
+		writeUserInputError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, UserInputResponse{RequestID: reject.RequestID, Status: "rejected"})
+}
+
+func writeUserInputError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errNoPendingUserInput), errors.Is(err, errUserInputRequestUnknown):
+		writeError(w, http.StatusNotFound, err.Error())
+	default:
+		writeError(w, http.StatusBadRequest, err.Error())
+	}
 }
 
 const gatewayInterruptWaitTimeout = 3 * time.Second
@@ -1374,6 +1431,25 @@ func (s *Server) agentForRunSettings(settings runSettings) (*agent.Agent, error)
 		MCP:             settings.mcp,
 		Hooks:           settings.hooks,
 		Instructions:    settings.instructions,
+	}, prov, s.registry), nil
+}
+
+func (s *Server) agentForSessionRunSettings(session *Session, settings runSettings) (*agent.Agent, error) {
+	prov, err := provider.NewFromBinding(settings.provider)
+	if err != nil {
+		return nil, err
+	}
+	return agent.NewFromSettings(agent.Settings{
+		ProviderBinding: settings.provider,
+		Profile:         settings.profile,
+		Runtime:         settings.runtime,
+		ToolPolicy:      settings.toolPolicy,
+		MCP:             settings.mcp,
+		Hooks:           settings.hooks,
+		Instructions:    settings.instructions,
+		AskUser: func(ctx context.Context, request protocol.UserInputRequestEvent, emit func(protocol.Event)) (protocol.UserInputAnswerEvent, error) {
+			return session.askUser(ctx, request, emit)
+		},
 	}, prov, s.registry), nil
 }
 

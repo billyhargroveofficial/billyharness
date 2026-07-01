@@ -182,6 +182,24 @@ type CancelSessionResponse struct {
 	Cancelled bool `json:"cancelled"`
 }
 
+type UserInputAnswerRequest struct {
+	Text     string                     `json:"text,omitempty"`
+	Answers  []protocol.UserInputAnswer `json:"answers,omitempty"`
+	Source   string                     `json:"source,omitempty"`
+	Metadata map[string]string          `json:"metadata,omitempty"`
+}
+
+type UserInputRejectRequest struct {
+	Reason   string            `json:"reason,omitempty"`
+	Source   string            `json:"source,omitempty"`
+	Metadata map[string]string `json:"metadata,omitempty"`
+}
+
+type UserInputResponse struct {
+	RequestID string `json:"request_id"`
+	Status    string `json:"status"`
+}
+
 type SessionUndoRequest struct {
 	ChangeID string `json:"change_id,omitempty"`
 	Preview  bool   `json:"preview,omitempty"`

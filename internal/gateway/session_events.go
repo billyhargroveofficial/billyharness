@@ -265,6 +265,7 @@ func (s *Session) observeRunEvent(event protocol.Event) (protocol.Event, bool) {
 		if strings.TrimSpace(event.RunID) == "" && strings.TrimSpace(s.activeRunID) != "" {
 			event.RunID = s.activeRunID
 		}
+		s.pendingInput = nil
 		runID := strings.TrimSpace(event.RunID)
 		if runID != "" {
 			if _, seen := s.terminalRunIDs[runID]; seen {
