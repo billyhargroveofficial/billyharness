@@ -515,9 +515,9 @@ canonical event stream.
     ./internal/tui/transcript ./internal/telegrambot ./internal/toolrender`
     passed;
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `72e5f5cf55edb09d2fc7c51bde3f8d6e2844347b`.
 
-- [ ] SH-03.3 Add provider replay/fake-provider regression suite.
+- [x] SH-03.3 Add provider replay/fake-provider regression suite.
   - inspiration: OpenCode fake provider and Billy bench traces.
   - target files: `internal/provider`, `internal/agent`, `internal/bench`,
     `internal/testkit`.
@@ -525,7 +525,28 @@ canonical event stream.
     partial JSON, provider retries, and cancellation; tests assert terminal
     events and transcript pairing.
   - verification: provider/agent package tests.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: added an isolated `internal/testkit/fakeprovider` scripted
+    provider helper for fake provider streams with delayed chunks, terminal
+    errors, repeated scripts, request capture, and deterministic cancellation
+    start signals. Provider tests now exercise slow fake streams, partial tool
+    JSON deltas, retry metadata, request capture, and cancellation through the
+    public provider stream contract. Agent tests replay fake-provider streams
+    that combine reasoning/content chunks, invalid tool arguments, partial JSON
+    recovery, provider retry metadata, and cancellation; they assert terminal
+    lifecycle events and validate provider-request transcript pairing before
+    each model call.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*Fake.*Provider.*|Test.*FakeProvider.*|Test.*Replay.*Fake.*|Test.*Cancellation.*Terminal.*'
+    -count=1 ./internal/testkit/fakeprovider ./internal/provider
+    ./internal/agent` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/testkit
+    ./internal/testkit/fakeprovider ./internal/provider ./internal/agent`
+    passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/bench` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 ## Milestone 4 - Manual Solo Memory MVP (P1)
 
