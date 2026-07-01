@@ -67,12 +67,17 @@ Goal: make the work reproducible before changing runtime behavior.
     `@{u}`.
   - commit: pending.
 
-- [ ] HR-00.2 Build an internal implementation plan from this file.
+- [x] HR-00.2 Build an internal implementation plan from this file.
   - source: this TODO.
   - target files: no code files.
   - acceptance: `update_plan` has exactly one task in progress; blocked tasks
     are recorded in this file with concrete reason and next action.
   - verification: plan state is visible in the current Codex turn.
+  - status: completed 2026-07-01.
+  - evidence: active `update_plan` mirrors Milestone 0 setup, HR-01.1 through
+    HR-01.10 in priority order, Milestone 1 final verification, and later
+    P0/P1 continuation; exactly one item is in progress.
+  - commit: pending.
 
 - [ ] HR-00.3 Establish verification baseline for touched packages.
   - source: package-level commands in each task.
