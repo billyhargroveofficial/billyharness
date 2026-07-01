@@ -175,6 +175,7 @@ func (p *Projector) appendToolResult(event protocol.Event) {
 		ApplyEventIdentity(&p.cells[i], event)
 	}
 	p.cells[i].Title = toolResultTitle(event.Data, p.cells[i].Title)
+	applyToolCompactDefaults(&p.cells[i], event)
 	p.appendTextAt(i, text)
 }
 
@@ -224,6 +225,7 @@ func (p *Projector) applyStepEvent(event protocol.Event) {
 func (p *Projector) addProtocolCell(event protocol.Event, kind string, cellType CellType, title, content string) {
 	cell := p.newCell(kind, cellType, title, content, event.Type)
 	ApplyEventIdentity(&cell, event)
+	applyToolCompactDefaults(&cell, event)
 	p.cells = append(p.cells, cell)
 }
 
@@ -410,6 +412,45 @@ func toolLifecycleText(event protocol.Event) (string, string) {
 	default:
 		return "Tool event", string(event.Type)
 	}
+}
+
+func applyToolCompactDefaults(cell *Cell, event protocol.Event) {
+	if cell == nil || cell.CollapseSet {
+		return
+	}
+	compact, ok := eventToolCompact(event)
+	if !ok || !compact.CollapseDefault {
+		return
+	}
+	cell.Collapsed = true
+	cell.CollapseSet = true
+}
+
+func eventToolCompact(event protocol.Event) (protocol.ToolCompact, bool) {
+	switch event.Type {
+	case protocol.EventToolCallProgress:
+		if progress, ok := decodeToolProgress(event.Data); ok && progress.Compact != nil {
+			return *progress.Compact, true
+		}
+	case protocol.EventToolCallFinished, protocol.EventToolCallFailed, protocol.EventToolCallAborted:
+		if result, ok := decodeToolResult(event.Data); ok && result.Compact != nil {
+			return *result.Compact, true
+		}
+	case protocol.EventToolOutputRefCreated:
+		if ref, ok := decodeToolOutputRef(event.Data); ok && ref.Compact != nil {
+			return *ref.Compact, true
+		}
+	}
+	return protocol.ToolCompact{}, false
+}
+
+func decodeToolOutputRef(value any) (protocol.ToolOutputRefEvent, bool) {
+	bytes, _ := json.Marshal(value)
+	var ref protocol.ToolOutputRefEvent
+	if err := json.Unmarshal(bytes, &ref); err != nil {
+		return protocol.ToolOutputRefEvent{}, false
+	}
+	return ref, ref.OutputRef != "" || ref.CallID != ""
 }
 
 func TurnChangeEventText(value any) string {

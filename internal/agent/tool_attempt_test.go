@@ -401,10 +401,13 @@ func TestRunMessagesToolOrchestratorEmitsSafePermissionAndAttempt(t *testing.T) 
 		t.Fatalf("tool result metadata = %#v ok=%v", result, ok)
 	}
 	if result.Compact == nil ||
+		result.Compact.DisplayVersion != 2 ||
 		result.Compact.CallID != "call_time" ||
 		result.Compact.Name != "time_now" ||
+		result.Compact.Group != "tool" ||
 		result.Compact.Status != protocol.StepStatusCompleted ||
-		result.Compact.Title != "time_now" {
+		result.Compact.Title != "time_now" ||
+		!result.Compact.CollapseDefault {
 		t.Fatalf("tool result compact = %#v", result.Compact)
 	}
 	progress := toolProgressEvents(events, "call_time")
@@ -434,8 +437,10 @@ func TestRunMessagesToolOrchestratorEmitsSafePermissionAndAttempt(t *testing.T) 
 		t.Fatalf("tool progress statuses = %#v", progress)
 	}
 	if progress[0].Compact == nil ||
+		progress[0].Compact.DisplayVersion != 2 ||
 		progress[0].Compact.CallID != "call_time" ||
 		progress[0].Compact.Lifecycle != toolPhasePrepare ||
+		progress[0].Compact.Group != "tool" ||
 		progress[0].Compact.Target != "{}" {
 		t.Fatalf("tool progress compact = %#v", progress[0].Compact)
 	}
@@ -447,10 +452,23 @@ func TestApplyToolCompactMetadataUsesDisplaySummary(t *testing.T) {
 		Target:  "fallback target",
 	}
 	applyToolCompactMetadata(&compact, map[string]any{
-		"display_summary": "plan 2 todos | 1 in progress",
-		"display_target":  "Build todo_write",
+		"display_summary":          "plan 2 todos | 1 in progress",
+		"display_group":            "plan",
+		"display_target":           "Build todo_write",
+		"display_path":             "TODO.md",
+		"display_url":              "https://example.com/very/long/path",
+		"display_query":            "roadmap",
+		"display_preview":          "compact plan preview",
+		"display_collapse_default": true,
 	})
-	if compact.Summary != "plan 2 todos | 1 in progress" || compact.Target != "Build todo_write" {
+	if compact.Summary != "plan 2 todos | 1 in progress" ||
+		compact.Group != "plan" ||
+		compact.Target != "Build todo_write" ||
+		compact.Path != "TODO.md" ||
+		compact.URL != "https://example.com/very/long/path" ||
+		compact.Query != "roadmap" ||
+		compact.Preview != "compact plan preview" ||
+		!compact.CollapseDefault {
 		t.Fatalf("compact metadata = %#v", compact)
 	}
 }

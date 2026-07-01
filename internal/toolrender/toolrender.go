@@ -99,6 +99,12 @@ type ResultSummary struct {
 	Line            string
 	IsError         bool
 	Truncated       bool
+	CollapseDefault bool
+	Group           string
+	Preview         string
+	Path            string
+	URL             string
+	Query           string
 	OutputRef       string
 	DurationMS      int64
 	EstimatedTokens int64
@@ -188,6 +194,12 @@ func ResultSummaryFromCompact(compact protocol.ToolCompact, base string, style S
 		Line:            line,
 		IsError:         compact.IsError || compact.Status == protocol.StepStatusFailed || compact.Status == "aborted",
 		Truncated:       compact.Truncated,
+		CollapseDefault: compact.CollapseDefault,
+		Group:           compact.Group,
+		Preview:         compact.Preview,
+		Path:            compact.Path,
+		URL:             compact.URL,
+		Query:           compact.Query,
 		OutputRef:       compact.OutputRef,
 		DurationMS:      compact.DurationMS,
 		EstimatedTokens: compact.EstimatedTokens,
@@ -302,6 +314,11 @@ func CompactLine(compact protocol.ToolCompact, base string, style Style) string 
 	prefix := compactPrefix(compact, style)
 	var parts []string
 	parts = append(parts, strings.TrimSpace(prefix+" "+CompactText(summary, 160)))
+	if target := compactSubjectLine(compact); target != "" && !strings.Contains(summary, target) {
+		parts = append(parts, target)
+	} else if preview := strings.TrimSpace(compact.Preview); preview != "" && !strings.Contains(summary, preview) {
+		parts = append(parts, "preview "+CompactText(preview, 96))
+	}
 	if compact.Error != "" {
 		parts = append(parts, CompactText(compact.Error, 80))
 	}
@@ -319,6 +336,20 @@ func CompactLine(compact protocol.ToolCompact, base string, style Style) string 
 	}
 	if compact.OriginalBytes > 0 {
 		parts = append(parts, CompactInt(compact.OriginalBytes)+"B")
+	}
+	return strings.Join(nonEmptyParts(parts...), " · ")
+}
+
+func compactSubjectLine(compact protocol.ToolCompact) string {
+	var parts []string
+	if compact.URL != "" {
+		parts = append(parts, "url "+CompactURL(compact.URL, 88))
+	}
+	if compact.Path != "" {
+		parts = append(parts, "path "+CompactText(compact.Path, 88))
+	}
+	if compact.Query != "" {
+		parts = append(parts, "query "+CompactText(compact.Query, 72))
 	}
 	return strings.Join(nonEmptyParts(parts...), " · ")
 }

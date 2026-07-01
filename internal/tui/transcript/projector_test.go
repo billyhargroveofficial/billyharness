@@ -97,17 +97,23 @@ func TestProjectorApplyToolCompactLifecycleCells(t *testing.T) {
 			AttemptID: "attempt-a",
 			OutputRef: "/root/billyharness/tool-output/custom.txt",
 			Compact: &protocol.ToolCompact{
-				CallID:    "call-a",
-				Name:      "custom_tool",
-				Lifecycle: "output_ref",
-				Status:    "output_ref",
-				Summary:   "custom_tool output ref",
-				OutputRef: "/root/billyharness/tool-output/custom.txt",
+				DisplayVersion:  2,
+				CallID:          "call-a",
+				Name:            "custom_tool",
+				Lifecycle:       "output_ref",
+				Status:          "output_ref",
+				Group:           "tool",
+				Summary:         "custom_tool output ref",
+				OutputRef:       "/root/billyharness/tool-output/custom.txt",
+				CollapseDefault: true,
 			},
 		},
 	})
 	if len(cells) != 2 || cells[1].Title != "Tool output" || !strings.Contains(cells[1].Content, "custom.txt") {
 		t.Fatalf("output ref cell = %#v", cells)
+	}
+	if !cells[1].CollapseSet || !cells[1].Collapsed {
+		t.Fatalf("output ref collapse default not applied: %#v", cells[1])
 	}
 }
 

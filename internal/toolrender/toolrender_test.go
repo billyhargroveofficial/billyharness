@@ -400,6 +400,45 @@ func TestToolCompactSummaryDrivesResultLine(t *testing.T) {
 	}
 }
 
+func TestToolCompactV2FieldsDriveBoundedSubjectLine(t *testing.T) {
+	longURL := "https://example.com/" + strings.Repeat("very-long-segment/", 12) + "final?secret=do-not-render"
+	longQuery := strings.Repeat("context cache diagnostics ", 12)
+	compact := protocol.ToolCompact{
+		DisplayVersion:  2,
+		CallID:          "call_web",
+		Name:            "web_fetch",
+		Lifecycle:       "result",
+		Status:          protocol.StepStatusCompleted,
+		Group:           "web",
+		Summary:         "fetched web context",
+		URL:             longURL,
+		Query:           longQuery,
+		Preview:         `{"raw":"json","secret":"nope"}`,
+		CollapseDefault: true,
+	}
+	summary := ResultSummaryFromCompact(compact, "", StyleTelegram)
+	if !summary.CollapseDefault || summary.Group != "web" || summary.URL != longURL || summary.Query != longQuery {
+		t.Fatalf("summary metadata = %#v", summary)
+	}
+	line := summary.Line
+	if len([]rune(line)) > 280 {
+		t.Fatalf("compact line too long (%d): %q", len([]rune(line)), line)
+	}
+	for _, want := range []string{"✅", "fetched web context", "url example.com/", "query context cache"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("line missing %q: %q", want, line)
+		}
+	}
+	for _, notWant := range []string{"secret=do-not-render", `"raw"`, `"secret"`} {
+		if strings.Contains(line, notWant) {
+			t.Fatalf("line leaked raw detail %q: %q", notWant, line)
+		}
+	}
+	if !strings.Contains(line, "…") {
+		t.Fatalf("line should middle-truncate long subject: %q", line)
+	}
+}
+
 func TestToolCompactNoRawJSONFallbackForUnknownTool(t *testing.T) {
 	call := protocol.ToolCall{
 		Name:      "custom_tool",

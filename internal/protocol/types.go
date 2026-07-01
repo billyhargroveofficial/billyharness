@@ -329,6 +329,7 @@ type ToolOutputRefEvent struct {
 }
 
 type ToolCompact struct {
+	DisplayVersion  int      `json:"display_version,omitempty"`
 	CallID          string   `json:"call_id,omitempty"`
 	AttemptID       string   `json:"attempt_id,omitempty"`
 	Name            string   `json:"name,omitempty"`
@@ -338,8 +339,13 @@ type ToolCompact struct {
 	Summary         string   `json:"summary,omitempty"`
 	Detail          string   `json:"detail,omitempty"`
 	Category        string   `json:"category,omitempty"`
+	Group           string   `json:"group,omitempty"`
 	Verb            string   `json:"verb,omitempty"`
 	Target          string   `json:"target,omitempty"`
+	Path            string   `json:"path,omitempty"`
+	URL             string   `json:"url,omitempty"`
+	Query           string   `json:"query,omitempty"`
+	Preview         string   `json:"preview,omitempty"`
 	Error           string   `json:"error,omitempty"`
 	OutputRef       string   `json:"output_ref,omitempty"`
 	OutputRefID     string   `json:"output_ref_id,omitempty"`
@@ -347,6 +353,7 @@ type ToolCompact struct {
 	EstimatedTokens int64    `json:"estimated_tokens,omitempty"`
 	OriginalBytes   int64    `json:"original_bytes,omitempty"`
 	Truncated       bool     `json:"truncated,omitempty"`
+	CollapseDefault bool     `json:"collapse_default,omitempty"`
 	IsError         bool     `json:"is_error,omitempty"`
 	Hints           []string `json:"hints,omitempty"`
 }

@@ -300,14 +300,14 @@ is to compaction.
     'Test.*Helper.*Usage.*|Test.*WebSummarizer.*|Test.*ToolSummary.*|TestReplayEventsAggregatesUsageCumulativeAndEventCounters|TestTUIAccountingMatchesClientUXProjector|TestRendererFooterShowsToolSummaryTokens|TestModelCompactionStrategyReplacesSummaryAndReportsModel|TestModelWebSummary.*'
     -count=1 ./internal/...` passed;
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `f5a95a62e01cd0a1823600a353dee9a26645ee6f`.
 
 ## Milestone 2 - Shared Tool UI, Output Refs, And Streaming Liveness (P0)
 
 Goal: make tool display compact, shared, and live across TUI and Telegram, and
 make silent stalls diagnosable.
 
-- [ ] SH-02.1 Upgrade `toolrender` into a tool display contract v2.
+- [x] SH-02.1 Upgrade `toolrender` into a tool display contract v2.
   - inspiration: Claude Code `Tool` UI traits and OpenCode truncation display.
   - target files: `internal/toolrender`, `internal/tui/transcript`,
     `internal/tui/render`, `internal/telegrambot/render.go`,
@@ -318,7 +318,30 @@ make silent stalls diagnosable.
   - acceptance: long URLs and JSON args are middle-truncated and never dominate
     Telegram/TUI progress bubbles.
   - verification: shared golden tests consumed by TUI and Telegram renderers.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: extended protocol `ToolCompact` with v2 display metadata for
+    display version, grouping, collapse default, path/URL/query subjects, and
+    one-line previews. Agent tool progress/result/output-ref compacts now
+    derive or honor those fields from tool args and display metadata without
+    importing presentation packages. Shared `toolrender` result summaries carry
+    the v2 fields and render bounded subject lines with middle-truncated URLs,
+    paths, and queries before falling back to preview text. TUI transcript
+    projection applies compact collapse defaults for tool lifecycle cells, and
+    Telegram rendering consumes the same compact line without leaking raw JSON
+    payloads or long URL query secrets.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/protocol
+    ./internal/agent ./internal/toolrender ./internal/tui/transcript
+    ./internal/telegrambot` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/toolrender
+    ./internal/tui/transcript ./internal/tui/render ./internal/tui
+    ./internal/telegrambot ./internal/protocol ./internal/clientux/projector
+    ./internal/agent` passed;
+    `/root/.local/go/bin/go test -run
+    'Test.*ToolCompact.*|Test.*ToolRender.*|Test.*Compact.*URL.*|Test.*NoRaw.*JSON.*|Test.*Tool.*Display.*|Test.*Collapse.*|TestRendererUsesToolCompactResultSummary|TestProjectorApplyToolCompactLifecycleCells'
+    -count=1 ./internal/...` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] SH-02.2 Audit output-ref behavior across resume/replay.
   - inspiration: OpenCode durable truncation directory and Codex rollout traces.

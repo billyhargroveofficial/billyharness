@@ -732,18 +732,26 @@ func toolProgressCompact(call protocol.ToolCall, attemptID, phase, status string
 	if target == "" {
 		target = summarizeToolCallArgs(call)
 	}
+	path, rawURL, query := toolCompactSubjects(call)
 	compact := protocol.ToolCompact{
-		CallID:    call.ID,
-		AttemptID: attemptID,
-		Name:      call.Name,
-		Lifecycle: phase,
-		Status:    status,
-		Title:     call.Name,
-		Summary:   compactToolSummary(call.Name, target, status),
-		Detail:    phase,
-		Category:  metadataText(metadata, "risk"),
-		Verb:      phase,
-		Target:    target,
+		DisplayVersion:  2,
+		CallID:          call.ID,
+		AttemptID:       attemptID,
+		Name:            call.Name,
+		Lifecycle:       phase,
+		Status:          status,
+		Title:           call.Name,
+		Summary:         compactToolSummary(call.Name, target, status),
+		Detail:          phase,
+		Category:        metadataText(metadata, "risk"),
+		Group:           toolCompactGroup(call.Name),
+		Verb:            phase,
+		Target:          target,
+		Path:            path,
+		URL:             rawURL,
+		Query:           query,
+		Preview:         toolCompactPreview(path, rawURL, query, target),
+		CollapseDefault: toolCompactCollapseDefault(phase, status),
 	}
 	applyToolCompactMetadata(&compact, metadata)
 	return compact
@@ -780,7 +788,12 @@ func applyToolCompactMetadata(compact *protocol.ToolCompact, metadata map[string
 	compact.OutputRef = firstNonEmptyString(compact.OutputRef, metadataString(metadata, "output_ref"))
 	compact.OutputRefID = firstNonEmptyString(compact.OutputRefID, metadataString(metadata, tooloutput.MetadataOutputRefID))
 	compact.Summary = firstNonEmptyString(metadataString(metadata, "display_summary"), compact.Summary)
+	compact.Group = firstNonEmptyString(metadataString(metadata, "display_group"), compact.Group)
 	compact.Target = firstNonEmptyString(metadataString(metadata, "display_target"), compact.Target)
+	compact.Path = firstNonEmptyString(metadataString(metadata, "display_path"), compact.Path)
+	compact.URL = firstNonEmptyString(metadataString(metadata, "display_url"), compact.URL)
+	compact.Query = firstNonEmptyString(metadataString(metadata, "display_query"), compact.Query)
+	compact.Preview = firstNonEmptyString(metadataString(metadata, "display_preview"), compact.Preview)
 	compact.DurationMS = firstNonZeroInt64(compact.DurationMS, metadataInt64(metadata, "duration_ms"))
 	compact.EstimatedTokens = firstNonZeroInt64(compact.EstimatedTokens, metadataInt64(metadata, "output_estimated_tokens"))
 	compact.EstimatedTokens = firstNonZeroInt64(compact.EstimatedTokens, metadataInt64(metadata, "estimated_text_tokens"))
@@ -790,12 +803,77 @@ func applyToolCompactMetadata(compact *protocol.ToolCompact, metadata map[string
 	if metadataBool(metadata, "truncated") {
 		compact.Truncated = true
 	}
+	if metadataBool(metadata, "display_collapse_default") {
+		compact.CollapseDefault = true
+	}
 	if compact.OutputRef != "" {
 		compact.Hints = appendMissingHint(compact.Hints, "output_ref")
 	}
 	if compact.Truncated {
 		compact.Hints = appendMissingHint(compact.Hints, "truncated")
 	}
+}
+
+func toolCompactSubjects(call protocol.ToolCall) (path, rawURL, query string) {
+	args := toolCallArgsMap(call)
+	path = firstArgString(args, "path", "file", "cwd")
+	rawURL = firstArgString(args, "url")
+	query = firstArgString(args, "query", "pattern", "glob", "name")
+	return path, rawURL, query
+}
+
+func toolCallArgsMap(call protocol.ToolCall) map[string]any {
+	if len(call.Arguments) == 0 || string(call.Arguments) == "null" {
+		return nil
+	}
+	var args map[string]any
+	if err := json.Unmarshal(call.Arguments, &args); err == nil {
+		return args
+	}
+	var raw string
+	if err := json.Unmarshal(call.Arguments, &raw); err == nil && raw != "" {
+		_ = json.Unmarshal([]byte(raw), &args)
+	}
+	return args
+}
+
+func firstArgString(args map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := metadataText(args, key); strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func toolCompactGroup(name string) string {
+	switch {
+	case strings.HasPrefix(name, "web_"):
+		return "web"
+	case strings.HasPrefix(name, "fs_"):
+		return "files"
+	case strings.HasPrefix(name, "shell_"):
+		return "shell"
+	case strings.HasPrefix(name, "mcp_"):
+		return "mcp"
+	case strings.HasPrefix(name, "diagnostics_"):
+		return "diagnostics"
+	case name == "todo_write":
+		return "plan"
+	default:
+		return "tool"
+	}
+}
+
+func toolCompactPreview(path, rawURL, query, target string) string {
+	return firstNonEmptyString(rawURL, path, query, target)
+}
+
+func toolCompactCollapseDefault(phase, status string) bool {
+	if status == protocol.StepStatusFailed || status == "aborted" {
+		return false
+	}
+	return phase == "result" || phase == "output_ref" || status == "output_ref"
 }
 
 func compactToolSummary(name, target, status string) string {

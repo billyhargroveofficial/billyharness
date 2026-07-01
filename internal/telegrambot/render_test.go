@@ -721,26 +721,31 @@ func TestRendererUsesToolCompactResultSummary(t *testing.T) {
 			Name:    "custom_tool",
 			Content: strings.Repeat("raw payload ", 50),
 			Compact: &protocol.ToolCompact{
+				DisplayVersion:  2,
 				CallID:          "call_custom",
 				Name:            "custom_tool",
 				Lifecycle:       "result",
 				Status:          protocol.StepStatusCompleted,
+				Group:           "web",
 				Summary:         "completed custom_tool target=README.md",
+				URL:             "https://example.com/" + strings.Repeat("long/", 20) + "final?query=secret",
+				Query:           strings.Repeat("compact display ", 12),
 				OutputRef:       "/root/billyharness/tool-output/custom.txt",
 				EstimatedTokens: 1200,
 				Truncated:       true,
+				CollapseDefault: true,
 			},
 		},
 	})
 	if len(rendered) != 1 {
 		t.Fatalf("rendered = %#v", rendered)
 	}
-	for _, want := range []string{"completed custom_tool", "README.md", "custom.txt", "~1.2k tok", "truncated"} {
+	for _, want := range []string{"completed custom_tool", "README.md", "url example.com/", "query compact display", "custom.txt", "~1.2k tok", "truncated"} {
 		if !strings.Contains(rendered[0].Body, want) {
 			t.Fatalf("compact result missing %q: %q", want, rendered[0].Body)
 		}
 	}
-	for _, notWant := range []string{"raw payload", "secret", "payload"} {
+	for _, notWant := range []string{"raw payload", "query=secret", "payload"} {
 		if strings.Contains(rendered[0].Body, notWant) {
 			t.Fatalf("compact result leaked %q: %q", notWant, rendered[0].Body)
 		}
