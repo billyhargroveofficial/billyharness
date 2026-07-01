@@ -24,6 +24,18 @@ func NewWebSummarizerFromProjections(binding config.ProviderBinding, toolPolicy 
 
 func (s WebSummarizer) SummarizeWeb(ctx context.Context, req webtools.SummaryRequest) (webtools.SummaryResult, error) {
 	binding, settings := s.summaryBinding(req)
+	if err := modelinfo.ValidateCapabilityPolicy(modelinfo.CapabilityPolicyRequest{
+		Provider:           binding.Provider.Provider,
+		Model:              binding.Model.Model,
+		Thinking:           binding.Model.Thinking,
+		ReasoningEffort:    binding.Model.ReasoningEffort,
+		MaxOutputTokens:    binding.Model.MaxTokens,
+		RequireStreaming:   true,
+		HelperKind:         "web_summary",
+		AllowUnknownModels: modelinfo.Provider(binding.Provider.Provider).Custom || binding.Provider.Provider == modelinfo.ProviderMock,
+	}); err != nil {
+		return webtools.SummaryResult{}, err
+	}
 	input, inputTruncated := webtools.SummaryInput(req.Source.Text, settings.MaxInputTokens)
 	prompt := webtools.SummaryPrompt(req.Source, input, inputTruncated)
 	estimatedInputTokens := int64(webtools.EstimateTokens(prompt))

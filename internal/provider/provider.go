@@ -128,6 +128,19 @@ func RequestMetadataFromError(err error) (RequestMetadata, bool) {
 
 func NewFromBinding(binding config.ProviderBinding) (Provider, error) {
 	providerID := modelinfo.ProviderForModel(binding.Model.Model, binding.Provider.Provider)
+	if err := modelinfo.ValidateCapabilityPolicy(modelinfo.CapabilityPolicyRequest{
+		Provider:           providerID,
+		Model:              binding.Model.Model,
+		Thinking:           binding.Model.Thinking,
+		ReasoningEffort:    binding.Model.ReasoningEffort,
+		MaxOutputTokens:    binding.Model.MaxTokens,
+		RequireStreaming:   true,
+		RequireToolCalls:   providerID != modelinfo.ProviderMock,
+		RequireParallel:    binding.Limits.MaxParallelTools > 1 && providerID != modelinfo.ProviderMock,
+		AllowUnknownModels: modelinfo.Provider(providerID).Custom || providerID == modelinfo.ProviderMock,
+	}); err != nil {
+		return nil, err
+	}
 	if providerID == modelinfo.ProviderMock {
 		return Mock{}, nil
 	}

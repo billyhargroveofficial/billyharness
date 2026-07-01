@@ -131,6 +131,8 @@ func TestConfigInspectJSONDoesNotLeakDotenvSecrets(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"diagnostics"`) ||
 		!strings.Contains(out.String(), `"provider_auth"`) ||
+		!strings.Contains(out.String(), `"provider_capability"`) ||
+		!strings.Contains(out.String(), `"max_output_tokens"`) ||
 		!strings.Contains(out.String(), `"runtime_tool"`) {
 		t.Fatalf("config inspect missing diagnostics: %s", out.String())
 	}

@@ -107,6 +107,7 @@ func (a *Agent) compactionSummaryBinding() (config.ProviderBinding, int, time.Du
 	if maxOutputTokens <= 0 {
 		maxOutputTokens = 700
 	}
+	binding.Model.MaxTokens = maxOutputTokens
 	timeout := a.toolPolicy.WebSummaryTimeout
 	if timeout <= 0 {
 		timeout = time.Minute

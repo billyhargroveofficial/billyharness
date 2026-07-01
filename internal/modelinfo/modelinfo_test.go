@@ -1,6 +1,9 @@
 package modelinfo
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNormalizeAlias(t *testing.T) {
 	tests := map[string]string{
@@ -52,7 +55,11 @@ func TestLookupIncludesBillingHints(t *testing.T) {
 func TestLookupIncludesCapabilityMetadata(t *testing.T) {
 	flash := Lookup("deepseek-v4-flash")
 	if flash.ContextWindowTokens != 1_000_000 || !flash.ToolCalls || !flash.ParallelToolCalls || !flash.Streaming ||
-		flash.DefaultSummaryModel != "deepseek-v4-flash" ||
+		flash.MaxOutputTokens != 8192 ||
+		flash.HelperModels.WebSummary != "deepseek-v4-flash" ||
+		flash.HelperModels.Memory != "deepseek-v4-flash" ||
+		flash.CostMode != "metered" ||
+		!flash.Reasoning ||
 		!hasString(flash.ReasoningModes, "max") ||
 		!hasString(flash.TokenAccountingFields, "reasoning_tokens") ||
 		!hasString(flash.CacheAccountingFields, "cache_hit_tokens") {
@@ -60,9 +67,51 @@ func TestLookupIncludesCapabilityMetadata(t *testing.T) {
 	}
 	gpt := Lookup("gpt-5.5")
 	if gpt.ContextWindowTokens != 1_000_000 || !gpt.ToolCalls || !gpt.Streaming ||
-		gpt.DefaultSummaryModel != "gpt-5.4-mini" ||
+		gpt.MaxOutputTokens != 8192 ||
+		gpt.HelperModels.WebSummary != "gpt-5.4-mini" ||
+		gpt.HelperModels.Memory != "gpt-5.4-mini" ||
+		gpt.CostMode != "subscription" ||
+		!hasString(gpt.ReasoningModes, "minimal") ||
 		!hasString(gpt.CacheAccountingFields, "cache_miss_tokens") {
 		t.Fatalf("gpt capabilities = %#v", gpt)
+	}
+}
+
+func TestValidateCapabilityPolicyRejectsUnsupportedSettings(t *testing.T) {
+	if err := ValidateCapabilityPolicy(CapabilityPolicyRequest{
+		Provider:        "deepseek",
+		Model:           "deepseek-v4-flash",
+		Thinking:        "enabled",
+		ReasoningEffort: "warp",
+	}); err == nil || !strings.Contains(err.Error(), "unsupported reasoning_effort") {
+		t.Fatalf("reasoning error = %v", err)
+	}
+	if err := ValidateCapabilityPolicy(CapabilityPolicyRequest{
+		Provider:        "deepseek",
+		Model:           "deepseek-v4-flash",
+		MaxOutputTokens: 9000,
+	}); err == nil || !strings.Contains(err.Error(), "max_output_tokens=9000") {
+		t.Fatalf("max output error = %v", err)
+	}
+	if err := ValidateCapabilityPolicy(CapabilityPolicyRequest{
+		Provider: "deepseek",
+		Model:    "unknown-model",
+	}); err == nil || !strings.Contains(err.Error(), "capabilities are unknown") {
+		t.Fatalf("unknown model error = %v", err)
+	}
+	if err := ValidateCapabilityPolicy(CapabilityPolicyRequest{
+		Provider:        "openai-codex",
+		Model:           "o3-mini",
+		ReasoningEffort: "minimal",
+	}); err != nil {
+		t.Fatalf("codex-family model should use inferred capabilities: %v", err)
+	}
+	if err := ValidateCapabilityPolicy(CapabilityPolicyRequest{
+		Provider:           "my-openai-compatible",
+		Model:              "unknown-model",
+		AllowUnknownModels: true,
+	}); err != nil {
+		t.Fatalf("custom unknown model should be allowed: %v", err)
 	}
 }
 
@@ -91,13 +140,4 @@ func TestDefaultSummaryModelUsesCatalog(t *testing.T) {
 	if got := DefaultSummaryModel("deepseek-v4-pro", "openai-codex"); got != "deepseek-v4-flash" {
 		t.Fatalf("deepseek summary model = %q", got)
 	}
-}
-
-func hasString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }

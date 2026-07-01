@@ -61,6 +61,32 @@ func TestWebSummarizerUsesProviderAndRecordsUsage(t *testing.T) {
 	}
 }
 
+func TestWebSummarizerRejectsUnsupportedHelperCapabilityBeforeProvider(t *testing.T) {
+	cfg := config.Default()
+	cfg.WebSummaryMode = "model"
+	cfg.WebSummaryProvider = "deepseek"
+	cfg.WebSummaryModel = "deepseek-v4-flash"
+	cfg.WebSummaryMaxOutputTokens = 9000
+	called := false
+	summarizer := WebSummarizer{
+		Binding:    cfg.ProviderBinding(),
+		ToolPolicy: cfg.ToolPolicySettings(),
+		NewProvider: func(config.ProviderBinding) (Provider, error) {
+			called = true
+			return summaryProvider{content: "unused"}, nil
+		},
+	}
+	_, err := summarizer.SummarizeWeb(context.Background(), webtools.SummaryRequest{
+		Source: webtools.SummarySource{URL: "https://example.com", Text: "raw page"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "web_summary helper model") || !strings.Contains(err.Error(), "max_output_tokens=9000") {
+		t.Fatalf("err = %v", err)
+	}
+	if called {
+		t.Fatalf("provider factory was called before capability validation")
+	}
+}
+
 type summaryProvider struct {
 	content string
 	usage   Usage

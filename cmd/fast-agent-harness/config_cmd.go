@@ -59,6 +59,21 @@ func configInspectCommand(args []string, stdout io.Writer) error {
 		providerAuth.ReasoningEffort,
 		resolved.Config.GatewayAddr,
 	)
+	caps := resolved.Config.ProviderCapabilitySnapshot()
+	fmt.Fprintf(stdout, "capability: context=%d max_output=%d tools=%v parallel=%v streaming=%v reasoning=%v cost=%s websum=%s memory=%s\n",
+		caps.ContextWindowTokens,
+		caps.MaxOutputTokens,
+		caps.ToolCalls,
+		caps.ParallelToolCalls,
+		caps.Streaming,
+		caps.Reasoning,
+		emptyConfigInspectValue(caps.CostMode),
+		emptyConfigInspectValue(caps.WebSummaryModel),
+		emptyConfigInspectValue(caps.MemoryHelperModel),
+	)
+	if caps.ValidationError != "" {
+		fmt.Fprintf(stdout, "capability warning: %s\n", caps.ValidationError)
+	}
 	fmt.Fprintf(stdout, "%-34s  %-28s  %-26s  %s\n", "key", "value", "source", "source key/path")
 	fmt.Fprintf(stdout, "%-34s  %-28s  %-26s  %s\n", strings.Repeat("-", 34), strings.Repeat("-", 28), strings.Repeat("-", 26), strings.Repeat("-", 24))
 	for _, value := range resolved.SanitizedValues() {
@@ -83,6 +98,14 @@ func configInspectCommand(args []string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "warning: %s\n", warning)
 	}
 	return nil
+}
+
+func emptyConfigInspectValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "-"
+	}
+	return value
 }
 
 func configUsage(w io.Writer) {

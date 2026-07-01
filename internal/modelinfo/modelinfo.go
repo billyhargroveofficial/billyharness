@@ -1,6 +1,9 @@
 package modelinfo
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 const (
 	ProviderDeepSeek    = "deepseek"
@@ -15,6 +18,11 @@ type Pricing struct {
 	OutputPer1M    float64
 }
 
+type HelperModels struct {
+	WebSummary string
+	Memory     string
+}
+
 type Info struct {
 	Model                 string
 	Provider              string
@@ -22,13 +30,17 @@ type Info struct {
 	Pricing               Pricing
 	Known                 bool
 	ContextWindowTokens   int64
+	MaxOutputTokens       int
 	ReasoningModes        []string
+	Reasoning             bool
 	ToolCalls             bool
 	ParallelToolCalls     bool
 	Streaming             bool
 	TokenAccountingFields []string
 	CacheAccountingFields []string
 	DefaultSummaryModel   string
+	HelperModels          HelperModels
+	CostMode              string
 }
 
 type ProviderInfo struct {
@@ -40,6 +52,19 @@ type ProviderInfo struct {
 	Subscription     bool     `json:"subscription"`
 	Custom           bool     `json:"custom"`
 	Models           []string `json:"models,omitempty"`
+}
+
+type CapabilityPolicyRequest struct {
+	Provider           string
+	Model              string
+	Thinking           string
+	ReasoningEffort    string
+	MaxOutputTokens    int
+	RequireToolCalls   bool
+	RequireParallel    bool
+	RequireStreaming   bool
+	HelperKind         string
+	AllowUnknownModels bool
 }
 
 func Lookup(model string) Info {
@@ -55,6 +80,8 @@ func Lookup(model string) Info {
 		return info
 	case "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark":
 		return codexInfo(model, true)
+	case "mock", "mock-summarizer", "mock-summary":
+		return mockInfo(model)
 	default:
 		if IsCodexModel(model) {
 			return codexInfo(model, false)
@@ -74,13 +101,17 @@ func deepSeekInfo(model string) Info {
 		Provider:              ProviderDeepSeek,
 		Known:                 true,
 		ContextWindowTokens:   1_000_000,
+		MaxOutputTokens:       8_192,
 		ReasoningModes:        []string{"off", "low", "medium", "high", "xhigh", "max"},
+		Reasoning:             true,
 		ToolCalls:             true,
 		ParallelToolCalls:     true,
 		Streaming:             true,
 		TokenAccountingFields: []string{"input_tokens", "output_tokens", "reasoning_tokens"},
 		CacheAccountingFields: []string{"cache_hit_tokens", "cache_miss_tokens"},
 		DefaultSummaryModel:   "deepseek-v4-flash",
+		HelperModels:          HelperModels{WebSummary: "deepseek-v4-flash", Memory: "deepseek-v4-flash"},
+		CostMode:              "metered",
 	}
 }
 
@@ -91,13 +122,35 @@ func codexInfo(model string, known bool) Info {
 		Subscription:          true,
 		Known:                 known,
 		ContextWindowTokens:   1_000_000,
-		ReasoningModes:        []string{"off", "low", "medium", "high", "xhigh", "max"},
+		MaxOutputTokens:       8_192,
+		ReasoningModes:        []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"},
+		Reasoning:             true,
 		ToolCalls:             true,
 		ParallelToolCalls:     true,
 		Streaming:             true,
 		TokenAccountingFields: []string{"input_tokens", "output_tokens", "reasoning_tokens"},
 		CacheAccountingFields: []string{"cache_hit_tokens", "cache_miss_tokens"},
 		DefaultSummaryModel:   "gpt-5.4-mini",
+		HelperModels:          HelperModels{WebSummary: "gpt-5.4-mini", Memory: "gpt-5.4-mini"},
+		CostMode:              "subscription",
+	}
+}
+
+func mockInfo(model string) Info {
+	return Info{
+		Model:                 model,
+		Provider:              ProviderMock,
+		Known:                 true,
+		ContextWindowTokens:   1_000_000,
+		MaxOutputTokens:       8_192,
+		ReasoningModes:        []string{"off", "low", "medium", "high", "xhigh", "max"},
+		Reasoning:             true,
+		Streaming:             true,
+		TokenAccountingFields: []string{"input_tokens", "output_tokens", "reasoning_tokens"},
+		CacheAccountingFields: []string{"cache_hit_tokens", "cache_miss_tokens"},
+		DefaultSummaryModel:   "mock-summarizer",
+		HelperModels:          HelperModels{WebSummary: "mock-summarizer", Memory: "mock-summarizer"},
+		CostMode:              "none",
 	}
 }
 
@@ -150,6 +203,9 @@ func Providers() []ProviderInfo {
 
 func DefaultSummaryModel(model, provider string) string {
 	info := Lookup(model)
+	if info.HelperModels.WebSummary != "" {
+		return info.HelperModels.WebSummary
+	}
 	if info.DefaultSummaryModel != "" {
 		return info.DefaultSummaryModel
 	}
@@ -159,6 +215,74 @@ func DefaultSummaryModel(model, provider string) string {
 	default:
 		return "deepseek-v4-flash"
 	}
+}
+
+func ValidateCapabilityPolicy(req CapabilityPolicyRequest) error {
+	model := NormalizeAlias(req.Model)
+	provider := ProviderForModel(model, req.Provider)
+	info := Lookup(model)
+	if !info.Known && info.Provider == "" && !req.AllowUnknownModels {
+		return fmt.Errorf("unsupported model %q for provider %q: model capabilities are unknown", model, provider)
+	}
+	if info.Provider != "" && provider != "" && info.Provider != provider && !Provider(provider).Custom {
+		return fmt.Errorf("unsupported provider/model combination: model %q belongs to provider %q, not %q", model, info.Provider, provider)
+	}
+	scope := "model"
+	if req.HelperKind != "" {
+		scope = req.HelperKind + " helper model"
+	}
+	if req.RequireStreaming && info.Known && !info.Streaming {
+		return fmt.Errorf("unsupported %s %q on provider %q: streaming is required", scope, model, provider)
+	}
+	if req.RequireToolCalls && info.Known && !info.ToolCalls {
+		return fmt.Errorf("unsupported %s %q on provider %q: tool calls are required", scope, model, provider)
+	}
+	if req.RequireParallel && info.Known && !info.ParallelToolCalls {
+		return fmt.Errorf("unsupported %s %q on provider %q: parallel tool calls are required", scope, model, provider)
+	}
+	if req.MaxOutputTokens > 0 && info.MaxOutputTokens > 0 && req.MaxOutputTokens > info.MaxOutputTokens {
+		return fmt.Errorf("unsupported %s %q on provider %q: max_output_tokens=%d exceeds capability max_output_tokens=%d", scope, model, provider, req.MaxOutputTokens, info.MaxOutputTokens)
+	}
+	effort := NormalizeReasoningEffort(req.ReasoningEffort)
+	if provider == ProviderDeepSeek && !thinkingEnabled(req.Thinking) {
+		effort = "off"
+	}
+	if effort != "off" {
+		if info.Known && !info.Reasoning {
+			return fmt.Errorf("unsupported %s %q on provider %q: reasoning is not supported", scope, model, provider)
+		}
+		if info.Known && !hasString(info.ReasoningModes, effort) {
+			return fmt.Errorf("unsupported reasoning_effort %q for %s %q on provider %q; supported modes: %s", effort, scope, model, provider, strings.Join(info.ReasoningModes, ","))
+		}
+	}
+	return nil
+}
+
+func NormalizeReasoningEffort(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "off", "disabled", "none", "false":
+		return "off"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+}
+
+func thinkingEnabled(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "enabled", "on", "true", "1", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func NormalizeAlias(value string) string {

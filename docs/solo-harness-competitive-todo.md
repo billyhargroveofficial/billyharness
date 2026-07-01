@@ -234,9 +234,9 @@ is to compaction.
     ./internal/gatewayapi ./internal/gateway ./internal/gatewayclient
     ./internal/tui ./internal/telegrambot ./cmd/fast-agent-harness` passed;
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `9bf53b14222d392ed16c33884548c85e2fe98bd3`.
 
-- [ ] SH-01.3 Make provider/model capability policy explicit.
+- [x] SH-01.3 Make provider/model capability policy explicit.
   - inspiration: Codex provider capability registry.
   - target files: `internal/modelinfo`, `internal/provider`, `internal/config`,
     `internal/credentials`, `cmd/fast-agent-harness/config*`.
@@ -247,7 +247,27 @@ is to compaction.
   - acceptance: unsupported model/provider/reasoning/helper combinations fail
     early with actionable diagnostics.
   - verification: modelinfo/config/provider tests.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: expanded `internal/modelinfo` from passive routing hints into an
+    explicit capability policy with context window, max output, tool-call and
+    parallel-tool support, streaming, reasoning modes, token/cache accounting
+    fields, web-summary and memory helper models, and cost/subscription mode.
+    Provider construction now validates model/provider/reasoning/output-cap
+    requests before credential lookup or network setup, web-summary helpers
+    validate their helper binding before provider creation, and model-based
+    compaction carries its helper output cap into the provider binding. `config
+    inspect` JSON and human output now expose the provider capability snapshot
+    and validation warning.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/modelinfo
+    ./internal/config ./internal/provider ./internal/credentials
+    ./cmd/fast-agent-harness` passed;
+    `/root/.local/go/bin/go test -run
+    'Test.*Capability.*|Test.*ProviderBinding.*|Test.*Provider.*Capability.*|Test.*Unsupported.*|Test.*Helper.*|TestConfigInspect.*'
+    -count=1 ./internal/modelinfo ./internal/config ./internal/provider
+    ./internal/credentials ./cmd/fast-agent-harness` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] SH-01.4 Record helper-model usage separately from main agent usage.
   - inspiration: Codex memory extraction model selection and Billy websum

@@ -1,10 +1,15 @@
 package config
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
+)
 
 type DiagnosticSnapshot struct {
-	ProviderAuth ProviderAuthSnapshot `json:"provider_auth"`
-	RuntimeTool  RuntimeToolSnapshot  `json:"runtime_tool"`
+	ProviderAuth       ProviderAuthSnapshot       `json:"provider_auth"`
+	ProviderCapability ProviderCapabilitySnapshot `json:"provider_capability"`
+	RuntimeTool        RuntimeToolSnapshot        `json:"runtime_tool"`
 }
 
 type ProviderAuthSnapshot struct {
@@ -51,10 +56,31 @@ type RuntimeToolSnapshot struct {
 	StoreReasoningContent         bool   `json:"store_reasoning_content"`
 }
 
+type ProviderCapabilitySnapshot struct {
+	Provider              string   `json:"provider"`
+	Model                 string   `json:"model"`
+	Known                 bool     `json:"known"`
+	ContextWindowTokens   int64    `json:"context_window_tokens,omitempty"`
+	MaxOutputTokens       int      `json:"max_output_tokens,omitempty"`
+	ToolCalls             bool     `json:"tool_calls"`
+	ParallelToolCalls     bool     `json:"parallel_tool_calls"`
+	Streaming             bool     `json:"streaming"`
+	Reasoning             bool     `json:"reasoning"`
+	ReasoningModes        []string `json:"reasoning_modes,omitempty"`
+	TokenAccountingFields []string `json:"token_accounting_fields,omitempty"`
+	CacheAccountingFields []string `json:"cache_accounting_fields,omitempty"`
+	WebSummaryModel       string   `json:"web_summary_model,omitempty"`
+	MemoryHelperModel     string   `json:"memory_helper_model,omitempty"`
+	CostMode              string   `json:"cost_mode,omitempty"`
+	Subscription          bool     `json:"subscription"`
+	ValidationError       string   `json:"validation_error,omitempty"`
+}
+
 func (c Config) DiagnosticSnapshot() DiagnosticSnapshot {
 	return DiagnosticSnapshot{
-		ProviderAuth: c.ProviderAuthSnapshot(),
-		RuntimeTool:  c.RuntimeToolSnapshot(),
+		ProviderAuth:       c.ProviderAuthSnapshot(),
+		ProviderCapability: c.ProviderCapabilitySnapshot(),
+		RuntimeTool:        c.RuntimeToolSnapshot(),
 	}
 }
 
@@ -110,4 +136,45 @@ func (c Config) RuntimeToolSnapshot() RuntimeToolSnapshot {
 		DiagnosticsCommandCount:       len(diagnostics.Commands),
 		StoreReasoningContent:         tools.StoreReasoningContent,
 	}
+}
+
+func (c Config) ProviderCapabilitySnapshot() ProviderCapabilitySnapshot {
+	binding := c.ProviderBinding()
+	provider := modelinfo.ProviderForModel(binding.Model.Model, binding.Provider.Provider)
+	info := modelinfo.Lookup(binding.Model.Model)
+	out := ProviderCapabilitySnapshot{
+		Provider:              provider,
+		Model:                 info.Model,
+		Known:                 info.Known,
+		ContextWindowTokens:   info.ContextWindowTokens,
+		MaxOutputTokens:       info.MaxOutputTokens,
+		ToolCalls:             info.ToolCalls,
+		ParallelToolCalls:     info.ParallelToolCalls,
+		Streaming:             info.Streaming,
+		Reasoning:             info.Reasoning,
+		ReasoningModes:        cloneStrings(info.ReasoningModes),
+		TokenAccountingFields: cloneStrings(info.TokenAccountingFields),
+		CacheAccountingFields: cloneStrings(info.CacheAccountingFields),
+		WebSummaryModel:       info.HelperModels.WebSummary,
+		MemoryHelperModel:     info.HelperModels.Memory,
+		CostMode:              info.CostMode,
+		Subscription:          info.Subscription,
+	}
+	if out.Model == "" {
+		out.Model = modelinfo.NormalizeAlias(binding.Model.Model)
+	}
+	if err := modelinfo.ValidateCapabilityPolicy(modelinfo.CapabilityPolicyRequest{
+		Provider:           provider,
+		Model:              binding.Model.Model,
+		Thinking:           binding.Model.Thinking,
+		ReasoningEffort:    binding.Model.ReasoningEffort,
+		MaxOutputTokens:    binding.Model.MaxTokens,
+		RequireStreaming:   true,
+		RequireToolCalls:   provider != modelinfo.ProviderMock,
+		RequireParallel:    binding.Limits.MaxParallelTools > 1 && provider != modelinfo.ProviderMock,
+		AllowUnknownModels: modelinfo.Provider(provider).Custom || provider == modelinfo.ProviderMock,
+	}); err != nil {
+		out.ValidationError = err.Error()
+	}
+	return out
 }

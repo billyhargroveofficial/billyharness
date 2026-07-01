@@ -71,6 +71,34 @@ func TestIsCodexProviderReroutesOSeriesModels(t *testing.T) {
 	}
 }
 
+func TestNewFromBindingRejectsUnsupportedCapabilityPolicyBeforeCredentials(t *testing.T) {
+	_, err := NewFromBinding(config.ProviderBinding{
+		Provider: config.ProviderSelection{Provider: "deepseek", BaseURL: "https://api.deepseek.example"},
+		Model: config.ModelSelection{
+			Model:           "deepseek-v4-flash",
+			Thinking:        "enabled",
+			ReasoningEffort: "warp",
+			MaxTokens:       512,
+		},
+		Auth: config.AuthSettings{APIKeyEnv: "MISSING_DEEPSEEK_KEY"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported reasoning_effort") {
+		t.Fatalf("err = %v", err)
+	}
+
+	_, err = NewFromBinding(config.ProviderBinding{
+		Provider: config.ProviderSelection{Provider: "deepseek", BaseURL: "https://api.deepseek.example"},
+		Model: config.ModelSelection{
+			Model:     "deepseek-v4-flash",
+			MaxTokens: 9000,
+		},
+		Auth: config.AuthSettings{APIKeyEnv: "MISSING_DEEPSEEK_KEY"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "max_output_tokens=9000") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestNewDeepSeekProviderUsesCredentialsManager(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", root)

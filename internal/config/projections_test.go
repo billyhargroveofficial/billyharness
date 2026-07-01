@@ -150,6 +150,22 @@ func TestDiagnosticSnapshotUsesProviderBindingAndAuthProjection(t *testing.T) {
 		snapshot.CodexOriginator != "originator" {
 		t.Fatalf("snapshot auth settings = %#v", snapshot)
 	}
+	caps := diagnostics.ProviderCapability
+	if caps.Provider != "openai-codex" ||
+		caps.Model != "gpt-5.4-mini" ||
+		caps.ContextWindowTokens != 1_000_000 ||
+		caps.MaxOutputTokens != 8192 ||
+		!caps.ToolCalls ||
+		!caps.ParallelToolCalls ||
+		!caps.Streaming ||
+		!caps.Reasoning ||
+		caps.WebSummaryModel != "gpt-5.4-mini" ||
+		caps.MemoryHelperModel != "gpt-5.4-mini" ||
+		caps.CostMode != "subscription" ||
+		!caps.Subscription ||
+		caps.ValidationError != "" {
+		t.Fatalf("capability snapshot = %#v", caps)
+	}
 	runtimeTool := diagnostics.RuntimeTool
 	if runtimeTool.ContextWindowTokens != 900000 ||
 		runtimeTool.ContextCompactTokens != 600000 ||
