@@ -21,6 +21,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
+	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 	"github.com/billyhargroveofficial/billyharness/internal/trace"
 )
@@ -72,6 +73,102 @@ func TestGatewaySessionRunStreamsEvents(t *testing.T) {
 	}
 	if got := content.String(); got != "mock: through gateway" {
 		t.Fatalf("content = %q", got)
+	}
+}
+
+func TestGatewaySessionRunInterruptPolicyCancelsActiveRunAndStartsReplacement(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	createResp, err := http.Post(httpServer.URL+"/v1/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer createResp.Body.Close()
+	if createResp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(createResp.Body)
+		t.Fatalf("create status = %d body=%s", createResp.StatusCode, body)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+
+	session, ok := server.session(created.ID)
+	if !ok {
+		t.Fatal("created session missing from server")
+	}
+	firstStarted := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- session.Thread.Run(context.Background(), sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
+			emit(protocol.Event{Type: protocol.EventRunStarted, RunID: "run-old"})
+			close(firstStarted)
+			<-ctx.Done()
+			return messages, ctx.Err()
+		}), "old prompt", func(event protocol.Event) {
+			if event.Type == protocol.EventRunStarted {
+				session.beginRunStatus(RunRequest{Provider: "mock", Model: "mock"})
+			}
+			session.observeRunEvent(event)
+		})
+	}()
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first session run did not start")
+	}
+
+	replacement := bytes.NewBufferString(`{"prompt":"new prompt","interrupt_policy":"interrupt"}`)
+	secondResp, err := http.Post(httpServer.URL+"/v1/sessions/"+created.ID+"/run", "application/json", replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondResp.Body.Close()
+	if secondResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(secondResp.Body)
+		t.Fatalf("second run status = %d body=%s", secondResp.StatusCode, body)
+	}
+	secondEvents := readProtocolEvents(t, secondResp.Body)
+	if err := <-firstDone; !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	var sawNewDelta, sawNewCompleted bool
+	for _, event := range secondEvents {
+		switch event.Type {
+		case protocol.EventAssistantDelta:
+			if fmt.Sprint(event.Data) == "mock: new prompt" {
+				sawNewDelta = true
+			}
+		case protocol.EventRunCompleted:
+			sawNewCompleted = true
+		}
+		if strings.Contains(fmt.Sprint(event.Data), "old prompt") {
+			t.Fatalf("replacement stream leaked old prompt event: %#v", event)
+		}
+	}
+	if !sawNewDelta || !sawNewCompleted {
+		t.Fatalf("replacement events missing delta/completion: %#v", secondEvents)
+	}
+	replayed, err := server.store.ReplayEventsAfter(created.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var oldFailed bool
+	for _, event := range replayed {
+		if event.Type == protocol.EventRunFailed && fmt.Sprint(event.Data) == "interrupted by newer session run" {
+			oldFailed = true
+		}
+	}
+	if !oldFailed {
+		t.Fatalf("stored events missing interrupted old run failure: %#v", replayed)
 	}
 }
 

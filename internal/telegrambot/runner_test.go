@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -148,9 +149,13 @@ func TestNewTelegramMessageInterruptsActiveRunAndRunsLatestPrompt(t *testing.T) 
 
 	harness.mu.Lock()
 	prompts := append([]string(nil), harness.prompts...)
+	policies := append([]string(nil), harness.interruptPolicies...)
 	harness.mu.Unlock()
 	if len(prompts) != 2 || prompts[0] != "old long task" || prompts[1] != "new instruction" {
 		t.Fatalf("prompts = %#v", prompts)
+	}
+	if len(policies) != 2 || policies[0] != gatewayapi.InterruptPolicyInterrupt || policies[1] != gatewayapi.InterruptPolicyInterrupt {
+		t.Fatalf("interrupt policies = %#v", policies)
 	}
 }
 

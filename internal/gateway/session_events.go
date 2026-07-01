@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -185,6 +186,19 @@ func (s *Session) abortActiveRun(reason string) bool {
 	}
 	s.Thread.Cancel()
 	return true
+}
+
+func (s *Session) interruptActiveRunAndWait(ctx context.Context, reason string) (bool, error) {
+	if s == nil || s.Thread == nil || !s.Thread.Running() {
+		return false, nil
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "gateway session interrupted"
+	}
+	if runID := s.activeRunIDSnapshot(); runID != "" {
+		s.observeRunEvent(protocol.Event{Type: protocol.EventRunFailed, RunID: runID, Data: reason})
+	}
+	return s.Thread.CancelAndWait(ctx)
 }
 
 func (s *Session) activeRunIDSnapshot() string {

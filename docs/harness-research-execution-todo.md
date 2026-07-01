@@ -120,7 +120,7 @@ adding more powerful tools.
     ./internal/clientux/projector` passed.
   - commit: pending.
 
-- [ ] HR-01.2 Gateway interrupt and stale cleanup.
+- [x] HR-01.2 Gateway interrupt and stale cleanup.
   - maps to: `competitive-improvements-todo.md` P0-2.
   - target files: `internal/gatewayapi/*`, `internal/gateway/*`,
     `internal/session/*`, `internal/telegrambot/runner.go`,
@@ -128,6 +128,19 @@ adding more powerful tools.
   - acceptance: new input can cancel old run, wait briefly for idle, emit
     terminal run/tool cleanup, and start the new run without stale old-run UI.
   - verification: `go test -count=1 ./internal/gateway ./internal/session ./internal/telegrambot ./internal/gatewayclient`.
+  - status: completed 2026-07-01.
+  - evidence: added `interrupt_policy:"interrupt"` to gateway run requests,
+    session `CancelAndWait`, gateway pre-run cancel-and-wait with persisted
+    old-run terminal failure, and Telegram run requests that opt into gateway
+    interrupt policy while retaining superseded-message UI guards.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/gateway
+    ./internal/session ./internal/telegrambot ./internal/gatewayclient` passed;
+    `/root/.local/go/bin/go test -run
+    'Test.*Interrupt.*|Test.*CancelAndWait.*|Test.*Stale.*Tool.*' -count=1
+    ./internal/gateway ./internal/session ./internal/telegrambot
+    ./internal/gatewayclient` passed.
+  - commit: pending.
 
 - [ ] HR-01.3 Durable prompt admission/input inbox MVP.
   - maps to: `competitive-improvements-todo.md` B1.

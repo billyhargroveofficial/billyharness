@@ -625,7 +625,15 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "prompt required")
 		return
 	}
+	interruptPolicy, err := normalizeInterruptPolicy(req.InterruptPolicy)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	streamEvents(w, func(emit func(protocol.Event)) error {
+		if err := s.applySessionInterruptPolicy(r.Context(), session, interruptPolicy); err != nil {
+			return err
+		}
 		settings, err := s.runSettingsForRequest(req)
 		if err != nil {
 			return err
@@ -650,6 +658,39 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 		}
 		return err
 	})
+}
+
+const gatewayInterruptWaitTimeout = 3 * time.Second
+
+func normalizeInterruptPolicy(policy string) (string, error) {
+	policy = strings.ToLower(strings.TrimSpace(policy))
+	switch policy {
+	case "", gatewayapi.InterruptPolicyInterrupt:
+		return policy, nil
+	default:
+		return "", fmt.Errorf("unsupported interrupt_policy %q", policy)
+	}
+}
+
+func (s *Server) applySessionInterruptPolicy(ctx context.Context, session *Session, policy string) error {
+	if policy != gatewayapi.InterruptPolicyInterrupt {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, gatewayInterruptWaitTimeout)
+	defer cancel()
+	interrupted, err := session.interruptActiveRunAndWait(waitCtx, "interrupted by newer session run")
+	if interrupted {
+		if saveErr := s.saveSession(session); saveErr != nil {
+			log.Printf("gateway session save failed id=%s after interrupt: %v", session.ID, saveErr)
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("interrupt active session run: %w", err)
+	}
+	return nil
 }
 
 func (s *Server) handleSessionCancel(w http.ResponseWriter, r *http.Request) {

@@ -192,6 +192,64 @@ func TestCancelStopsActiveRun(t *testing.T) {
 	}
 }
 
+func TestCancelAndWaitWaitsForIdle(t *testing.T) {
+	s := New([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- s.Run(context.Background(), RunnerFunc(func(ctx context.Context, messages []protocol.Message, _ func(protocol.Event)) ([]protocol.Message, error) {
+			close(started)
+			<-ctx.Done()
+			return messages, ctx.Err()
+		}), "cancel me", nil)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("run did not start")
+	}
+	cancelled, err := s.CancelAndWait(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cancelled {
+		t.Fatal("cancelled = false, want true")
+	}
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("run error = %v, want context.Canceled", err)
+	}
+	if s.Running() {
+		t.Fatal("session still reports running after CancelAndWait")
+	}
+}
+
+func TestCancelAndWaitReturnsContextErrorWhenRunDoesNotStop(t *testing.T) {
+	s := New([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- s.Run(context.Background(), RunnerFunc(func(ctx context.Context, messages []protocol.Message, _ func(protocol.Event)) ([]protocol.Message, error) {
+			close(started)
+			<-release
+			return messages, ctx.Err()
+		}), "stubborn", nil)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("run did not start")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	cancelled, err := s.CancelAndWait(ctx)
+	if !cancelled || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("cancelled=%t err=%v, want deadline", cancelled, err)
+	}
+	close(release)
+	<-done
+}
+
 func TestCancelDropsPromptWhenRunnerReturnsNilAfterContextCancelled(t *testing.T) {
 	s := New([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
 	started := make(chan struct{})

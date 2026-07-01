@@ -60,6 +60,7 @@ func (b *Bot) handleMessage(parent context.Context, msg Message) {
 		Profile:         state.Profile,
 		ReasoningEffort: state.ReasoningEffort,
 		MaxToolRounds:   b.opts.MaxToolRounds,
+		InterruptPolicy: gatewayapi.InterruptPolicyInterrupt,
 	}
 	runStarted := time.Now()
 	firstDelta := time.Time{}

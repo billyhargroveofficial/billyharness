@@ -119,6 +119,30 @@ func (s *Session) Cancel() bool {
 	return true
 }
 
+func (s *Session) CancelAndWait(ctx context.Context) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.mu.Lock()
+	running := s.running
+	cancel := s.cancel
+	idle := s.idle
+	s.mu.Unlock()
+	if !running || cancel == nil {
+		return false, nil
+	}
+	cancel()
+	if idle == nil {
+		return true, nil
+	}
+	select {
+	case <-idle:
+		return true, nil
+	case <-ctx.Done():
+		return true, ctx.Err()
+	}
+}
+
 func runInterrupted(ctx context.Context, err error) bool {
 	if ctx != nil && ctx.Err() != nil {
 		return true

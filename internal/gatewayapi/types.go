@@ -16,7 +16,10 @@ type RunRequest struct {
 	Thinking        string `json:"thinking,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	MaxToolRounds   int    `json:"max_tool_rounds,omitempty"`
+	InterruptPolicy string `json:"interrupt_policy,omitempty"`
 }
+
+const InterruptPolicyInterrupt = "interrupt"
 
 type CreateSessionRequest struct {
 	Messages []protocol.Message `json:"messages,omitempty"`

@@ -33,6 +33,7 @@ type interruptHarness struct {
 	gatewayCancelOnce   sync.Once
 	runCalls            int
 	prompts             []string
+	interruptPolicies   []string
 	firstStarted        chan struct{}
 	firstCancelled      chan struct{}
 	secondCompleted     chan struct{}
@@ -145,6 +146,7 @@ func (h *interruptHarness) RunSession(ctx context.Context, _ string, req gateway
 	h.runCalls++
 	call := h.runCalls
 	h.prompts = append(h.prompts, req.Prompt)
+	h.interruptPolicies = append(h.interruptPolicies, req.InterruptPolicy)
 	h.mu.Unlock()
 
 	switch call {
@@ -166,6 +168,7 @@ func (h *lateSuccessInterruptHarness) RunSession(ctx context.Context, _ string, 
 	h.runCalls++
 	call := h.runCalls
 	h.prompts = append(h.prompts, req.Prompt)
+	h.interruptPolicies = append(h.interruptPolicies, req.InterruptPolicy)
 	h.mu.Unlock()
 
 	switch call {
