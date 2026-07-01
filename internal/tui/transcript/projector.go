@@ -359,7 +359,7 @@ func toolCallBody(value any) string {
 	switch toolName(value) {
 	case "shell_exec":
 		return toolMetaLines(args, "cwd", "timeout_sec")
-	case "fs_read_file", "fs_list", "fs_search", "fs_grep", "fs_glob", "fs_find_files", "fs_make_dir", "web_fetch", "web_extract", "web_search", "web_crawl", "time_now", "todo_write":
+	case "fs_read_file", "fs_list", "fs_search", "fs_grep", "fs_glob", "fs_find_files", "fs_make_dir", "mcp_call", "web_fetch", "web_extract", "web_search", "web_crawl", "time_now", "todo_write":
 		return ""
 	case "fs_write_file":
 		return toolMetaLines(args, "append", "create_dirs")

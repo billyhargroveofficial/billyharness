@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/testkit"
 )
 
 func TestProjectorApplyStreamsAndFinalizesAssistantCells(t *testing.T) {
@@ -117,6 +118,58 @@ func TestProjectorApplyToolCompactLifecycleCells(t *testing.T) {
 	}
 }
 
+func TestGoldenBundleProjectsTUITranscriptParitySnapshot(t *testing.T) {
+	bundle := testkit.ReadCanonicalAgentLoopBundle(t)
+	if !bundle.OfflineReplay || bundle.Trace != testkit.CanonicalAgentLoopTrace {
+		t.Fatalf("bundle = %#v", bundle)
+	}
+	p := NewProjector()
+	var cells []Cell
+	for _, event := range goldenTraceEvents(t) {
+		cells = p.Apply(event)
+	}
+
+	var assistant, context, compaction, web, mcpCall, mcpResult, shell bool
+	for _, cell := range cells {
+		if cell.CellType == CellTypeAssistantFinal && strings.Contains(cell.Content, "Final answer: web context") {
+			assistant = true
+		}
+		if cell.CellType == CellTypeStatus && cell.Title == "CONTEXT" &&
+			strings.Contains(cell.Content, "threshold: 70%") &&
+			strings.Contains(cell.Content, "stage: before_turn") {
+			context = true
+		}
+		if cell.CellType == CellTypeCompaction && strings.Contains(cell.Content, "compact-golden-001") {
+			compaction = true
+		}
+		if cell.CallID == "call-web" &&
+			strings.Contains(cell.Title+"\n"+cell.Content, "ref web_fetch.txt") &&
+			strings.Contains(cell.Content, "bounded web digest") {
+			web = true
+		}
+		if cell.CallID == "call-mcp" && strings.Contains(cell.Title, "Called MCP mcp__fake__search") {
+			mcpCall = true
+			if strings.Contains(cell.Content, `"arguments"`) || strings.Contains(cell.RawCopy, `"arguments"`) {
+				t.Fatalf("MCP call leaked raw JSON args: %#v", cell)
+			}
+		}
+		if cell.CallID == "call-mcp" && strings.Contains(cell.Content, "MCP catalog") {
+			mcpResult = true
+		}
+		if cell.CallID == "call-shell" &&
+			strings.Contains(cell.Title+"\n"+cell.Content, "interrupted by newer user input") {
+			shell = true
+		}
+		if strings.Contains(cell.Title, "old query") || strings.Contains(cell.Content, "old query") || strings.Contains(cell.RawCopy, "old query") {
+			t.Fatalf("stale previous-run tool leaked into golden transcript: %#v", cell)
+		}
+	}
+	if !assistant || !context || !compaction || !web || !mcpCall || !mcpResult || !shell {
+		t.Fatalf("golden transcript parity assistant=%v context=%v compaction=%v web=%v mcpCall=%v mcpResult=%v shell=%v cells=%#v",
+			assistant, context, compaction, web, mcpCall, mcpResult, shell, cells)
+	}
+}
+
 func TestProjectorApplyTodoPlanStateWithoutRawArgs(t *testing.T) {
 	p := NewProjector()
 	cells := p.Apply(protocol.Event{
@@ -167,6 +220,20 @@ func TestProjectorApplyTodoPlanStateWithoutRawArgs(t *testing.T) {
 			t.Fatalf("todo result leaked %q: %#v", notWant, cells[0])
 		}
 	}
+}
+
+func goldenTraceEvents(t *testing.T) []protocol.Event {
+	t.Helper()
+	records := testkit.ReadTraceRecords(t, testkit.CanonicalAgentLoopTracePath(t))
+	events := make([]protocol.Event, 0, len(records))
+	for _, record := range records {
+		var event protocol.Event
+		if err := json.Unmarshal(record.Event, &event); err != nil {
+			t.Fatalf("decode event seq %d: %v", record.Seq, err)
+		}
+		events = append(events, event)
+	}
+	return events
 }
 
 func TestProjectorToolRenderFSGrepGlob(t *testing.T) {

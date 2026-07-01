@@ -486,9 +486,9 @@ canonical event stream.
     'Test.*Golden.*Trace|Test.*Replay.*|TestGoldenRunBundleIncludesReplayInputs'
     -count=1 ./cmd/fast-agent-harness` passed with no matching tests to run;
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `eca9998743afa179deb89c4728f6519f9138d21a`.
 
-- [ ] SH-03.2 Add adapter parity snapshot tests.
+- [x] SH-03.2 Add adapter parity snapshot tests.
   - inspiration: shared adapter event translation in OpenCode and Billy's
     existing projector.
   - target files: `internal/clientux/projector`, `internal/tui/transcript`,
@@ -497,7 +497,25 @@ canonical event stream.
     status/context lines, final message body, and no stale previous-run tools
     in both Telegram and TUI projections.
   - verification: focused snapshot/golden tests.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: added golden-bundle parity assertions across the shared client
+    projector, TUI transcript projector, Telegram renderer, and `toolrender`.
+    The tests replay the same offline bundle and assert the final assistant
+    body, compact web/MCP/shell tool lines, context threshold line, compaction
+    cell, output-ref summary, interrupted shell cleanup, and stale previous-run
+    tool exclusion. TUI transcript projection now suppresses raw `mcp_call`
+    argument JSON in favor of the shared compact call line before appending the
+    result.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*Golden.*(Trace|Bundle|Project|Render|Parity).*|Test.*Adapter.*Parity.*|TestGoldenBundle.*Parity.*'
+    -count=1 ./internal/clientux/projector ./internal/tui/transcript
+    ./internal/telegrambot ./internal/toolrender` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/clientux/projector
+    ./internal/tui/transcript ./internal/telegrambot ./internal/toolrender`
+    passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] SH-03.3 Add provider replay/fake-provider regression suite.
   - inspiration: OpenCode fake provider and Billy bench traces.

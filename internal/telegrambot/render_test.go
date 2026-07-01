@@ -90,6 +90,43 @@ func TestGoldenTraceRendersTelegram(t *testing.T) {
 	}
 }
 
+func TestGoldenBundleTelegramParitySnapshotDropsStalePreviousRunTools(t *testing.T) {
+	bundle := testkit.ReadCanonicalAgentLoopBundle(t)
+	if !bundle.OfflineReplay || bundle.Trace != testkit.CanonicalAgentLoopTrace {
+		t.Fatalf("bundle = %#v", bundle)
+	}
+	r := NewRenderer()
+	r.Apply(protocol.Event{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{
+		ID:        "call-old",
+		Name:      "web_search",
+		Arguments: json.RawMessage(`{"query":"old query"}`),
+	}})
+
+	var progress []RenderEvent
+	for _, event := range goldenTraceEvents(t) {
+		progress = append(progress, r.Apply(event)...)
+	}
+	progressText := renderEventsText(progress)
+	finalText := strings.Join(r.FinalChunks("deepseek-v4-flash", "high"), "\n")
+	for _, want := range []string{
+		"Final answer: web context",
+		"tools 3",
+		"web_fetch",
+		"mcp call mcp__fake__search",
+		"shell_exec",
+		"interrupted by newer user input",
+		"Context",
+		"ref web_fetch.txt",
+	} {
+		if !strings.Contains(progressText+"\n"+finalText, want) {
+			t.Fatalf("telegram parity snapshot missing %q\nprogress:\n%s\nfinal:\n%s", want, progressText, finalText)
+		}
+	}
+	if strings.Contains(progressText, "old query") || strings.Contains(finalText, "old query") {
+		t.Fatalf("stale previous-run tool leaked\nprogress:\n%s\nfinal:\n%s", progressText, finalText)
+	}
+}
+
 func TestMarkdownToTelegramHTMLSupportsTelegramSubset(t *testing.T) {
 	html := markdownToTelegramHTML(`# Заголовок
 

@@ -1,10 +1,12 @@
 package toolrender
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/testkit"
 )
 
 func TestCallLineCompactsLongWebFetchURL(t *testing.T) {
@@ -219,6 +221,57 @@ func TestCallLineSnapshotsCommonTools(t *testing.T) {
 				t.Fatalf("CallLine() = %q, want %q", got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestGoldenBundleToolRenderParityLines(t *testing.T) {
+	bundle := testkit.ReadCanonicalAgentLoopBundle(t)
+	if !bundle.OfflineReplay || bundle.Trace != testkit.CanonicalAgentLoopTrace {
+		t.Fatalf("bundle = %#v", bundle)
+	}
+	seen := map[string]bool{}
+	for _, event := range goldenTraceEvents(t) {
+		switch event.Type {
+		case protocol.EventToolCallRequested:
+			_, tui := CallKeyAndLine(event.Data, StyleTUI)
+			_, telegram := CallKeyAndLine(event.Data, StyleTelegram)
+			switch event.CallID {
+			case "call-web":
+				if strings.Contains(tui, "example.com/research") && strings.Contains(telegram, "web_fetch") {
+					seen["web-call"] = true
+				}
+			case "call-mcp":
+				if strings.Contains(tui, "Called MCP mcp__fake__search") && strings.Contains(telegram, "mcp call mcp__fake__search") {
+					seen["mcp-call"] = true
+				}
+			case "call-shell":
+				if strings.Contains(tui, "Started npm run dev") && strings.Contains(telegram, "shell start npm run dev") {
+					seen["shell-call"] = true
+				}
+			}
+		case protocol.EventToolOutputRefCreated:
+			_, tui := OutputRefLine(event.Data, StyleTUI)
+			_, telegram := OutputRefLine(event.Data, StyleTelegram)
+			if event.CallID == "call-web" &&
+				strings.Contains(tui, "ref web_fetch.txt") &&
+				strings.Contains(telegram, "ref web_fetch.txt") {
+				seen["web-ref"] = true
+			}
+		case protocol.EventToolCallAborted:
+			_, tui := ResultKeyAndLine(mustToolResult(t, event.Data), "", StyleTUI)
+			_, telegram := ResultKeyAndLine(mustToolResult(t, event.Data), "", StyleTelegram)
+			if event.CallID == "call-shell" &&
+				strings.Contains(tui, "shell_exec") &&
+				strings.Contains(telegram, "shell_exec") &&
+				strings.Contains(tui+"\n"+telegram, "interrupted by newer user input") {
+				seen["shell-abort"] = true
+			}
+		}
+	}
+	for _, want := range []string{"web-call", "mcp-call", "shell-call", "web-ref", "shell-abort"} {
+		if !seen[want] {
+			t.Fatalf("golden toolrender parity missing %s; seen=%#v", want, seen)
+		}
 	}
 }
 
@@ -539,4 +592,31 @@ func TestTurnChangeSummaryAndDetailsExposePatchRef(t *testing.T) {
 	if strings.Contains(details, "@@ ") {
 		t.Fatalf("details should not inline a patch:\n%s", details)
 	}
+}
+
+func goldenTraceEvents(t *testing.T) []protocol.Event {
+	t.Helper()
+	records := testkit.ReadTraceRecords(t, testkit.CanonicalAgentLoopTracePath(t))
+	events := make([]protocol.Event, 0, len(records))
+	for _, record := range records {
+		var event protocol.Event
+		if err := json.Unmarshal(record.Event, &event); err != nil {
+			t.Fatalf("decode event seq %d: %v", record.Seq, err)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+func mustToolResult(t *testing.T, value any) protocol.ToolResult {
+	t.Helper()
+	var result protocol.ToolResult
+	body, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatal(err)
+	}
+	return result
 }

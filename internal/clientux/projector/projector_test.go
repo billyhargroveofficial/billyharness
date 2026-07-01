@@ -273,6 +273,31 @@ func TestGoldenTraceProjectsClientSnapshot(t *testing.T) {
 	}
 }
 
+func TestGoldenBundleProjectorSnapshotDropsStalePreviousRunTools(t *testing.T) {
+	p := New()
+	p.Apply(protocol.Event{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{
+		ID:        "call-old",
+		Name:      "web_search",
+		Arguments: json.RawMessage(`{"query":"old query"}`),
+	}})
+
+	var snap Snapshot
+	for _, event := range goldenTraceEvents(t) {
+		snap = p.Apply(event)
+	}
+	if _, ok := snap.ToolsByCallID["call-old"]; ok {
+		t.Fatalf("stale previous-run tool survived run start: %#v", snap.ToolsByCallID)
+	}
+	for _, callID := range []string{"call-web", "call-mcp", "call-shell"} {
+		if _, ok := snap.ToolsByCallID[callID]; !ok {
+			t.Fatalf("golden snapshot missing %s: %#v", callID, snap.ToolsByCallID)
+		}
+	}
+	if !strings.Contains(snap.AssistantText, "Final answer: web context") {
+		t.Fatalf("final body = %q", snap.AssistantText)
+	}
+}
+
 func TestProjectorSeparatesAssistantTextAcrossModelTurns(t *testing.T) {
 	p := New()
 	for _, event := range []protocol.Event{
