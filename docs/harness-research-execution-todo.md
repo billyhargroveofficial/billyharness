@@ -936,11 +936,24 @@ platform.
     `BenchmarkEventJSONLReplay/deltas_100000_tail100` at about 642ms/op.
   - commit: pending.
 
-- [ ] HR-04.8 Cross-adapter slow-client stress harness.
+- [-] HR-04.8 Cross-adapter slow-client stress harness.
   - maps to: `competitive-improvements-todo.md` B15.
   - acceptance: fake provider 10k chunks, blocked TUI channel, Telegram 429,
     replay after drop, and final state correctness are tested.
   - verification: `go test -count=1 ./internal/testkit ./internal/gateway ./internal/tui ./internal/telegrambot ./internal/provider`.
+  - status: deferred 2026-07-01.
+  - blocker: B15 is marked P2 in `competitive-improvements-todo.md`, and the
+    active execution goal says to defer P2 unless explicitly unblocked and
+    justified by tests or benchmarks. HR-04.7 added JSONL scale benchmarks and
+    did not expose a replay/index failure that requires a broader
+    cross-adapter stress harness before the remaining P1 work.
+  - next action: revisit after the remaining unblocked P1 execution TODO items,
+    or earlier only if a focused TUI/Telegram/provider regression or benchmark
+    demonstrates that existing slow-client/backpressure coverage is
+    insufficient.
+  - verification evidence: source-priority check only; no code changed for this
+    deferral.
+  - commit: pending.
 
 ## Milestone 5 - Deferred Bounded Capabilities
 
