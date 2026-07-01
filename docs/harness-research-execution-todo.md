@@ -350,12 +350,29 @@ adding more powerful tools.
 
 Milestone 1 final verification:
 
-- [ ] Run focused reliability suite:
+- [x] Run focused reliability suite:
   - `go test -count=1 ./internal/gateway ./internal/gatewayclient ./internal/session ./internal/telegrambot ./internal/tui ./internal/eventlog ./internal/tools ./internal/agent ./internal/clientux/projector`
-- [ ] Run targeted regex suite:
+  - status: completed 2026-07-01.
+  - evidence: `/root/.local/go/bin/go test -count=1 ./internal/gateway
+    ./internal/gatewayclient ./internal/session ./internal/telegrambot
+    ./internal/tui ./internal/eventlog ./internal/tools ./internal/agent
+    ./internal/clientux/projector` passed on pushed `HEAD`
+    `25380f31e7a00ceb840b5fa2495b539426f54274`.
+- [x] Run targeted regex suite:
   - `go test -run 'Test.*Replay.*|Test.*Seq.*|Test.*Interrupt.*|Test.*Admission.*|Test.*InputInbox.*|Test.*Telegram.*(Admission|Offset).*|Test.*Slow.*Client.*|Test.*Backpressure.*|Test.*TUI.*(Batch|Reflow).*|Test.*FSRead.*|Test.*ToolSnapshot.*|Test.*TranscriptPairing.*|Test.*Golden.*Trace.*' -count=1 ./internal/...`
-- [ ] Commit and push a milestone summary update after all HR-01 tasks are
+  - status: completed 2026-07-01.
+  - evidence: first run failed in `internal/bench` with
+    `TestLocalLoopBenchmarkGeneratesReplayableFiftyTurnSuite: duplicate
+    terminal run event for "20260701T135222Z": got run.completed after
+    run.completed`; fixed by pushed commit
+    `25380f31e7a00ceb840b5fa2495b539426f54274`, which preserves nested agent
+    run ids in aggregate trace records. Rerun of the exact command passed.
+- [x] Commit and push a milestone summary update after all HR-01 tasks are
   complete.
+  - status: completed 2026-07-01.
+  - evidence: this summary update records the completed Milestone 1
+    implementation and verification state.
+  - commit: pending.
 
 ## Milestone 2 - Reversibility And Display Contracts
 
