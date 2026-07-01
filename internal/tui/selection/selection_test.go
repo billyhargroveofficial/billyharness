@@ -35,6 +35,33 @@ func TestSelectedTextAndHighlightUseVisibleColumns(t *testing.T) {
 	}
 }
 
+func TestSelectedTextAndHighlightRespectLineFilter(t *testing.T) {
+	content := strings.Join([]string{
+		"alpha",
+		"\x1b[90mstatus: hidden chrome\x1b[m",
+		"привет 🏳️‍🌈 中 tail",
+	}, "\n")
+	start := Point{Row: 0, Col: 0}
+	end := Point{Row: 2, Col: xansi.StringWidth("привет 🏳️‍🌈 中")}
+	selectable := []bool{true, false, true}
+
+	got := SelectedTextWithLineFilter(content, start, end, selectable)
+	if got != "alpha\nпривет 🏳️‍🌈 中" {
+		t.Fatalf("SelectedTextWithLineFilter = %q", got)
+	}
+	highlighted := HighlightedContentWithLineFilter(content, start, end, lipgloss.NewStyle().Background(lipgloss.Color("#FFD166")), selectable)
+	if xansi.Strip(highlighted) != xansi.Strip(content) {
+		t.Fatalf("highlight changed visible content: %q", highlighted)
+	}
+	lines := strings.Split(highlighted, "\n")
+	if strings.Contains(lines[1], "48;2;255;209;102") {
+		t.Fatalf("non-selectable status line was highlighted: %q", lines[1])
+	}
+	if !strings.Contains(lines[0], "48;2;255;209;102") || !strings.Contains(lines[2], "48;2;255;209;102") {
+		t.Fatalf("selectable lines were not highlighted: %q", highlighted)
+	}
+}
+
 func TestPointFromMouseClampedKeepsRightEdgeExclusive(t *testing.T) {
 	point := PointFromMouseClamped(10, 2, 3, 1, 999, 0)
 	if point.Row != 10 || point.Col != 5 {

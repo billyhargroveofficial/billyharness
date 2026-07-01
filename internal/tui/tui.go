@@ -117,9 +117,10 @@ type Model struct {
 	viewport viewport.Model
 	// viewportContent is the unhighlighted transcript. Mouse selection applies
 	// ANSI styling over this copy so repeated drag events do not stack styles.
-	viewportContent string
-	width           int
-	height          int
+	viewportContent         string
+	viewportSelectableLines []bool
+	width                   int
+	height                  int
 
 	blocks               []transcript.Cell
 	richRenderCache      map[string]tuirender.CellCache

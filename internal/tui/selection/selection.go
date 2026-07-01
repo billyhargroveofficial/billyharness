@@ -111,12 +111,24 @@ func (c Controller) SelectedText(content string) string {
 	return SelectedText(content, c.Start, c.End)
 }
 
+func (c Controller) SelectedTextWithLineFilter(content string, selectableLines []bool) string {
+	return SelectedTextWithLineFilter(content, c.Start, c.End, selectableLines)
+}
+
 func (c Controller) HighlightedContent(content string, style lipgloss.Style) string {
 	return HighlightedContent(content, c.Start, c.End, style)
 }
 
+func (c Controller) HighlightedContentWithLineFilter(content string, style lipgloss.Style, selectableLines []bool) string {
+	return HighlightedContentWithLineFilter(content, c.Start, c.End, style, selectableLines)
+}
+
 func (c Controller) ByteRange(content string) (int, int) {
 	return ByteRange(content, c.Start, c.End)
+}
+
+func (c Controller) ByteRangeWithLineFilter(content string, selectableLines []bool) (int, int) {
+	return ByteRangeWithLineFilter(content, c.Start, c.End, selectableLines)
 }
 
 func HasSelection(start, end Point) bool {
@@ -125,6 +137,10 @@ func HasSelection(start, end Point) bool {
 }
 
 func SelectedText(content string, start, end Point) string {
+	return SelectedTextWithLineFilter(content, start, end, nil)
+}
+
+func SelectedTextWithLineFilter(content string, start, end Point, selectableLines []bool) string {
 	start, end = Ordered(start, end)
 	if start.Row == end.Row && start.Col == end.Col {
 		return ""
@@ -137,6 +153,9 @@ func SelectedText(content string, start, end Point) string {
 	end.Row = maxInt(0, minInt(end.Row, len(lines)-1))
 	var selected []string
 	for row := start.Row; row <= end.Row; row++ {
+		if !lineSelectable(selectableLines, row) {
+			continue
+		}
 		line := lines[row]
 		left := 0
 		right := xansi.StringWidth(line)
@@ -152,8 +171,12 @@ func SelectedText(content string, start, end Point) string {
 }
 
 func HighlightedContent(content string, start, end Point, style lipgloss.Style) string {
+	return HighlightedContentWithLineFilter(content, start, end, style, nil)
+}
+
+func HighlightedContentWithLineFilter(content string, start, end Point, style lipgloss.Style, selectableLines []bool) string {
 	rawLines := strings.Split(content, "\n")
-	ranges := LineRanges(rawLines, start, end)
+	ranges := LineRangesWithLineFilter(rawLines, start, end, selectableLines)
 	if len(ranges) == 0 {
 		return content
 	}
@@ -167,6 +190,10 @@ func HighlightedContent(content string, start, end Point, style lipgloss.Style) 
 }
 
 func LineRanges(rawLines []string, start, end Point) []LineRange {
+	return LineRangesWithLineFilter(rawLines, start, end, nil)
+}
+
+func LineRangesWithLineFilter(rawLines []string, start, end Point, selectableLines []bool) []LineRange {
 	start, end = Ordered(start, end)
 	if (start.Row == end.Row && start.Col == end.Col) || len(rawLines) == 0 {
 		return nil
@@ -175,6 +202,9 @@ func LineRanges(rawLines []string, start, end Point) []LineRange {
 	end.Row = maxInt(0, minInt(end.Row, len(rawLines)-1))
 	ranges := make([]LineRange, 0, end.Row-start.Row+1)
 	for row := start.Row; row <= end.Row; row++ {
+		if !lineSelectable(selectableLines, row) {
+			continue
+		}
 		lineWidth := xansi.StringWidth(xansi.Strip(rawLines[row]))
 		left := 0
 		right := lineWidth
@@ -192,6 +222,10 @@ func LineRanges(rawLines []string, start, end Point) []LineRange {
 }
 
 func ByteRange(content string, start, end Point) (int, int) {
+	return ByteRangeWithLineFilter(content, start, end, nil)
+}
+
+func ByteRangeWithLineFilter(content string, start, end Point, selectableLines []bool) (int, int) {
 	start, end = Ordered(start, end)
 	if start.Row == end.Row && start.Col == end.Col {
 		return -1, -1
@@ -200,14 +234,26 @@ func ByteRange(content string, start, end Point) (int, int) {
 	if len(lines) == 0 {
 		return -1, -1
 	}
-	start.Row = maxInt(0, minInt(start.Row, len(lines)-1))
-	end.Row = maxInt(0, minInt(end.Row, len(lines)-1))
-	startByte := byteOffset(lines, start)
-	endByte := byteOffset(lines, end)
+	rawLines := strings.Split(content, "\n")
+	ranges := LineRangesWithLineFilter(rawLines, start, end, selectableLines)
+	if len(ranges) == 0 {
+		return -1, -1
+	}
+	first := ranges[0]
+	last := ranges[len(ranges)-1]
+	startByte := byteOffset(lines, Point{Row: first.Row, Col: first.Left})
+	endByte := byteOffset(lines, Point{Row: last.Row, Col: last.Right})
 	if endByte < startByte {
 		return endByte, startByte
 	}
 	return startByte, endByte
+}
+
+func lineSelectable(selectableLines []bool, row int) bool {
+	if len(selectableLines) == 0 || row < 0 || row >= len(selectableLines) {
+		return true
+	}
+	return selectableLines[row]
 }
 
 func Ordered(a, b Point) (Point, Point) {

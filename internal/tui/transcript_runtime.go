@@ -1004,6 +1004,7 @@ func (m *Model) finishLiveBlocks() {
 func (m *Model) reflow(gotoBottom bool) {
 	m.reflowCount++
 	var parts []string
+	var selectableLines []bool
 	currentToolTurnID := ""
 	if m.toolView == "current" {
 		currentToolTurnID = m.currentToolTurnID()
@@ -1030,14 +1031,39 @@ func (m *Model) reflow(gotoBottom bool) {
 		rendered, cache := m.renderBlockCached(i)
 		m.setRichBlockCache(m.blocks[i], cache)
 		parts = append(parts, rendered)
+		selectableLines = appendSelectableLines(selectableLines, rendered, m.blockSelectableForCopy(i, b))
 	}
 	m.viewportContent = strings.Join(parts, "\n")
+	m.viewportSelectableLines = selectableLines
 	m.viewport.SetContent(m.viewportContent)
 	if m.hasSelection() {
 		m.applySelectionHighlight()
 	}
 	if gotoBottom {
 		m.viewport.GotoBottom()
+	}
+}
+
+func appendSelectableLines(lines []bool, rendered string, selectable bool) []bool {
+	count := strings.Count(rendered, "\n") + 1
+	for i := 0; i < count; i++ {
+		lines = append(lines, selectable)
+	}
+	return lines
+}
+
+func (m Model) blockSelectableForCopy(i int, b transcript.Cell) bool {
+	switch {
+	case b.Kind == "status" || b.Kind == "audit":
+		return false
+	case b.CellType == cellTypeStatus || b.CellType == cellTypeRunSummary || b.CellType == cellTypeCompaction || b.CellType == cellTypeMCPStatus:
+		return false
+	case b.Kind == "tool" && (m.toolCollapsed(i) || (m.toolView == "auto" && m.blockCollapsed(i)) || b.CellType == cellTypeToolGroup):
+		return false
+	case b.Kind == "reasoning" && (m.thinkView == "collapsed" || m.blockCollapsed(i)):
+		return false
+	default:
+		return true
 	}
 }
 
@@ -1483,7 +1509,7 @@ func (m Model) selectionPointFromMouseClamped(x, y int) tuiselection.Point {
 }
 
 func (m Model) selectedTranscriptText() string {
-	return m.selection.SelectedText(m.baseViewportContent())
+	return m.selection.SelectedTextWithLineFilter(m.baseViewportContent(), m.viewportSelectableLines)
 }
 
 func (m Model) hasSelection() bool {
@@ -1504,11 +1530,11 @@ func (m Model) baseViewportContent() string {
 func (m Model) selectionHighlightedContent() string {
 	content := m.baseViewportContent()
 	styles := m.styles()
-	return m.selection.HighlightedContent(content, styles.selection)
+	return m.selection.HighlightedContentWithLineFilter(content, styles.selection, m.viewportSelectableLines)
 }
 
 func (m Model) selectionByteRange() (int, int) {
-	return m.selection.ByteRange(m.baseViewportContent())
+	return m.selection.ByteRangeWithLineFilter(m.baseViewportContent(), m.viewportSelectableLines)
 }
 
 func copySelectionCmd(text string) tea.Cmd {

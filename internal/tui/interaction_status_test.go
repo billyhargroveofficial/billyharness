@@ -241,6 +241,50 @@ func TestTranscriptSelectionCannotCopyHiddenThinkingOrTools(t *testing.T) {
 	}
 }
 
+func TestTranscriptSelectionSkipsSemanticNoSelectRows(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.height = 24
+	m.addBlock("assistant", "ASSISTANT", "alpha")
+	m.addBlock("status", "STATUS", "\x1b[90mstatus line should not copy\x1b[m")
+	m.addBlock("reasoning", "THINKING", "secret thought")
+	m.addBlock("tool", "Done Read README.md", "tool output should not copy when collapsed")
+	m.addBlock("assistant", "ASSISTANT", "привет 🏳️‍🌈 中 omega")
+	m.thinkView = "collapsed"
+	m.toolView = "collapsed"
+	m.reflow(true)
+
+	m.selection.Start = tuiselection.Point{Row: 0, Col: 0}
+	m.selection.End = tuiselection.Point{Row: 999, Col: 999}
+	selected := m.selectedTranscriptText()
+	for _, want := range []string{"alpha", "привет 🏳️‍🌈 中 omega"} {
+		if !strings.Contains(selected, want) {
+			t.Fatalf("selection should include selectable text %q, got %q", want, selected)
+		}
+	}
+	for _, bad := range []string{"status line should not copy", "STATUS", "secret thought", "THINKING", "collapsed", "Done Read", "tool output should not copy"} {
+		if strings.Contains(selected, bad) {
+			t.Fatalf("selection copied no-select text %q from %q", bad, selected)
+		}
+	}
+
+	highlighted := m.selectionHighlightedContent()
+	if stripANSITest(highlighted) != stripANSITest(m.viewportContent) {
+		t.Fatalf("highlight should preserve visible transcript")
+	}
+	highlightedText := selectionBackgroundText(highlighted)
+	for _, want := range []string{"alpha", "привет 🏳️‍🌈 中 omega"} {
+		if !strings.Contains(highlightedText, want) {
+			t.Fatalf("highlight missing selectable text %q, highlighted=%q", want, highlightedText)
+		}
+	}
+	for _, bad := range []string{"status line should not copy", "Done Read", "collapsed", "secret thought"} {
+		if strings.Contains(highlightedText, bad) {
+			t.Fatalf("highlight included no-select text %q: %q", bad, highlightedText)
+		}
+	}
+}
+
 func TestReflowPreservesSelectionHighlightDuringLiveUpdate(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 80

@@ -846,7 +846,7 @@ framework migration.
     ./internal/clientux ./internal/architecture` passed.
   - commit: `c33fe34c4242ba5bf1244738eaa59897bb4f5254`.
 
-- [ ] SH-06.2 Harden selection and copy with semantic no-select regions.
+- [x] SH-06.2 Harden selection and copy with semantic no-select regions.
   - inspiration: Claude Code terminal selection state.
   - target files: `internal/tui/selection`, `internal/tui/transcript`,
     `internal/tui/render`.
@@ -855,7 +855,26 @@ framework migration.
     and wide Unicode text.
   - verification: selection tests with Cyrillic, emoji, ANSI, tables, and
     scrolled content.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: extended `internal/tui/selection` with optional line-level
+    selection filters while preserving existing column/ANSI/grapheme behavior.
+    TUI reflow now records a selectable-line mask for rendered transcript rows:
+    assistant/user content stays selectable, while status/audit rows,
+    run/compaction/status cells, collapsed reasoning summaries, collapsed tool
+    rows, and grouped tool chrome are excluded from range copy and highlight.
+    Existing hidden thinking/tool views still avoid rendering those rows
+    entirely. Regression coverage selects across ANSI status text, collapsed
+    thinking/tool chrome, Cyrillic, emoji, and CJK text and verifies copy output
+    plus visible highlight behavior.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*Selection.*|Test.*NoSelect.*|Test.*Copy.*' -count=1
+    ./internal/tui/selection ./internal/tui ./internal/tui/render
+    ./internal/tui/transcript` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/tui/selection
+    ./internal/tui/render ./internal/tui/transcript ./internal/tui
+    ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] SH-06.3 Add compact command palette source labels and argument menus.
   - inspiration: OpenCode command hints and Billy's current slash-command UX.
