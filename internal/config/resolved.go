@@ -204,6 +204,7 @@ func configSpecs() []configSpec {
 		durationSecondsSpec("stream_idle_timeout_sec", []string{"FAST_AGENT_STREAM_IDLE_TIMEOUT_SEC"}, func(c Config) any { return c.StreamIdleTimeout }, func(c *Config, v time.Duration) { c.StreamIdleTimeout = v }),
 		intSpec("project_doc_max_bytes", []string{"FAST_AGENT_PROJECT_DOC_MAX_BYTES"}, func(c Config) any { return c.ProjectDocMaxBytes }, func(c *Config, v int) { c.ProjectDocMaxBytes = v }),
 		stringListSpec("project_doc_fallback_filenames", []string{"FAST_AGENT_PROJECT_DOC_FALLBACK_FILENAMES"}, func(c Config) any { return c.ProjectDocFallbacks }, func(c *Config, v []string) { c.ProjectDocFallbacks = v }),
+		intSpec("project_context_max_bytes", []string{"FAST_AGENT_PROJECT_CONTEXT_MAX_BYTES", "BILLYHARNESS_PROJECT_CONTEXT_MAX_BYTES"}, func(c Config) any { return c.ProjectContextMaxBytes }, func(c *Config, v int) { c.ProjectContextMaxBytes = v }),
 		intSpec("max_tool_output_bytes", []string{"FAST_AGENT_MAX_TOOL_OUTPUT_BYTES"}, func(c Config) any { return c.MaxToolOutputBytes }, func(c *Config, v int) { c.MaxToolOutputBytes = v }),
 		boolSpec("diagnostics_enabled", []string{"BILLYHARNESS_DIAGNOSTICS_ENABLED", "FAST_AGENT_DIAGNOSTICS_ENABLED"}, func(c Config) any { return c.DiagnosticsEnabled }, func(c *Config, v bool) { c.DiagnosticsEnabled = v }),
 		stringListSpec("diagnostics_config_files", []string{"BILLYHARNESS_DIAGNOSTICS_CONFIG_FILES", "FAST_AGENT_DIAGNOSTICS_CONFIG_FILES"}, func(c Config) any { return c.DiagnosticsConfigFiles }, func(c *Config, v []string) { c.DiagnosticsConfigFiles = v }),

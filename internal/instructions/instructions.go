@@ -6,6 +6,8 @@
 package instructions
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +31,8 @@ const (
 type Source struct {
 	Path    string `json:"path"`
 	Scope   string `json:"scope"`
+	Bytes   int    `json:"bytes,omitempty"`
+	SHA256  string `json:"sha256,omitempty"`
 	Capped  bool   `json:"capped,omitempty"`
 	Skipped string `json:"skipped,omitempty"`
 }
@@ -47,8 +51,8 @@ type Profile struct {
 
 func Load(settings config.InstructionSettings) Loaded {
 	var parts []instructionPart
-	if text, path := loadGlobalInstructions(); text != "" {
-		parts = append(parts, instructionPart{text: text, source: Source{Path: path, Scope: "global"}})
+	if text, source := loadGlobalInstructions(); text != "" {
+		parts = append(parts, instructionPart{text: text, source: source})
 	}
 	project := loadProjectInstructions(settings)
 	parts = append(parts, project.parts...)
@@ -131,7 +135,7 @@ type projectLoad struct {
 	directory string
 }
 
-func loadGlobalInstructions() (string, string) {
+func loadGlobalInstructions() (string, Source) {
 	for _, dir := range globalDirs() {
 		for _, name := range baseCandidates(nil) {
 			path := filepath.Join(dir, name)
@@ -145,11 +149,11 @@ func loadGlobalInstructions() (string, string) {
 			}
 			text := strings.TrimSpace(string(raw))
 			if text != "" {
-				return text, path
+				return text, instructionSource(path, "global", raw, false)
 			}
 		}
 	}
-	return "", ""
+	return "", Source{}
 }
 
 func loadProjectInstructions(settings config.InstructionSettings) projectLoad {
@@ -185,7 +189,7 @@ func loadProjectInstructions(settings config.InstructionSettings) projectLoad {
 				parts = append(parts, instructionPart{
 					text:    string(raw),
 					project: true,
-					source:  Source{Path: path, Scope: "project", Capped: capped},
+					source:  instructionSource(path, "project", raw, capped),
 				})
 				remaining -= len(raw)
 			}
@@ -193,6 +197,17 @@ func loadProjectInstructions(settings config.InstructionSettings) projectLoad {
 		}
 	}
 	return projectLoad{parts: parts, directory: cwd}
+}
+
+func instructionSource(path, scope string, raw []byte, capped bool) Source {
+	sum := sha256.Sum256(raw)
+	return Source{
+		Path:   path,
+		Scope:  scope,
+		Bytes:  len(raw),
+		SHA256: hex.EncodeToString(sum[:]),
+		Capped: capped,
+	}
 }
 
 func instructionCWD(settings config.InstructionSettings) string {

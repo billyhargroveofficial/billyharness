@@ -37,6 +37,9 @@ func TestLoadProjectInstructionsRootToCwdWithOverridePreference(t *testing.T) {
 	if len(loaded.Sources) != 2 {
 		t.Fatalf("Sources = %#v", loaded.Sources)
 	}
+	if loaded.Sources[0].Bytes != len("root rules") || len(loaded.Sources[0].SHA256) != 64 {
+		t.Fatalf("source metadata = %#v", loaded.Sources[0])
+	}
 	if filepath.Base(loaded.Sources[1].Path) != "AGENTS.override.md" {
 		t.Fatalf("override was not preferred: %#v", loaded.Sources)
 	}
@@ -103,6 +106,23 @@ func TestProjectDocFallbackFilename(t *testing.T) {
 	}
 	if filepath.Base(loaded.Sources[0].Path) != "CLAUDE.md" {
 		t.Fatalf("Sources = %#v", loaded.Sources)
+	}
+}
+
+func TestInstructionSourceMetadataIncludesBytesAndHash(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex-empty"))
+	root := t.TempDir()
+	mustMkdir(t, filepath.Join(root, ".git"))
+	mustWrite(t, filepath.Join(root, "AGENTS.md"), "project rules")
+
+	loaded := Load(instructionSettings(config.Config{
+		WorkspaceRoots:     []string{root},
+		ProjectDocMaxBytes: 32 * 1024,
+	}))
+	if len(loaded.Sources) != 1 || loaded.Sources[0].Bytes != len("project rules") || len(loaded.Sources[0].SHA256) != 64 {
+		t.Fatalf("sources = %#v", loaded.Sources)
 	}
 }
 

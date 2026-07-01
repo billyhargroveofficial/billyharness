@@ -1401,10 +1401,11 @@ func (s *Server) runtimeDiffSettings() config.RuntimeDiffSettings {
 
 func runSettingsFromRuntimeDiffSettings(settings config.RuntimeDiffSettings) runSettings {
 	instructions := config.InstructionSettings{
-		Profile:             settings.Profile,
-		WorkspaceRoots:      append([]string(nil), settings.ToolPolicy.WorkspaceRoots...),
-		ProjectDocMaxBytes:  settings.ToolPolicy.ProjectDocMaxBytes,
-		ProjectDocFallbacks: append([]string(nil), settings.ToolPolicy.ProjectDocFallbacks...),
+		Profile:                settings.Profile,
+		WorkspaceRoots:         append([]string(nil), settings.ToolPolicy.WorkspaceRoots...),
+		ProjectDocMaxBytes:     settings.ToolPolicy.ProjectDocMaxBytes,
+		ProjectDocFallbacks:    append([]string(nil), settings.ToolPolicy.ProjectDocFallbacks...),
+		ProjectContextMaxBytes: settings.ToolPolicy.ProjectContextMaxBytes,
 	}
 	return runSettings{
 		provider:     settings.Provider,

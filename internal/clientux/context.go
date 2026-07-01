@@ -156,6 +156,9 @@ func contextSource(msg protocol.Message) string {
 		}
 		return "system_instructions"
 	case protocol.RoleUser:
+		if strings.HasPrefix(strings.TrimSpace(msg.Content), "# Project context") || strings.Contains(msg.Content, "<PROJECT_CONTEXT>") {
+			return "project_context"
+		}
 		return "user_messages"
 	case protocol.RoleAssistant:
 		if len(msg.ToolCalls) > 0 {

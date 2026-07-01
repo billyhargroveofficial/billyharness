@@ -54,6 +54,7 @@ type ToolPolicySettings struct {
 	WorkspaceRoots            []string
 	ProjectDocMaxBytes        int
 	ProjectDocFallbacks       []string
+	ProjectContextMaxBytes    int
 	MaxToolOutputBytes        int
 	AutoApproveDangerous      bool
 	AccessMode                string
@@ -89,10 +90,11 @@ type HookSettings struct {
 }
 
 type InstructionSettings struct {
-	Profile             ProfileSelection
-	WorkspaceRoots      []string
-	ProjectDocMaxBytes  int
-	ProjectDocFallbacks []string
+	Profile                ProfileSelection
+	WorkspaceRoots         []string
+	ProjectDocMaxBytes     int
+	ProjectDocFallbacks    []string
+	ProjectContextMaxBytes int
 }
 
 type ProviderBinding struct {
@@ -167,6 +169,7 @@ func (c Config) ToolPolicySettings() ToolPolicySettings {
 		WorkspaceRoots:            cloneStrings(cfg.WorkspaceRoots),
 		ProjectDocMaxBytes:        cfg.ProjectDocMaxBytes,
 		ProjectDocFallbacks:       cloneStrings(cfg.ProjectDocFallbacks),
+		ProjectContextMaxBytes:    cfg.ProjectContextMaxBytes,
 		MaxToolOutputBytes:        cfg.MaxToolOutputBytes,
 		AutoApproveDangerous:      cfg.AutoApproveDangerous,
 		AccessMode:                NormalizeAccessMode(cfg.AccessMode),
@@ -227,10 +230,11 @@ func (c Config) InstructionSettings() InstructionSettings {
 		profile = c.ProfileSelection()
 	}
 	return InstructionSettings{
-		Profile:             profile,
-		WorkspaceRoots:      cloneStrings(c.WorkspaceRoots),
-		ProjectDocMaxBytes:  c.ProjectDocMaxBytes,
-		ProjectDocFallbacks: cloneStrings(c.ProjectDocFallbacks),
+		Profile:                profile,
+		WorkspaceRoots:         cloneStrings(c.WorkspaceRoots),
+		ProjectDocMaxBytes:     c.ProjectDocMaxBytes,
+		ProjectDocFallbacks:    cloneStrings(c.ProjectDocFallbacks),
+		ProjectContextMaxBytes: c.ProjectContextMaxBytes,
 	}
 }
 

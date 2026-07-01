@@ -7,10 +7,15 @@ The report includes:
 - active context tokens and percent of `context_window_tokens`;
 - compaction threshold and whether the session is below or over it;
 - 50%, 70%, 85%, and 95% threshold status;
-- source buckets for user messages, assistant messages, reasoning content, tool outputs, web summaries, MCP outputs, system instructions, and compaction summaries;
+- source buckets for project context, user messages, assistant messages, reasoning content, tool outputs, web summaries, MCP outputs, system instructions, and compaction summaries;
 - top context contributors with message index, role, source, tool name when available, token estimate, and a short preview.
 
 Provider usage counters such as cache hit/miss can be larger than active context because they are provider billing/cache accounting for model calls. `/context` is the cleaner place to answer "why did this chat get large?".
+
+Billyharness injects a bounded `project_context` fragment before project
+instructions. It records cwd, workspace roots, git root, package-manager and
+likely command hints, instruction file metadata, and `.env*` variable names
+only. It does not ingest README prose, shell history, or `.env` values.
 
 During a run, the agent emits `context.threshold` events when active context crosses 50%, 70%, 85%, or 95% of `context_window_tokens`. TUI renders these as `CONTEXT` blocks. Telegram shows them as compact progress lines.
 

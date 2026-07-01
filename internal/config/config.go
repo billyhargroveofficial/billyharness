@@ -43,6 +43,7 @@ type Config struct {
 	WorkspaceRoots                []string
 	ProjectDocMaxBytes            int
 	ProjectDocFallbacks           []string
+	ProjectContextMaxBytes        int
 	MaxToolOutputBytes            int
 	DiagnosticsEnabled            bool
 	DiagnosticsConfigFiles        []string

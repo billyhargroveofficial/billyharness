@@ -836,11 +836,27 @@ platform.
     ./internal/gatewayclient ./internal/tui ./internal/telegrambot` passed.
   - commit: pending.
 
-- [ ] HR-04.4 Minimal project context registry.
+- [x] HR-04.4 Minimal project context registry.
   - maps to: `competitive-improvements-todo.md` B8.
   - acceptance: bounded snapshot of cwd, roots, package manager, likely
     commands, instruction metadata, env names without values, and cap flags.
   - verification: `go test -count=1 ./internal/projectcontext ./internal/agent ./internal/clientux ./internal/config ./internal/instructions`.
+  - status: completed 2026-07-01.
+  - evidence: added `internal/projectcontext` for a bounded local snapshot with
+    cwd, workspace roots, git root, package-manager hints, likely test/build
+    commands, instruction source byte/hash metadata, `.env*` variable names
+    without values, and explicit cap flags. The agent now injects the capped
+    project-context fragment after profile/SOUL and before AGENTS/project
+    instructions, compaction protects that prefix, and `/context` reports a
+    separate `project_context` source bucket.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*ProjectContext.*|Test.*Env.*Hints.*|Test.*Instruction.*Metadata.*|Test.*Context.*Project.*'
+    -count=1 ./internal/...` passed; `/root/.local/go/bin/go test -count=1
+    ./internal/projectcontext ./internal/agent ./internal/clientux
+    ./internal/config ./internal/instructions` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] HR-04.5 Context epoch reconcile.
   - maps to: `competitive-improvements-todo.md` B9.

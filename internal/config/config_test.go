@@ -48,6 +48,9 @@ func TestDefaultRuntimeLimits(t *testing.T) {
 	if cfg.ContextCompactKeep != 32 {
 		t.Fatalf("ContextCompactKeep = %d, want 32", cfg.ContextCompactKeep)
 	}
+	if cfg.ProjectContextMaxBytes != 4*1024 {
+		t.Fatalf("ProjectContextMaxBytes = %d, want 4096", cfg.ProjectContextMaxBytes)
+	}
 	if !cfg.AutoApproveDangerous {
 		t.Fatalf("AutoApproveDangerous should be enabled by default")
 	}
@@ -95,6 +98,15 @@ func TestContextCompactionEnvOverridesPolicyControls(t *testing.T) {
 		cfg.ContextCompactKeep != 17 ||
 		cfg.ContextCompactMaxChars != 54321 {
 		t.Fatalf("context compaction policy = tokens:%d keep:%d max_chars:%d", cfg.ContextCompactTokens, cfg.ContextCompactKeep, cfg.ContextCompactMaxChars)
+	}
+}
+
+func TestProjectContextMaxBytesEnvOverride(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	t.Setenv("FAST_AGENT_PROJECT_CONTEXT_MAX_BYTES", "1234")
+	cfg := Default()
+	if cfg.ProjectContextMaxBytes != 1234 || cfg.InstructionSettings().ProjectContextMaxBytes != 1234 {
+		t.Fatalf("project context cap = cfg:%d projection:%d", cfg.ProjectContextMaxBytes, cfg.InstructionSettings().ProjectContextMaxBytes)
 	}
 }
 

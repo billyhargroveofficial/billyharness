@@ -56,6 +56,12 @@ CLI/gateway startup:
 
 Profile switches update provider/model/reasoning/instructions consistently for the next run. Sessions record the profile hash so traces can explain which instruction set was active.
 
+At run start, Billyharness assembles the prompt prefix in this order: built-in
+system prompt, selected profile `SOUL.md`, bounded project context, then
+AGENTS/project instructions. The project context is metadata only: roots,
+package-manager hints, likely commands, instruction file hashes/byte counts,
+and `.env*` variable names without values.
+
 ## Inspect
 
 ```sh
