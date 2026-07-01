@@ -109,6 +109,7 @@ func (m Model) gatewayRunRequest(prompt string, metadata ...map[string]string) g
 	thinking := m.currentThinking()
 	req := gatewayapi.RunRequest{
 		Prompt:          prompt,
+		ClientID:        "tui",
 		Provider:        m.currentProvider(),
 		Model:           m.currentModel(),
 		Profile:         m.currentProfile(),

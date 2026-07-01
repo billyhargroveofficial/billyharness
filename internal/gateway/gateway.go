@@ -620,7 +620,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		return a.Run(r.Context(), req.Prompt, emit)
+		return a.RunWithPromptOptions(r.Context(), req.Prompt, promptSubmitOptionsFromRun(req, "gateway"), emit)
 	})
 }
 
@@ -675,7 +675,9 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 		if err := s.promoteSessionInput(session, admission.InputID, runSeq); err != nil {
 			return err
 		}
-		err = session.Thread.Run(r.Context(), sessionpkg.RunnerFunc(a.RunMessages), req.Prompt, func(event protocol.Event) {
+		err = session.Thread.Run(r.Context(), sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
+			return a.RunMessagesWithPromptOptions(ctx, messages, promptSubmitOptionsFromRun(req, "gateway_session"), emit)
+		}), req.Prompt, func(event protocol.Event) {
 			if event.Type == protocol.EventRunStarted {
 				session.beginRunStatus(statusReq)
 			}
@@ -809,6 +811,21 @@ func sessionInputRequestFromRun(req RunRequest) gatewayapi.SessionInputRequest {
 		InterruptPolicy: req.InterruptPolicy,
 		ClientID:        req.ClientID,
 		Metadata:        req.Metadata,
+	}
+}
+
+func promptSubmitOptionsFromRun(req RunRequest, fallbackSource string) agent.PromptSubmitOptions {
+	source := fallbackSource
+	if strings.HasPrefix(req.ClientID, "telegram") {
+		source = "telegram"
+	} else if strings.HasPrefix(req.ClientID, "tui") {
+		source = "tui"
+	} else if strings.TrimSpace(req.ClientID) != "" {
+		source = req.ClientID
+	}
+	return agent.PromptSubmitOptions{
+		Source:   source,
+		Metadata: req.Metadata,
 	}
 }
 

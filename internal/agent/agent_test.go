@@ -323,6 +323,123 @@ func TestRunMessagesEmitsRunFailedOnProviderError(t *testing.T) {
 	}
 }
 
+func TestRunMessagesUserPromptSubmitBlockSkipsProviderAndDropsPrompt(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.HooksEnabled = true
+	cfg.Hooks = []config.Hook{{
+		Name:           "block",
+		Event:          "user_prompt_submit",
+		Command:        "sh",
+		Args:           []string{"-c", `printf '%s' '{"decision":"block","reason":"missing ticket id"}'`},
+		MaxOutputBytes: 4096,
+		Enabled:        true,
+	}}
+	prov := &scriptedProvider{}
+	a := New(cfg, prov, tools.NewRegistry(cfg))
+	var events []protocol.Event
+	next, err := a.RunMessagesWithPromptOptions(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "ship it"},
+	}, PromptSubmitOptions{Source: "telegram"}, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	var blocked PromptBlockedError
+	if !errors.As(err, &blocked) || blocked.Reason != "missing ticket id" {
+		t.Fatalf("err = %v blocked=%#v", err, blocked)
+	}
+	if prov.calls != 0 {
+		t.Fatalf("provider calls = %d, want 0", prov.calls)
+	}
+	if len(next) != 1 || next[0].Role != protocol.RoleSystem || next[0].Content != "system" {
+		t.Fatalf("blocked prompt should be removed from returned history: %#v", next)
+	}
+	if sawEvent(events, protocol.EventModelCallStarted) || sawEvent(events, protocol.EventTurnStarted) {
+		t.Fatalf("blocked prompt reached model/turn events: %#v", events)
+	}
+	finished, ok := firstEventData(events, protocol.EventHookFinished)
+	if !ok || finished["hook_event"] != "user_prompt_submit" || finished["decision"] != "block" || finished["block_reason"] != "missing ticket id" {
+		t.Fatalf("prompt hook event = %#v ok=%v", finished, ok)
+	}
+	payload, _ := finished["payload"].(map[string]any)
+	if payload["prompt"] != "ship it" || payload["source"] != "telegram" {
+		t.Fatalf("prompt hook payload = %#v", payload)
+	}
+	failedIndex := eventIndex(events, protocol.EventRunFailed)
+	if failedIndex < 0 || !strings.Contains(fmt.Sprint(events[failedIndex].Data), "missing ticket id") {
+		t.Fatalf("run.failed index=%d events=%#v", failedIndex, events)
+	}
+}
+
+func TestRunMessagesUserPromptSubmitContextAndRewriteReachProvider(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.HooksEnabled = true
+	cfg.Hooks = []config.Hook{{
+		Name:           "context",
+		Event:          "user_prompt_submit",
+		Command:        "sh",
+		Args:           []string{"-c", `printf '%s' '{"additional_context":"Use package-local tests.","updated_prompt":"Run focused tests."}'`},
+		MaxOutputBytes: 4096,
+		Enabled:        true,
+	}}
+	prov := &captureProvider{}
+	a := New(cfg, prov, tools.NewRegistry(cfg))
+	var events []protocol.Event
+	next, err := a.RunMessagesWithPromptOptions(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "original prompt"},
+	}, PromptSubmitOptions{
+		Source: "tui",
+		Metadata: map[string]string{
+			"prompt_command":                 "review",
+			"prompt_command_original":        "/review internal/tui",
+			"prompt_command_expanded_sha256": "abc123",
+		},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.messages) < 3 {
+		t.Fatalf("provider messages = %#v", prov.messages)
+	}
+	contextMsg := prov.messages[len(prov.messages)-2]
+	promptMsg := prov.messages[len(prov.messages)-1]
+	if contextMsg.Role != protocol.RoleUser || !strings.Contains(contextMsg.Content, "# user_prompt_submit hook context") || !strings.Contains(contextMsg.Content, "Use package-local tests.") {
+		t.Fatalf("context message = %#v", contextMsg)
+	}
+	if promptMsg.Role != protocol.RoleUser || promptMsg.Content != "Run focused tests." {
+		t.Fatalf("prompt message = %#v", promptMsg)
+	}
+	if strings.Contains(fmt.Sprint(prov.messages), "original prompt") {
+		t.Fatalf("original prompt leaked to provider messages: %#v", prov.messages)
+	}
+	if len(next) == 0 || next[len(next)-1].Role != protocol.RoleAssistant || next[len(next)-1].Content != "done" {
+		t.Fatalf("next messages = %#v", next)
+	}
+	hookIndex := eventIndex(events, protocol.EventHookFinished)
+	modelIndex := eventIndex(events, protocol.EventModelCallStarted)
+	if hookIndex < 0 || modelIndex < 0 || hookIndex > modelIndex {
+		t.Fatalf("hook/model order hook=%d model=%d events=%#v", hookIndex, modelIndex, events)
+	}
+	finished, ok := firstEventData(events, protocol.EventHookFinished)
+	if !ok || finished["decision"] != "allow" || finished["additional_context_bytes"] == nil || finished["updated_prompt_sha256"] == "" {
+		t.Fatalf("prompt hook metadata = %#v ok=%v", finished, ok)
+	}
+	payload, _ := finished["payload"].(map[string]any)
+	metadata, _ := payload["metadata"].(map[string]any)
+	slash, _ := payload["slash_command"].(map[string]any)
+	if payload["source"] != "tui" ||
+		metadata["prompt_command_original"] != "/review internal/tui" ||
+		slash["prompt_command"] != "review" {
+		t.Fatalf("prompt hook payload metadata = payload=%#v metadata=%#v slash=%#v", payload, metadata, slash)
+	}
+}
+
 type captureProvider struct {
 	messages []protocol.Message
 }

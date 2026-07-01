@@ -104,6 +104,62 @@ func TestSessionInputRequestFromRunIncludesMetadata(t *testing.T) {
 	}
 }
 
+func TestGatewaySessionRunUserPromptSubmitBlockDoesNotPersistPrompt(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.HooksEnabled = true
+	cfg.Hooks = []config.Hook{{
+		Name:           "block",
+		Event:          "user_prompt_submit",
+		Command:        "sh",
+		Args:           []string{"-c", `printf '%s' '{"decision":"block","reason":"missing ticket id"}'`},
+		MaxOutputBytes: 4096,
+		Enabled:        true,
+	}}
+	prov := &gatewayScriptedProvider{steps: [][]provider.Event{{
+		{Kind: provider.EventContent, Text: "should not run"},
+		{Kind: provider.EventDone},
+	}}}
+	server := NewServer(cfg, prov, tools.NewRegistry(cfg))
+
+	create := httptest.NewRecorder()
+	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewBufferString(`{"messages":[{"role":"system","content":"system"}]}`)))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var created SessionResponse
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	body := bytes.NewBufferString(`{"prompt":"ship it","client_id":"telegram:chat","metadata":{"prompt_command":"review"}}`)
+	run := httptest.NewRecorder()
+	server.Handler().ServeHTTP(run, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/run", body))
+	if run.Code != http.StatusOK {
+		t.Fatalf("run status = %d body=%s", run.Code, run.Body.String())
+	}
+	if prov.calls != 0 {
+		t.Fatalf("provider calls = %d, want 0", prov.calls)
+	}
+	if !strings.Contains(run.Body.String(), "prompt blocked by user_prompt_submit hook: missing ticket id") {
+		t.Fatalf("run stream missing block failure: %s", run.Body.String())
+	}
+
+	get := httptest.NewRecorder()
+	server.Handler().ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID, nil))
+	if get.Code != http.StatusOK {
+		t.Fatalf("get status = %d body=%s", get.Code, get.Body.String())
+	}
+	var got SessionResponse
+	if err := json.Unmarshal(get.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.MessageCount != 1 || len(got.Messages) != 1 || got.Messages[0].Role != protocol.RoleSystem || got.Messages[0].Content != "system" {
+		t.Fatalf("blocked prompt persisted in session: %+v body=%s", got, get.Body.String())
+	}
+}
+
 func TestGatewaySessionCancelEndpointCancelsActiveThread(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"

@@ -39,6 +39,10 @@ func (f RunnerFunc) RunMessages(ctx context.Context, messages []protocol.Message
 	return f(ctx, messages, emit)
 }
 
+type promptHistoryDiscarder interface {
+	DiscardPromptHistory() bool
+}
+
 type Session struct {
 	mu          sync.Mutex
 	messages    []protocol.Message
@@ -104,6 +108,10 @@ func (s *Session) Run(ctx context.Context, runner Runner, prompt string, emit fu
 		s.finishRun(base, base)
 		return err
 	}
+	if discardPromptHistory(err) {
+		s.finishRun(next, base)
+		return err
+	}
 	s.finishRun(next, runMessages)
 	return err
 }
@@ -148,6 +156,11 @@ func runInterrupted(ctx context.Context, err error) bool {
 		return true
 	}
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func discardPromptHistory(err error) bool {
+	var discard promptHistoryDiscarder
+	return errors.As(err, &discard) && discard.DiscardPromptHistory()
 }
 
 func (s *Session) startRun(cancel context.CancelFunc) ([]protocol.Message, InputDecision) {

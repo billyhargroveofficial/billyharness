@@ -864,7 +864,7 @@ func (m *Model) submitPrompt(prompt string) (tea.Model, tea.Cmd) {
 	if m.gatewayURL != "" {
 		go m.runGateway(prompt, promptMetadata)
 	} else {
-		go m.runLocal(prompt)
+		go m.runLocal(prompt, promptMetadata)
 	}
 	m.reflow(true)
 	return *m, tea.Batch(m.waitEventCmd(), m.tickCmd())
@@ -888,8 +888,8 @@ func (m Model) eventBatchCmd() tea.Cmd {
 	})
 }
 
-func (m Model) runLocal(prompt string) {
-	next, err := tuiruntime.RunLocal(context.Background(), m.runtimeClientSettings(), m.messages, prompt, func(event protocol.Event) {
+func (m Model) runLocal(prompt string, metadata map[string]string) {
+	next, err := tuiruntime.RunLocal(context.Background(), m.runtimeClientSettings(), m.messages, prompt, metadata, func(event protocol.Event) {
 		m.events <- streamEventMsg{event: event}
 	})
 	m.events <- runDoneMsg{messages: next, err: err}

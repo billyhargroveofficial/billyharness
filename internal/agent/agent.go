@@ -45,6 +45,11 @@ type Settings struct {
 	Instructions    config.InstructionSettings
 }
 
+type PromptSubmitOptions struct {
+	Source   string
+	Metadata map[string]string
+}
+
 func SettingsFromConfig(cfg config.Config) Settings {
 	return Settings{
 		ProviderBinding: cfg.ProviderBinding(),

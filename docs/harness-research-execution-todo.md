@@ -725,11 +725,37 @@ abuse.
     -count=1 ./internal/...` passed.
   - commit: pending.
 
-- [ ] HR-03.10 `user_prompt_submit` hook.
+- [x] HR-03.10 `user_prompt_submit` hook.
   - maps to: `competitive-improvements-todo.md` A11.
   - acceptance: hook runs before model call; can block or add bounded context;
     blocked prompts do not reach provider history.
   - verification: `go test -count=1 ./internal/config ./internal/hooks ./internal/agent ./internal/session ./internal/gateway`.
+  - status: completed 2026-07-01.
+  - evidence: added `user_prompt_submit` as a valid local hook event that runs
+    after `session_start` and before the first model call. Hook payloads include
+    prompt, cwd, model/profile, submission/run ids, source, access mode, durable
+    run metadata, and slash-command metadata when present. JSON stdout can
+    block with a bounded reason, add bounded model-visible context, or replace
+    the submitted prompt with a bounded `updated_prompt`; non-JSON stdout is
+    treated only as bounded additional context. Blocked prompts return an
+    explicit prompt-blocked error, skip provider calls and turn/model events,
+    and are discarded from session history even when the pre-run transcript is
+    empty. Hook events record decision, block reason, context length, updated
+    prompt length/hash, and cap values. Gateway and TUI local runs now pass
+    source and prompt-command metadata through the hook path.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/config ./internal/hooks
+    ./internal/agent ./internal/session ./internal/gateway` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/config ./internal/hooks
+    ./internal/agent ./internal/session ./internal/gateway
+    ./internal/tui/runtimeclient` passed; `/root/.local/go/bin/go test
+    -count=1 ./internal/config ./internal/hooks ./internal/agent
+    ./internal/session ./internal/gateway ./internal/gatewayapi
+    ./internal/gatewayclient ./internal/tui ./internal/tui/runtimeclient`
+    passed; `/root/.local/go/bin/go test -run
+    'Test.*UserPromptSubmit.*|Test.*PromptHook.*|Test.*Hook.*Block.*|Test.*AdditionalContext.*'
+    -count=1 ./internal/...` passed.
+  - commit: pending.
 
 ## Milestone 4 - Long-Run Productivity
 

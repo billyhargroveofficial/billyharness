@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"time"
 
 	runtimehooks "github.com/billyhargroveofficial/billyharness/internal/hooks"
@@ -10,14 +12,37 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
+type PromptBlockedError struct {
+	Reason string
+}
+
+func (e PromptBlockedError) Error() string {
+	if e.Reason == "" {
+		return "prompt blocked by user_prompt_submit hook"
+	}
+	return "prompt blocked by user_prompt_submit hook: " + e.Reason
+}
+
+func (e PromptBlockedError) DiscardPromptHistory() bool {
+	return true
+}
+
 func (a *Agent) Run(ctx context.Context, prompt string, emit func(protocol.Event)) error {
+	return a.RunWithPromptOptions(ctx, prompt, PromptSubmitOptions{Source: "direct"}, emit)
+}
+
+func (a *Agent) RunWithPromptOptions(ctx context.Context, prompt string, opts PromptSubmitOptions, emit func(protocol.Event)) error {
 	messages := InitialMessagesFromSettings(a.instructions)
 	messages = append(messages, protocol.Message{Role: protocol.RoleUser, Content: prompt})
-	_, err := a.RunMessages(ctx, messages, emit)
+	_, err := a.RunMessagesWithPromptOptions(ctx, messages, opts, emit)
 	return err
 }
 
 func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
+	return a.RunMessagesWithPromptOptions(ctx, messages, PromptSubmitOptions{Source: "direct"}, emit)
+}
+
+func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []protocol.Message, opts PromptSubmitOptions, emit func(protocol.Event)) ([]protocol.Message, error) {
 	if emit == nil {
 		emit = func(protocol.Event) {}
 	}
@@ -36,6 +61,11 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 		"run_id":        run.ID,
 		"status":        run.Status,
 	}, emit); err != nil {
+		emitAgentRunFailed(err, emit)
+		return messages, err
+	}
+	messages, err := a.applyPromptSubmitHook(ctx, hookRunner, run, messages, opts, emit)
+	if err != nil {
 		emitAgentRunFailed(err, emit)
 		return messages, err
 	}
@@ -111,8 +141,99 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 			Started:       turnStarted,
 		})
 	}
-	err := a.failMaxToolRounds(ctx, hookRunner, run, emit)
+	err = a.failMaxToolRounds(ctx, hookRunner, run, emit)
 	return messages, err
+}
+
+func (a *Agent) applyPromptSubmitHook(ctx context.Context, hookRunner *runtimehooks.Runner, run runstate.Run, messages []protocol.Message, opts PromptSubmitOptions, emit func(protocol.Event)) ([]protocol.Message, error) {
+	index := lastUserMessageIndex(messages)
+	if index < 0 {
+		return messages, nil
+	}
+	cwd, _ := os.Getwd()
+	source := opts.Source
+	if source == "" {
+		source = "direct"
+	}
+	result, err := hookRunner.RunPromptSubmit(ctx, runtimehooks.PromptSubmitInput{
+		Prompt:       messages[index].Content,
+		CWD:          cwd,
+		ModelID:      a.modelID(),
+		Profile:      a.profile.Profile,
+		SubmissionID: run.SubmissionID,
+		RunID:        run.ID,
+		Source:       source,
+		AccessMode:   a.toolPolicy.AccessMode,
+		Metadata:     clonePromptSubmitMetadata(opts.Metadata),
+	}, emit)
+	if err != nil {
+		return removeMessageAt(messages, index), err
+	}
+	if result.Blocked {
+		return removeMessageAt(messages, index), PromptBlockedError{Reason: result.Reason}
+	}
+	next := cloneProtocolMessages(messages)
+	if result.Prompt != "" {
+		next[index].Content = result.Prompt
+	}
+	if result.AdditionalContext != "" {
+		contextMessage := protocol.Message{
+			Role:    protocol.RoleUser,
+			Content: fmt.Sprintf("# user_prompt_submit hook context\n\n%s", result.AdditionalContext),
+		}
+		next = insertMessageAt(next, index, contextMessage)
+	}
+	return next, nil
+}
+
+func lastUserMessageIndex(messages []protocol.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == protocol.RoleUser {
+			return i
+		}
+	}
+	return -1
+}
+
+func removeMessageAt(messages []protocol.Message, index int) []protocol.Message {
+	if index < 0 || index >= len(messages) {
+		return cloneProtocolMessages(messages)
+	}
+	out := make([]protocol.Message, 0, len(messages)-1)
+	out = append(out, messages[:index]...)
+	out = append(out, messages[index+1:]...)
+	return cloneProtocolMessages(out)
+}
+
+func insertMessageAt(messages []protocol.Message, index int, message protocol.Message) []protocol.Message {
+	if index < 0 || index > len(messages) {
+		index = len(messages)
+	}
+	out := make([]protocol.Message, 0, len(messages)+1)
+	out = append(out, messages[:index]...)
+	out = append(out, message)
+	out = append(out, messages[index:]...)
+	return out
+}
+
+func cloneProtocolMessages(messages []protocol.Message) []protocol.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := make([]protocol.Message, len(messages))
+	copy(out, messages)
+	return out
+}
+
+func clonePromptSubmitMetadata(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		out[key] = value
+	}
+	return out
 }
 
 type toolExecutionResult struct {

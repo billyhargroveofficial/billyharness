@@ -696,6 +696,10 @@ fatal = true
 [hooks.after_tool.disabled]
 enabled = false
 command = "sh"
+
+[hooks.user_prompt_submit.guard]
+command = "sh"
+args = ["-c", "printf '{}'"]
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -703,16 +707,36 @@ command = "sh"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hooks) != 1 {
+	if len(hooks) != 2 {
 		t.Fatalf("hooks = %#v", hooks)
 	}
-	hook := hooks[0]
+	hook, ok := hookByName(hooks, "capture")
+	if !ok {
+		t.Fatalf("missing capture hook: %#v", hooks)
+	}
 	if hook.Event != "before_tool" || hook.Name != "capture" || hook.Command != "sh" ||
 		strings.Join(hook.Args, " ") != "-c cat" || hook.Env["STATIC_VALUE"] != "literal" ||
 		strings.Join(hook.EnvVars, ",") != "PATH" || hook.Timeout != 1500*time.Millisecond ||
 		hook.MaxOutputBytes != 123 || !hook.Fatal || !hook.Enabled {
 		t.Fatalf("hook = %#v", hook)
 	}
+	promptHook, ok := hookByName(hooks, "guard")
+	if !ok {
+		t.Fatalf("missing prompt hook: %#v", hooks)
+	}
+	if promptHook.Event != "user_prompt_submit" || promptHook.Name != "guard" || promptHook.Command != "sh" ||
+		strings.Join(promptHook.Args, " ") != "-c printf '{}'" || !promptHook.Enabled {
+		t.Fatalf("prompt hook = %#v", promptHook)
+	}
+}
+
+func hookByName(hooks []Hook, name string) (Hook, bool) {
+	for _, hook := range hooks {
+		if hook.Name == name {
+			return hook, true
+		}
+	}
+	return Hook{}, false
 }
 
 func TestFilterMCPServersKeepsOnlyAllowedNames(t *testing.T) {

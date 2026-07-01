@@ -175,7 +175,7 @@ func normalizeHookEvent(value string) string {
 
 func validHookEvent(event string) bool {
 	switch event {
-	case "session_start", "before_tool", "after_tool", "mcp_status_change", "provider_retry", "session_done":
+	case "session_start", "user_prompt_submit", "before_tool", "after_tool", "mcp_status_change", "provider_retry", "session_done":
 		return true
 	default:
 		return false

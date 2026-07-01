@@ -20,7 +20,7 @@ func TestInitialMessagesDelegatesInstructionProjection(t *testing.T) {
 }
 
 func TestRunLocalReturnsProviderConstructionError(t *testing.T) {
-	_, err := RunLocal(context.Background(), Settings{}, nil, "hello", nil)
+	_, err := RunLocal(context.Background(), Settings{}, nil, "hello", nil, nil)
 	if err == nil {
 		t.Fatal("RunLocal should return provider construction error for empty settings")
 	}

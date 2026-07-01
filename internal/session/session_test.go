@@ -280,6 +280,24 @@ func TestCancelDropsPromptWhenRunnerReturnsNilAfterContextCancelled(t *testing.T
 	}
 }
 
+func TestRunDiscardsPromptHistoryWhenRunnerRequestsDiscard(t *testing.T) {
+	s := New(nil)
+	runner := RunnerFunc(func(_ context.Context, messages []protocol.Message, _ func(protocol.Event)) ([]protocol.Message, error) {
+		if len(messages) != 1 || messages[0].Content != "blocked prompt" {
+			t.Fatalf("run messages = %#v", messages)
+		}
+		return nil, discardPromptErr{}
+	})
+	err := s.Run(context.Background(), runner, "blocked prompt", nil)
+	var discard discardPromptErr
+	if !errors.As(err, &discard) {
+		t.Fatalf("err = %v", err)
+	}
+	if messages := s.Messages(); len(messages) != 0 {
+		t.Fatalf("discarded prompt should not persist with empty base history: %#v", messages)
+	}
+}
+
 func TestMessagesReturnsDeepCopy(t *testing.T) {
 	s := New([]protocol.Message{{
 		Role: protocol.RoleAssistant,
@@ -296,4 +314,14 @@ func TestMessagesReturnsDeepCopy(t *testing.T) {
 	if string(fresh[0].ToolCalls[0].Arguments) != `{"path":"/tmp/a"}` {
 		t.Fatalf("messages leaked mutable RawMessage: %s", fresh[0].ToolCalls[0].Arguments)
 	}
+}
+
+type discardPromptErr struct{}
+
+func (discardPromptErr) Error() string {
+	return "discard prompt"
+}
+
+func (discardPromptErr) DiscardPromptHistory() bool {
+	return true
 }
