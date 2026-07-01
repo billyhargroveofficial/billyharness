@@ -1006,11 +1006,22 @@ need.
     deferral.
   - commit: pending.
 
-- [ ] HR-05.3 Opt-in AI memory candidate extraction.
+- [-] HR-05.3 Opt-in AI memory candidate extraction.
   - maps to: `competitive-improvements-todo.md` A15.
   - dependency: manual memory MVP.
   - acceptance: disabled by default; candidate-only; user approval required
     before canonical memory mutation.
+  - status: deferred 2026-07-01.
+  - blocker: A15 is marked P2 in `competitive-improvements-todo.md` and depends
+    on a manual memory MVP that is not implemented in this execution TODO. The
+    active goal also forbids P2 work without a concrete test or benchmark
+    justification.
+  - next action: revisit after a local manual memory MVP exists and a focused
+    candidate-review test proves extraction is needed; keep disabled-by-default
+    and candidate-only.
+  - verification evidence: source-priority/dependency check only; no code
+    changed for this deferral.
+  - commit: pending.
 
 - [ ] HR-05.4 MCP elicitation bridge.
   - maps to: `competitive-improvements-todo.md` B13.
