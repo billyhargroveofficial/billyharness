@@ -909,6 +909,26 @@ framework migration.
     ./internal/clientux ./internal/architecture` passed.
   - commit: `d6ec9689cc6d80a66f7d33f3db3aa4f5aa7f0d5b`.
 
+Milestone 6 final verification:
+
+- [x] Run UX polish touched package suite:
+  - `go test -count=1 ./internal/tui/selection ./internal/tui/render ./internal/tui/transcript ./internal/tui ./internal/commandregistry ./internal/mcpclient ./internal/mcpstatus ./internal/tools ./internal/tui/runtimeclient ./internal/gateway ./internal/telegrambot ./internal/clientux ./cmd/fast-agent-harness ./internal/architecture`
+  - status: completed 2026-07-01.
+  - evidence: `/root/.local/go/bin/go test -count=1
+    ./internal/tui/selection ./internal/tui/render ./internal/tui/transcript
+    ./internal/tui ./internal/commandregistry ./internal/mcpclient
+    ./internal/mcpstatus ./internal/tools ./internal/tui/runtimeclient
+    ./internal/gateway ./internal/telegrambot ./internal/clientux
+    ./cmd/fast-agent-harness ./internal/architecture` passed on pushed `HEAD`
+    `165b39d5a7cda22fb817ca9e8c8a3b5c3c2f2ea1`.
+
+- [x] Run UX polish targeted regex suite:
+  - `go test -run 'Test.*Transcript.*|Test.*Export.*|Test.*Selection.*|Test.*NoSelect.*|Test.*Copy.*|Test.*Command.*Registry.*|Test.*Slash.*(Popup|Arg|Command).*|Test.*MCP.*Prompt.*|Test.*MCPStatus.*|TestFormatMCPStatus.*|TestGatewayClientMCPStatusUsesSharedFormatter|TestActionRegistryBacksSlashCommandsAndHelp|TestTelegramCommandsCommandShowsRegistryAndProfiles|TestSessionsCommandListsAndInspectsStore' -count=1 ./internal/tui/selection ./internal/tui/render ./internal/tui/transcript ./internal/tui ./internal/commandregistry ./internal/mcpclient ./internal/mcpstatus ./internal/tools ./internal/tui/runtimeclient ./internal/gateway ./internal/telegrambot ./internal/clientux ./cmd/fast-agent-harness ./internal/architecture`
+  - status: completed 2026-07-01.
+  - evidence: the exact command above passed on pushed `HEAD`
+    `165b39d5a7cda22fb817ca9e8c8a3b5c3c2f2ea1`.
+  - commit: pending.
+
 ## Milestone 7 - Deferred Experiments (P2)
 
 These are useful only after P0/P1 proves the base is stable.
