@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
@@ -214,6 +215,90 @@ func TestSessionsCommandListsAndInspectsStore(t *testing.T) {
 	}
 }
 
+func TestSessionsSearchToolsErrorsUsageRunsCommands(t *testing.T) {
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	writeTestDiagnosticsIndex(t, storeDir)
+
+	var searchOut bytes.Buffer
+	if err := sessionsCommand([]string{"search", "-dir", storeDir, "-limit", "1", "auth"}, &searchOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(searchOut.String(), "session search") ||
+		!strings.Contains(searchOut.String(), "session-a") ||
+		strings.Contains(searchOut.String(), "session-b") {
+		t.Fatalf("search output:\n%s", searchOut.String())
+	}
+
+	var searchJSON bytes.Buffer
+	if err := sessionsCommand([]string{"search", "-dir", storeDir, "-json", "auth"}, &searchJSON); err != nil {
+		t.Fatal(err)
+	}
+	var searchResult struct {
+		Total int                            `json:"total"`
+		Rows  []gateway.StoredSessionTextRow `json:"rows"`
+	}
+	if err := json.Unmarshal(searchJSON.Bytes(), &searchResult); err != nil {
+		t.Fatal(err)
+	}
+	if searchResult.Total != 1 || len(searchResult.Rows) != 1 || searchResult.Rows[0].SessionID != "session-a" {
+		t.Fatalf("search json = %#v", searchResult)
+	}
+
+	var toolsOut bytes.Buffer
+	if err := sessionsCommand([]string{"tools", "-dir", storeDir, "-name", "shell", "-status", "failed"}, &toolsOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(toolsOut.String(), "shell_exec") ||
+		!strings.Contains(toolsOut.String(), "exit_status") ||
+		strings.Contains(toolsOut.String(), "fs_read_file") {
+		t.Fatalf("tools output:\n%s", toolsOut.String())
+	}
+
+	var errorsJSON bytes.Buffer
+	if err := sessionsCommand([]string{"errors", "-dir", storeDir, "-query", "exit", "-json"}, &errorsJSON); err != nil {
+		t.Fatal(err)
+	}
+	var errorsResult struct {
+		Rows []gateway.StoredSessionErrorRow `json:"rows"`
+	}
+	if err := json.Unmarshal(errorsJSON.Bytes(), &errorsResult); err != nil {
+		t.Fatal(err)
+	}
+	if len(errorsResult.Rows) != 1 || errorsResult.Rows[0].CallID != "call-shell" {
+		t.Fatalf("errors json = %#v", errorsResult)
+	}
+
+	var usageOut bytes.Buffer
+	if err := sessionsCommand([]string{"usage", "-dir", storeDir, "-limit", "1"}, &usageOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(usageOut.String(), "session-b") ||
+		!strings.Contains(usageOut.String(), "total=60") ||
+		strings.Contains(usageOut.String(), "session-a") {
+		t.Fatalf("usage output:\n%s", usageOut.String())
+	}
+
+	var runsJSON bytes.Buffer
+	if err := sessionsCommand([]string{"runs", "-dir", storeDir, "-status", "failed", "-json"}, &runsJSON); err != nil {
+		t.Fatal(err)
+	}
+	var runsResult struct {
+		Rows []gateway.StoredSessionRunRow `json:"rows"`
+	}
+	if err := json.Unmarshal(runsJSON.Bytes(), &runsResult); err != nil {
+		t.Fatal(err)
+	}
+	if len(runsResult.Rows) != 1 || runsResult.Rows[0].SessionID != "session-a" || runsResult.Rows[0].Status != "failed" {
+		t.Fatalf("runs json = %#v", runsResult)
+	}
+
+	var missingOut bytes.Buffer
+	err := sessionsCommand([]string{"search", "-dir", filepath.Join(t.TempDir(), "missing"), "auth"}, &missingOut)
+	if err == nil || !strings.Contains(err.Error(), "sessions index rebuild") {
+		t.Fatalf("missing index err = %v", err)
+	}
+}
+
 func TestParseChatIDs(t *testing.T) {
 	got, err := parseChatIDs("-100123, 42\n99")
 	if err != nil {
@@ -226,5 +311,50 @@ func TestParseChatIDs(t *testing.T) {
 	}
 	if _, err := parseChatIDs("bad"); err == nil {
 		t.Fatal("expected invalid chat id error")
+	}
+}
+
+func writeTestDiagnosticsIndex(t *testing.T, storeDir string) {
+	t.Helper()
+	index := gateway.StoredSessionDiagnosticsIndex{
+		SchemaVersion: 1,
+		BuiltAt:       time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC),
+		Dir:           storeDir,
+		SessionCount:  2,
+		TextRowCount:  2,
+		ToolRowCount:  2,
+		ErrorRowCount: 1,
+		RunRowCount:   2,
+		UsageRowCount: 2,
+		TextRows: []gateway.StoredSessionTextRow{
+			{SessionID: "session-a", MessageIndex: 2, Role: string(protocol.RoleUser), Text: "auth token failed during build", TextBytes: 30},
+			{SessionID: "session-b", MessageIndex: 3, Role: string(protocol.RoleAssistant), Text: "release note ready", TextBytes: 18},
+		},
+		ToolRows: []gateway.StoredSessionToolRow{
+			{SessionID: "session-a", Seq: 8, RunID: "run-a", CallID: "call-shell", AttemptID: "attempt-shell", Name: "shell_exec", Status: "failed", Error: "exit_status", ArgsPreview: `{"cmd":"go test ./..."}`},
+			{SessionID: "session-b", Seq: 4, RunID: "run-b", CallID: "call-read", AttemptID: "attempt-read", Name: "fs_read_file", Status: "finished"},
+		},
+		ErrorRows: []gateway.StoredSessionErrorRow{
+			{SessionID: "session-a", Seq: 8, EventType: string(protocol.EventToolCallFinished), RunID: "run-a", CallID: "call-shell", AttemptID: "attempt-shell", Name: "shell_exec", Status: "failed", Error: "exit_status"},
+		},
+		RunRows: []gateway.StoredSessionRunRow{
+			{SessionID: "session-a", RunID: "run-a", StartSeq: 1, EndSeq: 9, Status: "failed", Error: "exit_status"},
+			{SessionID: "session-b", RunID: "run-b", StartSeq: 1, EndSeq: 5, Status: "completed"},
+		},
+		UsageRows: []gateway.StoredSessionUsageRow{
+			{SessionID: "session-a", RunID: "run-a", Status: "failed", InputTokens: 3, OutputTokens: 1, ModelCalls: 1, ToolCalls: 1},
+			{SessionID: "session-b", RunID: "run-b", Status: "completed", InputTokens: 40, OutputTokens: 10, CacheHitTokens: 5, CacheMissTokens: 5, ModelCalls: 1},
+		},
+	}
+	body, err := json.MarshalIndent(index, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexDir := filepath.Join(storeDir, "index")
+	if err := os.MkdirAll(indexDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(indexDir, "diagnostics.json"), append(body, '\n'), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

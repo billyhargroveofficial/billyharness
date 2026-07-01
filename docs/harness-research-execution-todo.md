@@ -789,11 +789,29 @@ platform.
     -count=1 ./internal/...` passed.
   - commit: pending.
 
-- [ ] HR-04.2 CLI session queries.
+- [x] HR-04.2 CLI session queries.
   - maps to: `competitive-improvements-todo.md` B6.
   - acceptance: `sessions search/tools/errors/usage/runs` support human and
     JSON output with limits.
   - verification: `go test -count=1 ./cmd/fast-agent-harness ./internal/gateway`.
+  - status: completed 2026-07-01.
+  - evidence: added read-only `sessions search`, `sessions tools`,
+    `sessions errors`, `sessions usage`, and `sessions runs` commands over the
+    rebuildable diagnostics side index. Each command supports bounded human and
+    JSON output, `-limit`, `-session` filtering, and focused filters where
+    useful (`-name`, `-status`, `-query`). Missing or corrupt diagnostics index
+    reads return explicit rebuild guidance, and `sessions index rebuild` now
+    refreshes the diagnostics side index as a side effect while preserving the
+    existing session-list index output contract.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'TestSessionsSearchToolsErrorsUsageRunsCommands' -count=1
+    ./cmd/fast-agent-harness` passed; `/root/.local/go/bin/go test -count=1
+    ./cmd/fast-agent-harness ./internal/gateway` passed;
+    `/root/.local/go/bin/go test -run
+    'Test.*Sessions.*(Search|Tools|Errors|Usage|Runs).*' -count=1
+    ./cmd/fast-agent-harness ./internal/gateway` passed.
+  - commit: pending.
 
 - [ ] HR-04.3 Interactive `ask_user` MVP.
   - maps to: `competitive-improvements-todo.md` B7.
