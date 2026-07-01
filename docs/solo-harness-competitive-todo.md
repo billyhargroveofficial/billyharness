@@ -844,7 +844,7 @@ framework migration.
     `/root/.local/go/bin/go test -count=1 ./internal/tui/transcript
     ./internal/tui ./internal/gateway ./cmd/fast-agent-harness
     ./internal/clientux ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `c33fe34c4242ba5bf1244738eaa59897bb4f5254`.
 
 - [ ] SH-06.2 Harden selection and copy with semantic no-select regions.
   - inspiration: Claude Code terminal selection state.
