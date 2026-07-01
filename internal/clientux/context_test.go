@@ -17,6 +17,7 @@ func TestContextStatusClassifiesSourcesAndThresholds(t *testing.T) {
 	cfg.MaxToolOutputBytes = 256
 	resp := BuildContextResponse(cfg.RuntimeLimits(), "session-test", []protocol.Message{
 		{Role: protocol.RoleSystem, Content: "system instructions"},
+		{Role: protocol.RoleUser, Content: "# Memory context\n<MEMORY_CONTEXT>\nentries:\n- type=\"user\" topic=\"style\" summary=\"concise\" path=\"topics/style.md\" source=\"home\"\n</MEMORY_CONTEXT>"},
 		{Role: protocol.RoleUser, Content: "# Project context\n<PROJECT_CONTEXT>\ncwd: /repo\n</PROJECT_CONTEXT>"},
 		{Role: protocol.RoleUser, Content: strings.Repeat("ask ", 90)},
 		{Role: protocol.RoleAssistant, ToolCalls: []protocol.ToolCall{{ID: "call_1", Name: "web_fetch", Arguments: []byte(`{"url":"https://example.com/a/very/long/path"}`)}}},
@@ -31,7 +32,7 @@ func TestContextStatusClassifiesSourcesAndThresholds(t *testing.T) {
 	for _, source := range resp.Sources {
 		sourceTokens[source.Source] = source.EstimatedTokens
 	}
-	for _, source := range []string{"project_context", "web_summaries", "mcp_outputs", "assistant_tool_calls", "user_messages", "system_instructions", "reasoning_summaries"} {
+	for _, source := range []string{"memory_context", "project_context", "web_summaries", "mcp_outputs", "assistant_tool_calls", "user_messages", "system_instructions", "reasoning_summaries"} {
 		if sourceTokens[source] <= 0 {
 			t.Fatalf("missing source %s in %#v", source, resp.Sources)
 		}
@@ -53,7 +54,7 @@ func TestContextStatusClassifiesSourcesAndThresholds(t *testing.T) {
 		t.Fatalf("thresholds = %#v", resp.Thresholds)
 	}
 	formatted := gatewayclient.FormatSessionContext(resp)
-	for _, want := range []string{"active context:", "thresholds:", "project_context", "web_summaries", "mcp_outputs", "top contributors:", "large inline", "output_ref"} {
+	for _, want := range []string{"active context:", "thresholds:", "memory_context", "project_context", "web_summaries", "mcp_outputs", "top contributors:", "large inline", "output_ref"} {
 		if !strings.Contains(formatted, want) {
 			t.Fatalf("formatted context missing %q:\n%s", want, formatted)
 		}

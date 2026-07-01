@@ -108,14 +108,17 @@ func TestSnapshotInstructionHashIncludesProtectedUserContext(t *testing.T) {
 	cfg := config.Config{Model: "mock", Provider: "mock", Profile: "billy"}
 	base := []protocol.Message{
 		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "# Memory context\n<MEMORY_CONTEXT>\nentries:\n- type=\"user\" topic=\"style\" summary=\"concise\" path=\"topics/style.md\" source=\"home\"\n</MEMORY_CONTEXT>"},
 		{Role: protocol.RoleUser, Content: "# Project context\n<PROJECT_CONTEXT>\ncwd: /repo\n</PROJECT_CONTEXT>"},
 		{Role: protocol.RoleUser, Content: "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nold rules\n</INSTRUCTIONS>"},
 		{Role: protocol.RoleUser, Content: "prompt"},
 	}
+	memoryChanged := append([]protocol.Message(nil), base...)
+	memoryChanged[1].Content = "# Memory context\n<MEMORY_CONTEXT>\nentries:\n- type=\"user\" topic=\"style\" summary=\"detailed\" path=\"topics/style.md\" source=\"home\"\n</MEMORY_CONTEXT>"
 	contextChanged := append([]protocol.Message(nil), base...)
-	contextChanged[1].Content = "# Project context updated\n<PROJECT_CONTEXT>\ncwd: /repo\ncap_flags: rendered_capped\n</PROJECT_CONTEXT>"
+	contextChanged[2].Content = "# Project context updated\n<PROJECT_CONTEXT>\ncwd: /repo\ncap_flags: rendered_capped\n</PROJECT_CONTEXT>"
 	instructionsChanged := append([]protocol.Message(nil), base...)
-	instructionsChanged[2].Content = "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nnew rules\n</INSTRUCTIONS>"
+	instructionsChanged[3].Content = "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nnew rules\n</INSTRUCTIONS>"
 
 	original := NewSnapshot(snapshotInput(cfg), base, nil)
 	if original.ProfileInstructionHash == "" {
@@ -123,6 +126,9 @@ func TestSnapshotInstructionHashIncludesProtectedUserContext(t *testing.T) {
 	}
 	if got := NewSnapshot(snapshotInput(cfg), contextChanged, nil); got.ProfileInstructionHash == original.ProfileInstructionHash {
 		t.Fatalf("project context change did not affect instruction hash")
+	}
+	if got := NewSnapshot(snapshotInput(cfg), memoryChanged, nil); got.ProfileInstructionHash == original.ProfileInstructionHash {
+		t.Fatalf("memory context change did not affect instruction hash")
 	}
 	if got := NewSnapshot(snapshotInput(cfg), instructionsChanged, nil); got.ProfileInstructionHash == original.ProfileInstructionHash {
 		t.Fatalf("AGENTS change did not affect instruction hash")
@@ -133,6 +139,7 @@ func TestPromptInventoryIsStableAndOmitsArbitraryUserText(t *testing.T) {
 	cfg := config.Config{Model: "mock", Provider: "mock", Profile: "billy"}
 	messages := []protocol.Message{
 		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "# Memory context\n<MEMORY_CONTEXT>\nentries:\n- type=\"user\" topic=\"style\" summary=\"concise\" path=\"topics/style.md\" source=\"home\"\n</MEMORY_CONTEXT>"},
 		{Role: protocol.RoleUser, Content: "# Project context\n<PROJECT_CONTEXT>\nenv_vars: API_TOKEN\n</PROJECT_CONTEXT>"},
 		{Role: protocol.RoleUser, Content: "ordinary prompt with fake secret sk-test-123"},
 	}
@@ -154,6 +161,7 @@ func TestPromptInventoryIsStableAndOmitsArbitraryUserText(t *testing.T) {
 		t.Fatalf("inventory hashes differ: %s != %s", a.PromptInventory.Hash, b.PromptInventory.Hash)
 	}
 	if !hasPromptSection(a.PromptInventory, "system_prompt") ||
+		!hasPromptSection(a.PromptInventory, "memory_context") ||
 		!hasPromptSection(a.PromptInventory, "project_context") ||
 		!hasPromptSection(a.PromptInventory, "tool_schemas") {
 		t.Fatalf("inventory missing expected sections: %#v", a.PromptInventory.Sections)

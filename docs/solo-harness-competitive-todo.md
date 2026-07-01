@@ -567,13 +567,13 @@ P0 broad verification:
     'Test.*Prompt.*|Test.*Cache.*Break.*|Test.*Context.*Report.*|Test.*Capability.*|Test.*Helper.*Usage.*|Test.*ToolRender.*|Test.*Output.*Ref.*|Test.*Replay.*|Test.*Resume.*|Test.*Liveness.*|Test.*Golden.*|Test.*Adapter.*Parity.*|Test.*Fake.*Provider.*'
     -count=1 ./internal/...` passed on pushed `HEAD`
     `24335a14059ee84bf35d026edd5155d0ad630f44`.
-  - commit: pending.
+  - commit: `db97f9fa9e90c816a41f2e3ea68c54d025227c4c`.
 
 ## Milestone 4 - Manual Solo Memory MVP (P1)
 
 Goal: add useful memory without background magic or prompt bloat.
 
-- [ ] SH-04.1 Add file-based memory store with small index and topic files.
+- [x] SH-04.1 Add file-based memory store with small index and topic files.
   - inspiration: Claude Code memory taxonomy and Codex memory artifact layout.
   - target files: new `internal/memory`, `internal/config`,
     `internal/projectcontext`, `docs/memory-systems-research.md`.
@@ -582,7 +582,31 @@ Goal: add useful memory without background magic or prompt bloat.
     rejects path traversal, and injects only a small summary unless explicitly
     read.
   - verification: memory store tests.
-  - status: open.
+  - status: completed 2026-07-01.
+  - evidence: added `internal/memory` as a small file-backed memory loader over
+    `$BILLYHARNESS_HOME/memory/MEMORY.md` and
+    `$BILLYHARNESS_HOME/profiles/<profile>/memory/MEMORY.md`. Index entries
+    use explicit `type`, `topic`, `summary`, and relative `path` fields; topic
+    paths are normalized under the memory root, absolute paths and `..`
+    traversal are rejected, index/topic/render byte caps are enforced, and
+    prompt-like memory summaries are blocked before rendering. Initial agent
+    messages now inject a frozen `# Memory context` user message after
+    profile/SOUL and before project context/AGENTS only when memory files
+    exist, and the prompt contains summaries/paths/cap flags without reading
+    topic bodies. Prompt inventory/cache-break diagnostics, compaction
+    protected-prefix handling, `/context` source buckets, config inspection,
+    and architecture import guards now recognize the memory context.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*Memory.*|TestInitialMessagesInjectMemory.*|TestCompactMessagesReportsProtectedPrefixPolicyAndCompactedBudget|TestSnapshotInstructionHashIncludesProtectedUserContext|TestPromptInventoryIsStableAndOmitsArbitraryUserText|TestContextStatusClassifiesSourcesAndThresholds'
+    -count=1 ./internal/memory ./internal/config ./internal/agent
+    ./internal/runstate ./internal/clientux` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/memory
+    ./internal/projectcontext ./internal/tools ./internal/config
+    ./internal/agent ./internal/runstate ./internal/clientux
+    ./internal/architecture` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] SH-04.2 Add manual memory commands and tools.
   - inspiration: Claude `/memory` UX but without React dialogs or auto writes.

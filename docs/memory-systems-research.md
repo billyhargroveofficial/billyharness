@@ -365,6 +365,19 @@ Layer 6: Self-Improvement via Skills (Phase 4)
 
 ### 8.4 Layer 2: File-Backed Curated Memory Store (MVP)
 
+**2026-07-01 SH-04.1 implementation note:** Billyharness now has a narrow
+first slice of this layer in `internal/memory`. The current layout is
+intentionally smaller than the full design below: a home index at
+`$BILLYHARNESS_HOME/memory/MEMORY.md` and an optional profile index at
+`$BILLYHARNESS_HOME/profiles/<profile>/memory/MEMORY.md`, with topic files
+referenced by relative paths under the same memory root. Each index entry is a
+single `type=... topic=... summary="..." path=...` line. Startup prompt
+injection is summary-only, capped by config, and protected as its own prompt
+section; topic bodies are only statted for caps and are not read into the model
+until future explicit memory-read tools exist. This preserves the manual-first
+invariant and avoids default auto-memory writes, SQLite/FTS/vector dependencies,
+or background extraction.
+
 **Directory structure:**
 ```
 $BILLYHARNESS_HOME/memory/

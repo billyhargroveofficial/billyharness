@@ -43,6 +43,57 @@ func TestInitialMessagesInjectProjectContextBeforeInstructions(t *testing.T) {
 	}
 }
 
+func TestInitialMessagesInjectMemorySummaryBeforeProjectContextAndInstructions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex-empty"))
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/app\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("project rules"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	memoryRoot := filepath.Join(home, "memory")
+	if err := os.MkdirAll(filepath.Join(memoryRoot, "topics"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memoryRoot, "MEMORY.md"), []byte(`- type=user topic=style summary="Prefers small evidence summaries" path=topics/style.md`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memoryRoot, "topics", "style.md"), []byte("SECRET TOPIC BODY SHOULD NOT INLINE"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	messages := InitialMessagesFromSettings(config.InstructionSettings{
+		WorkspaceRoots:         []string{root},
+		ProjectDocMaxBytes:     32 * 1024,
+		ProjectContextMaxBytes: 2048,
+		MemoryEnabled:          true,
+		MemorySummaryMaxBytes:  2048,
+		MemoryIndexMaxBytes:    4096,
+		MemoryTopicMaxBytes:    4096,
+	})
+	if len(messages) != 4 {
+		t.Fatalf("messages = %#v", messages)
+	}
+	if !strings.Contains(messages[1].Content, "<MEMORY_CONTEXT>") || !strings.Contains(messages[1].Content, "Prefers small evidence summaries") {
+		t.Fatalf("memory message = %#v", messages[1])
+	}
+	if strings.Contains(messages[1].Content, "SECRET TOPIC BODY") {
+		t.Fatalf("memory message inlined topic body: %s", messages[1].Content)
+	}
+	if !strings.Contains(messages[2].Content, "<PROJECT_CONTEXT>") {
+		t.Fatalf("project context message = %#v", messages[2])
+	}
+	if !strings.Contains(messages[3].Content, "# AGENTS.md instructions") {
+		t.Fatalf("instructions message = %#v", messages[3])
+	}
+}
+
 func TestRunMessagesReconcilesChangedProjectContextBeforeProvider(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", home)

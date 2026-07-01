@@ -55,6 +55,10 @@ type ToolPolicySettings struct {
 	ProjectDocMaxBytes        int
 	ProjectDocFallbacks       []string
 	ProjectContextMaxBytes    int
+	MemoryEnabled             bool
+	MemorySummaryMaxBytes     int
+	MemoryIndexMaxBytes       int
+	MemoryTopicMaxBytes       int
 	MaxToolOutputBytes        int
 	AutoApproveDangerous      bool
 	AccessMode                string
@@ -95,6 +99,10 @@ type InstructionSettings struct {
 	ProjectDocMaxBytes     int
 	ProjectDocFallbacks    []string
 	ProjectContextMaxBytes int
+	MemoryEnabled          bool
+	MemorySummaryMaxBytes  int
+	MemoryIndexMaxBytes    int
+	MemoryTopicMaxBytes    int
 }
 
 type ProviderBinding struct {
@@ -170,6 +178,10 @@ func (c Config) ToolPolicySettings() ToolPolicySettings {
 		ProjectDocMaxBytes:        cfg.ProjectDocMaxBytes,
 		ProjectDocFallbacks:       cloneStrings(cfg.ProjectDocFallbacks),
 		ProjectContextMaxBytes:    cfg.ProjectContextMaxBytes,
+		MemoryEnabled:             cfg.MemoryEnabled,
+		MemorySummaryMaxBytes:     cfg.MemorySummaryMaxBytes,
+		MemoryIndexMaxBytes:       cfg.MemoryIndexMaxBytes,
+		MemoryTopicMaxBytes:       cfg.MemoryTopicMaxBytes,
 		MaxToolOutputBytes:        cfg.MaxToolOutputBytes,
 		AutoApproveDangerous:      cfg.AutoApproveDangerous,
 		AccessMode:                NormalizeAccessMode(cfg.AccessMode),
@@ -235,6 +247,10 @@ func (c Config) InstructionSettings() InstructionSettings {
 		ProjectDocMaxBytes:     c.ProjectDocMaxBytes,
 		ProjectDocFallbacks:    cloneStrings(c.ProjectDocFallbacks),
 		ProjectContextMaxBytes: c.ProjectContextMaxBytes,
+		MemoryEnabled:          c.MemoryEnabled,
+		MemorySummaryMaxBytes:  c.MemorySummaryMaxBytes,
+		MemoryIndexMaxBytes:    c.MemoryIndexMaxBytes,
+		MemoryTopicMaxBytes:    c.MemoryTopicMaxBytes,
 	}
 }
 

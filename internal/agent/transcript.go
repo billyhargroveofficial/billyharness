@@ -5,6 +5,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/instructions"
+	"github.com/billyhargroveofficial/billyharness/internal/memory"
 	"github.com/billyhargroveofficial/billyharness/internal/projectcontext"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
@@ -19,6 +20,9 @@ func InitialMessages(cfgs ...config.Config) []protocol.Message {
 func InitialMessagesFromSettings(settings config.InstructionSettings) []protocol.Message {
 	messages := []protocol.Message{{Role: protocol.RoleSystem, Content: systemPrompt()}}
 	if msg, ok := instructions.ProfileMessage(settings); ok {
+		messages = append(messages, msg)
+	}
+	if msg, ok := memory.Message(settings); ok {
 		messages = append(messages, msg)
 	}
 	if msg, ok := projectcontext.Message(settings); ok {

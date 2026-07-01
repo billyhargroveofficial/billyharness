@@ -228,7 +228,8 @@ func instructionHashMessage(msg protocol.Message) bool {
 		return false
 	}
 	content := strings.TrimSpace(msg.Content)
-	return strings.HasPrefix(content, "# Project context") ||
+	return strings.HasPrefix(content, "# Memory context") ||
+		strings.HasPrefix(content, "# Project context") ||
 		strings.HasPrefix(content, "# AGENTS.md instructions") ||
 		strings.HasPrefix(content, "# MCP server instructions")
 }
@@ -303,6 +304,8 @@ func promptSectionName(msg protocol.Message) (string, bool) {
 		return "", false
 	}
 	switch {
+	case strings.HasPrefix(content, "# Memory context"):
+		return "memory_context", true
 	case strings.HasPrefix(content, "# Project context"):
 		return "project_context", true
 	case strings.HasPrefix(content, "# AGENTS.md instructions"):

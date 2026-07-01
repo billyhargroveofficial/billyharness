@@ -13,7 +13,7 @@ exceptions are allowed only when they name the phase that removes them.
 
 | Package | Responsibility | Allowed internal imports | Forbidden imports and owner notes |
 | --- | --- | --- | --- |
-| `internal/agent` | Runtime loop, model calls, tool orchestration, compaction, and event emission. | `checkpoint`, `config`, `hooks`, `instructions`, `mcpclient`, `modelinfo`, `projectcontext`, `protocol`, `provider`, `runstate`, `tooloutput`, `tools` | Should shrink behind runtime/toolexec seams in P1.1. Do not add presentation imports. |
+| `internal/agent` | Runtime loop, model calls, tool orchestration, compaction, and event emission. | `checkpoint`, `config`, `hooks`, `instructions`, `mcpclient`, `memory`, `modelinfo`, `projectcontext`, `protocol`, `provider`, `runstate`, `tooloutput`, `tools` | Should shrink behind runtime/toolexec seams in P1.1. Do not add presentation imports. |
 | `internal/architecture` | Test-only import graph guard. | none | Guard package must not become runtime code. |
 | `internal/bench` | Benchmark runners, local-loop tasks, provider comparison, replay verification. | `agent`, `config`, `modelinfo`, `protocol`, `provider`, `runstate`, `tools`, `trace` | Bench can compose broad runtime pieces, but should not become a shared runtime dependency. |
 | `internal/checkpoint` | Turn-scoped filesystem snapshots, compact diffs, preview, and conflict-safe restore records for mutating tool steps. | none | Must not write user `.git` state or import runtime, gateway, tools, provider, TUI, or Telegram packages. |
@@ -33,6 +33,7 @@ exceptions are allowed only when they name the phase that removes them.
 | `internal/mcpclient` | Managed MCP stdio clients, server lifecycle, tool discovery, and status. | `config`, `protocol`, `secrets` | Must not depend on agent, gateway, TUI, or Telegram. |
 | `internal/mcpserver` | Local MCP server adapter exposing harness tools. | `protocol`, `tools` | Tool risk decisions must go through the central tools policy boundary. |
 | `internal/mcpstatus` | Presentation-friendly MCP status formatting. | `mcpclient` | Keep status formatting small; do not import runtime adapters. |
+| `internal/memory` | File-backed curated memory index loading, topic-path validation, caps, and frozen prompt summary rendering. | `config`, `protocol` | Must not auto-write memories, read topic bodies into the prompt, import provider/tools/UI packages, or add database/vector dependencies. |
 | `internal/modelinfo` | Model/provider catalog helpers. | none | Must remain a leaf utility package. |
 | `internal/protocol` | Shared protocol events, messages, envelopes, tool specs, and typed payloads. | none | Guarded: no billyharness internal imports. |
 | `internal/projectcontext` | Bounded project context snapshot and prompt fragment rendering. | `config`, `instructions`, `protocol` | Must not ingest README prose, `.env` values, shell history, watchers, databases, or provider calls. |

@@ -51,6 +51,12 @@ func TestDefaultRuntimeLimits(t *testing.T) {
 	if cfg.ProjectContextMaxBytes != 4*1024 {
 		t.Fatalf("ProjectContextMaxBytes = %d, want 4096", cfg.ProjectContextMaxBytes)
 	}
+	if !cfg.MemoryEnabled ||
+		cfg.MemorySummaryMaxBytes != 2*1024 ||
+		cfg.MemoryIndexMaxBytes != 25*1024 ||
+		cfg.MemoryTopicMaxBytes != 64*1024 {
+		t.Fatalf("memory defaults = enabled:%v summary:%d index:%d topic:%d", cfg.MemoryEnabled, cfg.MemorySummaryMaxBytes, cfg.MemoryIndexMaxBytes, cfg.MemoryTopicMaxBytes)
+	}
 	if !cfg.AutoApproveDangerous {
 		t.Fatalf("AutoApproveDangerous should be enabled by default")
 	}
@@ -107,6 +113,24 @@ func TestProjectContextMaxBytesEnvOverride(t *testing.T) {
 	cfg := Default()
 	if cfg.ProjectContextMaxBytes != 1234 || cfg.InstructionSettings().ProjectContextMaxBytes != 1234 {
 		t.Fatalf("project context cap = cfg:%d projection:%d", cfg.ProjectContextMaxBytes, cfg.InstructionSettings().ProjectContextMaxBytes)
+	}
+}
+
+func TestMemoryConfigEnvOverridesInstructionSettings(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	t.Setenv("BILLYHARNESS_MEMORY_ENABLED", "false")
+	t.Setenv("BILLYHARNESS_MEMORY_SUMMARY_MAX_BYTES", "123")
+	t.Setenv("BILLYHARNESS_MEMORY_INDEX_MAX_BYTES", "456")
+	t.Setenv("BILLYHARNESS_MEMORY_TOPIC_MAX_BYTES", "789")
+	cfg := Default()
+	instructions := cfg.InstructionSettings()
+	if cfg.MemoryEnabled || instructions.MemoryEnabled {
+		t.Fatalf("memory enabled = cfg:%v projection:%v", cfg.MemoryEnabled, instructions.MemoryEnabled)
+	}
+	if cfg.MemorySummaryMaxBytes != 123 || instructions.MemorySummaryMaxBytes != 123 ||
+		cfg.MemoryIndexMaxBytes != 456 || instructions.MemoryIndexMaxBytes != 456 ||
+		cfg.MemoryTopicMaxBytes != 789 || instructions.MemoryTopicMaxBytes != 789 {
+		t.Fatalf("memory caps = cfg:%#v instructions:%#v", cfg, instructions)
 	}
 }
 

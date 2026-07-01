@@ -445,6 +445,9 @@ func contextSource(msg protocol.Message) string {
 		}
 		return "system_instructions"
 	case protocol.RoleUser:
+		if strings.HasPrefix(strings.TrimSpace(msg.Content), "# Memory context") || strings.Contains(msg.Content, "<MEMORY_CONTEXT>") {
+			return "memory_context"
+		}
 		if strings.HasPrefix(strings.TrimSpace(msg.Content), "# Project context") || strings.Contains(msg.Content, "<PROJECT_CONTEXT>") {
 			return "project_context"
 		}

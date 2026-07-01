@@ -209,6 +209,7 @@ func TestCompactMessagesReportsProtectedPrefixPolicyAndCompactedBudget(t *testin
 	messages := []protocol.Message{
 		{Role: protocol.RoleSystem, Content: "base system"},
 		{Role: protocol.RoleSystem, Content: "# Billyharness profile: billy\n\n<SOUL>\nprofile rules\n</SOUL>"},
+		{Role: protocol.RoleUser, Content: "# Memory context\n<MEMORY_CONTEXT>\nentries:\n- type=\"user\" topic=\"style\" summary=\"concise\" path=\"topics/style.md\" source=\"home\"\n</MEMORY_CONTEXT>"},
 		{Role: protocol.RoleUser, Content: "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nproject rules\n</INSTRUCTIONS>"},
 		{Role: protocol.RoleUser, Content: "# MCP server instructions\n\nUse external tools sparingly."},
 		{Role: protocol.RoleUser, Content: strings.Repeat("old user ", 80)},
@@ -228,23 +229,24 @@ func TestCompactMessagesReportsProtectedPrefixPolicyAndCompactedBudget(t *testin
 		report.ThresholdTokens != 50 ||
 		report.BeforeEstimatedTokens <= 0 ||
 		report.AfterEstimatedTokens <= 0 ||
-		report.CutStartIndex != 4 ||
+		report.CutStartIndex != 5 ||
 		report.CutEndIndex <= report.CutStartIndex ||
-		report.ReplacementIndex != 4 ||
+		report.ReplacementIndex != 5 ||
 		report.KeepMessages != 1 ||
 		report.MaxSummaryChars != 1500 ||
 		report.SummaryStrategy != "deterministic" {
 		t.Fatalf("policy fields = %#v", report)
 	}
-	if report.ProtectedPrefix.EndIndex != 4 ||
-		report.ProtectedPrefixMessages != 4 ||
+	if report.ProtectedPrefix.EndIndex != 5 ||
+		report.ProtectedPrefixMessages != 5 ||
 		report.ProtectedPrefix.Reasons["system_prompt"] != 1 ||
 		report.ProtectedPrefix.Reasons["profile_soul"] != 1 ||
+		report.ProtectedPrefix.Reasons["memory_context"] != 1 ||
 		report.ProtectedPrefix.Reasons["agents_instructions"] != 1 ||
 		report.ProtectedPrefix.Reasons["mcp_instructions"] != 1 {
 		t.Fatalf("protected prefix report = %#v", report.ProtectedPrefix)
 	}
-	if len(report.ProtectedPrefix.Entries) != 4 || report.ProtectedPrefix.Entries[3].Reason != "mcp_instructions" {
+	if len(report.ProtectedPrefix.Entries) != 5 || report.ProtectedPrefix.Entries[4].Reason != "mcp_instructions" {
 		t.Fatalf("protected prefix entries = %#v", report.ProtectedPrefix.Entries)
 	}
 	if report.CompactedMessages != 2 ||
@@ -257,11 +259,11 @@ func TestCompactMessagesReportsProtectedPrefixPolicyAndCompactedBudget(t *testin
 		report.SummaryEstimatedTokens <= 0 {
 		t.Fatalf("budget fields = %#v", report)
 	}
-	if !strings.HasPrefix(compacted[4].Content, compactionMarker) {
+	if !strings.HasPrefix(compacted[5].Content, compactionMarker) {
 		t.Fatalf("summary should follow protected prefix: %#v", compacted)
 	}
-	if strings.Contains(compacted[4].Content, "threshold:") || strings.Contains(compacted[4].Content, "trigger prompt tokens") {
-		t.Fatalf("summary should not carry audit policy details: %s", compacted[4].Content)
+	if strings.Contains(compacted[5].Content, "threshold:") || strings.Contains(compacted[5].Content, "trigger prompt tokens") {
+		t.Fatalf("summary should not carry audit policy details: %s", compacted[5].Content)
 	}
 }
 

@@ -156,6 +156,10 @@ func runtimeDiffConfigFromSettings(base Config, settings RuntimeDiffSettings) Co
 	cfg.ProjectDocMaxBytes = settings.ToolPolicy.ProjectDocMaxBytes
 	cfg.ProjectDocFallbacks = cloneStrings(settings.ToolPolicy.ProjectDocFallbacks)
 	cfg.ProjectContextMaxBytes = settings.ToolPolicy.ProjectContextMaxBytes
+	cfg.MemoryEnabled = settings.ToolPolicy.MemoryEnabled
+	cfg.MemorySummaryMaxBytes = settings.ToolPolicy.MemorySummaryMaxBytes
+	cfg.MemoryIndexMaxBytes = settings.ToolPolicy.MemoryIndexMaxBytes
+	cfg.MemoryTopicMaxBytes = settings.ToolPolicy.MemoryTopicMaxBytes
 	cfg.MaxToolOutputBytes = settings.ToolPolicy.MaxToolOutputBytes
 	cfg.DiagnosticsEnabled = settings.Diagnostics.Enabled
 	cfg.DiagnosticsConfigFiles = cloneStrings(settings.Diagnostics.ConfigFiles)

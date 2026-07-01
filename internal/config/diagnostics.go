@@ -45,6 +45,10 @@ type RuntimeToolSnapshot struct {
 	MaxToolRounds                 int    `json:"max_tool_rounds"`
 	MaxParallelTools              int    `json:"max_parallel_tools"`
 	GatewayAddr                   string `json:"gateway_addr"`
+	MemoryEnabled                 bool   `json:"memory_enabled"`
+	MemorySummaryMaxBytes         int    `json:"memory_summary_max_bytes"`
+	MemoryIndexMaxBytes           int    `json:"memory_index_max_bytes"`
+	MemoryTopicMaxBytes           int    `json:"memory_topic_max_bytes"`
 	AutoApproveDangerous          bool   `json:"auto_approve_dangerous"`
 	AccessMode                    string `json:"access_mode"`
 	MCPEnabled                    bool   `json:"mcp_enabled"`
@@ -126,6 +130,10 @@ func (c Config) RuntimeToolSnapshot() RuntimeToolSnapshot {
 		MaxToolRounds:                 limits.MaxToolRounds,
 		MaxParallelTools:              limits.MaxParallelTools,
 		GatewayAddr:                   c.GatewayAddr,
+		MemoryEnabled:                 tools.MemoryEnabled,
+		MemorySummaryMaxBytes:         tools.MemorySummaryMaxBytes,
+		MemoryIndexMaxBytes:           tools.MemoryIndexMaxBytes,
+		MemoryTopicMaxBytes:           tools.MemoryTopicMaxBytes,
 		AutoApproveDangerous:          tools.AutoApproveDangerous,
 		AccessMode:                    tools.AccessMode,
 		MCPEnabled:                    mcp.Enabled,

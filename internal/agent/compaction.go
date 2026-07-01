@@ -181,6 +181,8 @@ func protectedContextInstructionReason(msg protocol.Message) string {
 	}
 	content := strings.TrimSpace(msg.Content)
 	switch {
+	case strings.HasPrefix(content, "# Memory context") || strings.Contains(content, "<MEMORY_CONTEXT>"):
+		return "memory_context"
 	case strings.HasPrefix(content, "# Project context") || strings.Contains(content, "<PROJECT_CONTEXT>"):
 		return "project_context"
 	case strings.HasPrefix(content, "# AGENTS.md instructions"):

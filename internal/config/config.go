@@ -44,6 +44,10 @@ type Config struct {
 	ProjectDocMaxBytes            int
 	ProjectDocFallbacks           []string
 	ProjectContextMaxBytes        int
+	MemoryEnabled                 bool
+	MemorySummaryMaxBytes         int
+	MemoryIndexMaxBytes           int
+	MemoryTopicMaxBytes           int
 	MaxToolOutputBytes            int
 	DiagnosticsEnabled            bool
 	DiagnosticsConfigFiles        []string
