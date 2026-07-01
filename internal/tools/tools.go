@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -88,6 +87,9 @@ type Registry struct {
 	manager         *mcpclient.Manager
 	instructions    []string
 	fileResolver    *filesearch.Resolver
+	shellMu         sync.Mutex
+	shellProcesses  map[string]*managedShellProcess
+	shellSeq        int64
 	webSummarizer   webtools.Summarizer
 	webSummarySlots chan struct{}
 	webSummarySeq   int64
@@ -143,6 +145,7 @@ func NewRegistryFromSettings(settings RegistrySettings, opts ...RegistryOption) 
 		tools:           map[string]Tool{},
 		mcpTools:        map[string]Tool{},
 		fileResolver:    filesearch.NewResolver(filesearch.DefaultCacheTTL),
+		shellProcesses:  map[string]*managedShellProcess{},
 		webSummarySlots: make(chan struct{}, defaultWebSummaryConcurrency),
 	}
 	for _, opt := range opts {
@@ -550,7 +553,7 @@ func defaultParallelMetadata(name string, risk protocol.Risk) ParallelMetadata {
 		return ParallelMetadata{Policy: ParallelPolicyReadOnly, Idempotent: true, Cancellable: true}
 	case "web_search", "web_fetch", "web_extract", "web_crawl":
 		return ParallelMetadata{Policy: ParallelPolicyNetworkRateLimited, Idempotent: true, RateLimitKey: "web", Cancellable: true, MaxConcurrency: 3}
-	case "fs_write_file", "fs_edit_file", "fs_make_dir", "shell_exec", "web_cache_clear":
+	case "fs_write_file", "fs_edit_file", "fs_make_dir", "shell_exec", "shell_output", "shell_kill", "web_cache_clear":
 		return ParallelMetadata{Policy: ParallelPolicyExclusiveWorkspace, RequiresExclusiveWorkspace: true, Cancellable: true, MaxConcurrency: 1}
 	case "mcp_list_tools", "mcp_call":
 		return ParallelMetadata{Policy: ParallelPolicyUnknownExternal, RequiresExclusiveWorkspace: true, Cancellable: true, RateLimitKey: "mcp", MaxConcurrency: 1}
@@ -566,6 +569,9 @@ func defaultParallelMetadata(name string, risk protocol.Risk) ParallelMetadata {
 }
 
 func (r *Registry) Close() {
+	if r != nil {
+		r.closeManagedShellProcesses()
+	}
 	if r != nil && r.manager != nil {
 		if r.mcpUnsubscribe != nil {
 			r.mcpUnsubscribe()
@@ -767,54 +773,29 @@ func (r *Registry) addShellExec() {
 	r.add(Tool{
 		Spec: protocol.ToolSpec{
 			Name:        "shell_exec",
-			Description: "Run a command by argv in an allowed workspace directory. Do not use for Telegram/Parilka chat context; use mcp_list_tools and mcp_call instead. Enabled by default; set FAST_AGENT_AUTO_APPROVE_DANGEROUS=false to disable write/execute tools.",
-			Parameters:  raw(`{"type":"object","properties":{"argv":{"type":"array","items":{"type":"string"},"minItems":1},"cwd":{"type":"string","default":"."},"timeout_sec":{"type":"integer","default":20},"max_output_bytes":{"type":"integer","default":65536}},"required":["argv"],"additionalProperties":false}`),
+			Description: "Run a command by argv in an allowed workspace directory. Set background=true for Billy-owned long-running processes and poll with shell_output. Do not use for Telegram/Parilka chat context; use mcp_list_tools and mcp_call instead. Enabled by default; set FAST_AGENT_AUTO_APPROVE_DANGEROUS=false to disable write/execute tools.",
+			Parameters:  raw(`{"type":"object","properties":{"argv":{"type":"array","items":{"type":"string"},"minItems":1},"cwd":{"type":"string","default":"."},"timeout_sec":{"type":"integer","default":20},"max_output_bytes":{"type":"integer","default":65536},"background":{"type":"boolean","default":false,"description":"Start a Billy-owned background process and return process_id without waiting."}},"required":["argv"],"additionalProperties":false}`),
 			Risk:        protocol.RiskExecute,
 		},
-		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
-			var in struct {
-				Argv           []string `json:"argv"`
-				CWD            string   `json:"cwd"`
-				TimeoutSec     int      `json:"timeout_sec"`
-				MaxOutputBytes int      `json:"max_output_bytes"`
-			}
-			if err := json.Unmarshal(args, &in); err != nil {
-				return Result{}, err
-			}
-			if len(in.Argv) == 0 || in.Argv[0] == "" {
-				return Result{}, fmt.Errorf("argv required")
-			}
-			if in.CWD == "" {
-				in.CWD = "."
-			}
-			if in.TimeoutSec <= 0 || in.TimeoutSec > 120 {
-				in.TimeoutSec = 20
-			}
-			explicitMaxOutput := in.MaxOutputBytes > 0
-			if in.MaxOutputBytes <= 0 || in.MaxOutputBytes > maxExecOutput {
-				in.MaxOutputBytes = maxExecOutput
-			}
-			cwd, err := r.safePath(in.CWD)
-			if err != nil {
-				return Result{}, err
-			}
-			cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(in.TimeoutSec)*time.Second)
-			defer cancel()
-			cmd := exec.CommandContext(cmdCtx, in.Argv[0], in.Argv[1:]...)
-			cmd.Dir = cwd
-			output, err := cmd.CombinedOutput()
-			text := string(output)
-			if explicitMaxOutput {
-				text = truncate(text, in.MaxOutputBytes)
-			}
-			if cmdCtx.Err() != nil {
-				return Result{Content: text}, cmdCtx.Err()
-			}
-			if err != nil {
-				return Result{Content: text}, fmt.Errorf("command failed: %w", err)
-			}
-			return Result{Content: text}, nil
+		Handler: r.handleShellExec,
+	})
+	r.add(Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "shell_output",
+			Description: "Read bounded output from a Billy-owned background shell process by process_id and cursor. Returns inline output plus output_ref metadata for the returned slice.",
+			Parameters:  raw(`{"type":"object","properties":{"process_id":{"type":"string"},"cursor":{"type":"integer","default":0},"max_output_bytes":{"type":"integer","default":65536},"tail_bytes":{"type":"integer","default":0,"description":"Optional tail window from the latest retained output; overrides cursor when positive."}},"required":["process_id"],"additionalProperties":false}`),
+			Risk:        protocol.RiskExecute,
 		},
+		Handler: r.handleShellOutput,
+	})
+	r.add(Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "shell_kill",
+			Description: "Terminate one Billy-owned background shell process by opaque process_id. Uses process-group termination where available.",
+			Parameters:  raw(`{"type":"object","properties":{"process_id":{"type":"string"}},"required":["process_id"],"additionalProperties":false}`),
+			Risk:        protocol.RiskExecute,
+		},
+		Handler: r.handleShellKill,
 	})
 }
 

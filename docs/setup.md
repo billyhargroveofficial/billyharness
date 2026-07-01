@@ -102,6 +102,17 @@ keeps tools visible but denies write and shell execution. `access_mode=plan`
 advertises only read/search tools and hard-denies write, execute, and external
 tool calls even when dangerous auto-approval is enabled.
 
+Managed shell processes are available to the agent in build mode for dev
+servers and watchers. A background `shell_exec` returns a Billy-owned
+`process_id`; `shell_output` reads bounded output by cursor and records an
+`output_ref`; `shell_kill` terminates only that Billy-owned process id.
+
+```json
+{"argv":["npm","run","dev"],"cwd":".","background":true}
+{"process_id":"shell-1","cursor":0,"max_output_bytes":65536}
+{"process_id":"shell-1"}
+```
+
 Audit status is visible through:
 
 ```sh

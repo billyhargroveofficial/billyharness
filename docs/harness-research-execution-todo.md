@@ -645,12 +645,29 @@ abuse.
     required workflow.
   - commit: pending.
 
-- [ ] HR-03.7 Managed shell runtime for dev servers.
+- [x] HR-03.7 Managed shell runtime for dev servers.
   - maps to: `competitive-improvements-todo.md` A8.
   - dependency: HR-02.2.
   - acceptance: background process ids are Billy-owned; output is bounded and
     cursor/ref based; kill is scoped; registry cleanup prevents leaks.
   - verification: `go test -count=1 ./internal/tools ./internal/tooloutput ./internal/agent`.
+  - status: completed 2026-07-01.
+  - evidence: `shell_exec` now supports `background=true` for Billy-owned
+    in-memory process ids, with registry-scoped max-live-process checks,
+    process-group termination, and `Registry.Close()` cleanup. Added
+    `shell_output` for bounded cursor/tail reads with output-ref metadata and
+    `shell_kill` for scoped termination by opaque process id; all shell tools
+    remain execute-risk and unavailable in plan/guarded access modes. Compact
+    TUI/Telegram call rendering covers background start, output polling, and
+    kill without raw JSON, and setup docs show the managed-shell JSON flow.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/tools
+    ./internal/tooloutput ./internal/agent` passed;
+    `/root/.local/go/bin/go test -run
+    'Test.*Shell.*(Background|Output|Kill|ProcessGroup|OutputRef|RegistryClose|MaxLive).*|TestRunMessagesShellExecBackground.*'
+    -count=1 ./internal/tools ./internal/agent` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/toolrender` passed.
+  - commit: pending.
 
 - [ ] HR-03.8 Command-based diagnostics feedback.
   - maps to: `competitive-improvements-todo.md` A9.

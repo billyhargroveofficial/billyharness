@@ -477,16 +477,38 @@ var callRenderers = map[string]callRenderer{
 	"shell_exec": {
 		tui: func(_ protocol.ToolCall, args map[string]any) (string, bool) {
 			if argv := stringSliceArg(args["argv"]); len(argv) > 0 {
+				if boolArg(args["background"]) {
+					return "Started " + Preview(formatArgv(argv), 120), true
+				}
 				return "Ran " + Preview(formatArgv(argv), 120), true
 			}
 			return "", false
 		},
 		telegram: func(_ protocol.ToolCall, args map[string]any) (string, bool) {
 			if argv := stringSliceArg(args["argv"]); len(argv) > 0 {
+				if boolArg(args["background"]) {
+					return "⚙️ shell start " + CompactText(formatArgv(argv), 120), true
+				}
 				return "⚙️ shell " + CompactText(formatArgv(argv), 120), true
 			}
 			return "⚙️ shell " + CompactArg(args["argv"], 120), true
 		},
+	},
+	"shell_output": {
+		tui: staticCallLine(func(args map[string]any) string {
+			return "Read shell " + firstArg(args, "process_id")
+		}),
+		telegram: staticCallLine(func(args map[string]any) string {
+			return "⚙️ shell output " + CompactArg(args["process_id"], 64)
+		}),
+	},
+	"shell_kill": {
+		tui: staticCallLine(func(args map[string]any) string {
+			return "Killed shell " + firstArg(args, "process_id")
+		}),
+		telegram: staticCallLine(func(args map[string]any) string {
+			return "⚙️ shell kill " + CompactArg(args["process_id"], 64)
+		}),
 	},
 	"fs_read_file": {
 		tui:      staticCallLine(fsReadTUILine),
@@ -818,6 +840,17 @@ func stringSliceArg(value any) []string {
 		return out
 	default:
 		return nil
+	}
+}
+
+func boolArg(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true")
+	default:
+		return false
 	}
 }
 

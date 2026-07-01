@@ -251,7 +251,7 @@ func TestPlanModeFiltersAndDeniesWriteExecuteExternalTools(t *testing.T) {
 	}
 
 	specs := registry.Specs()
-	for _, hidden := range []string{"fs_write_file", "fs_edit_file", "shell_exec", "external_custom"} {
+	for _, hidden := range []string{"fs_write_file", "fs_edit_file", "shell_exec", "shell_output", "shell_kill", "external_custom"} {
 		if hasSpec(specs, hidden) {
 			t.Fatalf("plan mode spec %s should be hidden: %#v", hidden, specs)
 		}

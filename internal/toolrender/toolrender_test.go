@@ -69,6 +69,30 @@ func TestCallLineSnapshotsCommonTools(t *testing.T) {
 			expected: "⚙️ shell rg -n selection internal/tui",
 		},
 		{
+			name:     "tui shell background",
+			call:     protocol.ToolCall{Name: "shell_exec", Arguments: []byte(`{"argv":["npm","run","dev"],"background":true}`)},
+			style:    StyleTUI,
+			expected: "Started npm run dev",
+		},
+		{
+			name:     "telegram shell background",
+			call:     protocol.ToolCall{Name: "shell_exec", Arguments: []byte(`{"argv":["npm","run","dev"],"background":true}`)},
+			style:    StyleTelegram,
+			expected: "⚙️ shell start npm run dev",
+		},
+		{
+			name:     "tui shell output",
+			call:     protocol.ToolCall{Name: "shell_output", Arguments: []byte(`{"process_id":"shell-1","cursor":12}`)},
+			style:    StyleTUI,
+			expected: "Read shell shell-1",
+		},
+		{
+			name:     "telegram shell kill",
+			call:     protocol.ToolCall{Name: "shell_kill", Arguments: []byte(`{"process_id":"shell-1"}`)},
+			style:    StyleTelegram,
+			expected: "⚙️ shell kill shell-1",
+		},
+		{
 			name:     "tui read",
 			call:     protocol.ToolCall{Name: "fs_read_file", Arguments: []byte(`{"path":"/root/billyharness/README.md"}`)},
 			style:    StyleTUI,
