@@ -243,7 +243,7 @@ adding more powerful tools.
     ./internal/tui/transcript` passed.
   - commit: pending.
 
-- [ ] HR-01.7 Hard inline budgets for web and large tool outputs.
+- [x] HR-01.7 Hard inline budgets for web and large tool outputs.
   - maps to: `competitive-improvements-todo.md` P0-3.
   - target files: `internal/tools/web_core.go`,
     `internal/tools/web_handlers.go`, `internal/tools/tools.go`,
@@ -252,6 +252,23 @@ adding more powerful tools.
     budget; full text goes to `output_ref`; context diagnostics identify large
     inline sources.
   - verification: `go test -count=1 ./internal/tools ./internal/agent ./internal/clientux`.
+  - status: completed 2026-07-01.
+  - evidence: agent tool-result compaction now enforces
+    `MaxToolOutputBytes` even when a handler pre-marks the result as truncated,
+    and the returned preview plus truncation note fits inside the configured
+    inline byte budget. Web crawl total inline text now clamps to the same hard
+    inline token cap as fetch/extract, extreme `max_tokens`/`max_total_tokens`
+    requests stay bounded, and web full extracted text remains available through
+    `output_ref`. Context diagnostics now flag large inline tool contributors
+    and count output-ref-backed sources.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/tools ./internal/agent
+    ./internal/clientux ./internal/config ./internal/gatewayclient` passed;
+    `/root/.local/go/bin/go test -run
+    'Test.*Web.*Budget.*|Test.*OutputRef.*|Test.*Context.*Tool.*|Test.*Large.*Tool.*|Test.*Inline.*Budget.*|Test.*Truncated.*Tool.*|TestContextStatusClassifiesSourcesAndThresholds'
+    -count=1 ./internal/tools ./internal/agent ./internal/clientux
+    ./internal/gatewayclient` passed.
+  - commit: pending.
 
 - [ ] HR-01.8 Turn-level tool snapshot and transcript pairing.
   - maps to: `competitive-improvements-todo.md` P0-4.

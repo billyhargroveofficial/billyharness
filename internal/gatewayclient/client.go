@@ -440,7 +440,18 @@ func FormatSessionContext(resp gatewayapi.SessionContextResponse) string {
 	if len(resp.Sources) > 0 {
 		b.WriteString("\nsources:\n")
 		for _, source := range resp.Sources {
-			fmt.Fprintf(&b, "  %s: %s (%.1f%%, %d msg)\n", source.Source, compactContextNumber(source.EstimatedTokens), source.Percent, source.MessageCount)
+			var flags []string
+			if source.LargeInlineCount > 0 {
+				flags = append(flags, fmt.Sprintf("large inline %d", source.LargeInlineCount))
+			}
+			if source.OutputRefCount > 0 {
+				flags = append(flags, fmt.Sprintf("output_ref %d", source.OutputRefCount))
+			}
+			flagText := ""
+			if len(flags) > 0 {
+				flagText = ", " + strings.Join(flags, ", ")
+			}
+			fmt.Fprintf(&b, "  %s: %s (%.1f%%, %d msg%s)\n", source.Source, compactContextNumber(source.EstimatedTokens), source.Percent, source.MessageCount, flagText)
 		}
 	}
 	if len(resp.TopContributors) > 0 {
@@ -454,7 +465,22 @@ func FormatSessionContext(resp gatewayapi.SessionContextResponse) string {
 			if preview == "" {
 				preview = "(no text)"
 			}
-			fmt.Fprintf(&b, "  #%d %s %s: %s - %s\n", contributor.Index, contributor.Role, name, compactContextNumber(contributor.EstimatedTokens), preview)
+			var flags []string
+			if contributor.LargeInline {
+				if contributor.InlineBudgetBytes > 0 {
+					flags = append(flags, "large inline>"+compactByteNumber(int64(contributor.InlineBudgetBytes)))
+				} else {
+					flags = append(flags, "large inline")
+				}
+			}
+			if contributor.HasOutputRef {
+				flags = append(flags, "output_ref")
+			}
+			flagText := ""
+			if len(flags) > 0 {
+				flagText = " [" + strings.Join(flags, ", ") + "]"
+			}
+			fmt.Fprintf(&b, "  #%d %s %s: %s%s - %s\n", contributor.Index, contributor.Role, name, compactContextNumber(contributor.EstimatedTokens), flagText, preview)
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
@@ -577,4 +603,8 @@ func compactContextNumber(value int64) string {
 	default:
 		return strconv.FormatInt(value, 10)
 	}
+}
+
+func compactByteNumber(value int64) string {
+	return compactContextNumber(value) + "B"
 }

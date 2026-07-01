@@ -796,7 +796,7 @@ func firstDeltaLatencyMS(started, firstDeltaAt time.Time) int64 {
 }
 
 func (a *Agent) compactToolResult(index int, call protocol.ToolCall, out *protocol.ToolResult) {
-	if a == nil || out == nil || out.Content == "" || out.Truncated {
+	if a == nil || out == nil || out.Content == "" {
 		return
 	}
 	limit := a.toolPolicy.MaxToolOutputBytes
@@ -804,18 +804,15 @@ func (a *Agent) compactToolResult(index int, call protocol.ToolCall, out *protoc
 		return
 	}
 	full := out.Content
-	refInfo, err := storeManagedToolOutput(index, call, full)
-	ref := refInfo.Path
-	preview := trimUTF8Bytes(full, limit)
-	if preview == "" {
-		preview = "[tool output omitted]"
+	ref := out.OutputRef
+	reusedRef := ref != ""
+	var refInfo tooloutput.Ref
+	var err error
+	if ref == "" {
+		refInfo, err = storeManagedToolOutput(index, call, full)
+		ref = refInfo.Path
 	}
-	note := fmt.Sprintf("\n...[truncated %d bytes; full tool output saved as plaintext to %s with 0600 permissions. Use fs_read_file on output_ref if exact output is needed]", len(full)-len(preview), ref)
-	if err != nil {
-		ref = ""
-		note = fmt.Sprintf("\n...[truncated %d bytes; failed to save full tool output: %v]", len(full)-len(preview), err)
-	}
-	out.Content = preview + note
+	out.Content = boundedToolOutputPreview(full, limit, ref, reusedRef, err)
 	out.Truncated = true
 	out.OutputRef = ref
 	if out.Metadata == nil {
@@ -823,8 +820,55 @@ func (a *Agent) compactToolResult(index int, call protocol.ToolCall, out *protoc
 	}
 	out.Metadata["original_output_bytes"] = len(full)
 	out.Metadata["returned_output_bytes"] = len(out.Content)
+	out.Metadata["inline_budget_bytes"] = limit
+	out.Metadata["inline_budget_enforced"] = true
 	if ref != "" {
-		refInfo.AddMetadata(out.Metadata)
+		if refInfo.Path != "" {
+			refInfo.AddMetadata(out.Metadata)
+		} else {
+			_ = tooloutput.AddMetadataForPath(out.Metadata, ref)
+		}
+	}
+}
+
+func boundedToolOutputPreview(full string, limit int, ref string, reusedRef bool, saveErr error) string {
+	if limit <= 0 {
+		return ""
+	}
+	noteFor := func(omitted int) string {
+		if saveErr != nil {
+			return fmt.Sprintf("\n...[truncated %d bytes; failed to save full tool output: %v]", omitted, saveErr)
+		}
+		if reusedRef && ref != "" {
+			return fmt.Sprintf("\n...[truncated %d bytes to fit inline budget; existing output_ref remains %s. Use fs_read_file on output_ref if exact output is needed]", omitted, ref)
+		}
+		if ref != "" {
+			return fmt.Sprintf("\n...[truncated %d bytes; full tool output saved as plaintext to %s with 0600 permissions. Use fs_read_file on output_ref if exact output is needed]", omitted, ref)
+		}
+		return fmt.Sprintf("\n...[truncated %d bytes]", omitted)
+	}
+	note := noteFor(len(full))
+	if len(note) >= limit {
+		return trimUTF8Bytes(strings.TrimSpace(note), limit)
+	}
+	for {
+		previewLimit := limit - len(note)
+		preview := trimUTF8Bytes(full, previewLimit)
+		omitted := len(full) - len(preview)
+		nextNote := noteFor(omitted)
+		if len(preview)+len(nextNote) <= limit {
+			if preview == "" {
+				return trimUTF8Bytes(strings.TrimSpace(nextNote), limit)
+			}
+			return preview + nextNote
+		}
+		if nextNote == note {
+			return trimUTF8Bytes(preview+nextNote, limit)
+		}
+		note = nextNote
+		if len(note) >= limit {
+			return trimUTF8Bytes(strings.TrimSpace(note), limit)
+		}
 	}
 }
 

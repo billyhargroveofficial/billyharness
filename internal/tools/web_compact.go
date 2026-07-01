@@ -487,7 +487,7 @@ func webTotalTextBudget(maxTotalTokens, pageCount int) (int, int) {
 	if pageCount <= 0 {
 		return 0, 0
 	}
-	tokens := normalizedWebTokens(maxTotalTokens, webCrawlDefaultTotalToks, webCrawlMaxTotalToks)
+	tokens := normalizedWebTokens(maxTotalTokens, webCrawlDefaultTotalToks, min(webCrawlMaxTotalToks, webInlineMaxTokens))
 	return tokens * 4, tokens
 }
 

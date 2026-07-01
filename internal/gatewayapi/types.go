@@ -145,21 +145,26 @@ type SessionContextResponse struct {
 }
 
 type ContextContributor struct {
-	Index           int    `json:"index"`
-	Role            string `json:"role"`
-	Source          string `json:"source,omitempty"`
-	Name            string `json:"name,omitempty"`
-	Chars           int    `json:"chars"`
-	EstimatedTokens int64  `json:"estimated_tokens"`
-	Preview         string `json:"preview,omitempty"`
+	Index             int    `json:"index"`
+	Role              string `json:"role"`
+	Source            string `json:"source,omitempty"`
+	Name              string `json:"name,omitempty"`
+	Chars             int    `json:"chars"`
+	EstimatedTokens   int64  `json:"estimated_tokens"`
+	Preview           string `json:"preview,omitempty"`
+	LargeInline       bool   `json:"large_inline,omitempty"`
+	HasOutputRef      bool   `json:"has_output_ref,omitempty"`
+	InlineBudgetBytes int    `json:"inline_budget_bytes,omitempty"`
 }
 
 type ContextSource struct {
-	Source          string  `json:"source"`
-	MessageCount    int     `json:"message_count"`
-	Chars           int     `json:"chars"`
-	EstimatedTokens int64   `json:"estimated_tokens"`
-	Percent         float64 `json:"percent"`
+	Source           string  `json:"source"`
+	MessageCount     int     `json:"message_count"`
+	Chars            int     `json:"chars"`
+	EstimatedTokens  int64   `json:"estimated_tokens"`
+	Percent          float64 `json:"percent"`
+	LargeInlineCount int     `json:"large_inline_count,omitempty"`
+	OutputRefCount   int     `json:"output_ref_count,omitempty"`
 }
 
 type ContextThreshold struct {

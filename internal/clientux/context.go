@@ -30,6 +30,7 @@ func BuildContextResponse(limits config.RuntimeLimits, id string, messages []pro
 		}
 		source := contextSource(msg)
 		tokens := messageTokens(msg)
+		diagnostics := contextMessageDiagnostics(limits, msg)
 		for _, contribution := range contextSourceContributions(msg) {
 			stat := sourceStats[contribution.source]
 			if stat == nil {
@@ -39,15 +40,26 @@ func BuildContextResponse(limits config.RuntimeLimits, id string, messages []pro
 			stat.MessageCount++
 			stat.Chars += contribution.chars
 			stat.EstimatedTokens += int64((contribution.chars + 3) / 4)
+			if contribution.source == source {
+				if diagnostics.largeInline {
+					stat.LargeInlineCount++
+				}
+				if diagnostics.hasOutputRef {
+					stat.OutputRefCount++
+				}
+			}
 		}
 		contributors = append(contributors, gatewayapi.ContextContributor{
-			Index:           i,
-			Role:            string(msg.Role),
-			Source:          source,
-			Name:            msg.Name,
-			Chars:           chars,
-			EstimatedTokens: tokens,
-			Preview:         previewMessage(messagePreviewText(msg), 120),
+			Index:             i,
+			Role:              string(msg.Role),
+			Source:            source,
+			Name:              msg.Name,
+			Chars:             chars,
+			EstimatedTokens:   tokens,
+			Preview:           previewMessage(messagePreviewText(msg), 120),
+			LargeInline:       diagnostics.largeInline,
+			HasOutputRef:      diagnostics.hasOutputRef,
+			InlineBudgetBytes: diagnostics.inlineBudgetBytes,
 		})
 	}
 	sort.Slice(contributors, func(i, j int) bool {
@@ -86,6 +98,32 @@ func BuildContextResponse(limits config.RuntimeLimits, id string, messages []pro
 		Thresholds:              contextThresholds(estimatedTokens, contextWindow),
 		TopContributors:         contributors,
 	}
+}
+
+type contextDiagnostics struct {
+	largeInline       bool
+	hasOutputRef      bool
+	inlineBudgetBytes int
+}
+
+func contextMessageDiagnostics(limits config.RuntimeLimits, msg protocol.Message) contextDiagnostics {
+	if msg.Role != protocol.RoleTool {
+		return contextDiagnostics{}
+	}
+	budget := limits.MaxToolOutputBytes
+	diag := contextDiagnostics{
+		hasOutputRef: messageHasOutputRef(msg),
+	}
+	if budget > 0 && len(msg.Content) > budget {
+		diag.largeInline = true
+		diag.inlineBudgetBytes = budget
+	}
+	return diag
+}
+
+func messageHasOutputRef(msg protocol.Message) bool {
+	content := strings.ToLower(msg.Content)
+	return strings.Contains(content, "output_ref") || strings.Contains(content, "tool-output")
 }
 
 func contextThresholds(estimatedTokens, contextWindow int64) []gatewayapi.ContextThreshold {

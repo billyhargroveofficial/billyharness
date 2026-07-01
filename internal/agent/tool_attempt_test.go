@@ -828,7 +828,7 @@ func TestRunMessagesStoresLargeToolOutputAndSendsPreview(t *testing.T) {
 	t.Setenv("BILLYHARNESS_HOME", home)
 	cfg := config.Default()
 	cfg.MaxToolRounds = 3
-	cfg.MaxToolOutputBytes = 128
+	cfg.MaxToolOutputBytes = 512
 	registry := tools.NewRegistry(cfg)
 	fullOutput := strings.Repeat("large-output-", 80)
 	if err := registry.Register(tools.Tool{
@@ -868,6 +868,9 @@ func TestRunMessagesStoresLargeToolOutputAndSendsPreview(t *testing.T) {
 	result, ok := firstToolResult(events)
 	if !ok || !result.Truncated || result.OutputRef == "" {
 		t.Fatalf("tool result = %#v ok=%v", result, ok)
+	}
+	if len(result.Content) > cfg.MaxToolOutputBytes {
+		t.Fatalf("tool result exceeded inline budget: %d > %d", len(result.Content), cfg.MaxToolOutputBytes)
 	}
 	if strings.Contains(result.Content, fullOutput) || !strings.Contains(result.Content, "full tool output saved as plaintext") {
 		t.Fatalf("result content should be preview with saved-output note: %q", result.Content)
@@ -911,6 +914,62 @@ func TestRunMessagesStoresLargeToolOutputAndSendsPreview(t *testing.T) {
 	}
 	if toolMessage.Content == "" || strings.Contains(toolMessage.Content, fullOutput) || !strings.Contains(toolMessage.Content, result.OutputRef) {
 		t.Fatalf("tool message should contain preview and output ref, got %#v", toolMessage)
+	}
+}
+
+func TestRunMessagesEnforcesBudgetForAlreadyTruncatedToolOutput(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	cfg := config.Default()
+	cfg.MaxToolRounds = 3
+	cfg.MaxToolOutputBytes = 384
+	registry := tools.NewRegistry(cfg)
+	fullOutput := strings.Repeat("already-truncated-output-", 80)
+	if err := registry.Register(tools.Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "pretruncated_output",
+			Description: "Return a large pre-truncated output.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+			Risk:        protocol.RiskReadOnly,
+		},
+		Handler: func(context.Context, json.RawMessage) (tools.Result, error) {
+			return tools.Result{Content: fullOutput, Truncated: true}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_pre", ToolName: "pretruncated_output", ArgsDelta: `{}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "finished"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	a := New(cfg, prov, registry)
+	var events []protocol.Event
+	if _, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "run large pre-truncated tool"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, ok := firstToolResult(events)
+	if !ok || !result.Truncated || result.OutputRef == "" {
+		t.Fatalf("tool result = %#v ok=%v", result, ok)
+	}
+	if len(result.Content) > cfg.MaxToolOutputBytes {
+		t.Fatalf("tool result exceeded inline budget: %d > %d", len(result.Content), cfg.MaxToolOutputBytes)
+	}
+	if strings.Contains(result.Content, fullOutput) {
+		t.Fatalf("pre-truncated tool output bypassed agent budget: %q", result.Content)
+	}
+	if result.Metadata["inline_budget_enforced"] != true || result.Metadata["inline_budget_bytes"] != cfg.MaxToolOutputBytes {
+		t.Fatalf("budget metadata = %#v", result.Metadata)
 	}
 }
 

@@ -149,6 +149,50 @@ func TestCompactFetchedPageHonorsTokenBudgetEvenForFullText(t *testing.T) {
 	}
 }
 
+func TestWebInlineBudgetsClampExtremeRequests(t *testing.T) {
+	text := strings.Repeat("Alpha beta gamma delta. ", 3000)
+	page := fetchedPage{
+		URL:   "https://example.com",
+		Title: "Example",
+		Text:  text,
+	}
+	fetched := compactFetchedPage(page, webFetchOptions{
+		IncludeText: true,
+		MaxTokens:   999_999,
+		MaxChars:    999_999,
+	})
+	if fetched.BudgetTextTokens != webInlineMaxTokens || fetched.BudgetTextChars != webInlineMaxTokens*4 {
+		t.Fatalf("fetch inline budget = %d tokens / %d chars, want %d / %d", fetched.BudgetTextTokens, fetched.BudgetTextChars, webInlineMaxTokens, webInlineMaxTokens*4)
+	}
+	if fetched.ReturnedTextChars > webInlineMaxTokens*4+128 {
+		t.Fatalf("fetch returned too much inline text: %#v", fetched)
+	}
+
+	pages := []crawlPage{
+		{URL: "https://example.com/a", Depth: 0, Title: "A", Text: text},
+		{URL: "https://example.com/b", Depth: 1, Title: "B", Text: text},
+		{URL: "https://example.com/c", Depth: 1, Title: "C", Text: text},
+	}
+	crawled := compactCrawlPages(pages, webFetchOptions{
+		IncludeText:    true,
+		MaxTokens:      999_999,
+		MaxTotalTokens: 999_999,
+		MaxChars:       999_999,
+	})
+	totalBudgetTokens := 0
+	totalReturnedChars := 0
+	for _, page := range crawled {
+		totalBudgetTokens += page.BudgetTextTokens
+		totalReturnedChars += page.ReturnedTextChars
+	}
+	if totalBudgetTokens > webInlineMaxTokens {
+		t.Fatalf("crawl total inline budget tokens = %d, want <= %d: %#v", totalBudgetTokens, webInlineMaxTokens, crawled)
+	}
+	if totalReturnedChars > webInlineMaxTokens*4+len(crawled)*128 {
+		t.Fatalf("crawl returned too much inline text: chars=%d pages=%#v", totalReturnedChars, crawled)
+	}
+}
+
 func TestCompactCrawlPagesHonorsTotalTokenBudget(t *testing.T) {
 	pages := []crawlPage{
 		{URL: "https://example.com/a", Depth: 0, Title: "A", Text: strings.Repeat("A page sentence. ", 800)},

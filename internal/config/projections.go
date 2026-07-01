@@ -38,6 +38,7 @@ type RuntimeLimits struct {
 	MaxToolRounds                 int
 	MaxParallelTools              int
 	ProviderMaxRetries            int
+	MaxToolOutputBytes            int
 	ContextWindowTokens           int64
 	ContextCompactTokens          int
 	ContextCompactKeep            int
@@ -138,6 +139,7 @@ func (c Config) RuntimeLimits() RuntimeLimits {
 		MaxToolRounds:                 c.MaxToolRounds,
 		MaxParallelTools:              c.MaxParallelTools,
 		ProviderMaxRetries:            c.ProviderMaxRetries,
+		MaxToolOutputBytes:            c.MaxToolOutputBytes,
 		ContextWindowTokens:           c.ContextWindowTokens,
 		ContextCompactTokens:          c.ContextCompactTokens,
 		ContextCompactKeep:            c.ContextCompactKeep,
