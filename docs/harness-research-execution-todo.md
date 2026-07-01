@@ -142,7 +142,7 @@ adding more powerful tools.
     ./internal/gatewayclient` passed.
   - commit: pending.
 
-- [ ] HR-01.3 Durable prompt admission/input inbox MVP.
+- [x] HR-01.3 Durable prompt admission/input inbox MVP.
   - maps to: `competitive-improvements-todo.md` B1.
   - target files: `internal/gateway/session_store.go`,
     `internal/gateway/session_inputs.go`, `internal/gatewayapi/types.go`,
@@ -153,6 +153,19 @@ adding more powerful tools.
     unpromoted inputs survive restart; promoted incomplete inputs are marked
     ambiguous, not silently replayed.
   - verification: `go test -count=1 ./internal/gateway ./internal/gatewayclient ./internal/session`.
+  - status: completed 2026-07-01.
+  - evidence: added per-session `inputs.jsonl`, `/v1/sessions/{id}/inputs`,
+    idempotent/conflict-checked `input_id` admission, `/run` admission wrapper,
+    pre-`Session.Run` promotion records, terminal completion records, gateway
+    client admission helper, and restart-time ambiguous marking for promoted
+    inputs without completion.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/gateway
+    ./internal/gatewayclient ./internal/session` passed;
+    `/root/.local/go/bin/go test -run
+    'Test.*Admission.*|Test.*InputInbox.*|Test.*Idempotent.*Prompt.*|Test.*Promot.*|Test.*Ambiguous.*'
+    -count=1 ./internal/...` passed.
+  - commit: pending.
 
 - [ ] HR-01.4 Telegram durable admission and offset safety.
   - maps to: `competitive-improvements-todo.md` B2.

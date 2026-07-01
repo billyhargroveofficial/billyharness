@@ -10,6 +10,8 @@ import (
 
 type RunRequest struct {
 	Prompt          string `json:"prompt"`
+	InputID         string `json:"input_id,omitempty"`
+	ClientID        string `json:"client_id,omitempty"`
 	Provider        string `json:"provider,omitempty"`
 	Model           string `json:"model,omitempty"`
 	Profile         string `json:"profile,omitempty"`
@@ -20,6 +22,22 @@ type RunRequest struct {
 }
 
 const InterruptPolicyInterrupt = "interrupt"
+
+type SessionInputRequest struct {
+	InputID         string            `json:"input_id"`
+	Prompt          string            `json:"prompt"`
+	InterruptPolicy string            `json:"interrupt_policy,omitempty"`
+	ClientID        string            `json:"client_id,omitempty"`
+	ClientType      string            `json:"client_type,omitempty"`
+	Metadata        map[string]string `json:"metadata,omitempty"`
+}
+
+type SessionInputResponse struct {
+	InputID   string `json:"input_id"`
+	State     string `json:"state"`
+	Duplicate bool   `json:"duplicate,omitempty"`
+	Seq       int64  `json:"seq,omitempty"`
+}
 
 type CreateSessionRequest struct {
 	Messages []protocol.Message `json:"messages,omitempty"`

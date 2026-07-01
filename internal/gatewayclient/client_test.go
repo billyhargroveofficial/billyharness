@@ -129,6 +129,36 @@ func TestFollowSessionEventsReplaysThenFollowsFromCursor(t *testing.T) {
 	}
 }
 
+func TestAdmitSessionInputPostsTypedRequest(t *testing.T) {
+	var got gatewayapi.SessionInputRequest
+	server := testkit.NewRouteServer(t, testkit.Route{
+		Method: http.MethodPost,
+		Path:   "/v1/sessions/session-1/inputs",
+		Handler: func(w http.ResponseWriter, r *http.Request) {
+			if !testkit.DecodeJSON(t, r, &got) {
+				return
+			}
+			testkit.WriteJSON(t, w, gatewayapi.SessionInputResponse{InputID: got.InputID, State: "admitted", Seq: 1})
+		},
+	})
+
+	resp, err := New(server.URL).AdmitSessionInput(context.Background(), "session-1", gatewayapi.SessionInputRequest{
+		InputID:         "input-1",
+		Prompt:          "hello",
+		InterruptPolicy: gatewayapi.InterruptPolicyInterrupt,
+		ClientID:        "telegram:1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.InputID != "input-1" || resp.State != "admitted" || resp.Seq != 1 {
+		t.Fatalf("response = %#v", resp)
+	}
+	if got.InputID != "input-1" || got.Prompt != "hello" || got.InterruptPolicy != gatewayapi.InterruptPolicyInterrupt || got.ClientID != "telegram:1" {
+		t.Fatalf("request = %#v", got)
+	}
+}
+
 func TestReplaySessionEventsReportsSequenceGap(t *testing.T) {
 	server := testkit.NewRouteServer(t, testkit.Route{
 		Method: http.MethodGet,

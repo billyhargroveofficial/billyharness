@@ -288,6 +288,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/sessions/{id}/status", s.handleSessionStatus)
 	s.mux.HandleFunc("GET /v1/sessions/{id}/context", s.handleSessionContextStatus)
 	s.mux.HandleFunc("GET /v1/sessions/{id}/events", s.handleSessionEvents)
+	s.mux.HandleFunc("POST /v1/sessions/{id}/inputs", s.handleSessionInput)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/run", s.handleSessionRun)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/cancel", s.handleSessionCancel)
 }
@@ -630,6 +631,21 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	admission, err := s.admitSessionInput(session, sessionInputRequestFromRun(req))
+	if err != nil {
+		var conflict *sessionInputConflictError
+		if errors.As(err, &conflict) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "input admission failed: "+err.Error())
+		return
+	}
+	if admission.Duplicate && admission.State != sessionInputAdmitted {
+		writeError(w, http.StatusConflict, fmt.Sprintf("input_id %q is already %s", admission.InputID, admission.State))
+		return
+	}
+	runSeq := session.Status().RunSeq + 1
 	streamEvents(w, func(emit func(protocol.Event)) error {
 		if err := s.applySessionInterruptPolicy(r.Context(), session, interruptPolicy); err != nil {
 			return err
@@ -643,6 +659,9 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		statusReq := runRequestFromSettings(settings)
+		if err := s.promoteSessionInput(session, admission.InputID, runSeq); err != nil {
+			return err
+		}
 		err = session.Thread.Run(r.Context(), sessionpkg.RunnerFunc(a.RunMessages), req.Prompt, func(event protocol.Event) {
 			if event.Type == protocol.EventRunStarted {
 				session.beginRunStatus(statusReq)
@@ -656,8 +675,57 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 				log.Printf("gateway session save failed id=%s: %v", session.ID, saveErr)
 			}
 		}
+		terminalStatus := "completed"
+		if err != nil {
+			terminalStatus = "failed"
+			if errors.Is(err, sessionpkg.ErrBusy) {
+				terminalStatus = "busy"
+			}
+		}
+		if completeErr := s.completeSessionInput(session, admission.InputID, runSeq, terminalStatus); completeErr != nil {
+			log.Printf("gateway session input complete failed id=%s input=%s: %v", session.ID, admission.InputID, completeErr)
+			if err == nil {
+				return completeErr
+			}
+		}
 		return err
 	})
+}
+
+func (s *Server) handleSessionInput(w http.ResponseWriter, r *http.Request) {
+	session, ok := s.session(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	var req gatewayapi.SessionInputRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Prompt) == "" {
+		writeError(w, http.StatusBadRequest, "prompt required")
+		return
+	}
+	if _, err := normalizeInterruptPolicy(req.InterruptPolicy); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp, err := s.admitSessionInput(session, req)
+	if err != nil {
+		var conflict *sessionInputConflictError
+		if errors.As(err, &conflict) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "input admission failed: "+err.Error())
+		return
+	}
+	status := http.StatusCreated
+	if resp.Duplicate {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, resp)
 }
 
 const gatewayInterruptWaitTimeout = 3 * time.Second
@@ -691,6 +759,43 @@ func (s *Server) applySessionInterruptPolicy(ctx context.Context, session *Sessi
 		return fmt.Errorf("interrupt active session run: %w", err)
 	}
 	return nil
+}
+
+func (s *Server) admitSessionInput(session *Session, req gatewayapi.SessionInputRequest) (gatewayapi.SessionInputResponse, error) {
+	if s == nil || s.store == nil {
+		if strings.TrimSpace(req.InputID) == "" {
+			req.InputID = newID()
+		}
+		inputID, err := cleanSessionInputID(req.InputID)
+		if err != nil {
+			return gatewayapi.SessionInputResponse{}, err
+		}
+		return gatewayapi.SessionInputResponse{InputID: inputID, State: sessionInputAdmitted}, nil
+	}
+	return s.store.AdmitInput(session, req)
+}
+
+func (s *Server) promoteSessionInput(session *Session, inputID string, runSeq int64) error {
+	if s == nil || s.store == nil {
+		return nil
+	}
+	return s.store.PromoteInput(session, inputID, runSeq)
+}
+
+func (s *Server) completeSessionInput(session *Session, inputID string, runSeq int64, terminalStatus string) error {
+	if s == nil || s.store == nil {
+		return nil
+	}
+	return s.store.CompleteInput(session, inputID, runSeq, terminalStatus)
+}
+
+func sessionInputRequestFromRun(req RunRequest) gatewayapi.SessionInputRequest {
+	return gatewayapi.SessionInputRequest{
+		InputID:         req.InputID,
+		Prompt:          req.Prompt,
+		InterruptPolicy: req.InterruptPolicy,
+		ClientID:        req.ClientID,
+	}
 }
 
 func (s *Server) handleSessionCancel(w http.ResponseWriter, r *http.Request) {

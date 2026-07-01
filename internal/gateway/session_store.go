@@ -21,6 +21,7 @@ const (
 	sessionManifestName         = "manifest.json"
 	sessionHistoryJSONLName     = "history.jsonl"
 	sessionEventsJSONLName      = "events.jsonl"
+	sessionInputsJSONLName      = "inputs.jsonl"
 	sessionConfigSnapshotName   = "config.snapshot.json"
 	sessionModelSnapshotName    = "model_provider.snapshot.json"
 	sessionMCPSnapshotName      = "mcp.snapshot.json"
@@ -49,6 +50,7 @@ type sessionManifest struct {
 	UpdatedAt                 time.Time               `json:"updated_at"`
 	HistoryJSONL              string                  `json:"history_jsonl"`
 	EventsJSONL               string                  `json:"events_jsonl,omitempty"`
+	InputsJSONL               string                  `json:"inputs_jsonl,omitempty"`
 	SnapshotJSON              string                  `json:"snapshot_json,omitempty"`
 	ConfigSnapshotJSON        string                  `json:"config_snapshot_json,omitempty"`
 	ModelProviderSnapshotJSON string                  `json:"model_provider_snapshot_json,omitempty"`
@@ -237,6 +239,7 @@ func (s *sessionStore) AppendEvent(session *Session, event protocol.Event) (prot
 			UpdatedAt:                 created,
 			HistoryJSONL:              sessionHistoryJSONLName,
 			EventsJSONL:               sessionEventsJSONLName,
+			InputsJSONL:               sessionInputsJSONLName,
 			SnapshotJSON:              id + ".json",
 			ConfigSnapshotJSON:        sessionConfigSnapshotName,
 			ModelProviderSnapshotJSON: sessionModelSnapshotName,
@@ -408,6 +411,7 @@ func (s *sessionStore) saveLocked(session *Session) error {
 		UpdatedAt:                 now,
 		HistoryJSONL:              sessionHistoryJSONLName,
 		EventsJSONL:               sessionEventsJSONLName,
+		InputsJSONL:               sessionInputsJSONLName,
 		SnapshotJSON:              id + ".json",
 		ConfigSnapshotJSON:        configSnapshotJSON,
 		ModelProviderSnapshotJSON: modelSnapshotJSON,
@@ -465,6 +469,10 @@ func (s *sessionStore) loadSessionDir(dir string) (*Session, error) {
 	}
 	if ok {
 		session.restoreStatus(status)
+	}
+	inputsPath := filepath.Join(dir, sessionFileName(manifest.InputsJSONL, sessionInputsJSONLName))
+	if err := markPromotedSessionInputsAmbiguous(inputsPath, id); err != nil {
+		return nil, err
 	}
 	return session, nil
 }
