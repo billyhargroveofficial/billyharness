@@ -118,7 +118,6 @@ func (w *EventWriter) Record(taskID string, event protocol.Event) (EventRecord, 
 		TS:     now.UTC().Format(time.RFC3339Nano),
 	})
 	event.Seq = w.seq
-	event.RunID = w.runID
 	if err := eventlog.ValidateEnvelope(event); err != nil {
 		return EventRecord{}, err
 	}

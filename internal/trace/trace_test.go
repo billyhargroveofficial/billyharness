@@ -122,6 +122,39 @@ func TestEventWriterConcurrentRecordsStayContiguous(t *testing.T) {
 	}
 }
 
+func TestEventWriterPreservesNestedRunIDForAggregateReplay(t *testing.T) {
+	var out bytes.Buffer
+	writer := NewEventWriter("suite-run", &out)
+	events := []struct {
+		task  string
+		event protocol.Event
+	}{
+		{task: "task-1", event: protocol.Event{Type: protocol.EventRunStarted, RunID: "agent-run-1"}},
+		{task: "task-1", event: protocol.Event{Type: protocol.EventRunCompleted, RunID: "agent-run-1"}},
+		{task: "task-2", event: protocol.Event{Type: protocol.EventRunStarted, RunID: "agent-run-2"}},
+		{task: "task-2", event: protocol.Event{Type: protocol.EventRunCompleted, RunID: "agent-run-2"}},
+	}
+	for _, item := range events {
+		if _, err := writer.Record(item.task, item.event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := ReplayEvents(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.RunID != "suite-run" || summary.RunStarted != 2 || summary.RunCompleted != 2 {
+		t.Fatalf("summary = %#v", summary)
+	}
+	if len(summary.Timeline) != 4 || summary.Timeline[0].RunID != "agent-run-1" || summary.Timeline[2].RunID != "agent-run-2" {
+		t.Fatalf("timeline = %#v", summary.Timeline)
+	}
+}
+
 func TestReplayEventsRejectsPayloadHashMismatch(t *testing.T) {
 	root := t.TempDir()
 	payloadPath := filepath.Join(root, "payload.json")
