@@ -128,11 +128,12 @@ func (v *RecordValidator) validateScope(scopeID string) error {
 }
 
 type LifecycleValidator struct {
-	runs     map[string]struct{}
-	turns    map[string]struct{}
-	steps    map[string]stepState
-	calls    map[string]struct{}
-	attempts map[string]struct{}
+	runs        map[string]struct{}
+	terminalRun map[string]protocol.EventType
+	turns       map[string]struct{}
+	steps       map[string]stepState
+	calls       map[string]struct{}
+	attempts    map[string]struct{}
 }
 
 type stepState struct {
@@ -181,6 +182,10 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 		if _, ok := v.runs[runID]; !ok {
 			return fmt.Errorf("%s without started run %q", event.Type, runID)
 		}
+		if previous, ok := v.terminalRun[runID]; ok {
+			return fmt.Errorf("duplicate terminal run event for %q: got %s after %s", runID, event.Type, previous)
+		}
+		v.terminalRun[runID] = event.Type
 	case protocol.EventTurnStarted:
 		if runID != "" && turnID != "" {
 			v.turns[turnKey(runID, turnID)] = struct{}{}
@@ -244,6 +249,9 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 func (v *LifecycleValidator) ensure() {
 	if v.runs == nil {
 		v.runs = map[string]struct{}{}
+	}
+	if v.terminalRun == nil {
+		v.terminalRun = map[string]protocol.EventType{}
 	}
 	if v.turns == nil {
 		v.turns = map[string]struct{}{}

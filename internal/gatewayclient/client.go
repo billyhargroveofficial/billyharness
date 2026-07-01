@@ -39,6 +39,7 @@ type RunResult struct {
 	Failed        bool
 	Failure       string
 	TerminalEvent protocol.Event
+	SeqGap        *EventSeqGapError
 }
 
 type StatusError struct {
@@ -51,6 +52,11 @@ type StatusError struct {
 type RunFailedError struct {
 	Message string
 	Event   protocol.Event
+}
+
+type EventSeqGapError struct {
+	AfterSeq int64
+	GotSeq   int64
 }
 
 type UnavailableError struct {
@@ -88,6 +94,13 @@ func (e *RunFailedError) Error() string {
 		return "gateway run failed"
 	}
 	return e.Message
+}
+
+func (e *EventSeqGapError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf("gateway event sequence gap: got seq %d after %d", e.GotSeq, e.AfterSeq)
 }
 
 func (e *UnavailableError) Error() string {
@@ -462,6 +475,10 @@ func decodeEvents(reader io.Reader, cursor int64, emit func(protocol.Event)) (Ru
 		}
 		if event.Seq > 0 && event.Seq <= cursor {
 			continue
+		}
+		if event.Seq > 0 && cursor > 0 && event.Seq > cursor+1 {
+			result.SeqGap = &EventSeqGapError{AfterSeq: cursor, GotSeq: event.Seq}
+			return result, result.SeqGap
 		}
 		if event.Seq > 0 {
 			cursor = event.Seq

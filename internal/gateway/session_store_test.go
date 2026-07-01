@@ -366,6 +366,55 @@ func TestGatewaySessionEventsReplayRejectsLifecycleViolation(t *testing.T) {
 	}
 }
 
+func TestGatewaySessionEventsReplayRejectsDuplicateTerminalRun(t *testing.T) {
+	path := filepath.Join(t.TempDir(), sessionEventsJSONLName)
+	records := []sessionEventRecord{
+		{
+			SchemaVersion: gatewaySessionSchemaVersion,
+			Seq:           1,
+			SessionID:     "session-1",
+			EventType:     string(protocol.EventRunStarted),
+			Event:         protocol.Event{Type: protocol.EventRunStarted, RunID: "run-1"},
+		},
+		{
+			SchemaVersion: gatewaySessionSchemaVersion,
+			Seq:           2,
+			SessionID:     "session-1",
+			EventType:     string(protocol.EventRunCompleted),
+			Event:         protocol.Event{Type: protocol.EventRunCompleted, RunID: "run-1"},
+		},
+		{
+			SchemaVersion: gatewaySessionSchemaVersion,
+			Seq:           3,
+			SessionID:     "session-1",
+			EventType:     string(protocol.EventRunFailed),
+			Event:         protocol.Event{Type: protocol.EventRunFailed, RunID: "run-1", Data: "late failure"},
+		},
+	}
+	var body bytes.Buffer
+	enc := json.NewEncoder(&body)
+	for _, record := range records {
+		if err := enc.Encode(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(path, body.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := replaySessionEventsAfter(path, "session-1", 0)
+	if err == nil || !strings.Contains(err.Error(), "duplicate terminal run event") {
+		t.Fatalf("expected duplicate terminal error, got %v", err)
+	}
+	var corrupt *eventlog.CorruptionError
+	if !errors.As(err, &corrupt) {
+		t.Fatalf("error %T does not expose CorruptionError", err)
+	}
+	if corrupt.Path != path || corrupt.Line != 3 || corrupt.RecordNo != 3 || corrupt.Kind != "lifecycle" {
+		t.Fatalf("corruption error = %#v", corrupt)
+	}
+}
+
 func TestInspectStoredSessionReturnsStructuredEventCorruption(t *testing.T) {
 	root := t.TempDir()
 	sessionID := "session-1"

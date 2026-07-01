@@ -24,6 +24,7 @@ type Snapshot struct {
 
 	RunState  RunState
 	LastSeq   int64
+	SeqGap    *EventSeqGap
 	LastError string
 	Errors    []string
 
@@ -71,6 +72,11 @@ type ContextThreshold struct {
 	Stage               string
 }
 
+type EventSeqGap struct {
+	AfterSeq int64
+	GotSeq   int64
+}
+
 type Projector struct {
 	assistant             strings.Builder
 	reasoning             strings.Builder
@@ -93,6 +99,9 @@ func (p *Projector) Apply(event protocol.Event) Snapshot {
 		return p.Snapshot()
 	}
 	if event.Seq > 0 {
+		if p.snapshot.LastSeq > 0 && event.Seq > p.snapshot.LastSeq+1 {
+			p.snapshot.SeqGap = &EventSeqGap{AfterSeq: p.snapshot.LastSeq, GotSeq: event.Seq}
+		}
 		p.snapshot.LastSeq = event.Seq
 	}
 	switch event.Type {
@@ -194,6 +203,10 @@ func (p *Projector) Snapshot() Snapshot {
 	}
 	out.ContextThresholds = append([]ContextThreshold(nil), p.snapshot.ContextThresholds...)
 	out.Errors = append([]string(nil), p.snapshot.Errors...)
+	if p.snapshot.SeqGap != nil {
+		gap := *p.snapshot.SeqGap
+		out.SeqGap = &gap
+	}
 	return out
 }
 
@@ -201,9 +214,11 @@ func (p *Projector) resetRun() {
 	p.assistant.Reset()
 	p.reasoning.Reset()
 	lastSeq := p.snapshot.LastSeq
+	seqGap := p.snapshot.SeqGap
 	p.snapshot = Snapshot{
 		RunState:      RunStateIdle,
 		LastSeq:       lastSeq,
+		SeqGap:        seqGap,
 		ToolsByCallID: map[string]ToolItem{},
 	}
 	p.usage.Reset()

@@ -193,6 +193,15 @@ func TestLifecycleValidatorRejectsOrderingViolations(t *testing.T) {
 			},
 			want: "matching attempt_id",
 		},
+		{
+			name: "duplicate terminal run event",
+			events: []protocol.Event{
+				{Type: protocol.EventRunStarted, RunID: "run-1"},
+				{Type: protocol.EventRunCompleted, RunID: "run-1"},
+				{Type: protocol.EventRunFailed, RunID: "run-1", Data: "late failure"},
+			},
+			want: "duplicate terminal run event",
+		},
 	}
 
 	for _, tt := range tests {

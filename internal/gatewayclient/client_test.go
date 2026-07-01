@@ -129,6 +129,54 @@ func TestFollowSessionEventsReplaysThenFollowsFromCursor(t *testing.T) {
 	}
 }
 
+func TestReplaySessionEventsReportsSequenceGap(t *testing.T) {
+	server := testkit.NewRouteServer(t, testkit.Route{
+		Method: http.MethodGet,
+		Path:   "/v1/sessions/session-1/events",
+		Handler: func(w http.ResponseWriter, _ *http.Request) {
+			testkit.WriteJSONLines(t, w,
+				protocol.Event{Seq: 4, Type: protocol.EventAssistantDelta, Data: "gap"},
+			)
+		},
+	})
+
+	var got []protocol.Event
+	err := New(server.URL).ReplaySessionEvents(context.Background(), "session-1", 2, func(event protocol.Event) {
+		got = append(got, event)
+	})
+	var gap *EventSeqGapError
+	if !errors.As(err, &gap) {
+		t.Fatalf("err = %T %[1]v, want EventSeqGapError", err)
+	}
+	if gap.AfterSeq != 2 || gap.GotSeq != 4 {
+		t.Fatalf("gap = %#v", gap)
+	}
+	if len(got) != 0 {
+		t.Fatalf("events emitted across gap = %#v", got)
+	}
+}
+
+func TestRunSessionResultAllowsFirstSequenceAboveOne(t *testing.T) {
+	server := testkit.NewRouteServer(t, testkit.Route{
+		Method: http.MethodPost,
+		Path:   "/v1/sessions/session-1/run",
+		Handler: func(w http.ResponseWriter, _ *http.Request) {
+			testkit.WriteJSONLines(t, w,
+				protocol.Event{Seq: 20, Type: protocol.EventRunStarted},
+				protocol.Event{Seq: 21, Type: protocol.EventRunCompleted},
+			)
+		},
+	})
+
+	result, err := New(server.URL).RunSessionResult(context.Background(), "session-1", gatewayapi.RunRequest{Prompt: "ping"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.LastSeq != 21 || result.EventCount != 2 || result.SeqGap != nil {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestRunSessionResultReportsTerminalFailure(t *testing.T) {
 	server := testkit.NewRouteServer(t, testkit.Route{
 		Method: http.MethodPost,

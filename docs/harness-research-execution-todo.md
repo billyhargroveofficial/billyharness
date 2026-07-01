@@ -96,7 +96,7 @@ Goal: make the work reproducible before changing runtime behavior.
 Goal: make long Telegram/TUI runs durable, replayable, and hard to stall before
 adding more powerful tools.
 
-- [ ] HR-01.1 Durable gateway follow and replay.
+- [x] HR-01.1 Durable gateway follow and replay.
   - maps to: `competitive-improvements-todo.md` P0-1.
   - target files: `internal/gateway/gateway.go`,
     `internal/gateway/session_events.go`,
@@ -106,6 +106,19 @@ adding more powerful tools.
   - acceptance: follow subscribes before replay; gaps are detectable; replay
     reads `seq > cursor`; duplicate terminal lifecycle events are rejected.
   - verification: `go test -count=1 ./internal/gateway ./internal/gatewayclient ./internal/eventlog ./internal/clientux/projector`.
+  - status: completed 2026-07-01.
+  - evidence: gateway follow already subscribed before replay and replayed
+    `seq > cursor`; added typed gateway-client `EventSeqGapError`, projector
+    `SeqGap` snapshot state, and shared eventlog duplicate-terminal run
+    rejection used by persisted session replay.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/gateway
+    ./internal/gatewayclient ./internal/eventlog ./internal/clientux/projector`
+    passed; `/root/.local/go/bin/go test -run
+    'Test.*Replay.*|Test.*Seq.*|Test.*Lifecycle.*' -count=1
+    ./internal/gateway ./internal/gatewayclient ./internal/eventlog
+    ./internal/clientux/projector` passed.
+  - commit: pending.
 
 - [ ] HR-01.2 Gateway interrupt and stale cleanup.
   - maps to: `competitive-improvements-todo.md` P0-2.

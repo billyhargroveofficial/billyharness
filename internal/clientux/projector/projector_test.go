@@ -127,6 +127,22 @@ func TestProjectorDropsStaleSequencedEvents(t *testing.T) {
 	}
 }
 
+func TestProjectorRecordsSequenceGap(t *testing.T) {
+	p := New()
+	p.Apply(protocol.Event{Seq: 5, Type: protocol.EventAssistantDelta, Data: "fresh"})
+	snap := p.Apply(protocol.Event{Seq: 7, Type: protocol.EventAssistantDelta, Data: "after gap"})
+	if snap.LastSeq != 7 || snap.SeqGap == nil {
+		t.Fatalf("snapshot = %#v", snap)
+	}
+	if snap.SeqGap.AfterSeq != 5 || snap.SeqGap.GotSeq != 7 {
+		t.Fatalf("seq gap = %#v", snap.SeqGap)
+	}
+	snap.SeqGap.AfterSeq = 99
+	if got := p.Snapshot().SeqGap.AfterSeq; got != 5 {
+		t.Fatalf("snapshot gap was not cloned: %d", got)
+	}
+}
+
 func TestProjectorReportsRunFailure(t *testing.T) {
 	p := New()
 	p.Apply(protocol.Event{Seq: 1, Type: protocol.EventRunStarted})
