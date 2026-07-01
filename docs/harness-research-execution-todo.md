@@ -270,7 +270,7 @@ adding more powerful tools.
     ./internal/gatewayclient` passed.
   - commit: pending.
 
-- [ ] HR-01.8 Turn-level tool snapshot and transcript pairing.
+- [x] HR-01.8 Turn-level tool snapshot and transcript pairing.
   - maps to: `competitive-improvements-todo.md` P0-4.
   - target files: `internal/tools/*`, `internal/agent/runtime_loop.go`,
     `internal/agent/model_call.go`, `internal/agent/tool_attempt.go`,
@@ -279,6 +279,23 @@ adding more powerful tools.
     frozen per provider turn; malformed tool-result pairing is rejected before
     provider calls.
   - verification: `go test -count=1 ./internal/agent ./internal/tools ./internal/mcpclient`.
+  - status: completed 2026-07-01.
+  - evidence: added a per-provider-turn `tools.ToolSet` snapshot that clones
+    model-visible specs, handler maps, parallel metadata, policy/risk lookup,
+    and the dynamic MCP catalog/status mirror; the agent now uses the snapshot
+    for model requests, tool execution, permission decisions, audits,
+    parallel batching, and rate buckets. Snapshot MCP gateway handlers are
+    rebound to the frozen mirror, so live MCP catalog changes do not affect
+    `tool_search`, `mcp_list_tools`, or `mcp_call` inside an active provider
+    turn. Added pre-provider transcript pairing validation that rejects
+    orphan, duplicate, or missing tool results before `model.call_started`.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/agent ./internal/tools
+    ./internal/mcpclient ./internal/runstate` passed; `/root/.local/go/bin/go
+    test -run
+    'Test.*ToolSnapshot.*|Test.*TranscriptPairing.*|Test.*ToolResult.*'
+    -count=1 ./internal/agent ./internal/tools` passed.
+  - commit: pending.
 
 - [ ] HR-01.9 Canonical end-to-end event trace.
   - maps to: `competitive-improvements-todo.md` P0-5.

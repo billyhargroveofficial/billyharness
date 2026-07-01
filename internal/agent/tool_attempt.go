@@ -7,10 +7,12 @@ import (
 	runtimehooks "github.com/billyhargroveofficial/billyharness/internal/hooks"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/tooloutput"
+	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
 type toolOrchestrator struct {
 	agent     *Agent
+	toolSet   tools.ToolSet
 	emit      func(protocol.Event)
 	hooks     *runtimehooks.Runner
 	decisions map[string]toolPermissionDecision
@@ -41,9 +43,10 @@ const (
 	toolProgressStatusAborted = "aborted"
 )
 
-func (a *Agent) newToolOrchestrator(emit func(protocol.Event), hookRunner *runtimehooks.Runner) *toolOrchestrator {
+func (a *Agent) newToolOrchestrator(emit func(protocol.Event), hookRunner *runtimehooks.Runner, toolSet tools.ToolSet) *toolOrchestrator {
 	return &toolOrchestrator{
 		agent:     a,
+		toolSet:   toolSet,
 		emit:      emit,
 		hooks:     hookRunner,
 		decisions: map[string]toolPermissionDecision{},
@@ -64,7 +67,7 @@ func (o *toolOrchestrator) Request(call protocol.ToolCall) {
 	o.emit(protocol.Event{Type: protocol.EventToolPermissionDecided, Data: decision.decisionEventData()})
 	o.EmitProgress(call, "", toolPhasePermissionDecision, decision.Decision, decision.progressMetadata())
 	if o.agent != nil {
-		o.agent.emitToolAudit(call, o.emit)
+		o.agent.emitToolAudit(call, o.toolSet, o.emit)
 	}
 }
 
@@ -131,7 +134,7 @@ func (o *toolOrchestrator) Execute(ctx context.Context, turnID string, index int
 				"invalid_arguments":      compactText(call.InvalidArguments, 500),
 			},
 		}
-	} else if o == nil || o.agent == nil || o.agent.tools == nil {
+	} else if o == nil || o.agent == nil {
 		out = protocol.ToolResult{
 			CallID:    call.ID,
 			Name:      call.Name,
@@ -141,7 +144,7 @@ func (o *toolOrchestrator) Execute(ctx context.Context, turnID string, index int
 			Metadata:  map[string]any{},
 		}
 	} else {
-		result, err := o.agent.tools.Call(ctx, call)
+		result, err := o.toolSet.Call(ctx, call)
 		out = protocol.ToolResult{
 			CallID:    call.ID,
 			Name:      call.Name,
@@ -391,7 +394,7 @@ func (o *toolOrchestrator) decision(call protocol.ToolCall) toolPermissionDecisi
 }
 
 func (o *toolOrchestrator) permissionDecision(call protocol.ToolCall) toolPermissionDecision {
-	if o == nil || o.agent == nil || o.agent.tools == nil {
+	if o == nil || o.agent == nil {
 		return toolPermissionDecision{
 			CallID:   call.ID,
 			Name:     call.Name,
@@ -400,7 +403,7 @@ func (o *toolOrchestrator) permissionDecision(call protocol.ToolCall) toolPermis
 			Reason:   "tool_registry_unavailable",
 		}
 	}
-	decision := o.agent.tools.PolicyDecision(call.Name)
+	decision := o.toolSet.PolicyDecision(call.Name)
 	return toolPermissionDecision{
 		CallID:           call.ID,
 		Name:             call.Name,

@@ -7,6 +7,7 @@ import (
 	runtimehooks "github.com/billyhargroveofficial/billyharness/internal/hooks"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/runstate"
+	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
 func (a *Agent) Run(ctx context.Context, prompt string, emit func(protocol.Event)) error {
@@ -56,9 +57,16 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 			lastPromptTokens = 0
 			emit(protocol.Event{Type: protocol.EventContextCompacted, Data: compaction})
 		}
-		toolSpecs := a.tools.Specs()
-		turnSnapshot := runstate.NewSnapshot(a.snapshotInput(), messages, toolSpecs)
+		toolSet := a.snapshotToolSet(ctx)
+		toolSpecs := toolSet.Specs()
+		snapshotInput := a.snapshotInput()
+		snapshotInput.MCPStatusSnapshotHash = toolSet.MCPStatusSnapshotHash()
+		turnSnapshot := runstate.NewSnapshot(snapshotInput, messages, toolSpecs)
 		a.emitTurnStarted(emit, turnID, roundNum, messages, turnSnapshot)
+		if err := validateTranscriptPairing(messages); err != nil {
+			err = a.failTurn(ctx, hookRunner, run, turnID, roundNum, turnStarted, err, emit)
+			return messages, err
+		}
 		modelStep := a.runModelCallStep(ctx, hookRunner, modelCallStepInput{
 			TurnID:       turnID,
 			Round:        roundNum,
@@ -90,7 +98,7 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 			return messages, nil
 		}
 		messages = a.appendModelResponse(messages, modelStep)
-		results := a.executeToolCalls(ctx, hookRunner, turnID, roundNum, modelStep.ToolCalls, emit)
+		results := a.executeToolCalls(ctx, hookRunner, toolSet, turnID, roundNum, modelStep.ToolCalls, emit)
 		messages = appendToolResultMessages(messages, results)
 		emitContextThresholdEvents(messages, a.runtime, roundNum, "after_tool_results", emittedContextThresholds, emit)
 		a.emitTurnCompleted(emit, turnCompletion{
@@ -115,23 +123,30 @@ type toolExecutionResult struct {
 	AttemptID  string
 }
 
-func (a *Agent) executeToolCalls(ctx context.Context, hookRunner *runtimehooks.Runner, turnID string, round int, calls []protocol.ToolCall, emit func(protocol.Event)) []toolExecutionResult {
+func (a *Agent) snapshotToolSet(ctx context.Context) tools.ToolSet {
+	if a == nil || a.tools == nil {
+		return tools.ToolSet{}
+	}
+	return a.tools.Snapshot(ctx)
+}
+
+func (a *Agent) executeToolCalls(ctx context.Context, hookRunner *runtimehooks.Runner, toolSet tools.ToolSet, turnID string, round int, calls []protocol.ToolCall, emit func(protocol.Event)) []toolExecutionResult {
 	results := make([]toolExecutionResult, len(calls))
-	orchestrator := a.newToolOrchestrator(emit, hookRunner)
+	orchestrator := a.newToolOrchestrator(emit, hookRunner, toolSet)
 	for _, call := range calls {
 		orchestrator.Request(call)
 	}
 	for i := 0; i < len(calls); {
-		if !a.canRunToolParallel(calls[i]) {
-			results[i] = a.executeOneTool(ctx, orchestrator, turnID, round, i, calls[i], false, "", 0, 0, emit)
+		if !a.canRunToolParallel(toolSet, calls[i]) {
+			results[i] = a.executeOneTool(ctx, orchestrator, toolSet, turnID, round, i, calls[i], false, "", 0, 0, emit)
 			i++
 			continue
 		}
 		j := i + 1
-		for j < len(calls) && a.canRunToolParallel(calls[j]) {
+		for j < len(calls) && a.canRunToolParallel(toolSet, calls[j]) {
 			j++
 		}
-		a.executeParallelToolBatch(ctx, orchestrator, turnID, round, calls, i, j, results, emit)
+		a.executeParallelToolBatch(ctx, orchestrator, toolSet, turnID, round, calls, i, j, results, emit)
 		i = j
 	}
 	return results

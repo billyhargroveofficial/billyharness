@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -333,6 +334,97 @@ func TestToolSearchFindsNativeAndMCPTools(t *testing.T) {
 		!strings.Contains(overBudget.Content, `"schema_truncated": true`) ||
 		!strings.Contains(overBudget.Content, `"truncated": true`) {
 		t.Fatalf("schema budget omission missing:\n%s", overBudget.Content)
+	}
+}
+
+func TestToolSnapshotFreezesMCPGatewayCatalog(t *testing.T) {
+	registry := NewRegistry(config.Default())
+	registry.mcpTools["mcp__fake__old"] = fakeMCPTool("mcp__fake__old", "old")
+	registry.mcpCatalog = mcpCatalogState{Kind: "dynamic_mcp_catalog", Version: 1, ToolCount: 1}
+	now := time.Now().UTC()
+	registry.mcpStatuses = []mcpclient.ServerStatus{{
+		Name:        "fake",
+		Transport:   "stdio",
+		Enabled:     true,
+		Connected:   true,
+		State:       "connected",
+		ToolCount:   1,
+		LastEventAt: &now,
+	}}
+	registry.addMCPGateway()
+
+	snapshot := registry.Snapshot(context.Background())
+
+	later := now.Add(time.Second)
+	registry.mcpMu.Lock()
+	registry.mcpTools = map[string]Tool{"mcp__fake__new": fakeMCPTool("mcp__fake__new", "new")}
+	registry.mcpCatalog = mcpCatalogState{Kind: "dynamic_mcp_catalog", Version: 2, ToolCount: 1}
+	registry.mcpStatuses = []mcpclient.ServerStatus{{
+		Name:        "fake",
+		Transport:   "stdio",
+		Enabled:     true,
+		Connected:   true,
+		State:       "connected",
+		ToolCount:   1,
+		LastEventAt: &later,
+	}}
+	registry.mcpMu.Unlock()
+
+	list, err := snapshot.Call(context.Background(), protocol.ToolCall{
+		Name:      "mcp_list_tools",
+		Arguments: rawArgs(map[string]any{"query": "fake"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(list.Content, "mcp__fake__old") || strings.Contains(list.Content, "mcp__fake__new") {
+		t.Fatalf("snapshot list should keep old MCP catalog only:\n%s", list.Content)
+	}
+
+	oldCall, err := snapshot.Call(context.Background(), protocol.ToolCall{
+		Name:      "mcp_call",
+		Arguments: rawArgs(map[string]any{"name": "mcp__fake__old"}),
+	})
+	if err != nil || oldCall.Content != "old" {
+		t.Fatalf("snapshot old MCP call = %#v err=%v", oldCall, err)
+	}
+	newCall, err := snapshot.Call(context.Background(), protocol.ToolCall{
+		Name:      "mcp_call",
+		Arguments: rawArgs(map[string]any{"name": "mcp__fake__new"}),
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown MCP tool") {
+		t.Fatalf("snapshot new MCP call should fail as unknown, result=%#v err=%v", newCall, err)
+	}
+
+	liveList, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "mcp_list_tools",
+		Arguments: rawArgs(map[string]any{"query": "fake"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(liveList.Content, "mcp__fake__new") || strings.Contains(liveList.Content, "mcp__fake__old") {
+		t.Fatalf("live registry should see updated MCP catalog:\n%s", liveList.Content)
+	}
+	if snapshot.MCPStatusSnapshotHash() == "" {
+		t.Fatal("snapshot MCP hash is empty")
+	}
+	if snapshot.MCPStatusSnapshotHash() == registry.Snapshot(context.Background()).MCPStatusSnapshotHash() {
+		t.Fatal("snapshot MCP hash did not change after live catalog mutation")
+	}
+}
+
+func fakeMCPTool(name, content string) Tool {
+	return Tool{
+		Spec: protocol.ToolSpec{
+			Name:        name,
+			Description: "fake MCP tool",
+			Parameters:  raw(`{"type":"object","properties":{},"additionalProperties":false}`),
+			Risk:        protocol.RiskExternal,
+		},
+		Handler: func(context.Context, json.RawMessage) (Result, error) {
+			return Result{Content: content}, nil
+		},
 	}
 }
 

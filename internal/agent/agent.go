@@ -339,11 +339,11 @@ func dangerousToolDisabledMessage() string {
 	return tools.DangerousToolDisabledMessage()
 }
 
-func (a *Agent) emitToolAudit(call protocol.ToolCall, emit func(protocol.Event)) {
-	if a == nil || a.tools == nil || emit == nil {
+func (a *Agent) emitToolAudit(call protocol.ToolCall, toolSet tools.ToolSet, emit func(protocol.Event)) {
+	if a == nil || emit == nil {
 		return
 	}
-	risk, ok := a.tools.Risk(call.Name)
+	risk, ok := toolSet.Risk(call.Name)
 	if !ok {
 		return
 	}
@@ -360,11 +360,11 @@ func (a *Agent) emitToolAudit(call protocol.ToolCall, emit func(protocol.Event))
 	}})
 }
 
-func (a *Agent) executeParallelToolBatch(ctx context.Context, orchestrator *toolOrchestrator, turnID string, round int, calls []protocol.ToolCall, start, end int, results []toolExecutionResult, emit func(protocol.Event)) {
+func (a *Agent) executeParallelToolBatch(ctx context.Context, orchestrator *toolOrchestrator, toolSet tools.ToolSet, turnID string, round int, calls []protocol.ToolCall, start, end int, results []toolExecutionResult, emit func(protocol.Event)) {
 	limit := a.runtime.MaxParallelTools
 	if limit <= 1 || end-start == 1 {
 		for i := start; i < end; i++ {
-			results[i] = a.executeOneTool(ctx, orchestrator, turnID, round, i, calls[i], false, "", 0, 0, emit)
+			results[i] = a.executeOneTool(ctx, orchestrator, toolSet, turnID, round, i, calls[i], false, "", 0, 0, emit)
 		}
 		return
 	}
@@ -374,7 +374,7 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, orchestrator *tool
 	batchID := agentStepID(turnID, protocol.StepKindToolBatch, start+1)
 	batchStarted := time.Now()
 	batchSize := end - start
-	rateBuckets := a.toolRateBuckets(calls, start, end)
+	rateBuckets := a.toolRateBuckets(toolSet, calls, start, end)
 	emit(protocol.Event{Type: protocol.EventStepStarted, Data: protocol.StepEvent{
 		TurnID:        turnID,
 		StepID:        batchID,
@@ -389,7 +389,7 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, orchestrator *tool
 	}})
 	for i := start; i < end; i++ {
 		attemptID := agentAttemptID(turnID, i)
-		emitToolStepStarted(emit, turnID, round, i, calls[i], true, batchID, batchSize, limit, orchestrator.StepMetadata(calls[i], attemptID, a.toolStepMetadata(calls[i], true, batchSize)))
+		emitToolStepStarted(emit, turnID, round, i, calls[i], true, batchID, batchSize, limit, orchestrator.StepMetadata(calls[i], attemptID, a.toolStepMetadata(toolSet, calls[i], true, batchSize)))
 		orchestrator.EmitAttemptStarted(calls[i], attemptID)
 	}
 	jobs := make(chan int)
@@ -401,7 +401,7 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, orchestrator *tool
 			defer wg.Done()
 			for idx := range jobs {
 				call := calls[idx]
-				release, waitMS, acquired := a.acquireToolRateBucket(ctx, rateBuckets, call)
+				release, waitMS, acquired := a.acquireToolRateBucket(ctx, toolSet, rateBuckets, call)
 				if !acquired {
 					done <- orchestrator.AbortBeforeExecute(idx, call, agentAttemptID(turnID, idx), ctx.Err())
 					continue
@@ -446,9 +446,9 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, orchestrator *tool
 	}})
 }
 
-func (a *Agent) executeOneTool(ctx context.Context, orchestrator *toolOrchestrator, turnID string, round, index int, call protocol.ToolCall, parallel bool, batchID string, batchSize, limit int, emit func(protocol.Event)) toolExecutionResult {
+func (a *Agent) executeOneTool(ctx context.Context, orchestrator *toolOrchestrator, toolSet tools.ToolSet, turnID string, round, index int, call protocol.ToolCall, parallel bool, batchID string, batchSize, limit int, emit func(protocol.Event)) toolExecutionResult {
 	attemptID := agentAttemptID(turnID, index)
-	emitToolStepStarted(emit, turnID, round, index, call, parallel, batchID, batchSize, limit, orchestrator.StepMetadata(call, attemptID, a.toolStepMetadata(call, parallel, batchSize)))
+	emitToolStepStarted(emit, turnID, round, index, call, parallel, batchID, batchSize, limit, orchestrator.StepMetadata(call, attemptID, a.toolStepMetadata(toolSet, call, parallel, batchSize)))
 	orchestrator.EmitAttemptStarted(call, attemptID)
 	result := orchestrator.Execute(ctx, turnID, index, call, attemptID)
 	emitToolStepCompleted(emit, turnID, round, result, parallel, batchID, batchSize, limit)
@@ -456,13 +456,13 @@ func (a *Agent) executeOneTool(ctx context.Context, orchestrator *toolOrchestrat
 	return result
 }
 
-func (a *Agent) toolRateBuckets(calls []protocol.ToolCall, start, end int) map[string]chan struct{} {
-	if a == nil || a.tools == nil {
+func (a *Agent) toolRateBuckets(toolSet tools.ToolSet, calls []protocol.ToolCall, start, end int) map[string]chan struct{} {
+	if a == nil {
 		return nil
 	}
 	limits := map[string]int{}
 	for i := start; i < end; i++ {
-		meta, ok := a.tools.ParallelMetadata(calls[i].Name)
+		meta, ok := toolSet.ParallelMetadata(calls[i].Name)
 		if !ok || meta.RateLimitKey == "" || meta.MaxConcurrency <= 0 {
 			continue
 		}
@@ -483,11 +483,11 @@ func (a *Agent) toolRateBuckets(calls []protocol.ToolCall, start, end int) map[s
 	return buckets
 }
 
-func (a *Agent) acquireToolRateBucket(ctx context.Context, buckets map[string]chan struct{}, call protocol.ToolCall) (func(), int64, bool) {
-	if len(buckets) == 0 || a == nil || a.tools == nil {
+func (a *Agent) acquireToolRateBucket(ctx context.Context, toolSet tools.ToolSet, buckets map[string]chan struct{}, call protocol.ToolCall) (func(), int64, bool) {
+	if len(buckets) == 0 || a == nil {
 		return nil, 0, true
 	}
-	meta, ok := a.tools.ParallelMetadata(call.Name)
+	meta, ok := toolSet.ParallelMetadata(call.Name)
 	if !ok || meta.RateLimitKey == "" {
 		return nil, 0, true
 	}
@@ -522,7 +522,7 @@ func emitToolStepStarted(emit func(protocol.Event), turnID string, round, index 
 	}})
 }
 
-func (a *Agent) toolStepMetadata(call protocol.ToolCall, parallel bool, batchSize int) map[string]any {
+func (a *Agent) toolStepMetadata(toolSet tools.ToolSet, call protocol.ToolCall, parallel bool, batchSize int) map[string]any {
 	metadata := map[string]any{}
 	if call.InvalidArgumentError != "" {
 		metadata["invalid_argument_error"] = call.InvalidArgumentError
@@ -532,13 +532,11 @@ func (a *Agent) toolStepMetadata(call protocol.ToolCall, parallel bool, batchSiz
 	var ok bool
 	var parallelMeta tools.ParallelMetadata
 	var hasParallelMeta bool
-	if a != nil && a.tools != nil {
-		risk, ok = a.tools.Risk(call.Name)
-		if ok {
-			metadata["risk"] = risk
-		}
-		parallelMeta, hasParallelMeta = a.tools.ParallelMetadata(call.Name)
+	risk, ok = toolSet.Risk(call.Name)
+	if ok {
+		metadata["risk"] = risk
 	}
+	parallelMeta, hasParallelMeta = toolSet.ParallelMetadata(call.Name)
 	parallelSafe := hasParallelMeta && parallelMeta.CanRunParallel()
 	if hasParallelMeta {
 		metadata["parallel_safe"] = parallelSafe
@@ -893,8 +891,8 @@ func trimUTF8Bytes(text string, maxBytes int) string {
 	return text
 }
 
-func (a *Agent) canRunToolParallel(call protocol.ToolCall) bool {
-	return a != nil && a.tools != nil && a.runtime.MaxParallelTools > 1 && a.tools.CanRunParallel(call.Name)
+func (a *Agent) canRunToolParallel(toolSet tools.ToolSet, call protocol.ToolCall) bool {
+	return a != nil && a.runtime.MaxParallelTools > 1 && toolSet.CanRunParallel(call.Name)
 }
 
 func PrettyEvent(event protocol.Event) string {

@@ -81,6 +81,7 @@ type Registry struct {
 	tools           map[string]Tool
 	mcpTools        map[string]Tool
 	mcpCatalog      mcpCatalogState
+	mcpStatuses     []mcpclient.ServerStatus
 	mcpUnsubscribe  func()
 	mcpMu           sync.RWMutex
 	manager         *mcpclient.Manager
@@ -257,8 +258,13 @@ func (r *Registry) MCPSettings() config.MCPSettings {
 }
 
 func (r *Registry) MCPStatuses() []mcpclient.ServerStatus {
-	if r == nil || r.manager == nil {
+	if r == nil {
 		return nil
+	}
+	if r.manager == nil {
+		r.mcpMu.RLock()
+		defer r.mcpMu.RUnlock()
+		return cloneMCPStatuses(r.mcpStatuses)
 	}
 	return r.manager.Statuses()
 }

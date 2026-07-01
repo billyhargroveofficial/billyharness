@@ -65,21 +65,26 @@ type Snapshot struct {
 }
 
 type SnapshotInput struct {
-	Provider   config.ProviderBinding
-	Profile    config.ProfileSelection
-	Runtime    config.RuntimeLimits
-	ToolPolicy config.ToolPolicySettings
-	MCP        config.MCPSettings
+	Provider              config.ProviderBinding
+	Profile               config.ProfileSelection
+	Runtime               config.RuntimeLimits
+	ToolPolicy            config.ToolPolicySettings
+	MCP                   config.MCPSettings
+	MCPStatusSnapshotHash string
 }
 
 func NewSnapshot(input SnapshotInput, messages []protocol.Message, specs []protocol.ToolSpec) Snapshot {
+	mcpHash := input.MCPStatusSnapshotHash
+	if mcpHash == "" {
+		mcpHash = mcpSnapshotHash(input.MCP)
+	}
 	return Snapshot{
 		ProviderID:              input.Provider.Provider.Provider,
 		ModelID:                 input.Provider.Model.Model,
 		ReasoningMode:           reasoningMode(input.Provider.Model),
 		ContextBudgetTokens:     input.Runtime.ContextWindowTokens,
 		ToolSnapshotHash:        toolSnapshotHash(specs),
-		MCPStatusSnapshotHash:   mcpSnapshotHash(input.MCP),
+		MCPStatusSnapshotHash:   mcpHash,
 		ProfileInstructionHash:  instructionHash(input.Profile, messages),
 		DangerousPermissionMode: dangerousPermissionMode(input.ToolPolicy),
 	}
