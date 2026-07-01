@@ -695,11 +695,35 @@ abuse.
     ./internal/...` passed.
   - commit: pending.
 
-- [ ] HR-03.9 Local custom slash prompt commands.
+- [x] HR-03.9 Local custom slash prompt commands.
   - maps to: `competitive-improvements-todo.md` A10.
   - acceptance: local markdown commands load from Billy home and workspace;
     built-ins cannot be shadowed; placeholders expand deterministically.
   - verification: `go test -count=1 ./internal/tui ./internal/promptcommands`.
+  - status: completed 2026-07-01.
+  - evidence: added `internal/promptcommands` for local Markdown prompt-command
+    loading from `$BILLYHARNESS_HOME/commands/*.md` and
+    `<workspace>/.billyharness/commands/*.md`, with simple frontmatter
+    (`description`, `argument_hint`), filename-derived command names,
+    deterministic `$ARGUMENTS` and `$1`..`$9` expansion, expansion byte caps,
+    and built-in/alias shadow protection. TUI now appends custom commands to the
+    slash popup and model-aware `/help`, and custom command invocation expands
+    back into the normal prompt send path so busy/gateway checks still apply.
+    Custom prompt command runs carry durable input metadata for the original
+    slash command, command source/scope, expanded prompt byte length, and
+    expanded prompt SHA-256 through gateway `/run` admission. No shell
+    interpolation, marketplace, model override, or allowed-tools frontmatter
+    was added.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/tui
+    ./internal/promptcommands ./internal/gateway ./internal/gatewayapi
+    ./internal/gatewayclient` passed; `/root/.local/go/bin/go test -count=1
+    ./internal/promptcommands ./internal/tui ./internal/gateway
+    ./internal/gatewayapi ./internal/gatewayclient ./internal/architecture`
+    passed; `/root/.local/go/bin/go test -run
+    'Test.*Custom.*Slash.*|Test.*CommandTemplate.*|Test.*Slash.*Popup.*|Test.*PromptCommand.*|Test.*SessionInputRequestFromRun.*'
+    -count=1 ./internal/...` passed.
+  - commit: pending.
 
 - [ ] HR-03.10 `user_prompt_submit` hook.
   - maps to: `competitive-improvements-todo.md` A11.

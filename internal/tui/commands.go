@@ -7,6 +7,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/promptcommands"
 )
 
 type slashCommand struct {
@@ -57,7 +60,7 @@ func (m Model) slashArgMode() (slashCommand, string, bool) {
 	if token == "" {
 		return slashCommand{}, "", false
 	}
-	for _, command := range slashCommands() {
+	for _, command := range m.slashCommands() {
 		if slashCommandMatches(command, token) && len(m.slashArgs(command)) > 0 {
 			return command, strings.ToLower(argPrefix), true
 		}
@@ -74,7 +77,7 @@ func (m Model) filteredSlashCommands() []slashCommand {
 	var prefix []slashCommand
 	var contains []slashCommand
 	var summary []slashCommand
-	for _, command := range slashCommands() {
+	for _, command := range m.slashCommands() {
 		name := strings.TrimPrefix(command.name, "/")
 		haystack := strings.ToLower(name + " " + command.args + " " + strings.Join(command.aliases, " "))
 		switch {
@@ -178,7 +181,7 @@ func (m Model) exactSlashCommand(prompt string) bool {
 	if len(fields) == 0 {
 		return false
 	}
-	for _, command := range slashCommands() {
+	for _, command := range m.slashCommands() {
 		if slashCommandMatches(command, fields[0]) {
 			return true
 		}
@@ -192,16 +195,19 @@ func (m *Model) handleSlashCommand(prompt string) (bool, tea.Cmd) {
 		return true, nil
 	}
 	command := strings.ToLower(fields[0])
-	arg := ""
+	rawArg := ""
 	if len(fields) > 1 {
-		arg = strings.ToLower(strings.Join(fields[1:], " "))
+		rawArg = strings.TrimSpace(strings.TrimPrefix(prompt, fields[0]))
 	}
 	action, ok := actionForSlash(command)
-	if !ok || !m.actionEnabled(action) || action.run == nil {
-		m.status = "unknown command " + fields[0]
-		return false, nil
+	if ok && m.actionEnabled(action) && action.run != nil {
+		return action.run(m, strings.ToLower(rawArg))
 	}
-	return action.run(m, arg)
+	if custom, ok := m.promptCommand(command); ok {
+		return m.runPromptCommand(custom, rawArg)
+	}
+	m.status = "unknown command " + fields[0]
+	return false, nil
 }
 
 func (m *Model) handleSlashNavigation(msg tea.KeyPressMsg) bool {
@@ -263,6 +269,101 @@ func (m *Model) handleSlashNavigation(msg tea.KeyPressMsg) bool {
 	}
 	m.clampSlashIndex(commands)
 	return false
+}
+
+func (m *Model) loadPromptCommands() {
+	commands, err := promptcommands.Load(promptcommands.LoadOptions{
+		HomeDir:        config.BillyHomeDir(),
+		WorkspaceRoots: m.toolPolicy.WorkspaceRoots,
+		BuiltIns:       builtInSlashNameSet(),
+	})
+	m.promptCommands = commands
+	m.promptCommandErr = ""
+	if err != nil {
+		m.promptCommandErr = err.Error()
+		if m.status == "" || m.status == "ready" {
+			m.status = "commands error: " + err.Error()
+		}
+	}
+}
+
+func (m Model) slashCommands() []slashCommand {
+	commands := slashCommands()
+	for _, command := range m.promptCommands {
+		name := "/" + command.Name
+		commands = append(commands, slashCommand{
+			id:       "prompt." + command.Name,
+			title:    command.Name,
+			category: "custom",
+			name:     name,
+			args:     command.ArgumentHint,
+			summary:  command.Description,
+		})
+	}
+	return commands
+}
+
+func (m Model) promptCommand(token string) (promptcommands.Command, bool) {
+	name := promptcommands.NormalizeName(token)
+	if name == "" {
+		return promptcommands.Command{}, false
+	}
+	for _, command := range m.promptCommands {
+		if command.Name == name {
+			return command, true
+		}
+	}
+	return promptcommands.Command{}, false
+}
+
+func (m *Model) runPromptCommand(command promptcommands.Command, arguments string) (bool, tea.Cmd) {
+	expanded, hash, err := promptcommands.Expand(command, arguments, promptcommands.ExpandOptions{})
+	if err != nil {
+		m.status = err.Error()
+		return true, nil
+	}
+	if strings.TrimSpace(expanded) == "" {
+		m.status = "empty prompt command " + command.Name
+		return true, nil
+	}
+	m.textarea.SetValue(expanded)
+	m.promptCommandMeta = promptCommandMetadata(command, arguments, expanded, hash)
+	model, cmd := m.submitPrompt(expanded)
+	if updated, ok := model.(Model); ok {
+		*m = updated
+	}
+	return true, cmd
+}
+
+func promptCommandMetadata(command promptcommands.Command, arguments, expanded, hash string) map[string]string {
+	original := "/" + command.Name
+	if strings.TrimSpace(arguments) != "" {
+		original += " " + strings.TrimSpace(arguments)
+	}
+	metadata := map[string]string{
+		"prompt_command":                 command.Name,
+		"prompt_command_original":        original,
+		"prompt_command_expanded_bytes":  strconv.Itoa(len([]byte(expanded))),
+		"prompt_command_expanded_sha256": hash,
+	}
+	if command.Scope != "" {
+		metadata["prompt_command_scope"] = command.Scope
+	}
+	if command.SourcePath != "" {
+		metadata["prompt_command_source"] = command.SourcePath
+	}
+	return metadata
+}
+
+func copyPromptMetadata(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		out[key] = value
+	}
+	return out
 }
 
 func (m *Model) clampSlashIndex(commands []slashCommand) {

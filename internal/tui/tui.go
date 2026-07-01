@@ -24,6 +24,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpstatus"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
+	"github.com/billyhargroveofficial/billyharness/internal/promptcommands"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	tuirender "github.com/billyhargroveofficial/billyharness/internal/tui/render"
 	tuiruntime "github.com/billyhargroveofficial/billyharness/internal/tui/runtimeclient"
@@ -82,6 +83,9 @@ type Model struct {
 	mcpSettings         config.MCPSettings
 	hookSettings        config.HookSettings
 	instructions        config.InstructionSettings
+	promptCommands      []promptcommands.Command
+	promptCommandErr    string
+	promptCommandMeta   map[string]string
 	gatewayURL          string
 	sessionID           string
 	lastGatewayEventSeq int64
@@ -366,6 +370,7 @@ func NewModel(cfg config.Config, opts Options) Model {
 		status:              status,
 	}
 	m.refreshConfigProjections()
+	m.loadPromptCommands()
 	m.messages = tuiruntime.InitialMessages(m.instructions)
 	_ = m.saveCurrentSession()
 	return m
@@ -826,16 +831,24 @@ func (m *Model) send() (tea.Model, tea.Cmd) {
 		m.reflow(m.followOutput)
 		return *m, cmd
 	}
+	return m.submitPrompt(prompt)
+}
+
+func (m *Model) submitPrompt(prompt string) (tea.Model, tea.Cmd) {
 	if m.busy {
 		m.status = "busy"
 		m.reflow(m.followOutput)
+		m.promptCommandMeta = nil
 		return *m, nil
 	}
 	if m.gatewayURL != "" && m.sessionID == "" {
 		m.status = "gateway session not ready"
 		m.reflow(m.followOutput)
+		m.promptCommandMeta = nil
 		return *m, nil
 	}
+	promptMetadata := copyPromptMetadata(m.promptCommandMeta)
+	m.promptCommandMeta = nil
 	m.textarea.SetValue("")
 	m.textarea.SetHeight(1)
 	m.addBlock("user", "USER", prompt)
@@ -849,7 +862,7 @@ func (m *Model) send() (tea.Model, tea.Cmd) {
 	}
 	_ = m.saveCurrentSession()
 	if m.gatewayURL != "" {
-		go m.runGateway(prompt)
+		go m.runGateway(prompt, promptMetadata)
 	} else {
 		go m.runLocal(prompt)
 	}

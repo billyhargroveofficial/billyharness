@@ -105,9 +105,9 @@ func (m Model) replayGatewayEventsCmd(fallbackCreate bool) tea.Cmd {
 	}
 }
 
-func (m Model) gatewayRunRequest(prompt string) gatewayapi.RunRequest {
+func (m Model) gatewayRunRequest(prompt string, metadata ...map[string]string) gatewayapi.RunRequest {
 	thinking := m.currentThinking()
-	return gatewayapi.RunRequest{
+	req := gatewayapi.RunRequest{
 		Prompt:          prompt,
 		Provider:        m.currentProvider(),
 		Model:           m.currentModel(),
@@ -117,6 +117,10 @@ func (m Model) gatewayRunRequest(prompt string) gatewayapi.RunRequest {
 		MaxToolRounds:   m.maxRounds,
 		AccessMode:      m.currentAccessMode(),
 	}
+	if len(metadata) > 0 {
+		req.Metadata = copyPromptMetadata(metadata[0])
+	}
+	return req
 }
 
 func (m Model) turnDiffPreviewCmd(changeID string) tea.Cmd {
@@ -181,8 +185,8 @@ func formatTurnDiffPreview(out gatewayapi.SessionUndoResponse) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m Model) runGateway(prompt string) {
-	runReq := m.gatewayRunRequest(prompt)
+func (m Model) runGateway(prompt string, metadata ...map[string]string) {
+	runReq := m.gatewayRunRequest(prompt, metadata...)
 	client := &gatewayclient.Client{BaseURL: m.gatewayURL, Client: http.DefaultClient}
 	result, err := client.RunSessionResult(context.Background(), m.sessionID, runReq, func(event protocol.Event) {
 		m.events <- streamEventMsg{event: event}

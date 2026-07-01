@@ -83,6 +83,27 @@ func TestNewServerFromSettingsClonesProjectionSettings(t *testing.T) {
 	}
 }
 
+func TestSessionInputRequestFromRunIncludesMetadata(t *testing.T) {
+	input := sessionInputRequestFromRun(RunRequest{
+		InputID:         "input-1",
+		Prompt:          "expanded prompt",
+		InterruptPolicy: "interrupt",
+		ClientID:        "tui",
+		Metadata: map[string]string{
+			"prompt_command":                 "review",
+			"prompt_command_original":        "/review internal/tui",
+			"prompt_command_expanded_sha256": "abc123",
+		},
+	})
+	if input.InputID != "input-1" || input.Prompt != "expanded prompt" || input.ClientID != "tui" {
+		t.Fatalf("input request = %#v", input)
+	}
+	if input.Metadata["prompt_command_original"] != "/review internal/tui" ||
+		input.Metadata["prompt_command_expanded_sha256"] != "abc123" {
+		t.Fatalf("metadata = %#v", input.Metadata)
+	}
+}
+
 func TestGatewaySessionCancelEndpointCancelsActiveThread(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"

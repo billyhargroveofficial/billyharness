@@ -808,6 +808,7 @@ func sessionInputRequestFromRun(req RunRequest) gatewayapi.SessionInputRequest {
 		Prompt:          req.Prompt,
 		InterruptPolicy: req.InterruptPolicy,
 		ClientID:        req.ClientID,
+		Metadata:        req.Metadata,
 	}
 }
 

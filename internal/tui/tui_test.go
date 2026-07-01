@@ -18,6 +18,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/clientux"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
+	"github.com/billyhargroveofficial/billyharness/internal/promptcommands"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/testkit"
 )
@@ -127,6 +128,68 @@ func TestSlashCommands(t *testing.T) {
 				t.Fatalf("%q reasoning = %q, want %q", tc.input, got, tc.wantThink)
 			}
 		}
+	}
+}
+
+func TestCustomPromptCommandsLoadPopupHelpAndRespectBuiltIns(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	writePromptCommand(t, filepath.Join(home, "commands", "review.md"), `---
+description: Review with focus
+argument_hint: [path]
+---
+Review $ARGUMENTS carefully. First target: $1
+`)
+	writePromptCommand(t, filepath.Join(root, ".billyharness", "commands", "help.md"), `This must not shadow help.`)
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	m := NewModel(cfg, Options{})
+	if _, ok := m.promptCommand("/review"); !ok {
+		t.Fatalf("custom command not loaded: %#v err=%q", m.promptCommands, m.promptCommandErr)
+	}
+	if _, ok := m.promptCommand("/help"); ok {
+		t.Fatalf("custom help command should not shadow built-in: %#v", m.promptCommands)
+	}
+	m.textarea.SetValue("/rev")
+	found := false
+	for _, command := range m.filteredSlashCommands() {
+		if command.name == "/review" && command.args == "[path]" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("filtered commands missing /review: %#v", m.filteredSlashCommands())
+	}
+	if help := m.helpText(); !strings.Contains(help, "/review [path]") || !strings.Contains(help, "Review with focus") {
+		t.Fatalf("help missing custom command:\n%s", help)
+	}
+	custom, _ := m.promptCommand("/review")
+	expanded, hash, err := promptcommands.Expand(custom, "internal/tui", promptcommands.ExpandOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := promptCommandMetadata(custom, "internal/tui", expanded, hash)
+	req := m.gatewayRunRequest(expanded, metadata)
+	if req.Metadata["prompt_command_original"] != "/review internal/tui" ||
+		req.Metadata["prompt_command_expanded_sha256"] != hash ||
+		req.Metadata["prompt_command_expanded_bytes"] == "" {
+		t.Fatalf("run metadata = %#v", req.Metadata)
+	}
+	metadata["prompt_command"] = "mutated"
+	if req.Metadata["prompt_command"] != "review" {
+		t.Fatalf("run metadata should be copied, got %#v", req.Metadata)
+	}
+	m.busy = true
+	handled, cmd := m.handleSlashCommand("/review internal/tui")
+	if !handled || cmd != nil {
+		t.Fatalf("custom command handled=%v cmd=%v", handled, cmd)
+	}
+	if got := m.textarea.Value(); !strings.Contains(got, "Review internal/tui carefully") || !strings.Contains(got, "First target: internal/tui") {
+		t.Fatalf("expanded prompt = %q", got)
+	}
+	if m.status != "busy" {
+		t.Fatalf("status = %q, want busy", m.status)
 	}
 }
 
@@ -660,6 +723,16 @@ func newTestModel(t testModelHelper) Model {
 	t.Helper()
 	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
 	return NewModel(config.Default(), Options{})
+}
+
+func writePromptCommand(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func goldenTraceEvents(t *testing.T) []protocol.Event {

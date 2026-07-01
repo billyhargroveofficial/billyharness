@@ -118,6 +118,11 @@ runs named commands from diagnostics settings or the built-in `go-test`
 default, parses common compiler locations, and stores raw output as an
 `output_ref`. See `docs/diagnostics.md`.
 
+Local TUI slash prompt commands load from `$BILLYHARNESS_HOME/commands/*.md`
+and `<workspace>/.billyharness/commands/*.md`. Built-ins cannot be shadowed,
+and `$ARGUMENTS` / `$1`..`$9` placeholders expand into the normal prompt send
+path. See `docs/commands.md`.
+
 Audit status is visible through:
 
 ```sh

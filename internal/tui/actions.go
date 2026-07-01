@@ -8,6 +8,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/clientux"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/promptcommands"
 )
 
 type actionSpec struct {
@@ -72,7 +73,7 @@ func actionRegistry() []actionSpec {
 			slash:    "/help",
 			summary:  "show commands and key bindings",
 			run: func(m *Model, _ string) (bool, tea.Cmd) {
-				m.addInfoBlock("HELP", helpText())
+				m.addInfoBlock("HELP", m.helpText())
 				m.status = "help shown"
 				return true, nil
 			},
@@ -613,6 +614,15 @@ func slashCommands() []slashCommand {
 	return commands
 }
 
+func builtInSlashNameSet() map[string]bool {
+	var names []string
+	for _, command := range slashCommands() {
+		names = append(names, command.name)
+		names = append(names, command.aliases...)
+	}
+	return promptcommands.BuiltInNameSet(names)
+}
+
 func actionForSlash(token string) (actionSpec, bool) {
 	token = strings.ToLower(strings.TrimSpace(token))
 	for _, action := range actionRegistry() {
@@ -708,6 +718,18 @@ func helpText() string {
 		lines = append(lines, fmt.Sprintf("%-42s %s", usage, action.summary))
 	}
 	lines = append(lines, keybindingHelpLines()...)
+	return strings.Join(lines, "\n")
+}
+
+func (m Model) helpText() string {
+	lines := []string{helpText()}
+	for _, command := range m.promptCommands {
+		usage := "/" + command.Name
+		if command.ArgumentHint != "" {
+			usage += " " + command.ArgumentHint
+		}
+		lines = append(lines, fmt.Sprintf("%-42s %s", usage, command.Description))
+	}
 	return strings.Join(lines, "\n")
 }
 
