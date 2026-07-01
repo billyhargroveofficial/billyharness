@@ -1086,6 +1086,81 @@ func TestDiffCommandRequestsGatewayPreview(t *testing.T) {
 	}
 }
 
+func TestUndoRedoCommandsRequestGatewayApply(t *testing.T) {
+	var undoReq gatewayapi.SessionUndoRequest
+	var redoCalled bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %q", r.Method)
+		}
+		switch r.URL.Path {
+		case "/v1/sessions/session-1/undo":
+			if err := json.NewDecoder(r.Body).Decode(&undoReq); err != nil {
+				t.Fatal(err)
+			}
+			_ = json.NewEncoder(w).Encode(gatewayapi.SessionUndoResponse{
+				ChangeID:      "change-1",
+				RestoredFiles: []string{"/workspace/README.md"},
+				Change: protocol.TurnChangeEvent{
+					ChangeID:   "change-1",
+					Status:     "reverted",
+					FileCount:  1,
+					Modified:   1,
+					Reversible: true,
+					Files:      []protocol.TurnChangeFile{{RelPath: "README.md", Change: "modified", Reversible: true}},
+				},
+			})
+		case "/v1/sessions/session-1/redo":
+			redoCalled = true
+			_ = json.NewEncoder(w).Encode(gatewayapi.SessionUndoResponse{
+				ChangeID:      "change-1",
+				RestoredFiles: []string{"/workspace/README.md"},
+				Change: protocol.TurnChangeEvent{
+					ChangeID:   "change-1",
+					Status:     "redone",
+					FileCount:  1,
+					Modified:   1,
+					Reversible: true,
+					Files:      []protocol.TurnChangeFile{{RelPath: "README.md", Change: "modified", Reversible: true}},
+				},
+			})
+		default:
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	m := newTestModel(t)
+	m.gatewayURL = server.URL
+	m.sessionID = "session-1"
+	handled, cmd := m.handleSlashCommand("/undo change-1")
+	if !handled || cmd == nil {
+		t.Fatalf("undo handled=%v cmd=%v", handled, cmd)
+	}
+	undoMsg := cmd().(turnUndoMsg)
+	if undoMsg.err != nil {
+		t.Fatal(undoMsg.err)
+	}
+	if undoReq.ChangeID != "change-1" || undoReq.Preview {
+		t.Fatalf("undo request = %#v", undoReq)
+	}
+	if !strings.Contains(undoMsg.text, "status: reverted") || !strings.Contains(undoMsg.text, "undo files:") {
+		t.Fatalf("undo text = %q", undoMsg.text)
+	}
+
+	handled, cmd = m.handleSlashCommand("/redo")
+	if !handled || cmd == nil {
+		t.Fatalf("redo handled=%v cmd=%v", handled, cmd)
+	}
+	redoMsg := cmd().(turnRedoMsg)
+	if redoMsg.err != nil {
+		t.Fatal(redoMsg.err)
+	}
+	if !redoCalled || !strings.Contains(redoMsg.text, "status: redone") || !strings.Contains(redoMsg.text, "redo files:") {
+		t.Fatalf("redoCalled=%v text=%q", redoCalled, redoMsg.text)
+	}
+}
+
 func TestContextThresholdEventRendersContextBlock(t *testing.T) {
 	m := newTestModel(t)
 	m.applyEvent(protocol.Event{Type: protocol.EventContextThreshold, Data: protocol.ContextThresholdEvent{

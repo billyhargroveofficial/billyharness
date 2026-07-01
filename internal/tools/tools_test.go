@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -190,6 +191,63 @@ func TestDangerousToolsCanBeDisabled(t *testing.T) {
 		if _, err := registry.Call(context.Background(), call); err == nil || !strings.Contains(err.Error(), "disabled") {
 			t.Fatalf("%s expected disabled error, got %v", call.Name, err)
 		}
+	}
+}
+
+func TestShellExecBlocksDestructiveGitCommands(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.AutoApproveDangerous = true
+	registry := NewRegistry(cfg)
+	for _, tc := range []struct {
+		name string
+		argv []string
+		want string
+	}{
+		{name: "reset hard", argv: []string{"git", "reset", "--hard"}, want: "git reset --hard"},
+		{name: "clean force", argv: []string{"git", "clean", "-fd"}, want: "git clean -f"},
+		{name: "checkout workspace", argv: []string{"git", "checkout", "."}, want: "git checkout ."},
+		{name: "restore workspace through shell", argv: []string{"sh", "-c", "git restore ."}, want: "git restore ."},
+		{name: "stash clear", argv: []string{"git", "stash", "clear"}, want: "git stash clear"},
+		{name: "force push", argv: []string{"git", "push", "--force-with-lease"}, want: "git push --force"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := registry.Call(context.Background(), protocol.ToolCall{
+				Name:      "shell_exec",
+				Arguments: rawArgs(map[string]any{"argv": tc.argv}),
+			})
+			if err == nil || !strings.Contains(err.Error(), "destructive git command blocked") || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want blocked %q", err, tc.want)
+			}
+			if !result.IsError || result.ErrorCode != "destructive_git_command" || result.Metadata["guardrail"] != "destructive_git" {
+				t.Fatalf("result = %#v", result)
+			}
+		})
+	}
+}
+
+func TestShellExecAllowsHarmlessGitStatus(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	if err := exec.Command("git", "init", root).Run(); err != nil {
+		t.Skipf("git init failed: %v", err)
+	}
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.AutoApproveDangerous = true
+	registry := NewRegistry(cfg)
+	result, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "shell_exec",
+		Arguments: rawArgs(map[string]any{"argv": []string{"git", "status", "--short"}}),
+	})
+	if err != nil {
+		t.Fatalf("git status should not be blocked, result=%#v err=%v", result, err)
+	}
+	if result.IsError || result.ErrorCode != "" {
+		t.Fatalf("result = %#v", result)
 	}
 }
 

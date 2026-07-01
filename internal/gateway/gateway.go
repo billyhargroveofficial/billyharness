@@ -309,6 +309,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/sessions/{id}/user_input/{request_id}/answer", s.handleUserInputAnswer)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/user_input/{request_id}/reject", s.handleUserInputReject)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/undo", s.handleSessionUndo)
+	s.mux.HandleFunc("POST /v1/sessions/{id}/redo", s.handleSessionRedo)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/cancel", s.handleSessionCancel)
 }
 
@@ -916,13 +917,24 @@ func (s *Server) handleSessionUndo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "session turn changes are unavailable without a session store")
 		return
 	}
-	stored, ok, err := s.store.FindTurnChange(session.ID, req.ChangeID)
+	var stored storedTurnChange
+	var found bool
+	var err error
+	if req.Preview {
+		stored, found, err = s.store.FindTurnChange(session.ID, req.ChangeID)
+	} else {
+		stored, found, err = s.store.FindUndoableTurnChange(session.ID, req.ChangeID)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "turn change replay failed: "+err.Error())
 		return
 	}
-	if !ok {
-		writeError(w, http.StatusNotFound, "turn change not found")
+	if !found {
+		if req.Preview {
+			writeError(w, http.StatusNotFound, "turn change not found")
+		} else {
+			writeError(w, http.StatusNotFound, "undoable turn change not found")
+		}
 		return
 	}
 	record, err := checkpoint.Load(stored.Data.PatchOutputRef)
@@ -961,6 +973,67 @@ func (s *Server) handleSessionUndo(w http.ResponseWriter, r *http.Request) {
 	change.Summary = "reverted " + change.ChangeID
 	session.publish(protocol.Event{
 		Type:      protocol.EventTurnChangeReverted,
+		RunID:     change.RunID,
+		TurnID:    change.TurnID,
+		StepID:    change.StepID,
+		CallID:    change.CallID,
+		AttemptID: change.AttemptID,
+		Data:      change,
+	})
+	writeJSON(w, http.StatusOK, gatewayapi.SessionUndoResponse{
+		ChangeID:      stored.Data.ChangeID,
+		RestoredFiles: result.RestoredFiles,
+		Change:        change,
+	})
+}
+
+func (s *Server) handleSessionRedo(w http.ResponseWriter, r *http.Request) {
+	session, ok := s.session(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	if session.Status().Running || (session.Thread != nil && session.Thread.Running()) {
+		writeError(w, http.StatusConflict, "redo denied during active run; cancel or wait for the run to finish first")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusNotFound, "session turn changes are unavailable without a session store")
+		return
+	}
+	stored, ok, err := s.store.FindRedoTurnChange(session.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "turn change replay failed: "+err.Error())
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "redo change not found")
+		return
+	}
+	record, err := checkpoint.Load(stored.Data.PatchOutputRef)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "checkpoint load failed: "+err.Error())
+		return
+	}
+	result, err := checkpoint.Redo(record)
+	if err != nil {
+		resp := gatewayapi.SessionUndoResponse{
+			ChangeID:  stored.Data.ChangeID,
+			Conflicts: result.Conflicts,
+			Change:    stored.Data,
+		}
+		if errors.Is(err, checkpoint.ErrConflict) {
+			writeJSON(w, http.StatusConflict, resp)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "checkpoint redo failed: "+err.Error())
+		return
+	}
+	change := stored.Data
+	change.Status = "redone"
+	change.Summary = "redone " + change.ChangeID
+	session.publish(protocol.Event{
+		Type:      protocol.EventTurnChangeRecorded,
 		RunID:     change.RunID,
 		TurnID:    change.TurnID,
 		StepID:    change.StepID,

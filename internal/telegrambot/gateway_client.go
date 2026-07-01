@@ -83,6 +83,14 @@ func (c *GatewayClient) PreviewSessionUndo(ctx context.Context, sessionID, chang
 	return c.gatewayClient().PreviewSessionUndo(ctx, sessionID, changeID)
 }
 
+func (c *GatewayClient) UndoSession(ctx context.Context, sessionID, changeID string) (gatewayapi.SessionUndoResponse, error) {
+	return c.gatewayClient().UndoSession(ctx, sessionID, gatewayapi.SessionUndoRequest{ChangeID: changeID})
+}
+
+func (c *GatewayClient) RedoSession(ctx context.Context, sessionID string) (gatewayapi.SessionUndoResponse, error) {
+	return c.gatewayClient().RedoSession(ctx, sessionID)
+}
+
 func (c *GatewayClient) MCPStatus(ctx context.Context) (string, error) {
 	resp, err := gatewayclient.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/mcp", nil)

@@ -114,6 +114,29 @@ func actionRegistry() []actionSpec {
 			},
 		},
 		{
+			id:        "undo.apply",
+			title:     "Undo Change",
+			category:  "session",
+			slash:     "/undo",
+			slashArgs: "[change_id]",
+			summary:   "revert latest or named turn change",
+			run: func(m *Model, arg string) (bool, tea.Cmd) {
+				m.status = "undoing turn change"
+				return true, m.turnUndoCmd(arg)
+			},
+		},
+		{
+			id:       "redo.apply",
+			title:    "Redo Change",
+			category: "session",
+			slash:    "/redo",
+			summary:  "reapply last undone turn change",
+			run: func(m *Model, _ string) (bool, tea.Cmd) {
+				m.status = "redoing turn change"
+				return true, m.turnRedoCmd()
+			},
+		},
+		{
 			id:       "config.show",
 			title:    "Show Config",
 			category: "setup",

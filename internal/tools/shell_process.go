@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -67,10 +68,141 @@ func (r *Registry) handleShellExec(ctx context.Context, args json.RawMessage) (R
 	if err != nil {
 		return Result{}, err
 	}
+	if reason, blocked := destructiveGitCommandReason(in.Argv); blocked {
+		result := errorResult("destructive_git_command", reason)
+		result.Metadata = map[string]any{
+			"guardrail": "destructive_git",
+			"argv":      append([]string(nil), in.Argv...),
+		}
+		return result, fmt.Errorf("%s", reason)
+	}
 	if in.Background {
 		return r.startManagedShell(in, cwd)
 	}
 	return runForegroundShell(ctx, in, cwd, explicitMaxOutput)
+}
+
+func destructiveGitCommandReason(argv []string) (string, bool) {
+	args, ok := gitArgsFromShellArgv(argv)
+	if !ok || len(args) == 0 {
+		return "", false
+	}
+	subcommand := strings.ToLower(strings.TrimSpace(args[0]))
+	rest := args[1:]
+	switch subcommand {
+	case "reset":
+		if hasLongFlag(rest, "--hard") {
+			return "destructive git command blocked: git reset --hard would bypass checkpoint/redo safety", true
+		}
+	case "clean":
+		if hasShortFlag(rest, 'f') || hasLongFlag(rest, "--force") {
+			return "destructive git command blocked: git clean -f would bypass checkpoint/redo safety", true
+		}
+	case "checkout":
+		if hasWorkspacePathspec(rest) {
+			return "destructive git command blocked: git checkout . would bypass checkpoint/redo safety", true
+		}
+	case "restore":
+		if hasWorkspacePathspec(rest) {
+			return "destructive git command blocked: git restore . would bypass checkpoint/redo safety", true
+		}
+	case "stash":
+		if len(rest) > 0 {
+			switch strings.ToLower(strings.TrimSpace(rest[0])) {
+			case "drop", "clear":
+				return "destructive git command blocked: git stash " + strings.ToLower(strings.TrimSpace(rest[0])) + " would bypass checkpoint/redo safety", true
+			}
+		}
+	case "push":
+		if hasShortFlag(rest, 'f') || hasLongFlagPrefix(rest, "--force") {
+			return "destructive git command blocked: git push --force would bypass checkpoint/redo safety", true
+		}
+	}
+	return "", false
+}
+
+func gitArgsFromShellArgv(argv []string) ([]string, bool) {
+	if len(argv) == 0 {
+		return nil, false
+	}
+	if isGitCommand(argv[0]) {
+		return argv[1:], true
+	}
+	if !isShellCommand(argv[0]) {
+		return nil, false
+	}
+	for i := 1; i < len(argv)-1; i++ {
+		if shellOptionRunsCommand(argv[i]) {
+			fields := strings.Fields(argv[i+1])
+			if len(fields) > 0 && isGitCommand(fields[0]) {
+				return fields[1:], true
+			}
+			return nil, false
+		}
+	}
+	return nil, false
+}
+
+func isGitCommand(command string) bool {
+	return strings.EqualFold(filepath.Base(strings.TrimSpace(command)), "git")
+}
+
+func isShellCommand(command string) bool {
+	switch strings.ToLower(filepath.Base(strings.TrimSpace(command))) {
+	case "sh", "bash", "zsh", "dash":
+		return true
+	default:
+		return false
+	}
+}
+
+func shellOptionRunsCommand(arg string) bool {
+	arg = strings.TrimSpace(arg)
+	return strings.HasPrefix(arg, "-") && strings.Contains(arg[1:], "c")
+}
+
+func hasLongFlag(args []string, flag string) bool {
+	for _, arg := range args {
+		if strings.EqualFold(strings.TrimSpace(arg), flag) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasLongFlagPrefix(args []string, prefix string) bool {
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if strings.EqualFold(arg, prefix) || strings.HasPrefix(strings.ToLower(arg), strings.ToLower(prefix)) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasShortFlag(args []string, flag rune) bool {
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if len(arg) < 2 || !strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "--") {
+			continue
+		}
+		for _, r := range arg[1:] {
+			if r == flag {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasWorkspacePathspec(args []string) bool {
+	for _, arg := range args {
+		switch strings.TrimSpace(arg) {
+		case ".", ":/":
+			return true
+		}
+	}
+	return false
 }
 
 func parseShellExecInput(args json.RawMessage) (shellExecInput, bool, error) {

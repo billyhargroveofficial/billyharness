@@ -42,6 +42,48 @@ func TestCheckpointRestorePreservesDirtyPreRunContent(t *testing.T) {
 	}
 }
 
+func TestCheckpointRedoRestoresAfterStateAndDetectsConflicts(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "file.txt")
+	if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tracker, tracked, err := Begin(DefaultOptions([]string{root}), "fs_write_file", rawArgs(map[string]any{"path": "file.txt"}))
+	if err != nil || !tracked {
+		t.Fatalf("begin tracked=%v err=%v", tracked, err)
+	}
+	if err := os.WriteFile(path, []byte("after\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	record, changed, err := tracker.Complete("turn-001", "step-001", "call-001", "attempt-001")
+	if err != nil || !changed {
+		t.Fatalf("complete changed=%v err=%v", changed, err)
+	}
+	if _, err := Restore(record); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	result, err := Redo(record)
+	if err != nil {
+		t.Fatalf("redo: %v conflicts=%v", err, result.Conflicts)
+	}
+	if got := readCheckpointFile(t, path); got != "after\n" {
+		t.Fatalf("redone content = %q", got)
+	}
+	if _, err := Restore(record); err != nil {
+		t.Fatalf("restore second time: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("user after undo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err = Redo(record)
+	if !errors.Is(err, ErrConflict) || len(result.Conflicts) == 0 {
+		t.Fatalf("redo err=%v result=%#v", err, result)
+	}
+	if got := readCheckpointFile(t, path); got != "user after undo\n" {
+		t.Fatalf("redo conflict mutated file: %q", got)
+	}
+}
+
 func TestCheckpointPreviewWritesNothing(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "new.txt")
@@ -137,6 +179,15 @@ func TestCheckpointShellChangedDetectsCreatedModifiedDeletedFiles(t *testing.T) 
 	if record.Stats.Added != 1 || record.Stats.Modified != 1 || record.Stats.Deleted != 1 {
 		t.Fatalf("stats = %#v files=%#v", record.Stats, record.Files)
 	}
+}
+
+func readCheckpointFile(t *testing.T, path string) string {
+	t.Helper()
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(bytes)
 }
 
 func rawArgs(value map[string]any) json.RawMessage {

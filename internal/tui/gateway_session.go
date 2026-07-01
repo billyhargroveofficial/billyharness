@@ -131,6 +131,20 @@ func (m Model) turnDiffPreviewCmd(changeID string) tea.Cmd {
 	}
 }
 
+func (m Model) turnUndoCmd(changeID string) tea.Cmd {
+	return func() tea.Msg {
+		text, err := m.loadTurnUndo(changeID)
+		return turnUndoMsg{text: text, err: err}
+	}
+}
+
+func (m Model) turnRedoCmd() tea.Cmd {
+	return func() tea.Msg {
+		text, err := m.loadTurnRedo()
+		return turnRedoMsg{text: text, err: err}
+	}
+}
+
 func (m Model) answerUserInputCmd(requestID, answer string) tea.Cmd {
 	sessionID := strings.TrimSpace(m.sessionID)
 	return func() tea.Msg {
@@ -172,6 +186,42 @@ func (m Model) loadTurnDiffPreview(changeID string) (string, error) {
 	return formatTurnDiffPreview(out), nil
 }
 
+func (m Model) loadTurnUndo(changeID string) (string, error) {
+	if strings.TrimSpace(m.gatewayURL) == "" {
+		return "", fmt.Errorf("undo requires gateway mode")
+	}
+	sessionID := strings.TrimSpace(m.sessionID)
+	if sessionID == "" {
+		return "", fmt.Errorf("gateway session is not ready")
+	}
+	body, err := json.Marshal(gatewayapi.SessionUndoRequest{ChangeID: strings.TrimSpace(changeID)})
+	if err != nil {
+		return "", err
+	}
+	var out gatewayapi.SessionUndoResponse
+	path := fmt.Sprintf("/v1/sessions/%s/undo", url.PathEscape(sessionID))
+	if err := m.gatewayJSON(http.MethodPost, path, body, &out); err != nil {
+		return "", err
+	}
+	return formatTurnChangeApply("Undo", out), nil
+}
+
+func (m Model) loadTurnRedo() (string, error) {
+	if strings.TrimSpace(m.gatewayURL) == "" {
+		return "", fmt.Errorf("redo requires gateway mode")
+	}
+	sessionID := strings.TrimSpace(m.sessionID)
+	if sessionID == "" {
+		return "", fmt.Errorf("gateway session is not ready")
+	}
+	var out gatewayapi.SessionUndoResponse
+	path := fmt.Sprintf("/v1/sessions/%s/redo", url.PathEscape(sessionID))
+	if err := m.gatewayJSON(http.MethodPost, path, []byte{}, &out); err != nil {
+		return "", err
+	}
+	return formatTurnChangeApply("Redo", out), nil
+}
+
 func formatTurnDiffPreview(out gatewayapi.SessionUndoResponse) string {
 	var lines []string
 	if strings.TrimSpace(out.Change.ChangeID) != "" {
@@ -200,6 +250,37 @@ func formatTurnDiffPreview(out gatewayapi.SessionUndoResponse) string {
 	}
 	if len(lines) == 0 {
 		return "No turn diff preview is available."
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatTurnChangeApply(label string, out gatewayapi.SessionUndoResponse) string {
+	var lines []string
+	if strings.TrimSpace(out.Change.ChangeID) != "" {
+		lines = append(lines, toolrender.TurnChangeDetails(out.Change))
+	} else if strings.TrimSpace(out.ChangeID) != "" {
+		lines = append(lines, "change: "+strings.TrimSpace(out.ChangeID))
+	}
+	if len(out.RestoredFiles) > 0 {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, strings.ToLower(label)+" files:")
+		for _, file := range out.RestoredFiles {
+			lines = append(lines, "- "+file)
+		}
+	}
+	if len(out.Conflicts) > 0 {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, "conflicts:")
+		for _, conflict := range out.Conflicts {
+			lines = append(lines, "- "+conflict)
+		}
+	}
+	if len(lines) == 0 {
+		return label + " completed."
 	}
 	return strings.Join(lines, "\n")
 }

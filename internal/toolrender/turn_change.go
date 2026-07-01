@@ -75,6 +75,9 @@ func TurnChangeDetails(change protocol.TurnChangeEvent) string {
 	if change.ChangeID != "" {
 		lines = append(lines, "change: "+change.ChangeID)
 	}
+	if change.Status != "" {
+		lines = append(lines, "status: "+change.Status)
+	}
 	if change.ToolName != "" {
 		lines = append(lines, "tool: "+change.ToolName)
 	}

@@ -264,6 +264,84 @@ func TestTelegramDiffCommandPreviewsTurnDiff(t *testing.T) {
 	}
 }
 
+func TestTelegramUndoRedoCommandsApplyTurnChanges(t *testing.T) {
+	var sentTexts []string
+	harness := &telegramSessionHarness{
+		undo: gatewayapi.SessionUndoResponse{
+			ChangeID:      "change-1",
+			RestoredFiles: []string{"/workspace/README.md"},
+			Change: protocol.TurnChangeEvent{
+				ChangeID:   "change-1",
+				Status:     "reverted",
+				ToolName:   "fs_write_file",
+				FileCount:  1,
+				Modified:   1,
+				Reversible: true,
+				Files:      []protocol.TurnChangeFile{{RelPath: "README.md", Change: "modified", Reversible: true}},
+			},
+		},
+		redo: gatewayapi.SessionUndoResponse{
+			ChangeID:      "change-1",
+			RestoredFiles: []string{"/workspace/README.md"},
+			Change: protocol.TurnChangeEvent{
+				ChangeID:   "change-1",
+				Status:     "redone",
+				ToolName:   "fs_write_file",
+				FileCount:  1,
+				Modified:   1,
+				Reversible: true,
+				Files:      []protocol.TurnChangeFile{{RelPath: "README.md", Change: "modified", Reversible: true}},
+			},
+		},
+	}
+	client := newTelegramAPIClient(t, "bottoken", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			text, _ := payload["text"].(string)
+			sentTexts = append(sentTexts, text)
+			writeTelegramResult(w, SentMessage{MessageID: 12, Chat: Chat{ID: 123}})
+		},
+	})
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      t.TempDir() + "/state.json",
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bot.setChatState(userChatKey(123, 0, 1001), ChatState{SessionID: "session-1"})
+	msg := Message{Chat: Chat{ID: 123}, From: &User{ID: 1001}}
+
+	msg.Text = "/undo change-1"
+	bot.handleMessage(context.Background(), msg)
+	msg.Text = "/redo"
+	bot.handleMessage(context.Background(), msg)
+
+	if len(sentTexts) != 2 {
+		t.Fatalf("sent texts = %#v", sentTexts)
+	}
+	for _, want := range []string{"<b>Undo</b>", "status: reverted", "undo files:"} {
+		if !strings.Contains(sentTexts[0], want) {
+			t.Fatalf("undo text missing %q:\n%s", want, sentTexts[0])
+		}
+	}
+	for _, want := range []string{"<b>Redo</b>", "status: redone", "redo files:"} {
+		if !strings.Contains(sentTexts[1], want) {
+			t.Fatalf("redo text missing %q:\n%s", want, sentTexts[1])
+		}
+	}
+	harness.mu.Lock()
+	undoSession, undoChangeID, redoSession := harness.undoSession, harness.undoChangeID, harness.redoSession
+	harness.mu.Unlock()
+	if undoSession != "session-1" || undoChangeID != "change-1" || redoSession != "session-1" {
+		t.Fatalf("undo session=%q change=%q redo session=%q", undoSession, undoChangeID, redoSession)
+	}
+}
+
 func TestTelegramResumeListsAndSelectsGatewaySession(t *testing.T) {
 	var sentTexts []string
 	statePath := t.TempDir() + "/state.json"

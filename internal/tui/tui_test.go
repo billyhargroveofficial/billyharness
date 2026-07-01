@@ -635,17 +635,29 @@ func TestProfileSlashCommandStartsNewProfileChat(t *testing.T) {
 		t.Fatalf("profile switch should start a new chat")
 	}
 	assertFreshChatRuntimeState(t, m)
-	if len(m.messages) != 1 {
-		t.Fatalf("custom missing profile should fall back to base system only, got %#v", m.messages)
+	if len(m.messages) == 0 || m.messages[0].Role != protocol.RoleSystem {
+		t.Fatalf("custom missing profile should keep base system message, got %#v", m.messages)
+	}
+	if tuiMessagesContain(m.messages, "# Billyharness profile:") {
+		t.Fatalf("custom missing profile should not inject a profile fragment, got %#v", m.messages)
 	}
 
 	handled, _ = m.handleSlashCommand("/profile billy")
 	if !handled {
 		t.Fatal("/profile billy failed")
 	}
-	if len(m.messages) != 2 || !strings.Contains(m.messages[1].Content, "# Billyharness profile: billy") {
+	if !tuiMessagesContain(m.messages, "# Billyharness profile: billy") {
 		t.Fatalf("billy profile not injected: %#v", m.messages)
 	}
+}
+
+func tuiMessagesContain(messages []protocol.Message, needle string) bool {
+	for _, message := range messages {
+		if strings.Contains(message.Content, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestNewChatClearsGatewayAndAccountingState(t *testing.T) {

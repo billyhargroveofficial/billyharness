@@ -211,6 +211,16 @@ type turnDiffPreviewMsg struct {
 	err  error
 }
 
+type turnUndoMsg struct {
+	text string
+	err  error
+}
+
+type turnRedoMsg struct {
+	text string
+	err  error
+}
+
 type userInputAnswerMsg struct {
 	requestID string
 	status    string
@@ -590,6 +600,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.addInfoBlock("DIFF", msg.text)
 			m.status = "diff preview shown"
+		}
+		reflow = true
+		gotoBottom = m.followOutput
+	case turnUndoMsg:
+		if msg.err != nil {
+			m.addBlock("error", "UNDO", msg.err.Error())
+			m.status = "undo failed"
+		} else {
+			m.addInfoBlock("UNDO", msg.text)
+			m.status = "undo applied"
+		}
+		reflow = true
+		gotoBottom = m.followOutput
+	case turnRedoMsg:
+		if msg.err != nil {
+			m.addBlock("error", "REDO", msg.err.Error())
+			m.status = "redo failed"
+		} else {
+			m.addInfoBlock("REDO", msg.text)
+			m.status = "redo applied"
 		}
 		reflow = true
 		gotoBottom = m.followOutput

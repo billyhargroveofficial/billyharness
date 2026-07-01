@@ -960,11 +960,35 @@ platform.
 Goal: implement only after the smaller contracts are stable and tests prove the
 need.
 
-- [ ] HR-05.1 Redo state and destructive git command guardrails.
+- [x] HR-05.1 Redo state and destructive git command guardrails.
   - maps to: `competitive-improvements-todo.md` A12.
   - dependency: HR-02.2.
   - acceptance: one linear redo stack; destructive git shell commands are
     blocked or require explicit approval.
+  - verification: `go test -count=1 ./internal/checkpoint ./internal/session ./internal/gateway ./internal/tui ./internal/telegrambot ./internal/tools ./internal/toolrender`.
+  - status: completed 2026-07-01.
+  - evidence: added direction-aware checkpoint redo that restores recorded
+    `After` state only when the current workspace still matches the reverted
+    `Before` state. Gateway undo now skips already-reverted changes, `/redo`
+    restores the last undone patch, emits a redone `turn.change_recorded`
+    event to clear the redo candidate, and session inspection exposes
+    turn-change status/files/stats plus redo availability. TUI and Telegram now
+    expose `/undo [change_id]` and `/redo` over the gateway, with shared
+    turn-change status rendering. `shell_exec` blocks recognizable destructive
+    git commands (`reset --hard`, `clean -f`, workspace `checkout`/`restore`,
+    `stash drop|clear`, and force push) before foreground or background
+    execution while allowing harmless `git status`.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*Redo.*|Test.*Destructive.*Git.*|Test.*Git.*Guardrail.*' -count=1
+    ./internal/...` passed; `/root/.local/go/bin/go test -count=1
+    ./internal/checkpoint ./internal/session ./internal/gateway ./internal/tui
+    ./internal/telegrambot ./internal/tools ./internal/toolrender
+    ./internal/gatewayclient ./internal/clientux` passed. During verification,
+    the package suite exposed a stale TUI profile-switch assertion that assumed
+    project context was absent; the test was updated to assert no profile
+    fragment is injected while allowing the existing project-context message.
+  - commit: pending.
 
 - [ ] HR-05.2 Minimal stateless subagent tools.
   - maps to: `competitive-improvements-todo.md` A14.

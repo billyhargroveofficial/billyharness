@@ -85,17 +85,36 @@ type StoredSessionHistoryInspection struct {
 }
 
 type StoredSessionEventsInspection struct {
-	Path                  string         `json:"path,omitempty"`
-	Exists                bool           `json:"exists"`
-	Records               int            `json:"records,omitempty"`
-	LastSeq               int64          `json:"last_seq,omitempty"`
-	LastEvent             string         `json:"last_event,omitempty"`
-	OutputRefs            int            `json:"output_refs,omitempty"`
-	OutputRefsVerified    bool           `json:"output_refs_verified,omitempty"`
-	OutputRefBytes        int64          `json:"output_ref_bytes,omitempty"`
-	MissingOutputRefs     int            `json:"missing_output_refs,omitempty"`
-	OutputRefHashMismatch int            `json:"output_ref_hash_mismatch,omitempty"`
-	EventTypes            map[string]int `json:"event_types,omitempty"`
+	Path                  string                              `json:"path,omitempty"`
+	Exists                bool                                `json:"exists"`
+	Records               int                                 `json:"records,omitempty"`
+	LastSeq               int64                               `json:"last_seq,omitempty"`
+	LastEvent             string                              `json:"last_event,omitempty"`
+	OutputRefs            int                                 `json:"output_refs,omitempty"`
+	OutputRefsVerified    bool                                `json:"output_refs_verified,omitempty"`
+	OutputRefBytes        int64                               `json:"output_ref_bytes,omitempty"`
+	MissingOutputRefs     int                                 `json:"missing_output_refs,omitempty"`
+	OutputRefHashMismatch int                                 `json:"output_ref_hash_mismatch,omitempty"`
+	EventTypes            map[string]int                      `json:"event_types,omitempty"`
+	TurnChanges           []StoredSessionTurnChangeInspection `json:"turn_changes,omitempty"`
+	RedoAvailable         bool                                `json:"redo_available,omitempty"`
+	RedoChangeID          string                              `json:"redo_change_id,omitempty"`
+}
+
+type StoredSessionTurnChangeInspection struct {
+	Seq            int64                     `json:"seq,omitempty"`
+	EventType      string                    `json:"event_type,omitempty"`
+	ChangeID       string                    `json:"change_id,omitempty"`
+	Status         string                    `json:"status,omitempty"`
+	ToolName       string                    `json:"tool_name,omitempty"`
+	FileCount      int                       `json:"file_count,omitempty"`
+	Added          int                       `json:"added,omitempty"`
+	Modified       int                       `json:"modified,omitempty"`
+	Deleted        int                       `json:"deleted,omitempty"`
+	Additions      int                       `json:"additions,omitempty"`
+	Deletions      int                       `json:"deletions,omitempty"`
+	PatchOutputRef string                    `json:"patch_output_ref,omitempty"`
+	Files          []protocol.TurnChangeFile `json:"files,omitempty"`
 }
 
 func ListStoredSessions(dir string) (StoredSessionList, error) {
@@ -280,6 +299,7 @@ func inspectSessionEvents(path string, events []protocol.Event) StoredSessionEve
 		Records:    len(events),
 		EventTypes: map[string]int{},
 	}
+	var redoChangeID string
 	for _, event := range events {
 		if event.Seq > out.LastSeq {
 			out.LastSeq = event.Seq
@@ -312,12 +332,55 @@ func inspectSessionEvents(path string, events []protocol.Event) StoredSessionEve
 				}
 			}
 		}
+		switch event.Type {
+		case protocol.EventTurnChangeRecorded, protocol.EventTurnChangeReverted:
+			stored, ok := storedTurnChangeFromEvent(event)
+			if !ok {
+				continue
+			}
+			out.TurnChanges = append(out.TurnChanges, inspectTurnChange(event, stored.Data))
+			if event.Type == protocol.EventTurnChangeRecorded {
+				redoChangeID = ""
+			} else {
+				redoChangeID = stored.Data.ChangeID
+			}
+		}
+	}
+	if redoChangeID != "" {
+		out.RedoAvailable = true
+		out.RedoChangeID = redoChangeID
 	}
 	out.OutputRefsVerified = out.OutputRefs > 0 && out.MissingOutputRefs == 0 && out.OutputRefHashMismatch == 0
 	if len(out.EventTypes) == 0 {
 		out.EventTypes = nil
 	}
 	return out
+}
+
+func inspectTurnChange(event protocol.Event, change protocol.TurnChangeEvent) StoredSessionTurnChangeInspection {
+	status := strings.TrimSpace(change.Status)
+	if status == "" {
+		if event.Type == protocol.EventTurnChangeReverted {
+			status = "reverted"
+		} else {
+			status = "recorded"
+		}
+	}
+	return StoredSessionTurnChangeInspection{
+		Seq:            event.Seq,
+		EventType:      string(event.Type),
+		ChangeID:       change.ChangeID,
+		Status:         status,
+		ToolName:       change.ToolName,
+		FileCount:      change.FileCount,
+		Added:          change.Added,
+		Modified:       change.Modified,
+		Deleted:        change.Deleted,
+		Additions:      change.Additions,
+		Deletions:      change.Deletions,
+		PatchOutputRef: change.PatchOutputRef,
+		Files:          append([]protocol.TurnChangeFile(nil), change.Files...),
+	}
 }
 
 type outputRefEventData struct {

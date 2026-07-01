@@ -184,6 +184,30 @@ func TestGatewaySessionUndoPreviewAndRestoreCheckpoint(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("undo should remove newly-created file, stat err=%v", err)
 	}
+	inspectionAfterUndo, err := InspectStoredSession(storeDir, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inspectionAfterUndo.Events.RedoAvailable || inspectionAfterUndo.Events.RedoChangeID != undo.ChangeID ||
+		!storedInspectionHasTurnChangeStatus(inspectionAfterUndo, undo.ChangeID, "reverted") {
+		t.Fatalf("inspection after undo = %#v", inspectionAfterUndo.Events)
+	}
+	redo := postGatewayJSON[gatewayapi.SessionUndoResponse](t, server, "/v1/sessions/"+sessionID+"/redo", ``, http.StatusOK)
+	if redo.ChangeID != undo.ChangeID || redo.Change.Status != "redone" || len(redo.RestoredFiles) == 0 {
+		t.Fatalf("redo = %#v undo=%#v", redo, undo)
+	}
+	if got := readFileString(t, path); got != "agent\n" {
+		t.Fatalf("redo restored file = %q", got)
+	}
+	postGatewayJSON[gatewayapi.SessionUndoResponse](t, server, "/v1/sessions/"+sessionID+"/redo", ``, http.StatusNotFound)
+	inspectionAfterRedo, err := InspectStoredSession(storeDir, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspectionAfterRedo.Events.RedoAvailable ||
+		!storedInspectionHasTurnChangeStatus(inspectionAfterRedo, undo.ChangeID, "redone") {
+		t.Fatalf("inspection after redo = %#v", inspectionAfterRedo.Events)
+	}
 	replayed, err := server.store.ReplayEventsAfter(sessionID, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -471,6 +495,15 @@ func readFileString(t *testing.T, path string) string {
 func sawEvent(events []protocol.Event, typ protocol.EventType) bool {
 	for _, event := range events {
 		if event.Type == typ {
+			return true
+		}
+	}
+	return false
+}
+
+func storedInspectionHasTurnChangeStatus(inspection StoredSessionInspection, changeID, status string) bool {
+	for _, change := range inspection.Events.TurnChanges {
+		if change.ChangeID == changeID && change.Status == status && len(change.Files) > 0 && change.FileCount > 0 {
 			return true
 		}
 	}

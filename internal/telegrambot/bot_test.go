@@ -349,6 +349,13 @@ type telegramSessionHarness struct {
 	previewErr      error
 	previewSession  string
 	previewChangeID string
+	undo            gatewayapi.SessionUndoResponse
+	undoErr         error
+	undoSession     string
+	undoChangeID    string
+	redo            gatewayapi.SessionUndoResponse
+	redoErr         error
+	redoSession     string
 	createdProfile  string
 	createdMessages []protocol.Message
 	createdOwner    gatewayapi.SessionOwner
@@ -387,6 +394,27 @@ func (h *telegramSessionHarness) PreviewSessionUndo(_ context.Context, sessionID
 		return gatewayapi.SessionUndoResponse{}, h.previewErr
 	}
 	return h.preview, nil
+}
+
+func (h *telegramSessionHarness) UndoSession(_ context.Context, sessionID, changeID string) (gatewayapi.SessionUndoResponse, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.undoSession = sessionID
+	h.undoChangeID = changeID
+	if h.undoErr != nil {
+		return gatewayapi.SessionUndoResponse{}, h.undoErr
+	}
+	return h.undo, nil
+}
+
+func (h *telegramSessionHarness) RedoSession(_ context.Context, sessionID string) (gatewayapi.SessionUndoResponse, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.redoSession = sessionID
+	if h.redoErr != nil {
+		return gatewayapi.SessionUndoResponse{}, h.redoErr
+	}
+	return h.redo, nil
 }
 
 func (h *telegramSessionHarness) CreateSessionFromMessages(_ context.Context, profile string, messages []protocol.Message) (string, error) {

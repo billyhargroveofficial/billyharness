@@ -321,30 +321,108 @@ func (s *sessionStore) FindTurnChange(sessionID, changeID string) (storedTurnCha
 		if event.Type != protocol.EventTurnChangeRecorded {
 			continue
 		}
-		change, ok := decodeTurnChange(event.Data)
-		if !ok || strings.TrimSpace(change.ChangeID) == "" {
+		stored, ok := storedTurnChangeFromEvent(event)
+		if !ok {
 			continue
 		}
-		if change.RunID == "" {
-			change.RunID = event.RunID
-		}
-		if change.TurnID == "" {
-			change.TurnID = event.TurnID
-		}
-		if change.StepID == "" {
-			change.StepID = event.StepID
-		}
-		if change.CallID == "" {
-			change.CallID = event.CallID
-		}
-		if change.AttemptID == "" {
-			change.AttemptID = event.AttemptID
-		}
-		if changeID == "" || change.ChangeID == changeID {
-			found = storedTurnChange{Event: event, Data: change}
+		if changeID == "" || stored.Data.ChangeID == changeID {
+			found = stored
 		}
 	}
 	return found, found.Data.ChangeID != "", nil
+}
+
+func (s *sessionStore) FindUndoableTurnChange(sessionID, changeID string) (storedTurnChange, bool, error) {
+	events, err := s.ReplayEventsAfter(sessionID, 0)
+	if err != nil {
+		return storedTurnChange{}, false, err
+	}
+	changeID = strings.TrimSpace(changeID)
+	records := map[string]storedTurnChange{}
+	reverted := map[string]bool{}
+	var order []string
+	for _, event := range events {
+		switch event.Type {
+		case protocol.EventTurnChangeRecorded:
+			stored, ok := storedTurnChangeFromEvent(event)
+			if !ok {
+				continue
+			}
+			if _, exists := records[stored.Data.ChangeID]; !exists {
+				order = append(order, stored.Data.ChangeID)
+			}
+			records[stored.Data.ChangeID] = stored
+			reverted[stored.Data.ChangeID] = false
+		case protocol.EventTurnChangeReverted:
+			stored, ok := storedTurnChangeFromEvent(event)
+			if !ok {
+				continue
+			}
+			reverted[stored.Data.ChangeID] = true
+		}
+	}
+	if changeID != "" {
+		stored, ok := records[changeID]
+		if !ok || reverted[changeID] {
+			return storedTurnChange{}, false, nil
+		}
+		return stored, true, nil
+	}
+	for i := len(order) - 1; i >= 0; i-- {
+		id := order[i]
+		if reverted[id] {
+			continue
+		}
+		return records[id], true, nil
+	}
+	return storedTurnChange{}, false, nil
+}
+
+func (s *sessionStore) FindRedoTurnChange(sessionID string) (storedTurnChange, bool, error) {
+	events, err := s.ReplayEventsAfter(sessionID, 0)
+	if err != nil {
+		return storedTurnChange{}, false, err
+	}
+	var redo storedTurnChange
+	var ok bool
+	for _, event := range events {
+		switch event.Type {
+		case protocol.EventTurnChangeRecorded:
+			ok = false
+			redo = storedTurnChange{}
+		case protocol.EventTurnChangeReverted:
+			stored, storedOK := storedTurnChangeFromEvent(event)
+			if !storedOK {
+				continue
+			}
+			redo = stored
+			ok = true
+		}
+	}
+	return redo, ok, nil
+}
+
+func storedTurnChangeFromEvent(event protocol.Event) (storedTurnChange, bool) {
+	change, ok := decodeTurnChange(event.Data)
+	if !ok || strings.TrimSpace(change.ChangeID) == "" {
+		return storedTurnChange{}, false
+	}
+	if change.RunID == "" {
+		change.RunID = event.RunID
+	}
+	if change.TurnID == "" {
+		change.TurnID = event.TurnID
+	}
+	if change.StepID == "" {
+		change.StepID = event.StepID
+	}
+	if change.CallID == "" {
+		change.CallID = event.CallID
+	}
+	if change.AttemptID == "" {
+		change.AttemptID = event.AttemptID
+	}
+	return storedTurnChange{Event: event, Data: change}, true
 }
 
 func gatewaySessionRunID(sessionID string, runSeq int64) string {

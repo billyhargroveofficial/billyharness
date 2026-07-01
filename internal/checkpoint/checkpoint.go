@@ -204,14 +204,22 @@ func Preview(record PatchRecord, maxBytes int) (string, bool) {
 }
 
 func Restore(record PatchRecord) (RestoreResult, error) {
-	conflicts := restoreConflicts(record)
+	return restoreRecord(record, false)
+}
+
+func Redo(record PatchRecord) (RestoreResult, error) {
+	return restoreRecord(record, true)
+}
+
+func restoreRecord(record PatchRecord, useAfter bool) (RestoreResult, error) {
+	conflicts := restoreConflicts(record, useAfter)
 	if len(conflicts) > 0 {
 		return RestoreResult{Conflicts: conflicts}, ErrConflict
 	}
 	files := append([]FilePatch(nil), record.Files...)
 	sort.Slice(files, func(i, j int) bool {
-		removeI := restoreRemoves(files[i])
-		removeJ := restoreRemoves(files[j])
+		removeI := restoreRemoves(files[i], useAfter)
+		removeJ := restoreRemoves(files[j], useAfter)
 		if removeI != removeJ {
 			return removeI
 		}
@@ -224,7 +232,7 @@ func Restore(record PatchRecord) (RestoreResult, error) {
 	})
 	var restored []string
 	for _, file := range files {
-		if err := restoreOne(file); err != nil {
+		if err := restoreOne(file, useAfter); err != nil {
 			return RestoreResult{RestoredFiles: restored}, err
 		}
 		restored = append(restored, file.Path)
@@ -232,8 +240,9 @@ func Restore(record PatchRecord) (RestoreResult, error) {
 	return RestoreResult{RestoredFiles: restored}, nil
 }
 
-func restoreRemoves(file FilePatch) bool {
-	return file.Before == nil || !file.Before.Exists
+func restoreRemoves(file FilePatch, useAfter bool) bool {
+	target := restoreTargetState(file, useAfter)
+	return !target.Exists
 }
 
 func normalizeOptions(opts Options) Options {
@@ -543,14 +552,16 @@ func simpleLineDiff(before, after string) (int, int) {
 	return len(b) - common, len(a) - common
 }
 
-func restoreConflicts(record PatchRecord) []string {
+func restoreConflicts(record PatchRecord, useAfter bool) []string {
 	recordPaths := map[string]struct{}{}
 	for _, file := range record.Files {
 		recordPaths[filepath.Clean(file.Path)] = struct{}{}
 	}
 	var conflicts []string
 	for _, file := range record.Files {
-		if !file.Reversible {
+		target := restoreTargetState(file, useAfter)
+		expectedCurrent := restoreConflictState(file, useAfter)
+		if !restorableTarget(target) {
 			conflicts = append(conflicts, fmt.Sprintf("%s: patch is not reversible", displayPath(file)))
 			continue
 		}
@@ -559,12 +570,11 @@ func restoreConflicts(record PatchRecord) []string {
 			conflicts = append(conflicts, fmt.Sprintf("%s: %v", displayPath(file), err))
 			continue
 		}
-		after := derefState(file.After)
-		if !statesEqualForConflict(current, after) {
+		if !statesEqualForConflict(current, expectedCurrent) {
 			conflicts = append(conflicts, fmt.Sprintf("%s: current file changed after checkpoint", displayPath(file)))
 			continue
 		}
-		if file.Before != nil && !file.Before.Exists && after.Exists && after.Kind == KindDir {
+		if !target.Exists && expectedCurrent.Exists && expectedCurrent.Kind == KindDir {
 			extra, err := extraDirEntries(file.Path, recordPaths)
 			if err != nil {
 				conflicts = append(conflicts, fmt.Sprintf("%s: %v", displayPath(file), err))
@@ -574,6 +584,34 @@ func restoreConflicts(record PatchRecord) []string {
 		}
 	}
 	return conflicts
+}
+
+func restoreTargetState(file FilePatch, useAfter bool) FileState {
+	if useAfter {
+		return derefState(file.After)
+	}
+	return derefState(file.Before)
+}
+
+func restoreConflictState(file FilePatch, useAfter bool) FileState {
+	if useAfter {
+		return derefState(file.Before)
+	}
+	return derefState(file.After)
+}
+
+func restorableTarget(target FileState) bool {
+	if !target.Exists {
+		return true
+	}
+	switch target.Kind {
+	case KindDir:
+		return true
+	case KindFile:
+		return target.ContentBase64 != ""
+	default:
+		return false
+	}
 }
 
 func statesEqualForConflict(current, recorded FileState) bool {
@@ -592,34 +630,34 @@ func statesEqualForConflict(current, recorded FileState) bool {
 	return current.Size == recorded.Size && current.Mode == recorded.Mode
 }
 
-func restoreOne(file FilePatch) error {
-	before := derefState(file.Before)
-	if !before.Exists {
+func restoreOne(file FilePatch, useAfter bool) error {
+	target := restoreTargetState(file, useAfter)
+	if !target.Exists {
 		if err := os.Remove(file.Path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		return nil
 	}
-	switch before.Kind {
+	switch target.Kind {
 	case KindDir:
-		if err := os.MkdirAll(file.Path, fs.FileMode(before.Mode)); err != nil {
+		if err := os.MkdirAll(file.Path, fs.FileMode(target.Mode)); err != nil {
 			return err
 		}
-		return os.Chmod(file.Path, fs.FileMode(before.Mode))
+		return os.Chmod(file.Path, fs.FileMode(target.Mode))
 	case KindFile:
-		bytes, err := base64.StdEncoding.DecodeString(before.ContentBase64)
+		bytes, err := base64.StdEncoding.DecodeString(target.ContentBase64)
 		if err != nil {
 			return err
 		}
 		if err := os.MkdirAll(filepath.Dir(file.Path), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(file.Path, bytes, fs.FileMode(before.Mode)); err != nil {
+		if err := os.WriteFile(file.Path, bytes, fs.FileMode(target.Mode)); err != nil {
 			return err
 		}
-		return os.Chmod(file.Path, fs.FileMode(before.Mode))
+		return os.Chmod(file.Path, fs.FileMode(target.Mode))
 	default:
-		return fmt.Errorf("%s: unsupported restore kind %q", displayPath(file), before.Kind)
+		return fmt.Errorf("%s: unsupported restore kind %q", displayPath(file), target.Kind)
 	}
 }
 

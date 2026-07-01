@@ -248,6 +248,36 @@ func TestGatewaySessionStoreRestoresSessionAfterRestart(t *testing.T) {
 	}
 }
 
+func TestSessionStoreRedoStateClearsOnNewTurnChange(t *testing.T) {
+	store := newSessionStore(t.TempDir())
+	session := newGatewaySession("redo-state", time.Now().UTC(), []protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	changeA := protocol.TurnChangeEvent{ChangeID: "change-a", Status: "recorded", FileCount: 1, Modified: 1, Reversible: true}
+	changeB := protocol.TurnChangeEvent{ChangeID: "change-b", Status: "recorded", FileCount: 1, Added: 1, Reversible: true}
+	if _, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventTurnChangeRecorded, Data: changeA}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventTurnChangeReverted, Data: changeA}); err != nil {
+		t.Fatal(err)
+	}
+	redo, ok, err := store.FindRedoTurnChange(session.ID)
+	if err != nil || !ok || redo.Data.ChangeID != "change-a" {
+		t.Fatalf("redo after revert = %#v ok=%v err=%v", redo, ok, err)
+	}
+	if undo, ok, err := store.FindUndoableTurnChange(session.ID, "change-a"); err != nil || ok || undo.Data.ChangeID != "" {
+		t.Fatalf("reverted change should not be undoable: undo=%#v ok=%v err=%v", undo, ok, err)
+	}
+	if _, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventTurnChangeRecorded, Data: changeB}); err != nil {
+		t.Fatal(err)
+	}
+	if redo, ok, err := store.FindRedoTurnChange(session.ID); err != nil || ok || redo.Data.ChangeID != "" {
+		t.Fatalf("redo after new change = %#v ok=%v err=%v", redo, ok, err)
+	}
+	undo, ok, err := store.FindUndoableTurnChange(session.ID, "")
+	if err != nil || !ok || undo.Data.ChangeID != "change-b" {
+		t.Fatalf("latest undoable = %#v ok=%v err=%v", undo, ok, err)
+	}
+}
+
 func TestGatewaySessionProjectContextEpochReusedAfterRestart(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", home)

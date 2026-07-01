@@ -379,6 +379,15 @@ func (c *Client) UndoSession(ctx context.Context, sessionID string, undo gateway
 	return out, nil
 }
 
+func (c *Client) RedoSession(ctx context.Context, sessionID string) (gatewayapi.SessionUndoResponse, error) {
+	var out gatewayapi.SessionUndoResponse
+	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/redo"
+	if err := c.JSON(ctx, http.MethodPost, path, nil, &out); err != nil {
+		return gatewayapi.SessionUndoResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) Do(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
 	return c.do(ctx, method, path, body)
 }
