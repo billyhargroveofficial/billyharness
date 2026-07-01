@@ -624,6 +624,29 @@ func firstEventData(events []protocol.Event, typ protocol.EventType) (map[string
 	return nil, false
 }
 
+func firstTurnChange(events []protocol.Event) (protocol.TurnChangeEvent, bool) {
+	for _, event := range events {
+		if event.Type != protocol.EventTurnChangeRecorded {
+			continue
+		}
+		switch data := event.Data.(type) {
+		case protocol.TurnChangeEvent:
+			return data, true
+		case *protocol.TurnChangeEvent:
+			if data != nil {
+				return *data, true
+			}
+		default:
+			bytes, _ := json.Marshal(event.Data)
+			var change protocol.TurnChangeEvent
+			if err := json.Unmarshal(bytes, &change); err == nil && change.ChangeID != "" {
+				return change, true
+			}
+		}
+	}
+	return protocol.TurnChangeEvent{}, false
+}
+
 func eventDataMap(event protocol.Event) map[string]any {
 	bytes, _ := json.Marshal(event.Data)
 	var data map[string]any

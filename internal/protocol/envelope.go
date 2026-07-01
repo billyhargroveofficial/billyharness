@@ -132,7 +132,7 @@ func ValidateEventEnvelope(event Event) error {
 	switch event.Type {
 	case EventRunStarted, EventRunCompleted, EventRunFailed, EventContextThreshold, EventContextCompacted:
 		return requireEnvelope(event, "run_id")
-	case EventTurnStarted, EventTurnCompleted:
+	case EventTurnStarted, EventTurnCompleted, EventTurnChangeRecorded, EventTurnChangeReverted:
 		return requireEnvelope(event, "run_id", "turn_id")
 	case EventStepStarted, EventStepCompleted:
 		return requireEnvelope(event, "run_id", "turn_id", "step_id")
@@ -189,6 +189,12 @@ func enrichEventIDsFromData(event *Event) {
 	case *TurnEvent:
 		if data != nil {
 			copyTurnEnvelope(event, *data)
+		}
+	case TurnChangeEvent:
+		copyTurnChangeEnvelope(event, data)
+	case *TurnChangeEvent:
+		if data != nil {
+			copyTurnChangeEnvelope(event, *data)
 		}
 	case StepEvent:
 		copyStepEnvelope(event, data)
@@ -257,6 +263,24 @@ func copyTurnEnvelope(event *Event, turn TurnEvent) {
 		event.DurationMS = turn.DurationMS
 	}
 	copyMapEnvelope(event, turn.Metadata)
+}
+
+func copyTurnChangeEnvelope(event *Event, change TurnChangeEvent) {
+	if event.RunID == "" {
+		event.RunID = change.RunID
+	}
+	if event.TurnID == "" {
+		event.TurnID = change.TurnID
+	}
+	if event.StepID == "" {
+		event.StepID = change.StepID
+	}
+	if event.CallID == "" {
+		event.CallID = change.CallID
+	}
+	if event.AttemptID == "" {
+		event.AttemptID = change.AttemptID
+	}
 }
 
 func copyStepEnvelope(event *Event, step StepEvent) {

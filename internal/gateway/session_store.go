@@ -145,6 +145,11 @@ type replayedSessionHistory struct {
 	historySHA256 string
 }
 
+type storedTurnChange struct {
+	Event protocol.Event
+	Data  protocol.TurnChangeEvent
+}
+
 func newSessionStore(dir string) *sessionStore {
 	return &sessionStore{
 		dir:      filepath.Clean(dir),
@@ -303,6 +308,43 @@ func (s *sessionStore) ReplayEventsAfter(sessionID string, afterSeq int64) ([]pr
 	}
 	eventsPath := filepath.Join(s.dir, id, sessionFileName(manifest.EventsJSONL, sessionEventsJSONLName))
 	return replaySessionEventsAfter(eventsPath, id, afterSeq)
+}
+
+func (s *sessionStore) FindTurnChange(sessionID, changeID string) (storedTurnChange, bool, error) {
+	events, err := s.ReplayEventsAfter(sessionID, 0)
+	if err != nil {
+		return storedTurnChange{}, false, err
+	}
+	changeID = strings.TrimSpace(changeID)
+	var found storedTurnChange
+	for _, event := range events {
+		if event.Type != protocol.EventTurnChangeRecorded {
+			continue
+		}
+		change, ok := decodeTurnChange(event.Data)
+		if !ok || strings.TrimSpace(change.ChangeID) == "" {
+			continue
+		}
+		if change.RunID == "" {
+			change.RunID = event.RunID
+		}
+		if change.TurnID == "" {
+			change.TurnID = event.TurnID
+		}
+		if change.StepID == "" {
+			change.StepID = event.StepID
+		}
+		if change.CallID == "" {
+			change.CallID = event.CallID
+		}
+		if change.AttemptID == "" {
+			change.AttemptID = event.AttemptID
+		}
+		if changeID == "" || change.ChangeID == changeID {
+			found = storedTurnChange{Event: event, Data: change}
+		}
+	}
+	return found, found.Data.ChangeID != "", nil
 }
 
 func gatewaySessionRunID(sessionID string, runSeq int64) string {
@@ -631,6 +673,18 @@ func decodeSessionStatus(value any) (SessionStatus, bool) {
 		return SessionStatus{}, false
 	}
 	return status, status.ID != "" || status.RunSeq > 0
+}
+
+func decodeTurnChange(value any) (protocol.TurnChangeEvent, bool) {
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return protocol.TurnChangeEvent{}, false
+	}
+	var change protocol.TurnChangeEvent
+	if err := json.Unmarshal(bytes, &change); err != nil {
+		return protocol.TurnChangeEvent{}, false
+	}
+	return change, strings.TrimSpace(change.ChangeID) != ""
 }
 
 func replaySessionEventsAfter(path, sessionID string, afterSeq int64) ([]protocol.Event, error) {

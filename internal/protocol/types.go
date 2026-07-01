@@ -62,6 +62,8 @@ const (
 	EventRunStarted              EventType = "run.started"
 	EventTurnStarted             EventType = "turn.started"
 	EventTurnCompleted           EventType = "turn.completed"
+	EventTurnChangeRecorded      EventType = "turn.change_recorded"
+	EventTurnChangeReverted      EventType = "turn.change_reverted"
 	EventStepStarted             EventType = "step.started"
 	EventStepCompleted           EventType = "step.completed"
 	EventModelCallStarted        EventType = "model.call_started"
@@ -143,6 +145,50 @@ type TurnEvent struct {
 	DurationMS    int64          `json:"duration_ms,omitempty"`
 	Error         string         `json:"error,omitempty"`
 	Metadata      map[string]any `json:"metadata,omitempty"`
+}
+
+type TurnChangeFile struct {
+	Path         string `json:"path"`
+	RelPath      string `json:"rel_path,omitempty"`
+	Change       string `json:"change"`
+	Kind         string `json:"kind,omitempty"`
+	Additions    int    `json:"additions,omitempty"`
+	Deletions    int    `json:"deletions,omitempty"`
+	Binary       bool   `json:"binary,omitempty"`
+	Large        bool   `json:"large,omitempty"`
+	Reversible   bool   `json:"reversible"`
+	BeforeSHA256 string `json:"before_sha256,omitempty"`
+	AfterSHA256  string `json:"after_sha256,omitempty"`
+}
+
+type TurnChangeEvent struct {
+	ChangeID                  string           `json:"change_id"`
+	RunID                     string           `json:"run_id,omitempty"`
+	TurnID                    string           `json:"turn_id,omitempty"`
+	StepID                    string           `json:"step_id,omitempty"`
+	CallID                    string           `json:"call_id,omitempty"`
+	AttemptID                 string           `json:"attempt_id,omitempty"`
+	ToolName                  string           `json:"tool_name,omitempty"`
+	Status                    string           `json:"status,omitempty"`
+	Summary                   string           `json:"summary,omitempty"`
+	FileCount                 int              `json:"file_count,omitempty"`
+	Added                     int              `json:"added,omitempty"`
+	Modified                  int              `json:"modified,omitempty"`
+	Deleted                   int              `json:"deleted,omitempty"`
+	Directories               int              `json:"directories,omitempty"`
+	Additions                 int              `json:"additions,omitempty"`
+	Deletions                 int              `json:"deletions,omitempty"`
+	BinaryFiles               int              `json:"binary_files,omitempty"`
+	LargeFiles                int              `json:"large_files,omitempty"`
+	Reversible                bool             `json:"reversible"`
+	PatchOutputRef            string           `json:"patch_output_ref,omitempty"`
+	PatchOutputRefID          string           `json:"patch_output_ref_id,omitempty"`
+	PatchOutputRefBytes       int64            `json:"patch_output_ref_bytes,omitempty"`
+	PatchOutputRefSHA256      string           `json:"patch_output_ref_sha256,omitempty"`
+	PatchOutputRefPermissions string           `json:"patch_output_ref_permissions,omitempty"`
+	PatchOutputRefPlaintext   bool             `json:"patch_output_ref_plaintext,omitempty"`
+	PreviewTruncated          bool             `json:"preview_truncated,omitempty"`
+	Files                     []TurnChangeFile `json:"files,omitempty"`
 }
 
 type StepEvent struct {

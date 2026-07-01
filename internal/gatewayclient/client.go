@@ -348,6 +348,19 @@ func (c *Client) CancelSession(ctx context.Context, sessionID string) (bool, err
 	return out.Cancelled, nil
 }
 
+func (c *Client) PreviewSessionUndo(ctx context.Context, sessionID, changeID string) (gatewayapi.SessionUndoResponse, error) {
+	return c.UndoSession(ctx, sessionID, gatewayapi.SessionUndoRequest{ChangeID: changeID, Preview: true})
+}
+
+func (c *Client) UndoSession(ctx context.Context, sessionID string, undo gatewayapi.SessionUndoRequest) (gatewayapi.SessionUndoResponse, error) {
+	var out gatewayapi.SessionUndoResponse
+	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/undo"
+	if err := c.JSON(ctx, http.MethodPost, path, undo, &out); err != nil {
+		return gatewayapi.SessionUndoResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) Do(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
 	return c.do(ctx, method, path, body)
 }

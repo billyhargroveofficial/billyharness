@@ -2,8 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"strconv"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/checkpoint"
 	runtimehooks "github.com/billyhargroveofficial/billyharness/internal/hooks"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/tooloutput"
@@ -94,6 +97,16 @@ func (o *toolOrchestrator) Execute(ctx context.Context, turnID string, index int
 	o.EmitProgress(call, attemptID, toolPhaseExecuting, executingStatus, decision.progressMetadata())
 	var out protocol.ToolResult
 	stepID := agentStepID(turnID, protocol.StepKindToolCall, index+1)
+	var turnChangeTracker *checkpoint.Tracker
+	var turnChangeErr string
+	if decision.Decision != "deny" && call.InvalidArgumentError == "" && o != nil && o.agent != nil {
+		tracker, tracked, err := checkpoint.Begin(checkpoint.DefaultOptions(o.agent.toolPolicy.WorkspaceRoots), call.Name, call.Arguments)
+		if err != nil {
+			turnChangeErr = err.Error()
+		} else if tracked {
+			turnChangeTracker = tracker
+		}
+	}
 	beforeHookErr := o.runHook(ctx, "before_tool", o.toolHookPayload(turnID, stepID, call, attemptID, map[string]any{
 		"args_summary":        summarizeToolCallArgs(call),
 		"permission_decision": decision.Decision,
@@ -213,6 +226,17 @@ func (o *toolOrchestrator) Execute(ctx context.Context, turnID string, index int
 			out.Metadata["hook_error"] = afterHookErr.Error()
 			out.Metadata["output_bytes"] = len(out.Content)
 			out.Metadata["output_estimated_tokens"] = estimateMessagesTokens([]protocol.Message{{Role: protocol.RoleTool, Content: out.Content}})
+		}
+	}
+	if turnChangeErr != "" {
+		out.Metadata["turn_change_error"] = turnChangeErr
+	}
+	if turnChangeTracker != nil {
+		record, changed, err := turnChangeTracker.Complete(turnID, stepID, call.ID, attemptID)
+		if err != nil {
+			out.Metadata["turn_change_error"] = err.Error()
+		} else if changed {
+			o.recordTurnChange(&out, record)
 		}
 	}
 	progressStatus := toolResultProgressStatus(out)
@@ -463,6 +487,112 @@ func toolOutputRefEvent(result toolExecutionResult) protocol.ToolOutputRefEvent 
 		OutputRefPlaintext:   metadataBool(metadata, tooloutput.MetadataOutputRefPlaintext),
 		Truncated:            result.Result.Truncated,
 	}
+}
+
+func (o *toolOrchestrator) recordTurnChange(out *protocol.ToolResult, record checkpoint.PatchRecord) {
+	if o == nil || out == nil {
+		return
+	}
+	body, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		out.Metadata["turn_change_error"] = err.Error()
+		return
+	}
+	ref, err := tooloutput.Store(tooloutput.StoreRequest{
+		Parts:                 []string{"checkpoint", record.ToolName, record.ChangeID},
+		Content:               string(body),
+		EnsureTrailingNewline: true,
+	})
+	if err != nil {
+		out.Metadata["turn_change_error"] = err.Error()
+		return
+	}
+	out.Metadata["turn_change_id"] = record.ChangeID
+	out.Metadata["turn_change_files"] = record.Stats.FileCount
+	out.Metadata["turn_change_added"] = record.Stats.Added
+	out.Metadata["turn_change_modified"] = record.Stats.Modified
+	out.Metadata["turn_change_deleted"] = record.Stats.Deleted
+	out.Metadata["turn_change_additions"] = record.Stats.Additions
+	out.Metadata["turn_change_deletions"] = record.Stats.Deletions
+	out.Metadata["turn_change_reversible"] = recordReversible(record)
+	out.Metadata["turn_change_output_ref"] = ref.Path
+	out.Metadata["turn_change_output_ref_id"] = ref.ID
+	data := turnChangeEvent(record, ref)
+	if o.emit != nil {
+		o.emit(protocol.Event{Type: protocol.EventTurnChangeRecorded, Data: data})
+	}
+}
+
+func turnChangeEvent(record checkpoint.PatchRecord, ref tooloutput.Ref) protocol.TurnChangeEvent {
+	event := protocol.TurnChangeEvent{
+		ChangeID:                  record.ChangeID,
+		TurnID:                    record.TurnID,
+		StepID:                    record.StepID,
+		CallID:                    record.CallID,
+		AttemptID:                 record.AttemptID,
+		ToolName:                  record.ToolName,
+		Status:                    "recorded",
+		Summary:                   turnChangeSummary(record),
+		FileCount:                 record.Stats.FileCount,
+		Added:                     record.Stats.Added,
+		Modified:                  record.Stats.Modified,
+		Deleted:                   record.Stats.Deleted,
+		Directories:               record.Stats.Directories,
+		Additions:                 record.Stats.Additions,
+		Deletions:                 record.Stats.Deletions,
+		BinaryFiles:               record.Stats.BinaryFiles,
+		LargeFiles:                record.Stats.LargeFiles,
+		Reversible:                recordReversible(record),
+		PatchOutputRef:            ref.Path,
+		PatchOutputRefID:          ref.ID,
+		PatchOutputRefBytes:       ref.Bytes,
+		PatchOutputRefSHA256:      ref.SHA256,
+		PatchOutputRefPermissions: ref.Permissions,
+		PatchOutputRefPlaintext:   ref.Plaintext,
+	}
+	for i, file := range record.Files {
+		if i >= 80 {
+			break
+		}
+		item := protocol.TurnChangeFile{
+			Path:       file.Path,
+			RelPath:    file.RelPath,
+			Change:     file.Change,
+			Kind:       file.Kind,
+			Additions:  file.Additions,
+			Deletions:  file.Deletions,
+			Binary:     file.Binary,
+			Large:      file.Large,
+			Reversible: file.Reversible,
+		}
+		if file.Before != nil {
+			item.BeforeSHA256 = file.Before.SHA256
+		}
+		if file.After != nil {
+			item.AfterSHA256 = file.After.SHA256
+		}
+		event.Files = append(event.Files, item)
+	}
+	return event
+}
+
+func turnChangeSummary(record checkpoint.PatchRecord) string {
+	return "changed " + metadataIntString(record.Stats.FileCount) +
+		" files (+" + metadataIntString(record.Stats.Additions) +
+		" -" + metadataIntString(record.Stats.Deletions) + ")"
+}
+
+func metadataIntString(value int) string {
+	return strconv.Itoa(value)
+}
+
+func recordReversible(record checkpoint.PatchRecord) bool {
+	for _, file := range record.Files {
+		if !file.Reversible {
+			return false
+		}
+	}
+	return true
 }
 
 func metadataString(metadata map[string]any, key string) string {

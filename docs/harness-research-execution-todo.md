@@ -401,12 +401,32 @@ Goal: add rollback and compact display invariants before expanding edit power.
     ./internal/modelinfo` passed.
   - commit: pending.
 
-- [ ] HR-02.2 Turn-scoped checkpoints, diff, preview, and undo.
+- [x] HR-02.2 Turn-scoped checkpoints, diff, preview, and undo.
   - maps to: `competitive-improvements-todo.md` A2.
   - acceptance: no hidden commits/stash/reset/user `.git` writes; mutating file
     and shell steps produce turn-change events; preview writes nothing; undo is
     conflict-safe and denied during active runs.
   - verification: `go test -count=1 ./internal/checkpoint ./internal/agent ./internal/eventlog ./internal/gateway ./internal/tui ./internal/telegrambot`.
+  - status: completed 2026-07-01.
+  - evidence: added a leaf `internal/checkpoint` package that snapshots
+    workspace files/directories before and after mutating `fs_write_file`,
+    `fs_make_dir`, and `shell_exec` tool attempts, stores capped reversible
+    patch records in Billy output-ref storage, and never writes user `.git`
+    state. Agent tool orchestration now emits durable
+    `turn.change_recorded` events with compact file/stat metadata and a patch
+    output ref when a mutating step changes the workspace. Gateway session
+    `/undo` supports preview-only and restore modes, replays JSONL to find the
+    latest or named change, denies undo during active runs, records
+    `turn.change_reverted`, and performs a full conflict precheck before any
+    restore write.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/checkpoint
+    ./internal/agent ./internal/eventlog ./internal/gateway ./internal/tui
+    ./internal/telegrambot` passed; `/root/.local/go/bin/go test -run
+    'Test.*Checkpoint.*|Test.*Turn.*Diff.*|Test.*Rollback.*|Test.*Undo.*|Test.*Preview.*|Test.*Conflict.*|Test.*Shell.*Changed.*'
+    -count=1 ./internal/...` passed; `/root/.local/go/bin/go test -count=1
+    ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] HR-02.3 Minimal turn diff display and revert preview UX.
   - maps to: `competitive-improvements-todo.md` B11.

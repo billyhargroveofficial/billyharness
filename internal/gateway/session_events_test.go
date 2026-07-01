@@ -19,7 +19,9 @@ import (
 	"testing"
 	"time"
 
+	agentpkg "github.com/billyhargroveofficial/billyharness/internal/agent"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
@@ -74,6 +76,128 @@ func TestGatewaySessionRunStreamsEvents(t *testing.T) {
 	}
 	if got := content.String(); got != "mock: through gateway" {
 		t.Fatalf("content = %q", got)
+	}
+}
+
+func TestGatewaySessionUndoPreviewAndRestoreCheckpoint(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.WorkspaceRoots = []string{root}
+	cfg.AutoApproveDangerous = true
+	cfg.MaxToolRounds = 2
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	prov := &gatewayScriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_write", ToolName: "fs_write_file", ArgsDelta: `{"path":"out.txt","content":"agent\n"}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "done"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	registry := tools.NewRegistry(cfg)
+	server := NewServerWithOptions(cfg, provider.Mock{}, registry, ServerOptions{SessionStoreDir: storeDir})
+	sessionID := createGatewaySessionForTest(t, server)
+	runGatewaySessionAgentForTest(t, server, sessionID, agentpkg.New(cfg, prov, registry), "write")
+	path := filepath.Join(root, "out.txt")
+	if got := readFileString(t, path); got != "agent\n" {
+		t.Fatalf("written file = %q", got)
+	}
+	preview := postGatewayJSON[gatewayapi.SessionUndoResponse](t, server, "/v1/sessions/"+sessionID+"/undo", `{"preview":true}`, http.StatusOK)
+	if !preview.Preview || preview.ChangeID == "" || !strings.Contains(preview.Patch, "+agent") {
+		t.Fatalf("preview = %#v", preview)
+	}
+	if got := readFileString(t, path); got != "agent\n" {
+		t.Fatalf("preview mutated file: %q", got)
+	}
+	undo := postGatewayJSON[gatewayapi.SessionUndoResponse](t, server, "/v1/sessions/"+sessionID+"/undo", `{}`, http.StatusOK)
+	if undo.ChangeID != preview.ChangeID || len(undo.RestoredFiles) == 0 {
+		t.Fatalf("undo = %#v preview=%#v", undo, preview)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("undo should remove newly-created file, stat err=%v", err)
+	}
+	replayed, err := server.store.ReplayEventsAfter(sessionID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sawEvent(replayed, protocol.EventTurnChangeRecorded) || !sawEvent(replayed, protocol.EventTurnChangeReverted) {
+		t.Fatalf("stored events missing turn change/revert: %#v", replayed)
+	}
+}
+
+func TestGatewaySessionUndoConflictDoesNotPartiallyRestore(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.WorkspaceRoots = []string{root}
+	cfg.AutoApproveDangerous = true
+	cfg.MaxToolRounds = 2
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	prov := &gatewayScriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_write", ToolName: "fs_write_file", ArgsDelta: `{"path":"out.txt","content":"agent\n"}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "done"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	registry := tools.NewRegistry(cfg)
+	server := NewServerWithOptions(cfg, provider.Mock{}, registry, ServerOptions{SessionStoreDir: storeDir})
+	sessionID := createGatewaySessionForTest(t, server)
+	runGatewaySessionAgentForTest(t, server, sessionID, agentpkg.New(cfg, prov, registry), "write")
+	path := filepath.Join(root, "out.txt")
+	if err := os.WriteFile(path, []byte("user after\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp := postGatewayJSON[gatewayapi.SessionUndoResponse](t, server, "/v1/sessions/"+sessionID+"/undo", `{}`, http.StatusConflict)
+	if len(resp.Conflicts) == 0 {
+		t.Fatalf("expected conflicts: %#v", resp)
+	}
+	if got := readFileString(t, path); got != "user after\n" {
+		t.Fatalf("conflict restore should not modify file, got %q", got)
+	}
+}
+
+func TestGatewaySessionUndoDeniedDuringActiveRun(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+	sessionID := createGatewaySessionForTest(t, server)
+	session, ok := server.session(sessionID)
+	if !ok {
+		t.Fatal("created session missing")
+	}
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Thread.Run(context.Background(), sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
+			close(started)
+			<-ctx.Done()
+			return messages, ctx.Err()
+		}), "hold", func(protocol.Event) {})
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("session run did not start")
+	}
+	postGatewayJSON[gatewayapi.SessionUndoResponse](t, server, "/v1/sessions/"+sessionID+"/undo", `{}`, http.StatusConflict)
+	session.Thread.Cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("run err = %v", err)
 	}
 }
 
@@ -171,6 +295,124 @@ func TestGatewaySessionRunInterruptPolicyCancelsActiveRunAndStartsReplacement(t 
 	if !oldFailed {
 		t.Fatalf("stored events missing interrupted old run failure: %#v", replayed)
 	}
+}
+
+type gatewayScriptedProvider struct {
+	steps [][]provider.Event
+	calls int
+}
+
+func (p *gatewayScriptedProvider) Stream(ctx context.Context, _ provider.Request) (<-chan provider.Event, <-chan error) {
+	events := make(chan provider.Event, 16)
+	errs := make(chan error, 1)
+	step := p.calls
+	p.calls++
+	go func() {
+		defer close(events)
+		defer close(errs)
+		if step >= len(p.steps) {
+			events <- provider.Event{Kind: provider.EventDone}
+			return
+		}
+		for _, event := range p.steps[step] {
+			select {
+			case <-ctx.Done():
+				errs <- ctx.Err()
+				return
+			case events <- event:
+			}
+		}
+	}()
+	return events, errs
+}
+
+func createGatewaySessionForTest(t *testing.T, server *Server) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/sessions", nil))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.ID == "" {
+		t.Fatal("empty session id")
+	}
+	return created.ID
+}
+
+func runGatewaySessionForTest(t *testing.T, server *Server, sessionID, body string) []protocol.Event {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+sessionID+"/run", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("run status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	return readProtocolEvents(t, rec.Body)
+}
+
+func runGatewaySessionAgentForTest(t *testing.T, server *Server, sessionID string, a *agentpkg.Agent, prompt string) []protocol.Event {
+	t.Helper()
+	session, ok := server.session(sessionID)
+	if !ok {
+		t.Fatal("created session missing")
+	}
+	var events []protocol.Event
+	err := session.Thread.Run(context.Background(), sessionpkg.RunnerFunc(a.RunMessages), prompt, func(event protocol.Event) {
+		if event.Type == protocol.EventRunStarted {
+			session.beginRunStatus(RunRequest{Provider: "mock", Model: "mock"})
+		}
+		if observed, ok := session.observeRunEvent(event); ok {
+			events = append(events, observed)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.saveSession(session); err != nil {
+		t.Fatal(err)
+	}
+	return events
+}
+
+func postGatewayJSON[T any](t *testing.T, server *Server, path, body string, wantStatus int) T {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != wantStatus {
+		t.Fatalf("POST %s status = %d want %d body=%s", path, rec.Code, wantStatus, rec.Body.String())
+	}
+	var out T
+	if strings.TrimSpace(rec.Body.String()) != "" {
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return out
+}
+
+func readFileString(t *testing.T, path string) string {
+	t.Helper()
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(bytes)
+}
+
+func sawEvent(events []protocol.Event, typ protocol.EventType) bool {
+	for _, event := range events {
+		if event.Type == typ {
+			return true
+		}
+	}
+	return false
 }
 
 func TestStreamEventsDoesNotDuplicateEmittedRunFailure(t *testing.T) {

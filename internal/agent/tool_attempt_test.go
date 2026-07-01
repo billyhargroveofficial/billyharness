@@ -78,6 +78,91 @@ func TestRunMessagesExecutesToolAndContinuesLoop(t *testing.T) {
 	}
 }
 
+func TestRunMessagesMutatingToolEmitsTurnChangeRecorded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.MaxToolRounds = 2
+	cfg.AutoApproveDangerous = true
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_write", ToolName: "fs_write_file", ArgsDelta: `{"path":"out.txt","content":"hello\n"}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "finished"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	a := New(cfg, prov, tools.NewRegistry(cfg))
+	var events []protocol.Event
+	if _, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "write file"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertAgentLifecycleValid(t, events)
+	change, ok := firstTurnChange(events)
+	if !ok {
+		t.Fatalf("turn change event missing: %#v", events)
+	}
+	if change.ChangeID == "" || change.ToolName != "fs_write_file" || change.FileCount != 1 || change.Added != 1 || change.PatchOutputRef == "" {
+		t.Fatalf("turn change = %#v", change)
+	}
+	if !strings.HasPrefix(change.PatchOutputRef, filepath.Join(home, "tool-output")) {
+		t.Fatalf("patch output ref = %q, want under %q", change.PatchOutputRef, home)
+	}
+	if _, err := os.Stat(change.PatchOutputRef); err != nil {
+		t.Fatal(err)
+	}
+	result, ok := firstToolResult(events)
+	if !ok || result.Metadata["turn_change_id"] != change.ChangeID || result.Metadata["turn_change_output_ref"] != change.PatchOutputRef {
+		t.Fatalf("tool result metadata = %#v ok=%v change=%#v", result.Metadata, ok, change)
+	}
+}
+
+func TestRunMessagesShellExecEmitsTurnChangeRecorded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.MaxToolRounds = 2
+	cfg.AutoApproveDangerous = true
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_shell", ToolName: "shell_exec", ArgsDelta: `{"argv":["sh","-c","printf shell > shell.txt"],"cwd":"."}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "finished"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	a := New(cfg, prov, tools.NewRegistry(cfg))
+	var events []protocol.Event
+	if _, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "run shell"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	change, ok := firstTurnChange(events)
+	if !ok {
+		t.Fatalf("turn change event missing: %#v", events)
+	}
+	if change.ToolName != "shell_exec" || change.FileCount != 1 || change.Added != 1 || change.PatchOutputRef == "" {
+		t.Fatalf("turn change = %#v", change)
+	}
+}
+
 func TestRunMessagesToolOrchestratorEmitsSafePermissionAndAttempt(t *testing.T) {
 	cfg := config.Default()
 	cfg.MaxToolRounds = 2

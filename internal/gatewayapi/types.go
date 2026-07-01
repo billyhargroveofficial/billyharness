@@ -178,6 +178,21 @@ type CancelSessionResponse struct {
 	Cancelled bool `json:"cancelled"`
 }
 
+type SessionUndoRequest struct {
+	ChangeID string `json:"change_id,omitempty"`
+	Preview  bool   `json:"preview,omitempty"`
+}
+
+type SessionUndoResponse struct {
+	ChangeID       string                   `json:"change_id,omitempty"`
+	Preview        bool                     `json:"preview,omitempty"`
+	Patch          string                   `json:"patch,omitempty"`
+	PatchTruncated bool                     `json:"patch_truncated,omitempty"`
+	RestoredFiles  []string                 `json:"restored_files,omitempty"`
+	Conflicts      []string                 `json:"conflicts,omitempty"`
+	Change         protocol.TurnChangeEvent `json:"change,omitempty"`
+}
+
 type BenchmarkListResponse struct {
 	Dir  string                `json:"dir"`
 	Runs []BenchmarkRunSummary `json:"runs"`

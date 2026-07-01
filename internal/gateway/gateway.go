@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/agent"
+	"github.com/billyhargroveofficial/billyharness/internal/checkpoint"
 	"github.com/billyhargroveofficial/billyharness/internal/clientux"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
@@ -291,6 +292,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/sessions/{id}/events", s.handleSessionEvents)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/inputs", s.handleSessionInput)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/run", s.handleSessionRun)
+	s.mux.HandleFunc("POST /v1/sessions/{id}/undo", s.handleSessionUndo)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/cancel", s.handleSessionCancel)
 }
 
@@ -806,6 +808,86 @@ func (s *Server) handleSessionCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, CancelSessionResponse{Cancelled: session.Thread.Cancel()})
+}
+
+func (s *Server) handleSessionUndo(w http.ResponseWriter, r *http.Request) {
+	session, ok := s.session(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	var req gatewayapi.SessionUndoRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+	}
+	if session.Status().Running || (session.Thread != nil && session.Thread.Running()) {
+		writeError(w, http.StatusConflict, "undo denied during active run; cancel or wait for the run to finish first")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusNotFound, "session turn changes are unavailable without a session store")
+		return
+	}
+	stored, ok, err := s.store.FindTurnChange(session.ID, req.ChangeID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "turn change replay failed: "+err.Error())
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "turn change not found")
+		return
+	}
+	record, err := checkpoint.Load(stored.Data.PatchOutputRef)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "checkpoint load failed: "+err.Error())
+		return
+	}
+	if req.Preview {
+		patch, truncated := checkpoint.Preview(record, 64*1024)
+		resp := gatewayapi.SessionUndoResponse{
+			ChangeID:       stored.Data.ChangeID,
+			Preview:        true,
+			Patch:          patch,
+			PatchTruncated: truncated,
+			Change:         stored.Data,
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	result, err := checkpoint.Restore(record)
+	if err != nil {
+		resp := gatewayapi.SessionUndoResponse{
+			ChangeID:  stored.Data.ChangeID,
+			Conflicts: result.Conflicts,
+			Change:    stored.Data,
+		}
+		if errors.Is(err, checkpoint.ErrConflict) {
+			writeJSON(w, http.StatusConflict, resp)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "checkpoint restore failed: "+err.Error())
+		return
+	}
+	change := stored.Data
+	change.Status = "reverted"
+	change.Summary = "reverted " + change.ChangeID
+	session.publish(protocol.Event{
+		Type:      protocol.EventTurnChangeReverted,
+		RunID:     change.RunID,
+		TurnID:    change.TurnID,
+		StepID:    change.StepID,
+		CallID:    change.CallID,
+		AttemptID: change.AttemptID,
+		Data:      change,
+	})
+	writeJSON(w, http.StatusOK, gatewayapi.SessionUndoResponse{
+		ChangeID:      stored.Data.ChangeID,
+		RestoredFiles: result.RestoredFiles,
+		Change:        change,
+	})
 }
 
 func (s *Server) session(id string) (*Session, bool) {
