@@ -685,6 +685,73 @@ func TestMCPGatewayRefreshesCatalogAfterReconnect(t *testing.T) {
 	}
 }
 
+func TestStaleToolFailsUnknownAfterMCPReconnectFailure(t *testing.T) {
+	root := t.TempDir()
+	phaseFile := filepath.Join(root, "tools-stale-reconnect.phase")
+	pidFile := filepath.Join(root, "tools-stale-reconnect.pid")
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.MCPEnabled = true
+	cfg.MCPServers = []config.MCPServer{{
+		Name:           "fake",
+		Command:        os.Args[0],
+		Args:           []string{"-test.run=TestToolsFakeStdioMCPServer"},
+		Env:            map[string]string{"BILLYHARNESS_TOOLS_MCP_HELPER": "1", "BILLYHARNESS_TOOLS_MCP_MODE": "close_then_bad_reconnect", "BILLYHARNESS_TOOLS_MCP_PID_FILE": pidFile, "BILLYHARNESS_TOOLS_MCP_PHASE_FILE": phaseFile},
+		CWD:            root,
+		Enabled:        true,
+		Required:       true,
+		StartupTimeout: 2 * time.Second,
+		ToolTimeout:    2 * time.Second,
+		EnabledTools:   []string{"echo"},
+	}}
+	registry, err := NewRegistryWithMCP(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+
+	first, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_call",
+		Arguments: rawArgs(map[string]any{
+			"name":      "mcp__fake__echo",
+			"arguments": map[string]any{"text": "first"},
+		}),
+	})
+	if err == nil || !strings.Contains(err.Error(), "transport") {
+		t.Fatalf("expected transport crash, got result=%#v err=%v", first, err)
+	}
+	if _, ok := registry.mcpToolsSnapshot()["mcp__fake__echo"]; ok {
+		t.Fatal("stale MCP tool remained in registry mirror after crash")
+	}
+
+	second, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_call",
+		Arguments: rawArgs(map[string]any{
+			"name":      "mcp__fake__echo",
+			"arguments": map[string]any{"text": "second"},
+		}),
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown MCP tool mcp__fake__echo") {
+		t.Fatalf("stale mcp_call should fail as unknown, got result=%#v err=%v", second, err)
+	}
+
+	list, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "mcp_list_tools",
+		Arguments: rawArgs(map[string]any{"server": "fake"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, notWant := range []string{`"name": "mcp__fake__echo"`} {
+		if strings.Contains(list.Content, notWant) {
+			t.Fatalf("stale catalog still visible with %q:\n%s", notWant, list.Content)
+		}
+	}
+	if !strings.Contains(list.Content, `"tool_count": 0`) || !strings.Contains(list.Content, `"tools": []`) {
+		t.Fatalf("mcp_list_tools did not show cleared catalog:\n%s", list.Content)
+	}
+}
+
 func TestRegistrySubscribesToMCPCatalogChanges(t *testing.T) {
 	root := t.TempDir()
 	phaseFile := filepath.Join(root, "tools-catalog-listener.phase")
@@ -861,6 +928,10 @@ func TestToolsFakeStdioMCPServer(t *testing.T) {
 				"instructions":    "Use echo for MCP gateway tests.",
 			}})
 		case "tools/list":
+			if mode == "close_then_bad_reconnect" && toolsMCPPhaseExists() {
+				_, _ = os.Stdout.Write([]byte("{not json\n"))
+				os.Exit(0)
+			}
 			name := "echo"
 			description := "Echo text"
 			if mode == "bad_list_once_then_new_tool" && !toolsMCPPhaseExists() {
@@ -899,6 +970,10 @@ func TestToolsFakeStdioMCPServer(t *testing.T) {
 				continue
 			}
 			if (mode == "close_once_then_echo" || mode == "close_once_then_new_tool") && !toolsMCPPhaseExists() {
+				writeToolsMCPPhase()
+				os.Exit(0)
+			}
+			if mode == "close_then_bad_reconnect" && !toolsMCPPhaseExists() {
 				writeToolsMCPPhase()
 				os.Exit(0)
 			}

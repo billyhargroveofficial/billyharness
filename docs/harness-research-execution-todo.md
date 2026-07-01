@@ -476,11 +476,26 @@ Goal: add rollback and compact display invariants before expanding edit power.
     ./internal/protocol ./internal/architecture` passed.
   - commit: pending.
 
-- [ ] HR-02.5 MCP catalog change lifecycle.
+- [x] HR-02.5 MCP catalog change lifecycle.
   - maps to: `competitive-improvements-todo.md` P1-8.
   - acceptance: manager owns raw catalog; relist atomically swaps tools;
     crashed/closed servers remove active specs; stale tools fail as unknown.
   - verification: `go test -count=1 ./internal/mcpclient ./internal/tools ./internal/config`.
+  - status: completed 2026-07-01.
+  - evidence: manager-owned MCP catalog snapshots already drove registry
+    mirrors, reconnect refreshes, and `tools/list_changed` relists. This slice
+    closes the stale-spec lifecycle gap: managed servers now clear their active
+    specs and publish catalog changes when a client crashes, reconnect fails,
+    restart begins, startup closes, or the manager closes. Registry mirrors
+    receive the same catalog change and stale `mcp_call` requests now fail
+    validation as unknown instead of reaching a dead or removed server tool.
+  - verification evidence:
+    `/root/.local/go/bin/go test -run
+    'Test.*MCP.*ListChanged.*|Test.*MCP.*Reconnect.*|Test.*Stale.*Tool.*'
+    -count=1 ./internal/mcpclient ./internal/tools` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/mcpclient
+    ./internal/tools ./internal/config` passed.
+  - commit: pending.
 
 ## Milestone 3 - Core Coding Tools
 

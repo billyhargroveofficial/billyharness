@@ -439,7 +439,7 @@ func TestStdioCrashReconnectStatusLifecycle(t *testing.T) {
 	waitProcessGone(t, pidTwo)
 }
 
-func TestStdioReconnectRefreshesCatalogAndEmitsChange(t *testing.T) {
+func TestMCPStdioReconnectRefreshesCatalogAndEmitsChange(t *testing.T) {
 	root := t.TempDir()
 	pidFile := filepath.Join(root, "catalog-reconnect.pid")
 	phaseFile := filepath.Join(root, "catalog-reconnect.phase")
@@ -499,7 +499,7 @@ func TestStdioReconnectRefreshesCatalogAndEmitsChange(t *testing.T) {
 	}
 }
 
-func TestStdioToolsListChangedNotificationRefreshesCatalog(t *testing.T) {
+func TestMCPStdioToolsListChangedNotificationRefreshesCatalog(t *testing.T) {
 	root := t.TempDir()
 	phaseFile := filepath.Join(root, "catalog-notification.phase")
 	manager, err := NewManager(context.Background(), config.Config{
@@ -555,7 +555,7 @@ func TestStdioToolsListChangedNotificationRefreshesCatalog(t *testing.T) {
 	}
 }
 
-func TestStdioReconnectFailureBackoffIsDeterministic(t *testing.T) {
+func TestStaleToolRemovedAfterMCPReconnectFailure(t *testing.T) {
 	root := t.TempDir()
 	pidFile := filepath.Join(root, "reconnect-fail.pid")
 	phaseFile := filepath.Join(root, "reconnect-fail.phase")
@@ -596,6 +596,12 @@ func TestStdioReconnectFailureBackoffIsDeterministic(t *testing.T) {
 	statuses := manager.Statuses()
 	if len(statuses) != 1 || statuses[0].Connected || statuses[0].State != mcpStateFailed || statuses[0].RetryCount != 1 || statuses[0].RetryBackoffMS <= 0 || statuses[0].NextRetryAt == nil || statuses[0].Error == "" {
 		t.Fatalf("failed reconnect status = %#v", statuses)
+	}
+	if hasTool(manager, "mcp__fake__echo") {
+		t.Fatalf("stale echo tool remained after failed reconnect: %#v", manager.Tools())
+	}
+	if snapshot := manager.CatalogSnapshot(); len(snapshot.Tools) != 0 {
+		t.Fatalf("stale tools remained in catalog snapshot: %#v", snapshot.Tools)
 	}
 
 	_, err = echo.Handler(context.Background(), json.RawMessage(`{"text":"third"}`))

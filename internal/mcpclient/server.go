@@ -75,17 +75,25 @@ func (s *managedServer) start(ctx context.Context, reconnect bool) ([]protocol.T
 	if !s.reconnectable {
 		err := fmt.Errorf("MCP %s cannot reconnect with transport %s", s.server.Name, mcpTransport(s.server))
 		s.recordFailureLocked(mcpStateFailed, err, false)
+		catalogChanged := s.clearCatalogLocked()
 		status := cloneStatus(s.status)
 		s.mu.Unlock()
 		s.publishStatus(status)
+		if catalogChanged {
+			s.publishCatalogChanged()
+		}
 		return nil, "", err
 	}
 	if s.closed {
 		err := fmt.Errorf("MCP %s manager is closed", s.server.Name)
 		s.recordFailureLocked(mcpStateDisconnected, err, false)
+		catalogChanged := s.clearCatalogLocked()
 		status := cloneStatus(s.status)
 		s.mu.Unlock()
 		s.publishStatus(status)
+		if catalogChanged {
+			s.publishCatalogChanged()
+		}
 		return nil, "", err
 	}
 	return s.startLocked(ctx, reconnect)
@@ -93,7 +101,17 @@ func (s *managedServer) start(ctx context.Context, reconnect bool) ([]protocol.T
 
 func (s *managedServer) ensureConnected(ctx context.Context) (*stdioClient, error) {
 	s.mu.Lock()
-	_, _ = s.absorbClientLocked()
+	status, statusChanged, catalogChanged := s.absorbClientLocked()
+	if statusChanged || catalogChanged {
+		s.mu.Unlock()
+		if statusChanged {
+			s.publishStatus(status)
+		}
+		if catalogChanged {
+			s.publishCatalogChanged()
+		}
+		s.mu.Lock()
+	}
 	if s.closed {
 		s.mu.Unlock()
 		return nil, fmt.Errorf("MCP %s manager is closed", s.server.Name)
@@ -138,6 +156,7 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 	}
 	oldClient := s.client
 	s.client = nil
+	catalogChanged := s.clearCatalogLocked()
 	s.starting = true
 	now := time.Now().UTC()
 	s.status.Connected = false
@@ -154,6 +173,9 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 	restartingStatus := cloneStatus(s.status)
 	s.mu.Unlock()
 	s.publishStatus(restartingStatus)
+	if catalogChanged {
+		s.publishCatalogChanged()
+	}
 
 	if oldClient != nil {
 		oldClient.close()
@@ -164,9 +186,13 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 	if s.closed {
 		closedErr := fmt.Errorf("MCP %s manager is closed", s.server.Name)
 		s.recordFailureLocked(mcpStateDisconnected, closedErr, false)
+		catalogChanged := s.clearCatalogLocked()
 		status := cloneStatus(s.status)
 		s.mu.Unlock()
 		s.publishStatus(status)
+		if catalogChanged {
+			s.publishCatalogChanged()
+		}
 		if client != nil {
 			client.close()
 		}
@@ -174,9 +200,13 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 	}
 	if err != nil {
 		s.recordFailureLocked(mcpStateFailed, err, reconnect)
+		catalogChanged := s.clearCatalogLocked()
 		status := cloneStatus(s.status)
 		s.mu.Unlock()
 		s.publishStatus(status)
+		if catalogChanged {
+			s.publishCatalogChanged()
+		}
 		return nil, "", err
 	}
 	s.client = client
@@ -217,10 +247,13 @@ func (s *managedServer) callTool(ctx context.Context, name string, args json.Raw
 	text, err := client.callTool(ctx, name, args)
 	if err != nil && !client.connected.Load() {
 		s.mu.Lock()
-		status, changed := s.absorbClientLocked()
+		status, changed, catalogChanged := s.absorbClientLocked()
 		s.mu.Unlock()
 		if changed {
 			s.publishStatus(status)
+		}
+		if catalogChanged {
+			s.publishCatalogChanged()
 		}
 	}
 	return text, err
@@ -260,10 +293,13 @@ func (s *managedServer) refreshCatalog(ctx context.Context) error {
 	if err != nil {
 		if !client.connected.Load() {
 			s.mu.Lock()
-			status, changed := s.absorbClientLocked()
+			status, changed, catalogChanged := s.absorbClientLocked()
 			s.mu.Unlock()
 			if changed {
 				s.publishStatus(status)
+			}
+			if catalogChanged {
+				s.publishCatalogChanged()
 			}
 		}
 		return err
@@ -289,10 +325,13 @@ func (s *managedServer) snapshot() ServerStatus {
 		return ServerStatus{}
 	}
 	s.mu.Lock()
-	status, changed := s.absorbClientLocked()
+	status, changed, catalogChanged := s.absorbClientLocked()
 	s.mu.Unlock()
 	if changed {
 		s.publishStatus(status)
+	}
+	if catalogChanged {
+		s.publishCatalogChanged()
 	}
 	return status
 }
@@ -320,6 +359,7 @@ func (s *managedServer) close() {
 	s.closed = true
 	client := s.client
 	s.client = nil
+	catalogChanged := s.clearCatalogLocked()
 	now := time.Now().UTC()
 	s.status.Connected = false
 	s.status.State = mcpStateDisconnected
@@ -330,6 +370,9 @@ func (s *managedServer) close() {
 	status := cloneStatus(s.status)
 	s.mu.Unlock()
 	s.publishStatus(status)
+	if catalogChanged {
+		s.publishCatalogChanged()
+	}
 	if client != nil {
 		client.close()
 	}
@@ -368,9 +411,17 @@ func (s *managedServer) recordFailureLocked(state string, err error, retryable b
 	}
 }
 
-func (s *managedServer) absorbClientLocked() (ServerStatus, bool) {
+func (s *managedServer) clearCatalogLocked() bool {
+	changed := len(s.specs) > 0 || strings.TrimSpace(s.instructions) != ""
+	s.specs = nil
+	s.instructions = ""
+	s.status.ToolCount = 0
+	return changed
+}
+
+func (s *managedServer) absorbClientLocked() (ServerStatus, bool, bool) {
 	if s.client == nil {
-		return cloneStatus(s.status), false
+		return cloneStatus(s.status), false, false
 	}
 	before := cloneStatus(s.status)
 	client := s.client
@@ -382,7 +433,7 @@ func (s *managedServer) absorbClientLocked() (ServerStatus, bool) {
 			s.status.StartedAt = &startedAt
 		}
 		after := cloneStatus(s.status)
-		return after, mcpStatusChanged(before, after)
+		return after, mcpStatusChanged(before, after), false
 	}
 	state, lastErr, lastErrAt := client.lifecycleState()
 	if state == "" {
@@ -400,8 +451,9 @@ func (s *managedServer) absorbClientLocked() (ServerStatus, bool) {
 	}
 	s.status.PID = client.pid()
 	s.status.StderrTail = client.stderrTail()
+	catalogChanged := s.clearCatalogLocked()
 	after := cloneStatus(s.status)
-	return after, mcpStatusChanged(before, after)
+	return after, mcpStatusChanged(before, after), catalogChanged
 }
 
 func (s *managedServer) publishStatus(status ServerStatus) {
