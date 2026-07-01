@@ -547,11 +547,33 @@ abuse.
     ./internal/tools ./internal/toolrender ./internal/tui/transcript` passed.
   - commit: pending.
 
-- [ ] HR-03.3 Fuzzy file resolver and TUI `@file`.
+- [x] HR-03.3 Fuzzy file resolver and TUI `@file`.
   - maps to: `competitive-improvements-todo.md` A6.
   - acceptance: ranked file search uses git/rg/walk fallbacks; TUI inserts exact
     paths without auto-injecting file content.
   - verification: `go test -count=1 ./internal/filesearch ./internal/tools ./internal/tui`.
+  - status: completed 2026-07-01.
+  - evidence: added `internal/filesearch` as an on-demand fuzzy relative-path
+    resolver with workspace-root safety, sensitive-path skips, lightweight
+    TTL/signature caching, exact-basename-before-path ranking, pagination, and
+    git `ls-files` / `rg --files` / `WalkDir` fallbacks. Added native
+    read-only `fs_find_files` with ranked path/type/score/source output,
+    truncation metadata, compact display metadata, and parallel-safe metadata.
+    TUI normal prompt input now opens an `@` file popup outside slash mode,
+    ignores stale async search results, inserts only exact relative paths on
+    `Tab`/`Enter`, and never reads or injects file content.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/filesearch
+    ./internal/tools ./internal/tui` passed; `/root/.local/go/bin/go test -run
+    'Test.*File(Search|Resolver|FindFiles).*|TestTUI.*(AtFile|FileMention|Popup)'
+    -count=1 ./internal/filesearch ./internal/tools ./internal/tui` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/toolrender
+    ./internal/tui/transcript ./internal/architecture` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/filesearch
+    ./internal/tools ./internal/tui ./internal/toolrender
+    ./internal/tui/transcript ./internal/architecture ./internal/telegrambot`
+    passed.
+  - commit: pending.
 
 - [ ] HR-03.4 Run access modes and plan mode.
   - maps to: `competitive-improvements-todo.md` A7.

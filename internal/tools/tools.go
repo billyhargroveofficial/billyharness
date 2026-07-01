@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/filesearch"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/tools/discovery"
@@ -86,6 +87,7 @@ type Registry struct {
 	mcpMu           sync.RWMutex
 	manager         *mcpclient.Manager
 	instructions    []string
+	fileResolver    *filesearch.Resolver
 	webSummarizer   webtools.Summarizer
 	webSummarySlots chan struct{}
 	webSummarySeq   int64
@@ -140,6 +142,7 @@ func NewRegistryFromSettings(settings RegistrySettings, opts ...RegistryOption) 
 		mcpSettings:     settings.MCP,
 		tools:           map[string]Tool{},
 		mcpTools:        map[string]Tool{},
+		fileResolver:    filesearch.NewResolver(filesearch.DefaultCacheTTL),
 		webSummarySlots: make(chan struct{}, defaultWebSummaryConcurrency),
 	}
 	for _, opt := range opts {
@@ -154,6 +157,7 @@ func NewRegistryFromSettings(settings RegistrySettings, opts ...RegistryOption) 
 	r.addFSSearch()
 	r.addFSGrep()
 	r.addFSGlob()
+	r.addFSFindFiles()
 	r.addFSWrite()
 	r.addFSMkdir()
 	r.addShellExec()
@@ -526,7 +530,7 @@ func normalizeParallelMetadata(name string, risk protocol.Risk, meta ParallelMet
 
 func defaultParallelMetadata(name string, risk protocol.Risk) ParallelMetadata {
 	switch name {
-	case "time_now", "fs_read_file", "fs_list", "fs_search", "fs_grep", "fs_glob", "tool_search", "skill_list", "skill_read", "web_cache_status":
+	case "time_now", "fs_read_file", "fs_list", "fs_search", "fs_grep", "fs_glob", "fs_find_files", "tool_search", "skill_list", "skill_read", "web_cache_status":
 		return ParallelMetadata{Policy: ParallelPolicyReadOnly, Idempotent: true, Cancellable: true}
 	case "web_search", "web_fetch", "web_extract", "web_crawl":
 		return ParallelMetadata{Policy: ParallelPolicyNetworkRateLimited, Idempotent: true, RateLimitKey: "web", Cancellable: true, MaxConcurrency: 3}

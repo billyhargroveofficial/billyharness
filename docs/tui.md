@@ -18,7 +18,7 @@ stty -ixon
 
 ## Commands
 
-Slash commands open an autocomplete popup. Use `Tab`, `Up`, and `Down` to move through command or argument choices.
+Slash commands open an autocomplete popup. Use `Tab`, `Up`, and `Down` to move through command or argument choices. Typing `@` in a normal prompt opens a file popup; `Tab` or `Enter` inserts the selected relative path without reading or injecting the file content.
 
 ```text
 /auth deepseek|codex
@@ -94,7 +94,7 @@ Thinking blocks can be switched with:
 /thinkview hidden
 ```
 
-The default compact tool line shows status, tool name, file/url/query/server/command summary, duration, truncation, output refs, and cache or token metadata when available. Native filesystem search tools include bounded `fs_grep` regex search and `fs_glob` recursive path matching, both rendered as compact tool rows.
+The default compact tool line shows status, tool name, file/url/query/server/command summary, duration, truncation, output refs, and cache or token metadata when available. Native filesystem search tools include bounded `fs_grep` regex search, `fs_glob` recursive path matching, and `fs_find_files` fuzzy relative-path lookup, all rendered as compact tool rows.
 
 `/toolview current` keeps only the latest turn's tool cells visible. In collapsed/current/auto views, repeated context-gathering calls such as file reads, searches, web fetches, and read-only MCP lookups are grouped into a compact "Context tools" summary so a long evidence-gathering run stays readable. Switch to `/toolview expanded` when you need the full individual tool outputs.
 

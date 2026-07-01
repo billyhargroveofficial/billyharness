@@ -19,6 +19,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/clientux"
 	uxprojector "github.com/billyhargroveofficial/billyharness/internal/clientux/projector"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/filesearch"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpstatus"
@@ -153,6 +154,15 @@ type Model struct {
 	toolSummaryAPITok    int64
 	slashIndex           int
 	slashDismissed       string
+	fileResolver         *filesearch.Resolver
+	fileMentionIndex     int
+	fileMentionSeq       int64
+	fileMentionPending   int64
+	fileMentionToken     fileMentionToken
+	fileMentionResults   []filesearch.Match
+	fileMentionDismissed string
+	fileMentionSearching bool
+	fileMentionErr       string
 	authInputProvider    string
 	selection            tuiselection.Controller
 	runStartedAt         time.Time
@@ -342,6 +352,7 @@ func NewModel(cfg config.Config, opts Options) Model {
 		events:              make(chan tea.Msg, 256),
 		uxProjector:         uxprojector.New(),
 		transcriptProjector: transcript.NewProjector(),
+		fileResolver:        filesearch.NewResolver(filesearch.DefaultCacheTTL),
 		status:              status,
 	}
 	m.refreshConfigProjections()
@@ -376,6 +387,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		if m.handleSlashNavigation(msg) {
+			skipTextareaUpdate = true
+			break
+		}
+		if m.handleFileMentionNavigation(msg) {
 			skipTextareaUpdate = true
 			break
 		}
@@ -556,6 +571,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		reflow = true
 		gotoBottom = m.followOutput
+	case fileMentionResultsMsg:
+		m.applyFileMentionResults(msg)
+		if m.width > 0 {
+			m.resize(m.followOutput)
+		}
 	case authResultMsg:
 		m.cancelAuthInput()
 		if msg.err != nil {
@@ -586,6 +606,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	}
 	if _, ok := msg.(tea.KeyPressMsg); ok && m.width > 0 {
+		if cmd := m.updateFileMentionSearch(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 		m.resize(m.followOutput)
 	}
 	if !skipViewportUpdate {
@@ -614,7 +637,7 @@ func (m Model) View() tea.View {
 	ta := m.textarea
 	ta.SetStyles(styles.textarea)
 	input := styles.input.Width(m.inputContentWidth(styles)).Render(ta.View())
-	popup := m.slashPopupView()
+	popup := m.inputPopupView()
 	runStatus := m.runStatusView()
 	status := styles.status.Width(m.statusContentWidth(styles)).Render(m.inlineStatusView())
 	parts := []string{m.viewport.View()}
@@ -656,7 +679,7 @@ func (m *Model) resize(gotoBottom bool) {
 	inputH := lipgloss.Height(styles.input.Width(inputContentW).Render(ta.View()))
 	runStatusH := lipgloss.Height(m.runStatusView())
 	statusH := lipgloss.Height(styles.status.Width(m.statusContentWidth(styles)).Render(m.inlineStatusView()))
-	popupH := m.slashPopupHeight()
+	popupH := m.inputPopupHeight()
 	vh := max(4, m.height-inputH-runStatusH-statusH-popupH)
 	m.viewport.SetHeight(vh)
 	if needsTranscriptReflow {

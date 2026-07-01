@@ -194,6 +194,21 @@ func TestProjectorToolRenderFSGrepGlob(t *testing.T) {
 	if strings.Contains(cells[1].Content, `"pattern"`) || strings.Contains(cells[1].Content, `"sort"`) {
 		t.Fatalf("glob cell leaked raw args: %#v", cells[1])
 	}
+
+	cells = p.Apply(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{
+			ID:        "call_find",
+			Name:      "fs_find_files",
+			Arguments: json.RawMessage(`{"query":"secret raw query","path":"internal","limit":10}`),
+		},
+	})
+	if len(cells) != 3 || !strings.Contains(cells[2].Title, "Found files secret raw query in internal") {
+		t.Fatalf("find-files cells = %#v", cells)
+	}
+	if strings.Contains(cells[2].Content, `"query"`) || strings.Contains(cells[2].Content, `"limit"`) {
+		t.Fatalf("find-files cell leaked raw args: %#v", cells[2])
+	}
 }
 
 func TestProjectorApplyUsesCompactToolAuditText(t *testing.T) {

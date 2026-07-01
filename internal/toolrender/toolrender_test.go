@@ -140,6 +140,18 @@ func TestCallLineSnapshotsCommonTools(t *testing.T) {
 			style:    StyleTelegram,
 			expected: "🧭 glob **/*.go in internal/tools",
 		},
+		{
+			name:     "tui fs find files",
+			call:     protocol.ToolCall{Name: "fs_find_files", Arguments: []byte(`{"query":"tui file","path":"internal"}`)},
+			style:    StyleTUI,
+			expected: "Found files tui file in internal",
+		},
+		{
+			name:     "telegram fs find files",
+			call:     protocol.ToolCall{Name: "fs_find_files", Arguments: []byte(`{"query":"tui file","path":"internal"}`)},
+			style:    StyleTelegram,
+			expected: "🗂 find files tui file in internal",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -230,6 +242,23 @@ func TestToolRenderFSGrepGlob(t *testing.T) {
 	for _, notWant := range []string{`"pattern"`, `"sort"`} {
 		if strings.Contains(glob, notWant) {
 			t.Fatalf("glob line leaked raw args: %q", glob)
+		}
+	}
+}
+
+func TestToolRenderFSFindFiles(t *testing.T) {
+	line := CallLine(protocol.ToolCall{
+		Name:      "fs_find_files",
+		Arguments: []byte(`{"query":"secret raw query","path":"internal","limit":10}`),
+	}, StyleTelegram)
+	for _, want := range []string{"find files", "secret raw query", "internal"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("find-files line missing %q: %q", want, line)
+		}
+	}
+	for _, notWant := range []string{`"query"`, `"limit"`} {
+		if strings.Contains(line, notWant) {
+			t.Fatalf("find-files line leaked raw args: %q", line)
 		}
 	}
 }
