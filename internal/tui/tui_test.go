@@ -404,6 +404,63 @@ func TestTUIDropsReplayEventsAtOrBeforeCursor(t *testing.T) {
 	}
 }
 
+func TestTUIBatchesStreamDeltasUntilEventBatchTick(t *testing.T) {
+	m := newTestModel(t)
+	want := newTestModel(t)
+	const chunks = 1000
+	for i := 0; i < chunks; i++ {
+		event := protocol.Event{Type: protocol.EventAssistantDelta, Data: "x"}
+		want.applyEvent(event)
+		updated, _ := m.Update(streamEventMsg{event: event})
+		m = updated.(Model)
+	}
+	if len(m.blocks) != 0 {
+		t.Fatalf("stream deltas should not apply before batch tick: %#v", m.blocks)
+	}
+	if len(m.pendingStreamEvents) != chunks {
+		t.Fatalf("pending events = %d, want %d", len(m.pendingStreamEvents), chunks)
+	}
+	if m.reflowCount != 0 {
+		t.Fatalf("reflow count before tick = %d, want 0", m.reflowCount)
+	}
+
+	updated, _ := m.Update(eventBatchTickMsg{})
+	m = updated.(Model)
+	if len(m.pendingStreamEvents) != 0 {
+		t.Fatalf("pending events after tick = %d", len(m.pendingStreamEvents))
+	}
+	if m.reflowCount != 1 {
+		t.Fatalf("reflow count after tick = %d, want 1", m.reflowCount)
+	}
+	if len(m.blocks) != len(want.blocks) || len(m.blocks) != 1 || m.blocks[0].Content != want.blocks[0].Content {
+		t.Fatalf("batched blocks = %#v, want %#v", m.blocks, want.blocks)
+	}
+}
+
+func TestTUIStreamBatchFlushesToolBoundaryImmediately(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(streamEventMsg{event: protocol.Event{Type: protocol.EventAssistantDelta, Data: "before tool"}})
+	m = updated.(Model)
+	if len(m.blocks) != 0 || m.reflowCount != 0 {
+		t.Fatalf("delta applied before boundary: blocks=%#v reflows=%d", m.blocks, m.reflowCount)
+	}
+
+	updated, _ = m.Update(streamEventMsg{event: protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{ID: "call-1", Name: "fs_read_file"},
+	}})
+	m = updated.(Model)
+	if len(m.pendingStreamEvents) != 0 {
+		t.Fatalf("pending events after tool boundary = %d", len(m.pendingStreamEvents))
+	}
+	if m.reflowCount != 1 {
+		t.Fatalf("reflow count after tool boundary = %d, want 1", m.reflowCount)
+	}
+	if len(m.blocks) < 2 {
+		t.Fatalf("expected assistant and tool blocks, got %#v", m.blocks)
+	}
+}
+
 func TestReplayGatewayEventsCmdFetchesAfterSeq(t *testing.T) {
 	var sawReplay bool
 	server := testkit.NewRouteServer(t,

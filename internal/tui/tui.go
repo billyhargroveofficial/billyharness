@@ -112,49 +112,52 @@ type Model struct {
 	width           int
 	height          int
 
-	blocks              []transcript.Cell
-	richRenderCache     map[string]tuirender.CellCache
-	nextBlockSeq        int64
-	collapsed           map[int]bool
-	selected            int
-	busy                bool
-	status              string
-	err                 string
-	events              chan tea.Msg
-	uxProjector         *uxprojector.Projector
-	transcriptProjector *transcript.Projector
-	transcriptStale     bool
-	modelCalls          int
-	toolCalls           int
-	runStartModelCalls  int
-	runStartToolCalls   int
-	runStartInputTok    int64
-	runStartOutputTok   int64
-	runStartCacheHit    int64
-	runStartCacheMiss   int64
-	runStartReasoning   int64
-	runStartSummaryIn   int64
-	runStartSummaryOut  int64
-	runStartSummaryAPI  int64
-	inputTok            int64
-	outputTok           int64
-	cacheHitTok         int64
-	cacheMissTok        int64
-	reasoningTok        int64
-	lastInputTok        int64
-	lastOutputTok       int64
-	lastCacheHitTok     int64
-	lastCacheMissTok    int64
-	toolSummaryInTok    int64
-	toolSummaryOutTok   int64
-	toolSummaryAPITok   int64
-	slashIndex          int
-	slashDismissed      string
-	authInputProvider   string
-	selection           tuiselection.Controller
-	runStartedAt        time.Time
-	lastRunDuration     time.Duration
-	spinnerFrame        int
+	blocks               []transcript.Cell
+	richRenderCache      map[string]tuirender.CellCache
+	nextBlockSeq         int64
+	collapsed            map[int]bool
+	selected             int
+	busy                 bool
+	status               string
+	err                  string
+	events               chan tea.Msg
+	pendingStreamEvents  []protocol.Event
+	streamBatchScheduled bool
+	uxProjector          *uxprojector.Projector
+	transcriptProjector  *transcript.Projector
+	transcriptStale      bool
+	reflowCount          int
+	modelCalls           int
+	toolCalls            int
+	runStartModelCalls   int
+	runStartToolCalls    int
+	runStartInputTok     int64
+	runStartOutputTok    int64
+	runStartCacheHit     int64
+	runStartCacheMiss    int64
+	runStartReasoning    int64
+	runStartSummaryIn    int64
+	runStartSummaryOut   int64
+	runStartSummaryAPI   int64
+	inputTok             int64
+	outputTok            int64
+	cacheHitTok          int64
+	cacheMissTok         int64
+	reasoningTok         int64
+	lastInputTok         int64
+	lastOutputTok        int64
+	lastCacheHitTok      int64
+	lastCacheMissTok     int64
+	toolSummaryInTok     int64
+	toolSummaryOutTok    int64
+	toolSummaryAPITok    int64
+	slashIndex           int
+	slashDismissed       string
+	authInputProvider    string
+	selection            tuiselection.Controller
+	runStartedAt         time.Time
+	lastRunDuration      time.Duration
+	spinnerFrame         int
 }
 
 type streamEventMsg struct {
@@ -192,10 +195,12 @@ type clipboardCopiedMsg struct {
 }
 
 type tickMsg time.Time
+type eventBatchTickMsg time.Time
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 const defaultTextareaPlaceholder = "Message billyharness. Type / for commands."
+const streamEventBatchInterval = 25 * time.Millisecond
 
 func Run(opts Options) error {
 	cfg := config.Default()
@@ -454,13 +459,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reflow = true
 		gotoBottom = m.followOutput
 	case streamEventMsg:
-		m.applyEvent(msg.event)
-		reflow = true
-		gotoBottom = m.followOutput
+		m.queueStreamEvent(msg.event)
+		if shouldFlushStreamEvent(msg.event) {
+			reflow = m.flushStreamEvents()
+			gotoBottom = m.followOutput
+		} else if !m.streamBatchScheduled {
+			m.streamBatchScheduled = true
+			cmds = append(cmds, m.eventBatchCmd())
+		}
 		if m.busy {
 			cmds = append(cmds, m.waitEventCmd())
 		}
 	case runDoneMsg:
+		if m.flushStreamEvents() {
+			reflow = true
+			gotoBottom = m.followOutput
+		}
+		m.streamBatchScheduled = false
 		m.busy = false
 		m.finishLiveBlocks()
 		if !m.runStartedAt.IsZero() {
@@ -480,6 +495,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reflow = true
 		gotoBottom = m.followOutput
 	case errMsg:
+		if m.flushStreamEvents() {
+			reflow = true
+			gotoBottom = m.followOutput
+		}
+		m.streamBatchScheduled = false
 		m.busy = false
 		m.finishLiveBlocks()
 		if !m.runStartedAt.IsZero() {
@@ -536,6 +556,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.busy {
 			m.spinnerFrame++
 			cmds = append(cmds, m.tickCmd())
+		}
+	case eventBatchTickMsg:
+		m.streamBatchScheduled = false
+		if m.flushStreamEvents() {
+			reflow = true
+			gotoBottom = m.followOutput
 		}
 	}
 
@@ -792,6 +818,12 @@ func (m Model) waitEventCmd() tea.Cmd {
 func (m Model) tickCmd() tea.Cmd {
 	return tea.Tick(120*time.Millisecond, func(t time.Time) tea.Msg {
 		return tickMsg(t)
+	})
+}
+
+func (m Model) eventBatchCmd() tea.Cmd {
+	return tea.Tick(streamEventBatchInterval, func(t time.Time) tea.Msg {
+		return eventBatchTickMsg(t)
 	})
 }
 

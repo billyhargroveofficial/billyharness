@@ -220,7 +220,7 @@ adding more powerful tools.
     -count=1 ./internal/...` passed.
   - commit: pending.
 
-- [ ] HR-01.6 Batched TUI event apply and reflow.
+- [x] HR-01.6 Batched TUI event apply and reflow.
   - maps to: `competitive-improvements-todo.md` B4.
   - target files: `internal/tui/tui.go`,
     `internal/tui/gateway_session.go`,
@@ -230,6 +230,18 @@ adding more powerful tools.
     events flush immediately; 1000 deltas produce the same final transcript
     with far fewer reflows.
   - verification: `go test -count=1 ./internal/tui ./internal/tui/transcript`.
+  - status: completed 2026-07-01.
+  - evidence: TUI stream events now queue assistant/model deltas behind a short
+    batch tick, flush immediately for terminal/tool-boundary events, and flush
+    any pending batch before run completion/error handling. A 1000-delta
+    regression proves the final assistant transcript matches direct apply while
+    reflow happens once after the batch tick.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/tui
+    ./internal/tui/transcript` passed; `/root/.local/go/bin/go test -run
+    'Test.*TUI.*(Batch|Reflow|Seq|Dedupe).*' -count=1 ./internal/tui
+    ./internal/tui/transcript` passed.
+  - commit: pending.
 
 - [ ] HR-01.7 Hard inline budgets for web and large tool outputs.
   - maps to: `competitive-improvements-todo.md` P0-3.

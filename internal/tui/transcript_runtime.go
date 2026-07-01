@@ -544,6 +544,35 @@ func (m *Model) applyEvent(event protocol.Event) {
 	}
 }
 
+func (m *Model) queueStreamEvent(event protocol.Event) {
+	m.pendingStreamEvents = append(m.pendingStreamEvents, event)
+}
+
+func (m *Model) flushStreamEvents() bool {
+	if len(m.pendingStreamEvents) == 0 {
+		return false
+	}
+	events := append([]protocol.Event(nil), m.pendingStreamEvents...)
+	m.pendingStreamEvents = m.pendingStreamEvents[:0]
+	for _, event := range events {
+		m.applyEvent(event)
+	}
+	return true
+}
+
+func shouldFlushStreamEvent(event protocol.Event) bool {
+	switch event.Type {
+	case protocol.EventRunCompleted, protocol.EventRunFailed,
+		protocol.EventToolCallRequested, protocol.EventToolCallStarted,
+		protocol.EventToolCallFinished, protocol.EventToolCallFailed,
+		protocol.EventToolCallAborted, protocol.EventToolOutputRefCreated,
+		protocol.EventStepStarted, protocol.EventStepCompleted:
+		return true
+	default:
+		return false
+	}
+}
+
 func (m *Model) upsertRunSummaryBlock(eventType protocol.EventType, state, errText string) {
 	previous := append([]transcript.Cell(nil), m.blocks...)
 	selected := m.selected
@@ -913,6 +942,7 @@ func (m *Model) finishLiveBlocks() {
 }
 
 func (m *Model) reflow(gotoBottom bool) {
+	m.reflowCount++
 	var parts []string
 	currentToolTurnID := ""
 	if m.toolView == "current" {
