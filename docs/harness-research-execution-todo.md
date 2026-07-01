@@ -911,11 +911,30 @@ platform.
     rerun and the full package-suite rerun both passed.
   - commit: pending.
 
-- [ ] HR-04.7 JSONL scale benchmark and sparse seq index gate.
+- [x] HR-04.7 JSONL scale benchmark and sparse seq index gate.
   - maps to: `competitive-improvements-todo.md` B12.
   - acceptance: 10k/100k append and tail-replay metrics exist; sparse `.idx`
     only if measured full scan misses target.
   - verification: `go test -run '^$' -bench 'Benchmark(SessionJSONL|EventJSONL|ReplayAfterSeq)' -benchmem ./internal/gateway ./internal/eventlog`.
+  - status: completed 2026-07-01.
+  - evidence: added gateway session and raw eventlog JSONL benchmarks covering
+    warmed 10k/100k appends, high-seq tail replay, output-ref-heavy records,
+    and coalesced/uncoalesced assistant streams. Added `scripts/bench-smoke.sh`
+    with stable `METRIC name value unit` output and documented the sparse
+    seq-offset gate in `docs/benchmarks.md`: keep JSONL full-scan replay while
+    the 100k tail replay benchmarks remain below 1s/op on repeated local smoke
+    runs. No sparse `.idx` was added because measured full scans stayed below
+    the gate.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/gateway
+    ./internal/eventlog` passed; `./scripts/bench-smoke.sh` passed and emitted
+    `METRIC` lines including `initial_events`, `log_events`, and
+    `tail_events`; `/root/.local/go/bin/go test -run '^$' -bench
+    'Benchmark(SessionJSONL|EventJSONL|ReplayAfterSeq)' -benchmem
+    ./internal/gateway ./internal/eventlog` passed with
+    `BenchmarkReplayAfterSeq/deltas_100000_tail100` at about 626ms/op and
+    `BenchmarkEventJSONLReplay/deltas_100000_tail100` at about 642ms/op.
+  - commit: pending.
 
 - [ ] HR-04.8 Cross-adapter slow-client stress harness.
   - maps to: `competitive-improvements-todo.md` B15.

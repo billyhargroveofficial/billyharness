@@ -94,13 +94,38 @@ TUI long-transcript rendering has focused benchmarks for cached transcript reflo
 
 Use these before and after renderer changes. Printable keypresses should stay far cheaper than cached full reflow on the same long transcript.
 
-Gateway JSONL session append/replay has focused benchmarks for append cost and replay cursor behavior:
+## JSONL Scale Gate
+
+Gateway session JSONL and the shared eventlog JSONL helpers have scale
+benchmarks for warmed appends, full-scan tail replay, output-ref-heavy records,
+and coalesced/uncoalesced assistant streams:
 
 ```sh
-/root/.local/go/bin/go test ./internal/gateway -run '^$' -bench 'BenchmarkGatewaySessionJSONL(Append|Replay)$' -benchmem
+/root/.local/go/bin/go test -run '^$' -bench 'Benchmark(SessionJSONL|EventJSONL|ReplayAfterSeq)' -benchmem ./internal/gateway ./internal/eventlog
 ```
 
-Tail replay is expected to scan the canonical JSONL file until an index optimization lands; use this benchmark to prove any future replay index actually changes the profile.
+The benchmark output includes `initial_events`, `log_events`, and
+`tail_events` custom metrics so 10k/100k runs are visible in machine-parsed
+results. For quick local trend checks, run:
+
+```sh
+./scripts/bench-smoke.sh
+```
+
+`bench-smoke.sh` defaults to `BENCHTIME=1x`, accepts `GO_BIN`, `BENCHTIME`, and
+`BENCH_REGEX`, and emits stable `METRIC name value unit` lines after the normal
+Go benchmark output.
+
+JSONL remains canonical. Do not add a sparse seq-offset `.idx` while
+`BenchmarkReplayAfterSeq/deltas_100000_tail100` and
+`BenchmarkEventJSONLReplay/deltas_100000_tail100` remain below 1s/op on repeated
+local smoke runs. If either benchmark repeatedly exceeds that target, add only a
+rebuildable sparse `.idx` derived from the canonical JSONL file; do not migrate
+session truth to SQLite/FTS/vector storage for this gate.
+
+Current HR-04.7 smoke on 2026-07-01 measured full-scan 100k tail replay at
+about 596ms/op for gateway sessions and 653ms/op for raw eventlog JSONL, so no
+sparse `.idx` was added.
 
 Provider streaming parsers have high-volume SSE benchmarks for DeepSeek-compatible chat streams and OpenAI/Codex Responses streams:
 
