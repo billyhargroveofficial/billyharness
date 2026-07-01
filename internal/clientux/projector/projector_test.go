@@ -1,10 +1,12 @@
 package projector
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/testkit"
 )
 
 func TestProjectorBuildsClientSnapshot(t *testing.T) {
@@ -84,6 +86,51 @@ func TestProjectorBuildsClientSnapshot(t *testing.T) {
 	}
 }
 
+func TestGoldenTraceProjectsClientSnapshot(t *testing.T) {
+	p := New()
+	var snap Snapshot
+	for _, event := range goldenTraceEvents(t) {
+		snap = p.Apply(event)
+	}
+	if snap.RunState != RunStateCompleted || snap.LastSeq != 36 || snap.SeqGap != nil {
+		t.Fatalf("terminal snapshot = %#v", snap)
+	}
+	for _, want := range []string{
+		"I'll check the web summary and MCP catalog.",
+		"Final answer: web context and MCP state agree",
+	} {
+		if !strings.Contains(snap.AssistantText, want) {
+			t.Fatalf("assistant text missing %q in %q", want, snap.AssistantText)
+		}
+	}
+	if !strings.Contains(snap.ReasoningText, "Need web context") {
+		t.Fatalf("reasoning text = %q", snap.ReasoningText)
+	}
+	if snap.ModelCalls != 2 || snap.ToolCalls != 2 {
+		t.Fatalf("call counts = model %d tool %d", snap.ModelCalls, snap.ToolCalls)
+	}
+	if snap.InputTokens != 2100 || snap.OutputTokens != 135 ||
+		snap.CacheHitTokens != 1100 || snap.CacheMissTokens != 1000 || snap.ReasoningTokens != 20 {
+		t.Fatalf("usage = %#v", snap)
+	}
+	if snap.ToolSummaryInputTokens != 100 || snap.ToolSummaryOutputTokens != 25 || snap.ToolSummaryAPITokens != 125 {
+		t.Fatalf("tool summary metrics = %#v", snap)
+	}
+	web := snap.ToolsByCallID["call-web"]
+	if web.Name != "web_fetch" || web.Status != "finished" || web.IsError ||
+		!strings.Contains(web.Content, "bounded web digest") {
+		t.Fatalf("web tool = %#v", web)
+	}
+	mcp := snap.ToolsByCallID["call-mcp"]
+	if mcp.Name != "mcp_call" || mcp.Status != "finished" || !strings.Contains(mcp.Content, "MCP catalog") {
+		t.Fatalf("mcp tool = %#v", mcp)
+	}
+	if len(snap.ContextThresholds) != 1 || snap.ContextThresholds[0].Percent != 70 ||
+		snap.ContextThresholds[0].Stage != "before_turn" {
+		t.Fatalf("thresholds = %#v", snap.ContextThresholds)
+	}
+}
+
 func TestProjectorSeparatesAssistantTextAcrossModelTurns(t *testing.T) {
 	p := New()
 	for _, event := range []protocol.Event{
@@ -98,6 +145,20 @@ func TestProjectorSeparatesAssistantTextAcrossModelTurns(t *testing.T) {
 	if got := p.Snapshot().AssistantText; !strings.Contains(got, "first turn.\n\nSecond turn.") {
 		t.Fatalf("assistant text = %q", got)
 	}
+}
+
+func goldenTraceEvents(t *testing.T) []protocol.Event {
+	t.Helper()
+	records := testkit.ReadTraceRecords(t, testkit.CanonicalAgentLoopTracePath(t))
+	events := make([]protocol.Event, 0, len(records))
+	for _, record := range records {
+		var event protocol.Event
+		if err := json.Unmarshal(record.Event, &event); err != nil {
+			t.Fatalf("decode event seq %d: %v", record.Seq, err)
+		}
+		events = append(events, event)
+	}
+	return events
 }
 
 func TestProjectorSeparatesAssistantTextAcrossToolBoundaries(t *testing.T) {

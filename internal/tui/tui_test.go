@@ -41,6 +41,43 @@ func TestDefaultsToDarkTheme(t *testing.T) {
 	}
 }
 
+func TestGoldenTraceProjectsIntoTUI(t *testing.T) {
+	m := newTestModel(t)
+	for _, event := range goldenTraceEvents(t) {
+		m.applyEvent(event)
+	}
+	if m.status != "completed" || m.modelCalls != 2 || m.toolCalls != 2 || m.lastGatewayEventSeq != 36 {
+		t.Fatalf("model state status=%q model=%d tools=%d seq=%d", m.status, m.modelCalls, m.toolCalls, m.lastGatewayEventSeq)
+	}
+	if m.inputTok != 2100 || m.outputTok != 135 || m.cacheHitTok != 1100 || m.cacheMissTok != 1000 || m.reasoningTok != 20 {
+		t.Fatalf("usage = input %d output %d hit %d miss %d reasoning %d", m.inputTok, m.outputTok, m.cacheHitTok, m.cacheMissTok, m.reasoningTok)
+	}
+	var assistant, reasoning, web, mcp, compaction, summary bool
+	for _, block := range m.blocks {
+		if block.CellType == cellTypeAssistantFinal && strings.Contains(block.Content, "Final answer: web context") {
+			assistant = true
+		}
+		if block.CellType == cellTypeThinking && strings.Contains(block.Content, "Need web context") {
+			reasoning = true
+		}
+		if block.CallID == "call-web" && strings.Contains(block.Content, "bounded web digest") {
+			web = true
+		}
+		if block.CallID == "call-mcp" && block.ToolName == "mcp_call" && strings.Contains(block.Content, "MCP catalog") {
+			mcp = true
+		}
+		if block.CellType == cellTypeCompaction && strings.Contains(block.Content, "compact-golden-001") {
+			compaction = true
+		}
+		if block.CellType == cellTypeRunSummary && strings.Contains(block.Content, "completed") {
+			summary = true
+		}
+	}
+	if !assistant || !reasoning || !web || !mcp || !compaction || !summary {
+		t.Fatalf("golden trace cells assistant=%v reasoning=%v web=%v mcp=%v compaction=%v summary=%v blocks=%#v", assistant, reasoning, web, mcp, compaction, summary, m.blocks)
+	}
+}
+
 func TestGatewayNoticeSetsInitialStatus(t *testing.T) {
 	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
 	m := NewModel(config.Default(), Options{GatewayNotice: "gateway http://127.0.0.1:8765 is not reachable; local mode active"})
@@ -623,6 +660,20 @@ func newTestModel(t testModelHelper) Model {
 	t.Helper()
 	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
 	return NewModel(config.Default(), Options{})
+}
+
+func goldenTraceEvents(t *testing.T) []protocol.Event {
+	t.Helper()
+	records := testkit.ReadTraceRecords(t, testkit.CanonicalAgentLoopTracePath(t))
+	events := make([]protocol.Event, 0, len(records))
+	for _, record := range records {
+		var event protocol.Event
+		if err := json.Unmarshal(record.Event, &event); err != nil {
+			t.Fatalf("decode event seq %d: %v", record.Seq, err)
+		}
+		events = append(events, event)
+	}
+	return events
 }
 
 func seedStaleChatRuntimeState(m *Model) {

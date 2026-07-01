@@ -297,7 +297,7 @@ adding more powerful tools.
     -count=1 ./internal/agent ./internal/tools` passed.
   - commit: pending.
 
-- [ ] HR-01.9 Canonical end-to-end event trace.
+- [x] HR-01.9 Canonical end-to-end event trace.
   - maps to: `competitive-improvements-todo.md` P0-5.
   - target files: `internal/testkit/*`,
     `internal/testkit/testdata/traces/agent_loop_full.jsonl`,
@@ -309,6 +309,20 @@ adding more powerful tools.
     usage, context threshold, compaction, and terminal completion; all clients
     project it consistently.
   - verification: `go test -count=1 ./internal/testkit ./internal/trace ./internal/clientux/projector ./internal/tui ./internal/telegrambot`.
+  - status: completed 2026-07-01.
+  - evidence: added a canonical JSONL trace fixture plus shared testkit loader
+    covering assistant content/reasoning deltas, provider usage, context
+    threshold and compaction, a parallel web/MCP tool batch, web output-ref
+    metadata, tool-summary usage, terminal turn completion, and terminal run
+    completion. Trace replay, the shared client projector, TUI projection, and
+    Telegram rendering now all consume the same fixture and assert consistent
+    counts, usage, context, tools, assistant text, and completion state.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/testkit
+    ./internal/trace ./internal/clientux/projector ./internal/tui
+    ./internal/telegrambot` passed; `/root/.local/go/bin/go test -run
+    'Test.*Golden.*Trace.*' -count=1 ./internal/...` passed.
+  - commit: pending.
 
 - [ ] HR-01.10 Bounded file reads with line windows.
   - maps to: `competitive-improvements-todo.md` A1.

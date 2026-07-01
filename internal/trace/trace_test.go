@@ -17,6 +17,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/eventlog"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
+	"github.com/billyhargroveofficial/billyharness/internal/testkit"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
@@ -304,6 +305,39 @@ func TestReplayEventsAggregatesUsageAndEventCounters(t *testing.T) {
 	}
 	if turnRecord.ProfileHash != profileHash {
 		t.Fatalf("event record profile hash = %q, want %q", turnRecord.ProfileHash, profileHash)
+	}
+}
+
+func TestGoldenTraceReplayCanonicalAgentLoop(t *testing.T) {
+	summary, err := ReplayEvents(testkit.CanonicalAgentLoopTracePath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.RunID != "run-golden-agent-loop" || summary.Records != 36 || summary.FirstSeq != 1 || summary.LastSeq != 36 {
+		t.Fatalf("summary identity = %#v", summary)
+	}
+	if summary.RunStarted != 1 || summary.RunCompleted != 1 || summary.RunFailed != 0 ||
+		summary.TurnsStarted != 2 || summary.TurnsCompleted != 2 || summary.TurnsFailed != 0 ||
+		summary.StepsStarted != 5 || summary.StepsCompleted != 5 || summary.StepsFailed != 0 ||
+		summary.ParallelBatches != 1 ||
+		summary.ModelCallsStarted != 2 || summary.ModelCallsFinished != 2 ||
+		summary.ToolCallsStarted != 2 || summary.ToolCallProgress != 2 || summary.ToolCallsFinished != 2 ||
+		summary.ContextThresholds != 1 || summary.ContextCompactions != 1 {
+		t.Fatalf("summary counters = %#v", summary)
+	}
+	if summary.InputTokens != 2100 || summary.OutputTokens != 135 ||
+		summary.CacheHitTokens != 1100 || summary.CacheMissTokens != 1000 {
+		t.Fatalf("usage counters = %#v", summary)
+	}
+	if summary.FirstDeltaSamples != 2 || summary.FirstDeltaTotalMS != 8 ||
+		summary.ModelLatencyMS != 50 || summary.ToolLatencyMS != 40 || summary.ParallelBatchLatencyMS != 25 {
+		t.Fatalf("latency counters = %#v", summary)
+	}
+	if len(summary.ProfileHashes) != 1 || summary.ProfileHashes[0] != "profile-golden" {
+		t.Fatalf("profile hashes = %#v", summary.ProfileHashes)
+	}
+	if len(summary.Timeline) == 0 {
+		t.Fatal("timeline is empty")
 	}
 }
 

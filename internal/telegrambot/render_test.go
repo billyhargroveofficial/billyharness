@@ -1,12 +1,14 @@
 package telegrambot
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/testkit"
 )
 
 func TestRendererFinalChunksAreTelegramSizedAndEscaped(t *testing.T) {
@@ -36,6 +38,36 @@ func TestRendererFinalChunksAreTelegramSizedAndEscaped(t *testing.T) {
 	}
 	if !strings.Contains(chunks[len(chunks)-1], "💾 hit") {
 		t.Fatalf("last chunk missing footer: %q", chunks[len(chunks)-1])
+	}
+}
+
+func TestGoldenTraceRendersTelegram(t *testing.T) {
+	r := NewRenderer()
+	var progress []RenderEvent
+	for _, event := range goldenTraceEvents(t) {
+		progress = append(progress, r.Apply(event)...)
+	}
+	if !r.Done || r.ModelCalls != 2 || r.ToolCalls != 2 {
+		t.Fatalf("renderer state done=%v model=%d tools=%d", r.Done, r.ModelCalls, r.ToolCalls)
+	}
+	if r.InputTokens != 2100 || r.OutputTokens != 135 || r.CacheHit != 1100 || r.CacheMiss != 1000 || r.Reasoning != 20 {
+		t.Fatalf("usage = input %d output %d hit %d miss %d reasoning %d", r.InputTokens, r.OutputTokens, r.CacheHit, r.CacheMiss, r.Reasoning)
+	}
+	progressText := renderEventsText(progress)
+	for _, want := range []string{"web_fetch", "mcp call", "ref web_fetch.txt", "Context"} {
+		if !strings.Contains(progressText, want) {
+			t.Fatalf("progress missing %q in:\n%s", want, progressText)
+		}
+	}
+	chunks := r.FinalChunks("deepseek-v4-flash", "high")
+	if len(chunks) == 0 {
+		t.Fatal("final chunks empty")
+	}
+	finalText := strings.Join(chunks, "\n")
+	for _, want := range []string{"Final answer: web context", "agent turns 2", "tools 2", "💾 hit"} {
+		if !strings.Contains(finalText, want) {
+			t.Fatalf("final output missing %q in:\n%s", want, finalText)
+		}
 	}
 }
 
@@ -79,6 +111,31 @@ func TestMarkdownToTelegramHTMLSupportsTelegramSubset(t *testing.T) {
 			t.Fatalf("telegram HTML should not contain %q:\n%s", bad, html)
 		}
 	}
+}
+
+func goldenTraceEvents(t *testing.T) []protocol.Event {
+	t.Helper()
+	records := testkit.ReadTraceRecords(t, testkit.CanonicalAgentLoopTracePath(t))
+	events := make([]protocol.Event, 0, len(records))
+	for _, record := range records {
+		var event protocol.Event
+		if err := json.Unmarshal(record.Event, &event); err != nil {
+			t.Fatalf("decode event seq %d: %v", record.Seq, err)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+func renderEventsText(events []RenderEvent) string {
+	var b strings.Builder
+	for _, event := range events {
+		b.WriteString(event.Title)
+		b.WriteString(" ")
+		b.WriteString(event.Body)
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 func TestRendererFinalChunksConvertTablesInHTMLFallback(t *testing.T) {
