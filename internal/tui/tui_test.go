@@ -99,7 +99,7 @@ func TestSubmitWithAttachmentRejectsTextOnlyModelAndKeepsDraft(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf("cmd = %#v", cmd)
 	}
-	if !strings.Contains(updated.status, "image input unsupported") || updated.textarea.Value() != "look" ||
+	if !strings.Contains(updated.status, "image input unsupported by deepseek-v4-flash (text-only)") || updated.textarea.Value() != "look" ||
 		len(updated.attachments) != 1 || len(updated.blocks) != 0 {
 		t.Fatalf("updated status=%q textarea=%q attachments=%#v blocks=%#v", updated.status, updated.textarea.Value(), updated.attachments, updated.blocks)
 	}
@@ -132,6 +132,9 @@ func TestSubmitWithAttachmentRendersTranscriptChip(t *testing.T) {
 	}
 	if content := updated.blocks[len(updated.blocks)-1].Content; !strings.Contains(content, "look") || !strings.Contains(content, "vision image screen.png 2x3") {
 		t.Fatalf("user block content = %q", content)
+	}
+	if !strings.Contains(updated.status, "running") {
+		t.Fatalf("vision-capable attachment should submit, status=%q", updated.status)
 	}
 }
 

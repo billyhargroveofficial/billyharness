@@ -213,9 +213,9 @@ func safeTelegramName(value string) string {
 func telegramVisionUnsupportedMessage(model string) string {
 	model = strings.TrimSpace(model)
 	if model == "" {
-		model = "the current model"
+		return "Image input is unsupported for the current model. Switch to a vision-capable model with /model gpt-5.5, or resend text only."
 	}
-	return "Image input is unsupported for " + model + ". Switch to a Codex/OpenAI model with /model gpt-5.4, or resend text only."
+	return "Image input is unsupported for " + modelWithCapability(model) + ". Switch to a vision-capable model with /model gpt-5.5, or resend text only."
 }
 
 func telegramDurableInput(reason, userMessage string, err error) error {

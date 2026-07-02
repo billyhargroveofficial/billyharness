@@ -6,6 +6,7 @@ import (
 	"time"
 
 	runtimehooks "github.com/billyhargroveofficial/billyharness/internal/hooks"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/runstate"
@@ -30,6 +31,17 @@ type modelCallStepResult struct {
 	ToolCalls    []protocol.ToolCall
 	PromptTokens int64
 	Err          error
+}
+
+func (a *Agent) validateModelInputCapabilities(messages []protocol.Message) error {
+	if protocol.MessageImageAttachmentCount(messages) == 0 {
+		return nil
+	}
+	return modelinfo.ValidateCapabilityPolicy(modelinfo.CapabilityPolicyRequest{
+		Provider:           a.providerID(),
+		Model:              a.modelID(),
+		RequireVisionInput: true,
+	})
 }
 
 func (a *Agent) runModelCallStep(ctx context.Context, hookRunner *runtimehooks.Runner, input modelCallStepInput, emit func(protocol.Event)) modelCallStepResult {

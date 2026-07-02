@@ -93,6 +93,14 @@ func TestLookupIncludesCapabilityMetadata(t *testing.T) {
 	if spark := Lookup("gpt-5.3-codex-spark"); spark.ContextWindowTokens != 128_000 {
 		t.Fatalf("spark context window = %d, want 128000", spark.ContextWindowTokens)
 	}
+	mock := Lookup("mock")
+	if !mock.VisionInput || !hasString(mock.InputModalities, "image") {
+		t.Fatalf("mock capabilities = %#v", mock)
+	}
+	mockSummary := Lookup("mock-summary")
+	if mockSummary.VisionInput || hasString(mockSummary.InputModalities, "image") {
+		t.Fatalf("mock summary capabilities = %#v", mockSummary)
+	}
 }
 
 func TestInputCapabilityLabel(t *testing.T) {
@@ -101,6 +109,9 @@ func TestInputCapabilityLabel(t *testing.T) {
 	}
 	if got := InputCapabilityLabel("gpt"); got != "vision-capable" {
 		t.Fatalf("gpt label = %q", got)
+	}
+	if got := InputCapabilityLabel("mock"); got != "vision-capable" {
+		t.Fatalf("mock label = %q", got)
 	}
 }
 
@@ -146,6 +157,13 @@ func TestValidateCapabilityPolicyRejectsUnsupportedSettings(t *testing.T) {
 		RequireVisionInput: true,
 	}); err != nil {
 		t.Fatalf("codex vision should be allowed: %v", err)
+	}
+	if err := ValidateCapabilityPolicy(CapabilityPolicyRequest{
+		Provider:           "mock",
+		Model:              "mock",
+		RequireVisionInput: true,
+	}); err != nil {
+		t.Fatalf("mock vision should be allowed: %v", err)
 	}
 	if err := ValidateCapabilityPolicy(CapabilityPolicyRequest{
 		Provider:           "deepseek",

@@ -334,6 +334,74 @@ func TestRunMessagesEmitsRunFailedOnProviderError(t *testing.T) {
 	}
 }
 
+func TestRunMessagesRejectsImageInputForTextOnlyModelBeforeProviderCall(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "deepseek"
+	cfg.Model = "deepseek-v4-flash"
+	cfg.MaxToolRounds = 1
+	prov := &scriptedProvider{steps: [][]provider.Event{{
+		{Kind: provider.EventContent, Text: "should not run"},
+		{Kind: provider.EventDone},
+	}}}
+	a := New(cfg, prov, tools.NewRegistry(cfg))
+	var runFailed bool
+	var modelCallStarted bool
+	_, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		protocol.UserMessage("look", []protocol.AttachmentRef{{
+			ID:   "att_text_only",
+			Kind: protocol.AttachmentKindImage,
+		}}),
+	}, func(event protocol.Event) {
+		switch event.Type {
+		case protocol.EventRunFailed:
+			runFailed = strings.Contains(fmt.Sprint(event.Data), "image input is required")
+		case protocol.EventModelCallStarted:
+			modelCallStarted = true
+		}
+	})
+	if err == nil || !strings.Contains(err.Error(), "image input is required") {
+		t.Fatalf("err = %v", err)
+	}
+	if prov.calls != 0 {
+		t.Fatalf("provider calls = %d, want 0", prov.calls)
+	}
+	if modelCallStarted {
+		t.Fatalf("model call should not start for unsupported image input")
+	}
+	if !runFailed {
+		t.Fatalf("run.failed did not expose unsupported image input")
+	}
+}
+
+func TestRunMessagesAllowsImageInputForVisionModel(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "openai-codex"
+	cfg.Model = "gpt-5.5"
+	cfg.MaxToolRounds = 1
+	prov := &scriptedProvider{steps: [][]provider.Event{{
+		{Kind: provider.EventContent, Text: "vision ok"},
+		{Kind: provider.EventDone},
+	}}}
+	a := New(cfg, prov, tools.NewRegistry(cfg))
+	messages, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		protocol.UserMessage("look", []protocol.AttachmentRef{{
+			ID:   "att_vision",
+			Kind: protocol.AttachmentKindImage,
+		}}),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prov.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", prov.calls)
+	}
+	if got := lastAssistantContent(messages); got != "vision ok" {
+		t.Fatalf("assistant content = %q", got)
+	}
+}
+
 func TestRunMessagesUserPromptSubmitBlockSkipsProviderAndDropsPrompt(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"

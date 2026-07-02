@@ -163,11 +163,17 @@ func codexContextWindowTokens(model string) int64 {
 }
 
 func mockInfo(model string) Info {
+	inputModalities := []string{"text"}
+	visionInput := model == "mock"
+	if visionInput {
+		inputModalities = []string{"text", "image"}
+	}
 	return Info{
 		Model:                 model,
 		Provider:              ProviderMock,
 		Known:                 true,
-		InputModalities:       []string{"text"},
+		InputModalities:       inputModalities,
+		VisionInput:           visionInput,
 		ContextWindowTokens:   1_000_000,
 		MaxOutputTokens:       8_192,
 		ReasoningModes:        []string{"off", "low", "medium", "high", "xhigh", "max"},

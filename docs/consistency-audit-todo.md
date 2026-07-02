@@ -566,12 +566,25 @@ Files:
 
 ### 16. Align vision support across Codex, Telegram, and TUI
 
-- [ ] Codex/OAuth models marked vision-capable should accept Telegram photos
+- [x] Codex/OAuth models marked vision-capable should accept Telegram photos
   and TUI attachments consistently.
-- [ ] DeepSeek text-only models should fail early with a clear message before
+- [x] DeepSeek text-only models should fail early with a clear message before
   sending unsupported image payloads to the provider.
-- [ ] `/model` and `/status` should show capability hints from the same
+- [x] `/model` and `/status` should show capability hints from the same
   `modelinfo` source, not local strings.
+
+Evidence:
+
+- Added an agent-side `modelinfo.ValidateCapabilityPolicy` preflight for image
+  attachments before model-call streaming begins, so gateway/API callers cannot
+  send DeepSeek text-only image payloads to the provider.
+- Codex/OAuth vision models and the in-process mock provider accept image
+  attachments; DeepSeek remains text-only in `modelinfo`.
+- Telegram unsupported-photo replies and TUI attachment rejection now include
+  the same `modelinfo.InputCapabilityLabel` wording used by `/model` and
+  `/status`.
+- Tests: `/root/.local/go/bin/go test -run 'TestRunMessagesRejectsImageInputForTextOnlyModelBeforeProviderCall|TestRunMessagesAllowsImageInputForVisionModel|TestTelegramImageOnlyPhotoAdmittedForVisionModel|TestTelegramVisionUnsupportedModelRepliesAndAcks|TestSubmitWithAttachmentRejectsTextOnlyModelAndKeepsDraft|TestSubmitWithAttachmentRendersTranscriptChip|TestModelCommandStatusShowsInputCapability|TestLookupIncludesCapabilityMetadata|TestInputCapabilityLabel|TestValidateCapabilityPolicyRejectsUnsupportedSettings' -count=1 ./internal/agent ./internal/telegrambot ./internal/tui ./internal/modelinfo ./internal/gateway`.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/agent ./internal/modelinfo ./internal/telegrambot ./internal/tui ./internal/gateway ./internal/provider`.
 
 Files:
 

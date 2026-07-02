@@ -947,7 +947,7 @@ func (m *Model) submitPrompt(prompt string) (tea.Model, tea.Cmd) {
 		return *m, nil
 	}
 	if len(m.attachments) > 0 && !m.attachmentsSupported() {
-		m.status = "image input unsupported by " + m.currentModel()
+		m.status = "image input unsupported by " + m.currentModelCapabilityLabel()
 		m.reflow(m.followOutput)
 		m.promptCommandMeta = nil
 		return *m, nil

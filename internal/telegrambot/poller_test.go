@@ -316,7 +316,7 @@ func TestTelegramVisionUnsupportedModelRepliesAndAcks(t *testing.T) {
 
 	bot.handlePolledUpdate(context.Background(), telegramPhotoUpdate(53, 123, 1001, "describe", PhotoSize{FileID: "photo-unsupported", FileUniqueID: "unsupported", Width: 2, Height: 2, FileSize: 12}))
 
-	if !strings.Contains(sentText, "Image input is unsupported") || !strings.Contains(sentText, "deepseek-v4-flash") {
+	if !strings.Contains(sentText, "Image input is unsupported") || !strings.Contains(sentText, "deepseek-v4-flash (text-only)") {
 		t.Fatalf("unsupported reply = %q", sentText)
 	}
 	select {

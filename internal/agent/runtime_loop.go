@@ -106,6 +106,10 @@ func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []pro
 			err = a.failTurn(ctx, hookRunner, run, turnID, roundNum, turnStarted, err, emit)
 			return messages, err
 		}
+		if err := a.validateModelInputCapabilities(messages); err != nil {
+			err = a.failTurn(ctx, hookRunner, run, turnID, roundNum, turnStarted, err, emit)
+			return messages, err
+		}
 		modelStep := a.runModelCallStep(ctx, hookRunner, modelCallStepInput{
 			TurnID:       turnID,
 			Round:        roundNum,

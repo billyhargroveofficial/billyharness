@@ -120,8 +120,12 @@ func (m *Model) cycleModel() {
 }
 
 func (m Model) modelStatusText() string {
+	return "model " + m.currentModelCapabilityLabel()
+}
+
+func (m Model) currentModelCapabilityLabel() string {
 	model := m.currentModel()
-	return "model " + model + " (" + modelinfo.InputCapabilityLabel(model) + ")"
+	return model + " (" + modelinfo.InputCapabilityLabel(model) + ")"
 }
 
 func (m *Model) setModel(value string) bool {
