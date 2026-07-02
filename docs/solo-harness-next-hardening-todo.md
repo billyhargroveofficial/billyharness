@@ -126,7 +126,24 @@ closed as no final report.
     - accepted findings were mapped to RS-01 through RS-04; Carver was closed
       with no additional action because no final product finding survived the
       trace beyond the existing solo harness filter.
-  - commit: pending.
+  - follow-up closure, 2026-07-02:
+    - reconciliation and mapping were committed in `0436175`.
+    - compact recoverable tool-call schema errors were committed in
+      `42c852a`; mutating tool display/replay contracts were committed in
+      `6dc62f0`.
+    - the fresh architecture pressure baseline and no-split decision were
+      committed in `593289a`.
+    - the TUI primitive audit and gateway Enter regression were committed in
+      `83dc223`.
+    - web/search/extract product tests, search options, readability fallback,
+      and configured-backend-to-native search failover were committed in
+      `3281198`.
+    - the closeout pass split oversized focused tests back under strict
+      hygiene limits and recorded final verification in
+      `docs/recovered-subagent-followup-todo.md`.
+    - no platform, marketplace, team, cloud, or broad framework features were
+      accepted from the recovered traces.
+  - commit: closeout commit pending.
   - status: completed.
 
 ## Milestone 1 - Durable Run Termination And Replay Recovery (P0)

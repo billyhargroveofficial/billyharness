@@ -372,7 +372,7 @@ bounded fixes without derailing the main hardening roadmap.
   - verification:
     - `/root/.local/go/bin/go test -count=1 ./internal/webtools`
     - `/root/.local/go/bin/go test -count=1 ./internal/tools`
-  - commit: pending.
+  - commit: 3281198.
   - status: completed.
 
 - [x] RS-04.2 Define backend failover policy.
@@ -405,20 +405,42 @@ bounded fixes without derailing the main hardening roadmap.
   - verification:
     - `/root/.local/go/bin/go test -count=1 ./internal/webtools`
     - `/root/.local/go/bin/go test -count=1 ./internal/tools`
-  - commit: pending.
+  - commit: 3281198.
   - status: completed.
 
 ## Milestone 5 - Solo Product Coherence (P1)
 
-- [ ] RS-05.1 Consolidate recovered fixes into the main hardening roadmap.
+- [x] RS-05.1 Consolidate recovered fixes into the main hardening roadmap.
   - acceptance: the main roadmap gets only the fixes that passed the solo
     harness filter; marketplace/platform/team features stay rejected.
-  - status: open.
+  - consolidation, 2026-07-02:
+    - `docs/solo-harness-next-hardening-todo.md` now records the recovered
+      follow-up outcomes under NH-00.1 with the pushed commits for
+      reconciliation, tool recovery/contracts, architecture pressure, TUI
+      regression reuse, and web/search/extract quality.
+    - accepted findings were either implemented in RS-01 through RS-04 or
+      closed as no additional action. No platform, marketplace, team, cloud,
+      or broad framework features were added to the roadmap.
+    - the remaining main-roadmap items stay the existing bounded solo-harness
+      hardening work around interruption/replay, context/compaction, and
+      Telegram/TUI projection correctness.
+  - commit: closeout commit pending.
+  - status: completed.
 
-- [ ] RS-05.2 Close this follow-up.
+- [x] RS-05.2 Close this follow-up.
   - acceptance: all RS items are completed, blocked with exact reason, or
     moved into `solo-harness-next-hardening-todo.md` with a concrete target.
-  - status: open.
+  - closure, 2026-07-02:
+    - all incomplete Averroes, Mill, Erdos, Schrodinger, and Carver rollout
+      traces were reconciled with `jq`; useful findings are recorded in this
+      TODO and no recovered research remains only in Codex chat logs.
+    - RS-01 through RS-04 are completed with pushed code/doc commits. Carver
+      was explicitly closed with no extra roadmap item because no concrete
+      surviving product finding passed the solo harness filter.
+    - final verification passed after splitting the recently added TUI and web
+      tests into focused files to satisfy strict file-size hygiene.
+  - commit: closeout commit pending.
+  - status: completed.
 
 ## Verification Gate
 
@@ -435,6 +457,25 @@ If runtime behavior changes, also run:
 ```sh
 /root/.local/go/bin/go test -count=1 ./...
 ```
+
+Verification note, 2026-07-02:
+- `/root/.local/go/bin/go test -count=1 ./internal/tools ./internal/agent ./internal/protocol ./internal/tui ./internal/telegrambot ./internal/webtools ./internal/provider ./internal/architecture`
+  passed.
+- `/root/.local/go/bin/go run ./cmd/fast-agent-harness hygiene -strict -repo /root/billyharness`
+  failed with `internal/tui/interaction_status_test.go: 1231 LOC > 1200`
+  and `internal/tools/web_test.go: 1229 LOC > 1200`.
+- next action: split the recently added focused TUI and web product tests into
+  separate test files, rerun strict hygiene, then rerun the final gate.
+- resolution: split the tests into
+  `internal/tui/gateway_keyboard_test.go` and
+  `internal/tools/web_search_product_test.go`. The formerly failing files are
+  now below budget (`interaction_status_test.go`: 1168 LOC,
+  `web_test.go`: 1093 LOC).
+- final verification passed:
+  - `/root/.local/go/bin/go test -count=1 ./internal/tui ./internal/tools`
+  - `/root/.local/go/bin/go test -count=1 ./internal/tools ./internal/agent ./internal/protocol ./internal/tui ./internal/telegrambot ./internal/webtools ./internal/provider ./internal/architecture`
+  - `/root/.local/go/bin/go run ./cmd/fast-agent-harness hygiene -strict -repo /root/billyharness`
+  - `/root/.local/go/bin/go test -count=1 ./...`
 
 ## Completion Criteria
 
