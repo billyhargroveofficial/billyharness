@@ -531,7 +531,7 @@ func (r *Registry) Call(ctx context.Context, call protocol.ToolCall) (Result, er
 		return result, err
 	}
 	if err := validateArgs(tool.Spec.Parameters, call.Arguments); err != nil {
-		return errorResult("validation_error", err.Error()), err
+		return validationErrorResult(call.Name, err), err
 	}
 	return tool.Handler(ctx, call.Arguments)
 }
@@ -579,6 +579,43 @@ func normalizeArgs(args json.RawMessage) json.RawMessage {
 
 func errorResult(code, content string) Result {
 	return Result{Content: content, IsError: true, ErrorCode: code}
+}
+
+func validationErrorResult(toolName string, err error) Result {
+	detail := "invalid tool arguments"
+	if err != nil {
+		detail = strings.TrimSpace(err.Error())
+	}
+	if detail == "" {
+		detail = "invalid tool arguments"
+	}
+	kind := "schema"
+	prefix := "arguments did not match the tool schema"
+	if strings.HasPrefix(detail, "invalid JSON args") {
+		kind = "json"
+		prefix = "arguments were not valid JSON"
+	}
+	compactDetail := truncate(detail, 360)
+	recoveryHint := "retry with a valid JSON object that matches the tool schema"
+	return Result{
+		Content: fmt.Sprintf(
+			"Tool call was not executed because %s %s: %s. %s.",
+			toolName,
+			prefix,
+			compactDetail,
+			recoveryHint,
+		),
+		IsError:   true,
+		ErrorCode: "validation_error",
+		Metadata: map[string]any{
+			"tool_name":        toolName,
+			"validation_kind":  kind,
+			"validation_error": compactDetail,
+			"recoverable":      true,
+			"recovery_hint":    recoveryHint,
+			"display_summary":  truncate(toolName+" validation_error: "+compactDetail, 160),
+		},
+	}
 }
 
 func (r *Registry) add(tool Tool) {

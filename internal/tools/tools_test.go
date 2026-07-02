@@ -69,6 +69,11 @@ func TestToolArgumentsValidatedAgainstSchema(t *testing.T) {
 			want: `missing required property "path"`,
 		},
 		{
+			name: "invalid json",
+			call: protocol.ToolCall{Name: "time_now", Arguments: json.RawMessage(`{bad`)},
+			want: "invalid JSON args",
+		},
+		{
 			name: "wrong type",
 			call: protocol.ToolCall{Name: "fs_list", Arguments: rawArgs(map[string]any{"path": ".", "limit": "ten"})},
 			want: "$.limit must be integer",
@@ -91,6 +96,13 @@ func TestToolArgumentsValidatedAgainstSchema(t *testing.T) {
 			}
 			if !result.IsError || result.ErrorCode != "validation_error" || !strings.Contains(result.Content, tc.want) {
 				t.Fatalf("result = %#v", result)
+			}
+			if !strings.Contains(result.Content, "Tool call was not executed") ||
+				!strings.Contains(result.Content, "retry with a valid JSON object") ||
+				result.Metadata["recoverable"] != true ||
+				result.Metadata["validation_error"] == "" ||
+				result.Metadata["recovery_hint"] == "" {
+				t.Fatalf("validation result should be compact and recoverable: %#v", result)
 			}
 		})
 	}

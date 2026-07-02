@@ -156,14 +156,33 @@ bounded fixes without derailing the main hardening roadmap.
 
 ## Milestone 1 - Tool Contracts, Edit, And Shell Recovery (P0)
 
-- [ ] RS-01.1 Audit tool schemas and argument validation.
+- [x] RS-01.1 Audit tool schemas and argument validation.
   - target areas: `internal/protocol`, `internal/tools`, `internal/agent`.
   - acceptance: malformed tool-call JSON, unknown fields, wrong types, missing
     required fields, and provider-specific function-call quirks return compact,
     actionable errors that the agent can recover from.
   - verification: focused malformed-tool-call tests, including the Telegram
     observed `shell_exec had invalid JSON args` failure.
-  - status: open.
+  - implementation, 2026-07-02:
+    - `internal/tools.Registry.Call` now returns compact structured
+      `validation_error` tool results for malformed JSON, missing required
+      properties, wrong types, unknown fields, and other schema failures.
+    - validation errors include `recoverable`, `validation_kind`,
+      `validation_error`, `recovery_hint`, and bounded display metadata so the
+      agent/client can retry without scraping a bare Go error string.
+    - agent regression coverage now exercises a Telegram-like `shell_exec`
+      bad argument shape (`{"cmd":"touch out.txt"}`): the shell is not
+      executed, no `run.failed` event is emitted, `tool.call_failed` carries a
+      recoverable `validation_error`, and the next model turn completes.
+    - existing provider accumulator coverage still preserves the observed
+      invalid-JSON path where malformed streamed arguments are sanitized to
+      `{}` and surfaced as `invalid_json_args`.
+  - verification:
+    - `/root/.local/go/bin/go test -count=1 ./internal/tools`
+    - `/root/.local/go/bin/go test -count=1 ./internal/agent`
+    - `/root/.local/go/bin/go test -count=1 ./internal/provider`
+  - commit: pending.
+  - status: completed.
 
 - [ ] RS-01.2 Harden mutating tool contracts.
   - target areas: `fs_write_file`, `fs_edit_file`, `fs_make_dir`,

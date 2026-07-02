@@ -286,6 +286,64 @@ func TestRunMessagesTurnsInvalidToolArgumentsIntoToolError(t *testing.T) {
 	}
 }
 
+func TestRunMessagesTurnsToolSchemaErrorsIntoRecoverableToolError(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.MaxToolRounds = 2
+	cfg.AutoApproveDangerous = true
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_shell", ToolName: "shell_exec", ArgsDelta: `{"cmd":"touch out.txt"}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "recovered"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	a := New(cfg, prov, tools.NewRegistry(cfg))
+	var failed bool
+	var toolResult protocol.ToolResult
+	var sawToolFailed bool
+	next, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "bad shell args"},
+	}, func(event protocol.Event) {
+		if event.Type == protocol.EventRunFailed {
+			failed = true
+		}
+		if event.Type == protocol.EventToolCallFailed {
+			if result, ok := event.Data.(protocol.ToolResult); ok && result.CallID == "call_shell" {
+				toolResult = result
+				sawToolFailed = true
+			}
+		}
+	})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if failed {
+		t.Fatalf("run.failed should not be emitted for schema validation errors")
+	}
+	if _, err := os.Stat(filepath.Join(root, "out.txt")); !os.IsNotExist(err) {
+		t.Fatalf("invalid shell_exec args should not execute, stat err = %v", err)
+	}
+	if !sawToolFailed ||
+		toolResult.ErrorCode != "validation_error" ||
+		toolResult.Metadata["recoverable"] != true ||
+		!strings.Contains(toolResult.Content, "shell_exec arguments did not match the tool schema") ||
+		!strings.Contains(toolResult.Content, `missing required property "argv"`) {
+		t.Fatalf("tool schema error result = %#v saw=%v", toolResult, sawToolFailed)
+	}
+	if len(next) == 0 || next[len(next)-1].Content != "recovered" {
+		t.Fatalf("messages = %#v", next)
+	}
+	if prov.calls != 2 {
+		t.Fatalf("provider calls = %d", prov.calls)
+	}
+}
+
 func TestRunMessagesEmitsRunFailedOnProviderError(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "deepseek"
