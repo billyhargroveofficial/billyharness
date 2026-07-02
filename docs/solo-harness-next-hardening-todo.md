@@ -21,6 +21,31 @@ use.
 - Subagent reliability report: interrupt/replay/cancel/backpressure.
 - Subagent context report: compaction, cache stability, memory, web summaries.
 - Subagent Telegram report: rich-message streaming, throttling, finalization.
+- Recovered Codex subagent rollout files from `/root/.codex/sessions/2026/07/02`:
+  - completed: Bacon reliability
+    `/root/.codex/sessions/2026/07/02/rollout-2026-07-02T18-46-04-019f23b9-2841-7b21-beca-c55e27956982.jsonl`.
+  - completed: Boole Telegram streaming
+    `/root/.codex/sessions/2026/07/02/rollout-2026-07-02T18-46-16-019f23b9-53d9-7b62-bf4a-9ba49d0af139.jsonl`.
+  - completed: Sagan context/compaction/memory
+    `/root/.codex/sessions/2026/07/02/rollout-2026-07-02T18-46-25-019f23b9-7a71-7d53-b0ad-b5353415665b.jsonl`.
+  - completed: Parfit MCP lifecycle/config
+    `/root/.codex/sessions/2026/07/02/rollout-2026-07-02T18-47-01-019f23b9-f9db-7833-b2b6-9c14447a3d6c.jsonl`.
+  - completed: Turing solo safety/permissions
+    `/root/.codex/sessions/2026/07/02/rollout-2026-07-02T18-47-43-019f23ba-a8b4-7df1-a2ef-2b836186d6da.jsonl`.
+  - completed: Hume observability/debug bundles
+    `/root/.codex/sessions/2026/07/02/rollout-2026-07-02T18-48-06-019f23ba-ea53-7051-972b-4df9a4e64ebd.jsonl`.
+  - completed: Faraday benchmarks/regression
+    `/root/.codex/sessions/2026/07/02/rollout-2026-07-02T18-52-09-019f23be-b71a-7b43-8a16-964be77357ff.jsonl`.
+  - incomplete: Averroes tools/edit/shell/contracts
+    `/root/.codex/sessions/2026/07/02/rollout-2026-07-02T18-46-35-019f23b9-9fb5-7ad1-9886-da7ae97942c2.jsonl`.
+  - incomplete: Mill architecture/decomposition
+    `/root/.codex/sessions/2026/07/02/rollout-2026-07-02T18-52-23-019f23be-eff3-77c0-91c3-280095cf2be4.jsonl`.
+  - incomplete: Erdos TUI/terminal UX
+    `/root/.codex/sessions/2026/07/02/rollout-2026-07-02T18-52-35-019f23bf-1f0b-7a82-86dc-427f02045389.jsonl`.
+  - incomplete: Schrodinger web/search/extract
+    `/root/.codex/sessions/2026/07/02/rollout-2026-07-02T18-53-55-019f23c0-559b-7fe0-b873-4bd036c10d33.jsonl`.
+  - incomplete: Carver solo product/roadmap
+    `/root/.codex/sessions/2026/07/02/rollout-2026-07-02T18-54-42-019f23c1-0c0e-71f0-8d73-7db47599e1cc.jsonl`.
 - Upstream docs checked 2026-07-02:
   - OpenAI Codex non-interactive JSONL event stream:
     `https://developers.openai.com/codex/noninteractive`
@@ -65,6 +90,39 @@ Reject by default:
 - Context accounting is now clearer than earlier raw input/output counters, but
   compaction, web-summary helper use, cache-break reasons, and context epochs
   still need stronger recovery and regression tests.
+
+## Milestone 0 - Recovered Research Reconciliation (P0)
+
+Goal: make sure the recovered Codex subagent rollout files are not lost, and
+that incomplete agents are either rerun, mapped to concrete work, or explicitly
+closed as no final report.
+
+- [ ] NH-00.1 Reconcile completed and incomplete subagent traces.
+  - target files: this document, optionally the relevant roadmap sections.
+  - acceptance: completed reports are mapped to existing NH tasks; incomplete
+    traces are inspected through their last `agent_message` and either rerun
+    or recorded as "no final report, no additional action".
+  - evidence already recovered:
+    - Averroes produced no final report; last state was switching from sparse
+      web search to direct `curl` reads for tools/edit/shell/contracts.
+    - Mill produced no final report; last state noted strict hygiene and
+      architecture guard pass, but tracked Go files had grown to 315, so new
+      pressure points should be reviewed before broad decomposition work.
+    - Erdos produced no final report; last state noted existing TUI primitives
+      such as Bubble Tea/Lip Gloss, `/toolview`, `/copy`, transcript export,
+      command registry, and `internal/tui`, so future TUI work should avoid
+      duplicating shipped behavior.
+    - Schrodinger produced no final report; last state noted web-tool coverage
+      is already good for DNS rebinding, redirects, auth mapping, retries,
+      output refs, summary accounting, and cache invalidation, but missing
+      product-level tests remain around provider query options,
+      evidence/citation shape, markdown/readability quality, and multi-backend
+      failover policy.
+    - Carver produced no final report; last state said it was using the
+      `openai-docs` skill for Codex-specific product/roadmap claims.
+  - verification: use `jq -s` extraction on each rollout file and record the
+    result in this TODO before marking this item complete.
+  - status: open.
 
 ## Milestone 1 - Durable Run Termination And Replay Recovery (P0)
 

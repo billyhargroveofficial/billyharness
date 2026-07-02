@@ -14,7 +14,7 @@ Source of truth:
 - /root/billyharness/docs/solo-harness-competitive-todo.md
 
 Focus:
-Start with P0 Milestone 1 in /root/billyharness/docs/solo-harness-next-hardening-todo.md, then P0 Milestone 2, then P0 Milestone 3. Do not start P1/P2 work until all unblocked P0 items are implemented, verified, and reflected in the TODO. Preserve the solo-harness filter: JSONL remains source of truth; avoid schedulers, mandatory databases, cloud/team/platform features, plugin marketplaces, hidden git state, copied competitor code, and broad UI rewrites.
+Start with P0 Milestone 0 in /root/billyharness/docs/solo-harness-next-hardening-todo.md to reconcile recovered Codex subagent rollouts, including incomplete agents found under /root/.codex/sessions/2026/07/02. Then do P0 Milestone 1, P0 Milestone 2, and P0 Milestone 3. Do not start P1/P2 work until all unblocked P0 items are implemented, verified, and reflected in the TODO. Preserve the solo-harness filter: JSONL remains source of truth; avoid schedulers, mandatory databases, cloud/team/platform features, plugin marketplaces, hidden git state, copied competitor code, and broad UI rewrites.
 
 Execution loop:
 1. Read all source files before starting and after any compaction/resume.
@@ -25,6 +25,7 @@ Execution loop:
 6. If verification or push fails, record the exact command/error and next action in the TODO before moving on. Continue only if another independent unblocked task exists.
 
 Required P0 outcomes:
+- Completed subagent reports are mapped to TODO tasks, and incomplete subagent traces are either rerun or explicitly recorded as no final report/no additional action.
 - Interrupt replacement works during long tools and never leaks canceled context into the replacement run.
 - Incomplete JSONL tails are repaired by appended recovery events, not by mutating history.
 - Live stream gaps are explicit and clients recover by replaying durable events.
