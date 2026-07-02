@@ -629,7 +629,7 @@ P0 is green.
   - next action: after the PH-04.3 interrupt blocker is fixed, add a focused
     benchmark only if the fix introduces measurable gateway replay, toolrender,
     or TUI reflow cost; otherwise keep benchmark coverage unchanged.
-  - commit: pending.
+  - commit: `a8076a1435b669a20484a3e2ce0ec5129e39bb6c`.
 
 ## Completion Criteria
 
