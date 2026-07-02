@@ -325,12 +325,22 @@ Goal: prove the cleaned code still behaves like the current deployed harness.
     with no test files.
   - commit: `99b0e1f0959905ffe07b129165add528d934726f`.
 
-- [ ] PH-03.2 Run broad tests if focused suites are green.
+- [x] PH-03.2 Run broad tests if focused suites are green.
   - verification:
     `go test -count=1 ./...`
   - acceptance: pass, or record exact failing package/test and decide whether
     it is a real regression, flaky test, or unrelated environment issue.
-  - status: open.
+  - status: completed 2026-07-02.
+  - evidence: final rerun of the exact command above passed across all
+    packages, including the in-progress attachment packages present in the
+    dirty worktree. Earlier attempts during concurrent unrelated edits failed
+    transiently with `internal/gateway/gateway.go:666:19: undefined:
+    sessionInputValidationError`, then `internal/clientux/context.go:501:10:
+    undefined: fmt`, plus an architecture-guard mismatch for
+    `internal/gateway` importing `internal/attachments`; the exact broad rerun
+    passed after those in-flight edits settled, so no PH-03.2 code change was
+    needed.
+  - commit: pending.
 
 - [ ] PH-03.3 Build the binary from current source.
   - verification:
