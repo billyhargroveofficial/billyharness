@@ -117,7 +117,7 @@ Goal: make the new active plan and git state clean before touching runtime code.
     checklist and its historical `commit: pending` entries unchanged.
   - verification evidence: manual diff review confirmed only the historical
     status note and this PH-00.3 TODO entry changed.
-  - commit: pending.
+  - commit: `1401e38198e2508f6b7835dab0a1b5808b6ff382`.
 
 ## Milestone 1 - Strict Hygiene And Decomposition (P0)
 
