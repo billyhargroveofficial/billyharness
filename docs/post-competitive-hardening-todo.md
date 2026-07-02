@@ -342,11 +342,15 @@ Goal: prove the cleaned code still behaves like the current deployed harness.
     needed.
   - commit: `1b18ee2bfe2f145ef8715af3bdff462c88244aeb`.
 
-- [ ] PH-03.3 Build the binary from current source.
+- [x] PH-03.3 Build the binary from current source.
   - verification:
     `go build -o bin/fast-agent-harness ./cmd/fast-agent-harness`
   - acceptance: binary is current after runtime/CLI changes.
-  - status: open.
+  - status: completed 2026-07-02.
+  - evidence:
+    `/root/.local/go/bin/go build -o bin/fast-agent-harness
+    ./cmd/fast-agent-harness` passed.
+  - commit: pending.
 
 - [ ] PH-03.4 Run CLI smoke checks.
   - suggested verification:
