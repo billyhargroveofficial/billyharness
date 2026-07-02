@@ -19,3 +19,4 @@ Start here:
 - [Context](context.md): active context accounting, source contributors, thresholds, and `/context`.
 - [Post-competitive hardening TODO](post-competitive-hardening-todo.md): active cleanup, decomposition, hygiene, regression, and smoke roadmap after the competitive pass.
 - [Solo harness competitive TODO](solo-harness-competitive-todo.md): completed competitive follow-up roadmap and evidence log for the SH pass.
+- [Solo harness next hardening TODO](solo-harness-next-hardening-todo.md): next reliability, compaction/cache, Telegram/TUI streaming, and recovery roadmap.
