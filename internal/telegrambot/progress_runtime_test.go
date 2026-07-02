@@ -184,6 +184,94 @@ func TestProgressEditsSkipHeartbeatOnlyTicks(t *testing.T) {
 	}
 }
 
+func TestLiveRunViewHeartbeatEditsDuringToolOnlyWait(t *testing.T) {
+	fakeClock := newFakeClock()
+	tickers := &fakeTelegramTickerFactory{}
+	oldNow := telegramNow
+	oldTicker := newTelegramTicker
+	telegramNow = fakeClock.Now
+	newTelegramTicker = tickers.NewTicker
+	t.Cleanup(func() {
+		telegramNow = oldNow
+		newTelegramTicker = oldTicker
+	})
+
+	var mu sync.Mutex
+	var edits []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if r.URL.Path != "/botbottoken/editMessageText" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if text, ok := payload["text"].(string); ok {
+			mu.Lock()
+			edits = append(edits, text)
+			mu.Unlock()
+		}
+		writeTelegramResult(w, true)
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClient(ClientOptions{BaseURL: server.URL, Token: "bottoken", MinInterval: time.Nanosecond})
+	bot := &Bot{
+		opts:   Options{SendEnabled: true},
+		client: client,
+	}
+	view := &telegramLiveRunView{
+		renderer:    NewRenderer(),
+		tools:       NewToolProgress(),
+		model:       "deepseek-v4-flash",
+		reasoning:   "high",
+		answerDirty: true,
+	}
+	if !view.tools.Add(RenderEvent{Kind: "tool", Body: "🌐 web_fetch example.com/forecast", Key: "fetch"}) {
+		t.Fatal("expected tool progress to be added")
+	}
+
+	stop := make(chan struct{})
+	done := bot.startProgressEdits(context.Background(), 123, 11, time.Hour, stop, view.progressText)
+	ticker := tickers.WaitTicker(t, 0)
+	waitForTestCondition(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(edits) == 1
+	})
+	fakeClock.Advance(5 * time.Second)
+	ticker.Tick(fakeClock.Now())
+	waitForTestCondition(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(edits) >= 2
+	})
+	close(stop)
+	<-done
+
+	mu.Lock()
+	first := edits[0]
+	second := edits[1]
+	mu.Unlock()
+	for _, want := range []string{"Tools running · 0s", "🌐 web_fetch example.com/forecast"} {
+		if !strings.Contains(first, want) {
+			t.Fatalf("initial progress missing %q:\n%s", want, first)
+		}
+	}
+	for _, want := range []string{"⏱ 5s", "Tools running · 5s", "🌐 web_fetch example.com/forecast"} {
+		if !strings.Contains(second, want) {
+			t.Fatalf("heartbeat progress missing %q:\n%s", want, second)
+		}
+	}
+	if first == second {
+		t.Fatalf("heartbeat progress did not change:\n%s", second)
+	}
+}
+
 func TestProgressEditsFakeClockKeepsUTF16Limit(t *testing.T) {
 	fakeClock := newFakeClock()
 	tickers := &fakeTelegramTickerFactory{}

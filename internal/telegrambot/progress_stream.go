@@ -19,7 +19,7 @@ func (r *Renderer) StreamPlainTextPulse(model, reasoning string, tools *ToolProg
 		content = workingPulseText(pulse)
 	}
 	contentShown := telegramUTF16Len(content)
-	elapsed := time.Since(r.Started).Round(time.Second)
+	elapsed := telegramElapsedSince(r.Started).Round(time.Second)
 	meta := "🧬 " + model + " · 🧠 " + reasoning + " · ⏱ " + elapsed.String()
 	if eventPulse := r.eventPulseText(); eventPulse != "" {
 		meta += " · " + eventPulse
@@ -71,10 +71,7 @@ func (r *Renderer) eventPulseText() string {
 	if r == nil || r.LastEventAt.IsZero() {
 		return ""
 	}
-	age := time.Since(r.LastEventAt).Round(time.Second)
-	if age < 0 {
-		age = 0
-	}
+	age := telegramElapsedSince(r.LastEventAt).Round(time.Second)
 	label := "event"
 	switch r.LastEventType {
 	case protocol.EventAssistantDelta:

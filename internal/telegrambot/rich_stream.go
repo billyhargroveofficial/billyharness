@@ -49,7 +49,7 @@ func (s RichStream) markdownChunks(renderer *Renderer, model, reasoning string, 
 	if renderer == nil {
 		return nil
 	}
-	elapsed := time.Since(renderer.Started).Round(time.Second)
+	elapsed := telegramElapsedSince(renderer.Started).Round(time.Second)
 	content := renderer.finalContent()
 	if strings.TrimSpace(content) == "Working..." {
 		if !includeFallback {

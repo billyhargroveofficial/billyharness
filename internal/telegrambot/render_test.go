@@ -782,6 +782,26 @@ func TestStreamPlainTextKeepsToolsVisibleWhenContentIsLong(t *testing.T) {
 	}
 }
 
+func TestStreamPlainTextLongAssistantKeepsFreshTail(t *testing.T) {
+	renderer := NewRenderer()
+	renderer.Content.WriteString("stale-head-sentinel ")
+	renderer.Content.WriteString(strings.Repeat("old content ", 900))
+	renderer.Content.WriteString("fresh live tail")
+
+	text := renderer.StreamPlainText("deepseek-v4-flash", "high", NewToolProgress())
+	if got := telegramUTF16Len(text); got > telegramLiveProgressLimit {
+		t.Fatalf("stream text exceeds live progress limit: %d", got)
+	}
+	for _, want := range []string{"live tail", "fresh live tail"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("stream text missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "stale-head-sentinel") {
+		t.Fatalf("stream text kept stale head instead of fresh tail:\n%s", text)
+	}
+}
+
 func TestStreamPlainTextTruncatesFromStartWhenToolProgressIsHuge(t *testing.T) {
 	renderer := NewRenderer()
 	renderer.Content.WriteString("initial answer that can be dropped")

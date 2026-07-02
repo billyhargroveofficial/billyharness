@@ -399,16 +399,32 @@ Tests:
 
 ### 11. Make streaming liveness visible and monotonic
 
-- [ ] While a run is active, Telegram should continuously show:
+- [x] While a run is active, Telegram should continuously show:
   - typing indicator where Telegram allows it;
   - progress edit heartbeat;
   - elapsed time;
   - live tail text when assistant deltas arrive;
   - compact tool progress when tools are active.
-- [ ] If no assistant deltas arrive for a while but tools are running, progress
+- [x] If no assistant deltas arrive for a while but tools are running, progress
   must still edit with elapsed time.
-- [ ] If assistant text is long and truncated, keep the tail, not the head, so
+- [x] If assistant text is long and truncated, keep the tail, not the head, so
   progress visibly moves.
+
+Evidence:
+
+- Telegram live-run progress now returns heartbeat text while the renderer is
+  active, so progress edits continue to change even when no new assistant delta
+  arrives.
+- Renderer, rich stream, and tool-progress elapsed labels now use the injectable
+  Telegram clock, letting fake-clock tests verify monotonic elapsed updates.
+- Added `TestLiveRunViewHeartbeatEditsDuringToolOnlyWait` for tool-only waits:
+  a heartbeat tick advances both the run elapsed label and tool elapsed label
+  from `0s` to `5s` without any new assistant text.
+- Added `TestStreamPlainTextLongAssistantKeepsFreshTail`, and existing burst
+  progress coverage still checks that live edits include the freshest delta
+  tail.
+- Tests: `/root/.local/go/bin/go test -run 'TestLiveRunViewHeartbeatEditsDuringToolOnlyWait|TestStreamPlainTextLongAssistantKeepsFreshTail|TestTelegramRunShowsTypingAndAnimatedWorkingPulse|TestTelegramRunThrottlesBurstProgressEdits|TestProgressEditsFakeClockKeepsUTF16Limit' -count=1 ./internal/telegrambot`.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/telegrambot`.
 
 Files:
 

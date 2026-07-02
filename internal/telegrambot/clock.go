@@ -38,6 +38,17 @@ func (t realTelegramTicker) Stop() {
 
 var telegramNow = time.Now
 
+func telegramElapsedSince(start time.Time) time.Duration {
+	if start.IsZero() {
+		return 0
+	}
+	elapsed := telegramNow().Sub(start)
+	if elapsed < 0 {
+		return 0
+	}
+	return elapsed
+}
+
 var newTelegramTimer = func(d time.Duration) telegramTimer {
 	return realTelegramTimer{timer: time.NewTimer(d)}
 }

@@ -398,11 +398,15 @@ func (b *Bot) startLiveRunView(ctx context.Context, msg Message, state ChatState
 func (v *telegramLiveRunView) progressText(force bool, pulse int) string {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if !v.answerDirty && !force {
+	if !v.answerDirty && !force && !v.heartbeatActiveLocked() {
 		return ""
 	}
 	v.answerDirty = false
 	return v.renderer.StreamPlainTextPulse(v.model, v.reasoning, v.tools, pulse)
+}
+
+func (v *telegramLiveRunView) heartbeatActiveLocked() bool {
+	return v.renderer != nil && !v.renderer.Done
 }
 
 func (v *telegramLiveRunView) Apply(event protocol.Event) {

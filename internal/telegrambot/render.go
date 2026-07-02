@@ -74,7 +74,7 @@ func NewRendererWithContextWindowAndTotals(contextWindow int64, agentTurns, tool
 		contextWindow = unknownModelContextWindowFallbackTokens
 	}
 	return &Renderer{
-		Started:        time.Now(),
+		Started:        telegramNow(),
 		ContextWindow:  contextWindow,
 		BaseAgentTurns: max(0, agentTurns),
 		BaseToolCalls:  max(0, toolCalls),
@@ -86,7 +86,7 @@ func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
 	if r.projector == nil {
 		r.projector = projector.New()
 	}
-	r.LastEventAt = time.Now()
+	r.LastEventAt = telegramNow()
 	r.LastEventType = event.Type
 	previousError := r.LastError
 	snapshot := r.projector.Apply(event)
@@ -188,7 +188,7 @@ func (r *Renderer) StatusText(model, reasoning string) string {
 }
 
 func (r *Renderer) FinalChunks(model, reasoning string) []string {
-	elapsed := time.Since(r.Started).Round(time.Second)
+	elapsed := telegramElapsedSince(r.Started).Round(time.Second)
 	state := r.state()
 	content := r.finalContent()
 	header := "<b>" + esc(statusEmoji(state)+" Billyharness · "+titleState(state)) + "</b>\n" +
@@ -340,7 +340,7 @@ type toolProgressLine struct {
 
 func NewToolProgress() *ToolProgress {
 	return &ToolProgress{
-		Started: time.Now(),
+		Started: telegramNow(),
 		index:   map[string]int{},
 		seen:    map[string]bool{},
 	}
@@ -391,7 +391,7 @@ func (p *ToolProgress) HTML() string {
 	if p.Done {
 		state = "done"
 	}
-	elapsed := time.Since(p.Started).Round(time.Second)
+	elapsed := telegramElapsedSince(p.Started).Round(time.Second)
 	lines := make([]string, 0, len(p.lines))
 	for _, line := range p.lines {
 		lines = append(lines, line.text)
@@ -409,7 +409,7 @@ func (p *ToolProgress) PlainText() string {
 	if p.Done {
 		state = "done"
 	}
-	elapsed := time.Since(p.Started).Round(time.Second)
+	elapsed := telegramElapsedSince(p.Started).Round(time.Second)
 	lines := make([]string, 0, len(p.lines))
 	for _, line := range p.lines {
 		lines = append(lines, line.text)
@@ -429,7 +429,7 @@ func (p *ToolProgress) PlainTextLimit(limit int) string {
 	if p.Done {
 		state = "done"
 	}
-	elapsed := time.Since(p.Started).Round(time.Second)
+	elapsed := telegramElapsedSince(p.Started).Round(time.Second)
 	header := "Tools " + state + " · " + elapsed.String()
 	marker := "…[truncated]"
 	budget := limit - telegramUTF16Len(header) - telegramUTF16Len(marker) - 2
