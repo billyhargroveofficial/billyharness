@@ -134,7 +134,7 @@ func EnsureDefaultMCPConfigFile() (string, error) {
 }
 
 const defaultMCPConfig = `# billyharness MCP config.
-# Native web_search, web_fetch, and web_crawl are built in; keep them out of MCP.
+# Native web_search, web_fetch, web_extract, and web_crawl are built in; keep them out of MCP.
 # Secrets can live in $BILLYHARNESS_HOME/.env and be referenced via env_vars.
 
 [mcp_servers.telegram]

@@ -11,6 +11,7 @@ type Prompt = mcpclient.Prompt
 type PromptArgument = mcpclient.PromptArgument
 
 type Response struct {
+	Source      string                   `json:"source,omitempty"`
 	ConfigFiles []string                 `json:"config_files"`
 	Allowed     []string                 `json:"allowed"`
 	Enabled     bool                     `json:"enabled"`
@@ -27,7 +28,12 @@ func Format(status Response) string {
 	if allowed == "" {
 		allowed = "(all)"
 	}
+	source := strings.TrimSpace(status.Source)
+	if source == "" {
+		source = "runtime config"
+	}
 	lines := []string{
+		"source: " + source,
 		"config: " + configFiles,
 		"allowed: " + allowed,
 		"native: web_search, web_fetch, web_extract, web_crawl",

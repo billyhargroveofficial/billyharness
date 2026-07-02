@@ -24,6 +24,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
+	"github.com/billyhargroveofficial/billyharness/internal/mcpstatus"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
@@ -389,12 +390,13 @@ func (s *Server) handleCodexImport(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMCP(w http.ResponseWriter, _ *http.Request) {
 	mcpSettings := s.registry.MCPSettings()
-	writeJSON(w, http.StatusOK, map[string]any{
-		"config_files": mcpSettings.ConfigFiles,
-		"allowed":      mcpSettings.AllowedServers,
-		"enabled":      mcpSettings.Enabled,
-		"servers":      s.registry.MCPStatuses(),
-		"prompts":      s.registry.MCPPrompts(),
+	writeJSON(w, http.StatusOK, mcpstatus.Response{
+		Source:      "runtime config",
+		ConfigFiles: mcpSettings.ConfigFiles,
+		Allowed:     mcpSettings.AllowedServers,
+		Enabled:     mcpSettings.Enabled,
+		Servers:     s.registry.MCPStatuses(),
+		Prompts:     s.registry.MCPPrompts(),
 	})
 }
 

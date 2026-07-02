@@ -1371,6 +1371,12 @@ command = "nope"
 			t.Fatalf("default MCP config missing %s: %s", wantServer, text)
 		}
 	}
+	if count := strings.Count(text, "[mcp_servers."); count != 4 {
+		t.Fatalf("default MCP config server count = %d, want 4: %s", count, text)
+	}
+	if !strings.Contains(text, "web_extract") {
+		t.Fatalf("default MCP config should document native web_extract: %s", text)
+	}
 	if strings.Contains(text, "codex_only") {
 		t.Fatalf("default MCP config should not copy Codex MCP servers: %s", text)
 	}

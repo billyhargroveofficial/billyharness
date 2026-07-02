@@ -50,6 +50,7 @@ func MCPStatus(ctx context.Context, settings Settings) (mcpstatus.Response, erro
 	defer registry.Close()
 	mcpSettings := registry.MCPSettings()
 	return mcpstatus.Response{
+		Source:      "runtime config",
 		ConfigFiles: mcpSettings.ConfigFiles,
 		Allowed:     mcpSettings.AllowedServers,
 		Enabled:     mcpSettings.Enabled,

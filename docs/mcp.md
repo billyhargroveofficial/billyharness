@@ -70,7 +70,11 @@ Use `/mcp` in TUI or Telegram, or call the gateway:
 curl -fsS http://127.0.0.1:8765/v1/mcp
 ```
 
-Status shows config files, allowlist, native tools, server state, transport, command or URL, tool count, last error, restart count, retry count, reconnect backoff, and next retry time.
+Status starts with `source: runtime config`, then shows the config files and
+allowlist from the active registry used by the gateway or local TUI runtime.
+It also lists native tools separately from MCP servers, followed by server
+state, transport, command or URL, tool count, last error, restart count, retry
+count, reconnect backoff, and next retry time.
 
 States include `connected`, `reconnected`, `failed`, `crashed`, `restarting`, `disabled`, `disconnected`, and `unsupported`.
 

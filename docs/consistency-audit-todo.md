@@ -538,11 +538,23 @@ Files:
 
 ### 15. Make MCP status reflect the same config used by runtime
 
-- [ ] `/mcp` output should show the config path and allowed servers from the
+- [x] `/mcp` output should show the config path and allowed servers from the
   same runtime config used by the gateway.
-- [ ] Ensure native web tools stay separate from MCP tools in status output.
-- [ ] Verify only Telegram, Telegram Parilka, GitHub, and Context7 are loaded
+- [x] Ensure native web tools stay separate from MCP tools in status output.
+- [x] Verify only Telegram, Telegram Parilka, GitHub, and Context7 are loaded
   by default unless config explicitly changes it.
+
+Evidence:
+
+- Gateway `/v1/mcp`, local TUI `/mcp`, and Telegram gateway `/mcp` formatting
+  now share `mcpstatus.Response` with `source: runtime config`, config file
+  paths, and allowed servers from the active runtime registry.
+- Native web tools remain on the formatter's separate `native:` line, including
+  `web_extract`, instead of being mixed with MCP server status.
+- The default MCP config test now asserts exactly four default MCP servers:
+  Telegram, Telegram Parilka, GitHub, and Context7.
+- Tests: `/root/.local/go/bin/go test -run 'TestFormatMCPStatusShowsOwnConfigAndNativeWebTools|TestGatewayClientMCPStatusUsesSharedFormatter|TestGatewayToolsExposeMCPRegistry|TestDefaultMCPConfigFilesUsesBillyharnessHomeOnly|TestMCPStatusReturnsDisabledStatusForDefaultSettings' -count=1 ./internal/tui ./internal/telegrambot ./internal/gateway ./internal/config ./internal/tui/runtimeclient`.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/mcpstatus ./internal/tui/runtimeclient ./internal/tui ./internal/telegrambot ./internal/gateway ./internal/config`.
 
 Files:
 

@@ -17,6 +17,7 @@ func TestGatewayClientMCPStatusUsesSharedFormatter(t *testing.T) {
 		Path:   "/v1/mcp",
 		Handler: func(w http.ResponseWriter, _ *http.Request) {
 			testkit.WriteJSON(t, w, map[string]any{
+				"source":       "runtime config",
 				"config_files": []string{"/root/billyharness/mcp.config.toml"},
 				"allowed":      []string{"github"},
 				"enabled":      true,
@@ -46,7 +47,7 @@ func TestGatewayClientMCPStatusUsesSharedFormatter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"config: /root/billyharness/mcp.config.toml", "allowed: github", "github", "connected", "command:npx", "tools:7", "github/review <target>", "metadata only"} {
+	for _, want := range []string{"source: runtime config", "config: /root/billyharness/mcp.config.toml", "allowed: github", "github", "connected", "command:npx", "tools:7", "github/review <target>", "metadata only"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("MCP status missing %q: %q", want, text)
 		}

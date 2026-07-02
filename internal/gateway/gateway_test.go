@@ -713,6 +713,7 @@ func TestGatewayToolsExposeMCPRegistry(t *testing.T) {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `"name":"fake"`) ||
+		!strings.Contains(rec.Body.String(), `"source":"runtime config"`) ||
 		!strings.Contains(rec.Body.String(), `"connected":true`) ||
 		!strings.Contains(rec.Body.String(), `"state":"connected"`) ||
 		!strings.Contains(rec.Body.String(), `"retry_count":0`) ||
