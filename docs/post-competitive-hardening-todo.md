@@ -282,7 +282,7 @@ Goal: verify decomposition helped architecture instead of just moving lines.
       ownership grows.
   - verification evidence:
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `95718f8cdf3ddb8bf210f0b47e24b58815d5cbfa`.
 
 - [ ] PH-02.3 Remove accidental duplicate abstractions if found.
   - likely areas: context formatting, command metadata, tool display, output
