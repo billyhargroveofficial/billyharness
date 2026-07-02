@@ -352,7 +352,7 @@ Goal: prove the cleaned code still behaves like the current deployed harness.
     ./cmd/fast-agent-harness` passed.
   - commit: `093e2f878f55a929cca9a8965b84c9321fc7e1c9`.
 
-- [ ] PH-03.4 Run CLI smoke checks.
+- [x] PH-03.4 Run CLI smoke checks.
   - suggested verification:
     - `./bin/fast-agent-harness config inspect -json`
     - `./bin/fast-agent-harness commands list`
@@ -361,7 +361,24 @@ Goal: prove the cleaned code still behaves like the current deployed harness.
     - `./bin/fast-agent-harness hygiene -strict`
   - acceptance: commands succeed or fail only for expected missing local data,
     with clear errors and no panics.
-  - status: open.
+  - status: completed 2026-07-02.
+  - evidence:
+    - `./bin/fast-agent-harness config inspect -json` passed and reported
+      provider `openai-codex`, model `gpt-5.5`, explicit provider capability
+      diagnostics, memory enabled with `memory_auto_extract_enabled=false`,
+      and one provider-routing warning.
+    - `./bin/fast-agent-harness commands list` passed and printed built-in
+      action/profile entries from the shared command registry.
+    - `./bin/fast-agent-harness memory list` passed with `memory entries: 0`
+      and `no memory entries`.
+    - `./bin/fast-agent-harness sessions list` passed, listed JSONL and legacy
+      sessions, and surfaced existing store warnings for older records instead
+      of panicking: two `history_sha256 mismatch` warnings and one
+      `run.failed without started run` lifecycle warning, repeated by the
+      current list/index flow.
+    - `./bin/fast-agent-harness hygiene -strict` passed with
+      `tracked Go files: 286` and `large source files: none`.
+  - commit: pending.
 
 ## Milestone 4 - Deployed Service Reality Check (P1)
 
