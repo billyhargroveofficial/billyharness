@@ -222,7 +222,7 @@ Goal: make `fast-agent-harness hygiene -strict` pass without changing behavior.
   - verification evidence:
     `/root/.local/go/bin/go run ./cmd/fast-agent-harness hygiene -strict`
     passed.
-  - commit: pending.
+  - commit: `229a03b79ab9c0fe3cc857ec3cfb190784c2c122`.
 
 ## Milestone 2 - Boundary And Complexity Audit (P0)
 
