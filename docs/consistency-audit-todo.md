@@ -441,12 +441,27 @@ Tests:
 
 ### 12. Centralize TUI/Telegram event presentation policy
 
-- [ ] Define one event presentation policy for which lifecycle events affect:
+- [x] Define one event presentation policy for which lifecycle events affect:
   transcript, compact progress, status line, final footer, and `/context`.
-- [ ] TUI and Telegram currently filter different subsets of run/tool/status
+- [x] TUI and Telegram currently filter different subsets of run/tool/status
   events. Remove accidental differences while preserving client-specific style.
-- [ ] Do not show raw low-level tool lifecycle noise in the TUI unless the user
+- [x] Do not show raw low-level tool lifecycle noise in the TUI unless the user
   chooses full tool view.
+
+Evidence:
+
+- Added `clientux/projector.EventPresentationPolicy`, which classifies each
+  event type for transcript, compact progress, status line, final footer,
+  `/context`, low-level tool lifecycle, and immediate stream flushing.
+- TUI transcript projection and stream-flush decisions now call the shared
+  policy instead of local event-type allowlists.
+- Telegram compact progress rendering now checks the same compact-progress
+  policy before emitting tool/status/error progress rows.
+- Added a policy unit test plus a golden TUI/Telegram trace asserting shared
+  model/tool/token counts, visible compact categories, and no transcript or
+  Telegram progress noise for low-level tool lifecycle events.
+- Tests: `/root/.local/go/bin/go test -run 'TestEventPresentationPolicyClassifiesLifecycleEvents|TestGoldenStatusEventPresentationPolicyMatchesTUITelegram|TestToolLifecycleEventsUpdateStatusWithoutTranscriptNoise' -count=1 ./internal/clientux/projector ./internal/tui ./internal/telegrambot`.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/clientux/projector ./internal/tui ./internal/telegrambot`.
 
 Files:
 
@@ -658,6 +673,12 @@ Cross-cutting regression tests:
 ```bash
 go test -run 'Test.*Context.*Window.*|Test.*Status.*Context.*|Test.*Selected.*Runtime.*|Test.*Cache.*Context.*|Test.*Tool.*Count.*|Test.*Helper.*Usage.*|Test.*Telegram.*Stale.*|Test.*Interrupt.*Late.*|Test.*Golden.*Status.*|Test.*Vision.*Capability.*' -count=1 ./internal/...
 ```
+
+Latest P0 verification evidence, all passed after P0-12:
+
+- `/root/.local/go/bin/go test -count=1 ./internal/modelinfo ./internal/config ./internal/gateway ./internal/gatewayclient ./internal/session ./internal/telegrambot ./internal/tui ./internal/clientux ./internal/clientux/projector ./internal/tools ./internal/toolrender ./internal/provider`
+- `/root/.local/go/bin/go test -run 'Test.*Context.*Window.*|Test.*Status.*Context.*|Test.*Selected.*Runtime.*|Test.*Cache.*Context.*|Test.*Tool.*Count.*|Test.*Helper.*Usage.*|Test.*Telegram.*Stale.*|Test.*Interrupt.*Late.*|Test.*Golden.*Status.*|Test.*Vision.*Capability.*' -count=1 ./internal/...`
+- `/root/.local/go/bin/go test -count=1 ./...`
 
 Full verification before marking this TODO complete:
 

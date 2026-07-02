@@ -412,27 +412,7 @@ func projectedBlockChanged(before, after transcript.Cell) bool {
 }
 
 func transcriptProjectsEvent(eventType protocol.EventType) bool {
-	switch eventType {
-	case protocol.EventRunStarted,
-		protocol.EventAssistantReasoning,
-		protocol.EventAssistantDelta,
-		protocol.EventToolAudit,
-		protocol.EventToolCallRequested,
-		protocol.EventToolCallFinished,
-		protocol.EventToolCallFailed,
-		protocol.EventToolCallAborted,
-		protocol.EventStepStarted,
-		protocol.EventStepCompleted,
-		protocol.EventContextCompacted,
-		protocol.EventContextThreshold,
-		protocol.EventTurnChangeRecorded,
-		protocol.EventTurnChangeReverted,
-		protocol.EventRunCompleted,
-		protocol.EventRunFailed:
-		return true
-	default:
-		return false
-	}
+	return uxprojector.EventPresentationPolicy(eventType).Transcript
 }
 
 func (m *Model) applyEvent(event protocol.Event) {
@@ -532,19 +512,7 @@ func (m *Model) flushStreamEvents() bool {
 }
 
 func shouldFlushStreamEvent(event protocol.Event) bool {
-	switch event.Type {
-	case protocol.EventRunCompleted, protocol.EventRunFailed,
-		protocol.EventUserInputRequested, protocol.EventUserInputAnswered, protocol.EventUserInputRejected,
-		protocol.EventStreamStillRunning,
-		protocol.EventToolCallRequested, protocol.EventToolCallStarted,
-		protocol.EventToolCallFinished, protocol.EventToolCallFailed,
-		protocol.EventToolCallAborted, protocol.EventToolOutputRefCreated,
-		protocol.EventStepStarted, protocol.EventStepCompleted,
-		protocol.EventTurnChangeRecorded, protocol.EventTurnChangeReverted:
-		return true
-	default:
-		return false
-	}
+	return uxprojector.EventPresentationPolicy(event.Type).FlushesStreamQueue()
 }
 
 func stillRunningStatus(value any) string {

@@ -91,47 +91,78 @@ func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
 	previousError := r.LastError
 	snapshot := r.projector.Apply(event)
 	r.applySnapshot(snapshot)
+	presentation := projector.EventPresentationPolicy(event.Type)
 	switch event.Type {
 	case protocol.EventRunStarted:
 	case protocol.EventModelCallStarted:
 	case protocol.EventAssistantReasoning:
 	case protocol.EventAssistantDelta:
 	case protocol.EventToolCallRequested:
+		if !presentation.CompactProgress {
+			return nil
+		}
 		key, summary := toolCallKeyAndSummary(event.Data)
 		return []RenderEvent{{Kind: "tool", Title: "Tool", Body: "⏳ " + summary, Key: key}}
 	case protocol.EventToolCallFinished:
+		if !presentation.CompactProgress {
+			return nil
+		}
 		key, summary := toolResultSummary(snapshot, event.Data)
 		if summary == "" {
 			return nil
 		}
 		return []RenderEvent{{Kind: "tool", Title: "Tool", Body: summary, Key: key}}
 	case protocol.EventToolCallFailed, protocol.EventToolCallAborted:
+		if !presentation.CompactProgress {
+			return nil
+		}
 		key, summary := toolFailureSummary(event)
 		if summary == "" {
 			return nil
 		}
 		return []RenderEvent{{Kind: "tool", Title: "Tool", Body: summary, Key: key}}
 	case protocol.EventContextThreshold:
+		if !presentation.CompactProgress {
+			return nil
+		}
 		return []RenderEvent{{Kind: "status", Title: "Context", Body: telegramContextThresholdText(event.Data), Key: telegramContextThresholdKey(event.Data)}}
 	case protocol.EventStreamStillRunning:
+		if !presentation.CompactProgress {
+			return nil
+		}
 		return []RenderEvent{{Kind: "status", Title: "Still Running", Body: telegramStillRunningText(event.Data), Key: "stream.still_running"}}
 	case protocol.EventTurnChangeRecorded:
+		if !presentation.CompactProgress {
+			return nil
+		}
 		if change, ok := toolrender.DecodeTurnChange(event.Data); ok {
 			return []RenderEvent{{Kind: "status", Title: "Changes", Body: toolrender.TurnChangeSummary(change), Key: change.ChangeID}}
 		}
 	case protocol.EventTurnChangeReverted:
+		if !presentation.CompactProgress {
+			return nil
+		}
 		if change, ok := toolrender.DecodeTurnChange(event.Data); ok {
 			return []RenderEvent{{Kind: "status", Title: "Reverted", Body: toolrender.TurnChangeSummary(change), Key: change.ChangeID}}
 		}
 	case protocol.EventUserInputRequested:
+		if !presentation.CompactProgress {
+			return nil
+		}
 		if req, ok := protocol.DecodeUserInputRequest(event.Data); ok {
 			return []RenderEvent{{Kind: "status", Title: "Question", Body: telegramUserInputQuestionText(req), Key: req.RequestID}}
 		}
 	case protocol.EventUserInputAnswered:
+		if !presentation.CompactProgress {
+			return nil
+		}
 		if answer, ok := protocol.DecodeUserInputAnswer(event.Data); ok {
 			return []RenderEvent{{Kind: "status", Title: "Question", Body: "answered", Key: answer.RequestID}}
 		}
 	case protocol.EventUserInputRejected:
+		if !presentation.CompactProgress {
+			return nil
+		}
 		if reject, ok := protocol.DecodeUserInputReject(event.Data); ok {
 			body := "rejected"
 			if reject.Reason != "" {
@@ -142,6 +173,9 @@ func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
 	case protocol.EventProviderUsageUpdate:
 	case protocol.EventRunCompleted:
 	case protocol.EventRunFailed:
+		if !presentation.CompactProgress {
+			return nil
+		}
 		errText := fmt.Sprint(event.Data)
 		if errText != "" && errText != previousError {
 			return []RenderEvent{{Kind: "error", Title: "Error", Body: errText}}
@@ -189,8 +223,8 @@ func (r *Renderer) StatusText(model, reasoning string) string {
 
 func (r *Renderer) FinalChunks(model, reasoning string) []string {
 	elapsed := telegramElapsedSince(r.Started).Round(time.Second)
-	state := r.state()
 	content := r.finalContent()
+	state := r.state()
 	header := "<b>" + esc(statusEmoji(state)+" Billyharness · "+titleState(state)) + "</b>\n" +
 		esc("🧬 "+model+" · 🧠 "+reasoning+" · ⏱ "+elapsed.String()) + "\n\n"
 	footer := "\n\n<i>" + esc(r.footerLine()) + "</i>"
