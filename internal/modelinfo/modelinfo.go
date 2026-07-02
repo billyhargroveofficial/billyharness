@@ -81,7 +81,7 @@ func Lookup(model string) Info {
 		info := deepSeekInfo(model)
 		info.Pricing = Pricing{CacheHitPer1M: 0.003625, CacheMissPer1M: 0.435, InputPer1M: 0.435, OutputPer1M: 0.87}
 		return info
-	case "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark":
+	case "gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex-spark":
 		return codexInfo(model, true)
 	case "mock", "mock-summarizer", "mock-summary":
 		return mockInfo(model)
@@ -134,7 +134,7 @@ func codexInfo(model string, known bool) Info {
 		Known:                 known,
 		InputModalities:       []string{"text", "image"},
 		VisionInput:           true,
-		ContextWindowTokens:   1_000_000,
+		ContextWindowTokens:   codexContextWindowTokens(model),
 		MaxOutputTokens:       8_192,
 		ReasoningModes:        []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"},
 		Reasoning:             true,
@@ -146,6 +146,17 @@ func codexInfo(model string, known bool) Info {
 		DefaultSummaryModel:   "gpt-5.4-mini",
 		HelperModels:          HelperModels{WebSummary: "gpt-5.4-mini", Memory: "gpt-5.4-mini"},
 		CostMode:              "subscription",
+	}
+}
+
+func codexContextWindowTokens(model string) int64 {
+	switch NormalizeAlias(model) {
+	case "gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro":
+		return 1_050_000
+	case "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex-spark":
+		return 400_000
+	default:
+		return 400_000
 	}
 }
 
@@ -187,7 +198,7 @@ func Provider(id string) ProviderInfo {
 			Auth:             "codex-oauth",
 			OpenAICompatible: false,
 			Subscription:     true,
-			Models:           []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"},
+			Models:           []string{"gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex-spark"},
 		}
 	case ProviderMock:
 		return ProviderInfo{ID: ProviderMock, Name: "Mock", Transport: "in-process", Auth: "none", Models: []string{"mock"}}

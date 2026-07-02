@@ -10,6 +10,8 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 )
 
+const legacyDefaultContextWindowTokens int64 = 1_000_000
+
 func Default() Config {
 	return MustResolve().Config
 }
@@ -30,6 +32,17 @@ func (c *Config) ApplyModelProviderDefaults() {
 		c.Model = "gpt-5.4-mini"
 	}
 	c.Provider = modelinfo.ProviderForModel(c.Model, c.Provider)
+	c.applyModelContextWindowDefault()
+}
+
+func (c *Config) applyModelContextWindowDefault() {
+	info := modelinfo.Lookup(c.Model)
+	if info.ContextWindowTokens <= 0 {
+		return
+	}
+	if c.ContextWindowTokens <= 0 || c.ContextWindowTokens == 128_000 || (info.Provider == modelinfo.ProviderOpenAICodex && c.ContextWindowTokens == legacyDefaultContextWindowTokens) {
+		c.ContextWindowTokens = info.ContextWindowTokens
+	}
 }
 
 func (c *Config) ApplyWebSummaryDefaults() {

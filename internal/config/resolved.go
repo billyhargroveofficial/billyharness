@@ -486,6 +486,7 @@ func (s *resolveState) applyValue(key string, value any, source, sourcePath, sou
 func (s *resolveState) finalizeDerivedValues() {
 	beforeProvider := s.cfg.Provider
 	beforeModel := s.cfg.Model
+	beforeContextWindow := s.cfg.ContextWindowTokens
 	providerValue, providerValueOK := s.values["provider"]
 	explicitProvider := providerValueOK && isExplicitProviderSource(providerValue.Source)
 	s.cfg.ApplyModelProviderDefaults()
@@ -499,6 +500,9 @@ func (s *resolveState) finalizeDerivedValues() {
 			s.warn(warning)
 		}
 		s.record("provider", s.cfg.Provider, SourceDerived, "", "model", false, warning, "")
+	}
+	if s.cfg.ContextWindowTokens != beforeContextWindow {
+		s.record("context_window_tokens", s.cfg.ContextWindowTokens, SourceDerived, "", "model", false, "derived from model "+s.cfg.Model, "")
 	}
 	beforeWebProvider := s.cfg.WebSummaryProvider
 	beforeWebModel := s.cfg.WebSummaryModel

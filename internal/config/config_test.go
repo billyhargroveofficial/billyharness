@@ -331,6 +331,26 @@ func TestApplyModelProviderDefaultsSelectsProviderFromModel(t *testing.T) {
 	}
 }
 
+func TestApplyModelProviderDefaultsUsesCodexModelContextWindows(t *testing.T) {
+	cfg := Config{Provider: "deepseek", Model: "gpt-5.5", ContextWindowTokens: 1_000_000}
+	cfg.ApplyModelProviderDefaults()
+	if cfg.Provider != "openai-codex" || cfg.ContextWindowTokens != 1_050_000 {
+		t.Fatalf("gpt-5.5 defaults = provider:%q context:%d", cfg.Provider, cfg.ContextWindowTokens)
+	}
+
+	cfg = Config{Provider: "deepseek", Model: "gpt-5.4-mini", ContextWindowTokens: 1_000_000}
+	cfg.ApplyModelProviderDefaults()
+	if cfg.Provider != "openai-codex" || cfg.ContextWindowTokens != 400_000 {
+		t.Fatalf("gpt-5.4-mini defaults = provider:%q context:%d", cfg.Provider, cfg.ContextWindowTokens)
+	}
+
+	cfg = Config{Provider: "deepseek", Model: "gpt-5.4-mini", ContextWindowTokens: 777_000}
+	cfg.ApplyModelProviderDefaults()
+	if cfg.Provider != "openai-codex" || cfg.ContextWindowTokens != 777_000 {
+		t.Fatalf("custom context should be preserved: provider:%q context:%d", cfg.Provider, cfg.ContextWindowTokens)
+	}
+}
+
 func TestWebSummaryModelDefaultsFollowProviderWithoutSpark(t *testing.T) {
 	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
 	t.Setenv("FAST_AGENT_WEB_SUMMARY_MODE", "model")

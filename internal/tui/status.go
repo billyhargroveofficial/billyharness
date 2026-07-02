@@ -104,7 +104,7 @@ func (m Model) spinner() string {
 
 func (m Model) contextText() string {
 	used := m.contextTokens()
-	window := m.settings.ContextWindowTokens
+	window := m.runtime.ContextWindowTokens
 	if window <= 0 {
 		return compactNumber(used)
 	}
