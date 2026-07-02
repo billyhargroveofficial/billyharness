@@ -93,7 +93,6 @@ func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
 	r.applySnapshot(snapshot)
 	switch event.Type {
 	case protocol.EventRunStarted:
-		return []RenderEvent{{Kind: "status", Title: "Run", Body: "started"}}
 	case protocol.EventModelCallStarted:
 	case protocol.EventAssistantReasoning:
 	case protocol.EventAssistantDelta:

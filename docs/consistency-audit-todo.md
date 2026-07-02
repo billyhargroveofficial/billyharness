@@ -327,14 +327,25 @@ Files:
 
 ### 9. Reset per-message tool progress, keep chat cumulative totals
 
-- [ ] For every new Telegram input, tool progress must start empty for that run.
-- [ ] Cumulative `agent turns` and `tools` may remain chat/session totals, but
+- [x] For every new Telegram input, tool progress must start empty for that run.
+- [x] Cumulative `agent turns` and `tools` may remain chat/session totals, but
   running tool rows must be only the current run.
-- [ ] Final message should not carry old tool lines or old assistant text from a
+- [x] Final message should not carry old tool lines or old assistant text from a
   previous run.
-- [ ] Add a regression test with two Telegram messages in one chat where the
+- [x] Add a regression test with two Telegram messages in one chat where the
   first run uses tools and the second run has no tools; the second live/final
   messages must not show first-run tools.
+
+Evidence:
+
+- Added `TestTelegramSecondMessageStartsFreshToolProgress`, which runs two
+  Telegram messages in one chat: the first has a web tool and assistant text,
+  the second has no tools. The second progress/final edits reject the previous
+  tool row and previous assistant text while preserving cumulative `tools 1`.
+- Telegram render no longer inserts the generic run-start status into
+  `ToolProgress`, so a no-tool run starts with an empty tool-progress panel.
+- Tests: `/root/.local/go/bin/go test -run TestTelegramSecondMessageStartsFreshToolProgress -count=1 ./internal/telegrambot`.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/telegrambot`.
 
 Files:
 

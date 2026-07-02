@@ -671,6 +671,173 @@ func TestTelegramReplayCatchupDoesNotLeakOldRunIntoNewProgress(t *testing.T) {
 	}
 }
 
+func TestTelegramSecondMessageStartsFreshToolProgress(t *testing.T) {
+	var mu sync.Mutex
+	nextMessageID := 20
+	var sentIDs []int
+	editsByMessage := map[int][]string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		switch r.URL.Path {
+		case "/botbottoken/sendMessage":
+			mu.Lock()
+			nextMessageID++
+			id := nextMessageID
+			sentIDs = append(sentIDs, id)
+			mu.Unlock()
+			writeTelegramResult(w, SentMessage{MessageID: id, Chat: Chat{ID: 123}})
+		case "/botbottoken/sendChatAction":
+			writeTelegramResult(w, true)
+		case "/botbottoken/editMessageText":
+			id := intFromPayload(payload["message_id"])
+			mu.Lock()
+			if text, ok := payload["text"].(string); ok {
+				editsByMessage[id] = append(editsByMessage[id], text)
+			}
+			if rich, ok := payload["rich_message"].(map[string]any); ok {
+				if markdown, ok := rich["markdown"].(string); ok {
+					editsByMessage[id] = append(editsByMessage[id], markdown)
+				}
+			}
+			mu.Unlock()
+			writeTelegramResult(w, true)
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	harness := &sequenceRunHarness{
+		delay: 35 * time.Millisecond,
+		runs: [][]protocol.Event{
+			{
+				{Type: protocol.EventRunStarted},
+				{Type: protocol.EventModelCallStarted},
+				{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{
+					ID:        "old-search",
+					Name:      "web_search",
+					Arguments: json.RawMessage(`{"query":"old query"}`),
+				}},
+				{Type: protocol.EventAssistantDelta, Data: "first answer"},
+			},
+			{
+				{Type: protocol.EventRunStarted},
+				{Type: protocol.EventModelCallStarted},
+				{Type: protocol.EventAssistantDelta, Data: "second answer no tools"},
+			},
+		},
+	}
+	client := NewClient(ClientOptions{BaseURL: server.URL, Token: "bottoken", MinInterval: time.Nanosecond})
+	statePath := t.TempDir() + "/state.json"
+	bot, err := New(Options{
+		BotToken:        "bottoken",
+		StatePath:       statePath,
+		Model:           "deepseek-v4-flash",
+		Profile:         "billy",
+		ReasoningEffort: "high",
+		EditInterval:    time.Millisecond,
+		AllowedChatIDs:  map[int64]bool{123: true},
+		SendEnabled:     true,
+		DryRunDefault:   false,
+	}, client, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "first"})
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "second"})
+
+	mu.Lock()
+	ids := append([]int(nil), sentIDs...)
+	if len(ids) < 2 {
+		mu.Unlock()
+		t.Fatalf("sent placeholder ids = %#v", ids)
+	}
+	firstJoined := strings.Join(editsByMessage[ids[0]], "\n---\n")
+	secondJoined := strings.Join(editsByMessage[ids[1]], "\n---\n")
+	mu.Unlock()
+	if !strings.Contains(firstJoined, "old query") || !strings.Contains(firstJoined, "first answer") {
+		t.Fatalf("first run did not render expected tool and answer:\n%s", firstJoined)
+	}
+	for _, notWant := range []string{"old query", "first answer", "web_search", "Tools running", "Tools done"} {
+		if strings.Contains(secondJoined, notWant) {
+			t.Fatalf("second run leaked previous run content %q:\n%s", notWant, secondJoined)
+		}
+	}
+	for _, want := range []string{"second answer no tools", "tools 1"} {
+		if !strings.Contains(secondJoined, want) {
+			t.Fatalf("second run missing %q:\n%s", want, secondJoined)
+		}
+	}
+
+	state, err := (Store{Path: statePath}).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat := state.Chats["123"]
+	if chat.AgentTurns != 2 || chat.ToolCalls != 1 {
+		t.Fatalf("chat totals = turns:%d tools:%d, want cumulative turns=2 tools=1", chat.AgentTurns, chat.ToolCalls)
+	}
+}
+
+type sequenceRunHarness struct {
+	scriptedHarness
+
+	mu     sync.Mutex
+	calls  int
+	runs   [][]protocol.Event
+	delay  time.Duration
+	runErr error
+}
+
+func (h *sequenceRunHarness) RunSession(ctx context.Context, _ string, _ gatewayapi.RunRequest, emit func(protocol.Event)) error {
+	h.mu.Lock()
+	call := h.calls
+	h.calls++
+	if call >= len(h.runs) {
+		call = len(h.runs) - 1
+	}
+	events := append([]protocol.Event(nil), h.runs[call]...)
+	delay := h.delay
+	runErr := h.runErr
+	h.mu.Unlock()
+
+	for _, event := range events {
+		emit(event)
+	}
+	if delay > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	emit(protocol.Event{Type: protocol.EventRunCompleted})
+	return runErr
+}
+
+func intFromPayload(value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return int(n)
+	default:
+		return 0
+	}
+}
+
 func TestTelegramRunRecreatesMissingGatewaySessionAndRetries(t *testing.T) {
 	statePath := t.TempDir() + "/state.json"
 	if err := (Store{Path: statePath}).Save(State{Chats: map[string]ChatState{
