@@ -385,11 +385,41 @@ Goal: prove the cleaned code still behaves like the current deployed harness.
 Goal: avoid the classic trap where source is clean but Telegram/TUI still runs
 an old binary.
 
-- [ ] PH-04.1 Inspect running gateway and Telegram processes.
+- [x] PH-04.1 Inspect running gateway and Telegram processes.
   - acceptance: identify process command paths, PIDs, binary timestamps, and
     whether they point to `/root/billyharness/bin/fast-agent-harness`.
   - verification: `ps`, PID files, and service logs as appropriate.
-  - status: open.
+  - status: completed 2026-07-02.
+  - evidence:
+    - PID files were stale: `gateway.pid` contained `535818` and
+      `telegram.pid` contained `535828`, but `ps -p 535818` and
+      `ps -p 535828` found no live process.
+    - Actual live processes were systemd-owned PIDs `798` and `799`, both with
+      PPID `1`, started `Wed Jul 1 13:36:19 2026`, and commands
+      `/root/billyharness/bin/fast-agent-harness gateway` and
+      `/root/billyharness/bin/fast-agent-harness telegram`.
+    - `systemctl is-active billyharness-gateway.service` and
+      `systemctl is-active billyharness-telegram.service` both returned
+      `active`; `systemctl show` reported `MainPID=798`/`MainPID=799` and
+      `ExecStart=/root/billyharness/bin/fast-agent-harness gateway|telegram`
+      from `/etc/systemd/system/billyharness-*.service`.
+    - Both live processes resolve to the old deleted executable inode:
+      `readlink /proc/798/exe` and `readlink /proc/799/exe` returned
+      `/root/billyharness/bin/fast-agent-harness (deleted)`.
+    - The current binary at `bin/fast-agent-harness` exists with size
+      `19937664` bytes and mtime `2026-07-02 10:07:20.206497344 +0200`; the
+      older top-level `fast-agent-harness` binary is `13880018` bytes with
+      mtime `2026-06-27 01:16:42.407807585 +0200`.
+    - `gateway.log` still contains
+      `fast-agent-harness gateway listening on http://127.0.0.1:8765`, and
+      `telegram.log` contains
+      `billyharness telegram gateway polling; gateway=http://127.0.0.1:8765`.
+    - Live gateway health succeeded at `/health` with
+      `{"model":"deepseek-v4-pro","ok":true,"provider":"deepseek"}`. The
+      current PH-04.2 checklist still says `/ready`, but current source and
+      setup docs use `/health`; the running deleted-inode binary returns 404
+      for both `/ready` and current-source `/v1/processes`.
+  - commit: pending.
 
 - [ ] PH-04.2 Restart deployed gateway/Telegram only after a current binary
   exists and tests pass.
