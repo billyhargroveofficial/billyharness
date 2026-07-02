@@ -187,16 +187,26 @@ Files:
 
 ### 5. Rename confusing token counters in final/status lines
 
-- [ ] Do not display cumulative provider input/output as if it were active
+- [x] Do not display cumulative provider input/output as if it were active
   context.
-- [ ] Keep the current cleaner status concept:
+- [x] Keep the current cleaner status concept:
   - `ctx X/Y Z%`: active conversation context estimate.
   - `cache hit/miss`: provider billing/cache counters, can exceed active
     context and should be labeled as such.
   - `last in/out` or `last call` only if needed, never as the primary context
     metric.
-- [ ] Add a short `/context` explanation line when provider cache counters are
+- [x] Add a short `/context` explanation line when provider cache counters are
   larger than active context.
+
+Evidence:
+
+- Telegram final/live footers now label provider cache counters as
+  `cache hit`/`miss` instead of a bare hit/miss pair next to context.
+- TUI inline status now labels both `cache hit` and `cache miss`.
+- Gateway `/context` labels cumulative provider counters as `provider usage`
+  and `provider cache`, and adds an explanation when provider cache counters
+  exceed active context.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/telegrambot ./internal/tui ./internal/gatewayclient`.
 
 Files:
 

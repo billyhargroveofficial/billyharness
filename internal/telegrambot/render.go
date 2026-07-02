@@ -191,10 +191,7 @@ func (r *Renderer) StatusText(model, reasoning string) string {
 func (r *Renderer) FinalChunks(model, reasoning string) []string {
 	elapsed := time.Since(r.Started).Round(time.Second)
 	state := r.state()
-	content := strings.TrimSpace(r.assistantText())
-	if content == "" {
-		content = "Working..."
-	}
+	content := r.finalContent()
 	header := "<b>" + esc(statusEmoji(state)+" Billyharness · "+titleState(state)) + "</b>\n" +
 		esc("🧬 "+model+" · 🧠 "+reasoning+" · ⏱ "+elapsed.String()) + "\n\n"
 	footer := "\n\n<i>" + esc(r.footerLine()) + "</i>"
@@ -215,6 +212,20 @@ func (r *Renderer) FinalChunks(model, reasoning string) []string {
 		chunks = append(chunks, body)
 	}
 	return chunks
+}
+
+func (r *Renderer) finalContent() string {
+	if r == nil {
+		return "Working..."
+	}
+	content := strings.TrimSpace(r.assistantText())
+	if content != "" {
+		return content
+	}
+	if errText := strings.TrimSpace(r.LastError); errText != "" {
+		return "Error: " + errText
+	}
+	return "Working..."
 }
 
 func (r *Renderer) FinalRichMarkdownChunks(model, reasoning string) []string {
@@ -273,7 +284,7 @@ func (r *Renderer) footerLineWithContext(includeContext bool) string {
 		parts = append(parts, context)
 	}
 	if r.LastCacheHit+r.LastCacheMiss > 0 {
-		parts = append(parts, fmt.Sprintf("💾 hit %s miss %s", compactInt(r.LastCacheHit), compactInt(r.LastCacheMiss)))
+		parts = append(parts, fmt.Sprintf("💾 cache hit %s miss %s", compactInt(r.LastCacheHit), compactInt(r.LastCacheMiss)))
 	}
 	if r.ToolSummaryIn+r.ToolSummaryOut > 0 {
 		parts = append(parts, fmt.Sprintf("🧩 websum %s→%s", compactInt(r.ToolSummaryIn), compactInt(r.ToolSummaryOut)))

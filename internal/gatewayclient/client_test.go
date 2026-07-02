@@ -46,6 +46,35 @@ func TestFormatSessionContextLabelsExplicitContextWindowOverride(t *testing.T) {
 	}
 }
 
+func TestFormatSessionContextExplainsProviderCacheCounters(t *testing.T) {
+	text := FormatSessionContext(gatewayapi.SessionContextResponse{
+		ID:                  "session-1",
+		EstimatedTokens:     120,
+		ContextWindowTokens: 1_000,
+		PercentUsed:         12,
+		Usage: gatewayapi.ContextUsage{
+			InputTokens:        100,
+			OutputTokens:       20,
+			CacheHitTokens:     900,
+			CacheMissTokens:    50,
+			LastCacheHitTokens: 900,
+		},
+	})
+	for _, want := range []string{
+		"active context: 120 / 1.0k (12.0%)",
+		"provider usage: input=100 output=20 reasoning=0",
+		"provider cache: hit=900 miss=50 last_hit=900 last_miss=0",
+		"provider cache counters are billing/cache accounting, not active context",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("context report missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "\ncache: hit=") || strings.Contains(text, "\nusage: input=") {
+		t.Fatalf("context report should label provider counters explicitly:\n%s", text)
+	}
+}
+
 func TestCreateSessionWithOwnerSendsOwnerMetadata(t *testing.T) {
 	var got gatewayapi.CreateSessionRequest
 	server := testkit.NewRouteServer(t, testkit.Route{

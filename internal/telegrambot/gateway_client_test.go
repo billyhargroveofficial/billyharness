@@ -90,7 +90,7 @@ func TestGatewayClientContextStatusUsesSharedFormatter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"active context: 580.0k / 1.00M", "compact threshold: 600.0k (60.0%, below)", "runtime: model=deepseek-v4-flash", "cache: hit=700", "helper usage: websum=20.0k", "prompt cache: status=changed", "thresholds: ●50% ○70%", "web_summaries"} {
+	for _, want := range []string{"active context: 580.0k / 1.00M", "compact threshold: 600.0k (60.0%, below)", "runtime: model=deepseek-v4-flash", "provider cache: hit=700", "helper usage: websum=20.0k", "prompt cache: status=changed", "thresholds: ●50% ○70%", "web_summaries"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("context status missing %q: %q", want, text)
 		}

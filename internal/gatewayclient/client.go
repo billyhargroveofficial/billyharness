@@ -507,6 +507,9 @@ func FormatSessionContext(resp gatewayapi.SessionContextResponse) string {
 	if usageText := formatContextUsage(resp.Usage); usageText != "" {
 		b.WriteString(usageText)
 	}
+	if providerCacheExceedsActiveContext(resp.Usage, resp.EstimatedTokens) {
+		b.WriteString("note: provider cache counters are billing/cache accounting, not active context.\n")
+	}
 	if promptText := formatContextPrompt(resp.Prompt); promptText != "" {
 		b.WriteString(promptText)
 	}
@@ -625,10 +628,10 @@ func formatContextUsage(usage gatewayapi.ContextUsage) string {
 		fmt.Fprintf(&b, "activity: model_calls=%d tools=%d\n", usage.ModelCalls, usage.ToolCalls)
 	}
 	if usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.ReasoningTokens > 0 {
-		fmt.Fprintf(&b, "usage: input=%s output=%s reasoning=%s\n", compactContextNumber(usage.InputTokens), compactContextNumber(usage.OutputTokens), compactContextNumber(usage.ReasoningTokens))
+		fmt.Fprintf(&b, "provider usage: input=%s output=%s reasoning=%s\n", compactContextNumber(usage.InputTokens), compactContextNumber(usage.OutputTokens), compactContextNumber(usage.ReasoningTokens))
 	}
 	if usage.CacheHitTokens > 0 || usage.CacheMissTokens > 0 || usage.LastCacheHitTokens > 0 || usage.LastCacheMissTokens > 0 {
-		fmt.Fprintf(&b, "cache: hit=%s miss=%s last_hit=%s last_miss=%s\n",
+		fmt.Fprintf(&b, "provider cache: hit=%s miss=%s last_hit=%s last_miss=%s\n",
 			compactContextNumber(usage.CacheHitTokens),
 			compactContextNumber(usage.CacheMissTokens),
 			compactContextNumber(usage.LastCacheHitTokens),
@@ -661,6 +664,23 @@ func formatContextUsage(usage gatewayapi.ContextUsage) string {
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+func providerCacheExceedsActiveContext(usage gatewayapi.ContextUsage, activeContext int64) bool {
+	if activeContext <= 0 {
+		return false
+	}
+	for _, value := range []int64{
+		usage.CacheHitTokens,
+		usage.CacheMissTokens,
+		usage.LastCacheHitTokens,
+		usage.LastCacheMissTokens,
+	} {
+		if value > activeContext {
+			return true
+		}
+	}
+	return false
 }
 
 func formatContextPrompt(prompt gatewayapi.ContextPrompt) string {

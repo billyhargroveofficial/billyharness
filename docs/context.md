@@ -10,7 +10,11 @@ The report includes:
 - source buckets for project context, user messages, assistant messages, reasoning content, tool outputs, web summaries, MCP outputs, system instructions, and compaction summaries;
 - top context contributors with message index, role, source, tool name when available, token estimate, and a short preview.
 
-Provider usage counters such as cache hit/miss can be larger than active context because they are provider billing/cache accounting for model calls. `/context` is the cleaner place to answer "why did this chat get large?".
+Provider usage counters are labelled separately as `provider usage` and
+`provider cache`. Cache hit/miss can be larger than active context because
+they are provider billing/cache accounting for model calls, not the active
+conversation window. `/context` is the cleaner place to answer "why did this
+chat get large?".
 
 Billyharness injects a bounded `project_context` fragment before project
 instructions. It records cwd, workspace roots, git root, package-manager and

@@ -245,6 +245,7 @@ func TestInlineStatusShowsModelAccessCacheCostAndSession(t *testing.T) {
 		"Context",
 		"cost $",
 		"cache hit",
+		"cache miss",
 		"websum",
 		"20k→900",
 		"sumapi 0",
@@ -550,13 +551,32 @@ func TestProviderUsageUpdateDeduplicatesCumulativeSnapshots(t *testing.T) {
 		t.Fatalf("contextTokens = %d, want current snapshot input+output 150", got)
 	}
 	status := m.inlineStatusView()
-	if !strings.Contains(status, "cache hit 50") || !strings.Contains(status, "miss 75") {
+	if !strings.Contains(status, "cache hit 50") || !strings.Contains(status, "cache miss 75") {
 		t.Fatalf("status should show last cache snapshot, got %q", status)
 	}
-	for _, bad := range []string{"cache hit 90", "miss 135", "reasoning 7", "157 used"} {
+	for _, bad := range []string{"cache hit 90", "cache miss 135", "reasoning 7", "157 used"} {
 		if strings.Contains(status, bad) {
 			t.Fatalf("status should not show cumulative raw counter %q: %q", bad, status)
 		}
+	}
+}
+
+func TestInlineStatusLabelsCacheCountersWhenLargerThanContext(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 220
+	m.lastInputTok = 100
+	m.lastOutputTok = 20
+	m.lastCacheHitTok = 900
+	m.lastCacheMissTok = 50
+
+	status := stripANSITest(m.inlineStatusView())
+	for _, want := range []string{"Context 120/", "cache hit 900", "cache miss 50"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status missing %q: %q", want, status)
+		}
+	}
+	if strings.Contains(status, "cached context") || strings.Contains(status, " · miss 50") {
+		t.Fatalf("status should label cache counters clearly: %q", status)
 	}
 }
 
@@ -868,7 +888,7 @@ func TestContextCommandShowsGatewayContextReport(t *testing.T) {
 	if msg.err != nil {
 		t.Fatal(msg.err)
 	}
-	for _, want := range []string{"active context: 580.0k / 1.00M", "compact threshold: 600.0k (60.0%, below)", "runtime: model=deepseek-v4-flash", "cache: hit=700", "helper usage: websum=20.0k", "prompt cache: status=changed", "thresholds: ●50% ○70%", "web_summaries", "top contributors"} {
+	for _, want := range []string{"active context: 580.0k / 1.00M", "compact threshold: 600.0k (60.0%, below)", "runtime: model=deepseek-v4-flash", "provider cache: hit=700", "helper usage: websum=20.0k", "prompt cache: status=changed", "thresholds: ●50% ○70%", "web_summaries", "top contributors"} {
 		if !strings.Contains(msg.text, want) {
 			t.Fatalf("context report missing %q:\n%s", want, msg.text)
 		}

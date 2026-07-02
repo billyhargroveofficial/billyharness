@@ -38,7 +38,7 @@ func (m Model) inlineStatusView() string {
 	if m.lastCacheHitTok+m.lastCacheMissTok > 0 {
 		bottom = append(bottom,
 			statusSegment{"cache hit " + compactNumber(m.lastCacheHitTok), styles.statusUsage},
-			statusSegment{"miss " + compactNumber(m.lastCacheMissTok), styles.statusUsage},
+			statusSegment{"cache miss " + compactNumber(m.lastCacheMissTok), styles.statusUsage},
 		)
 	}
 	if m.toolSummaryInTok > 0 || m.toolSummaryOutTok > 0 {
