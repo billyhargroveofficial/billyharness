@@ -310,7 +310,7 @@ Goal: verify decomposition helped architecture instead of just moving lines.
     ./internal/tooloutput ./internal/memory ./internal/mcpclient
     ./internal/tools ./internal/tui ./internal/telegrambot
     ./cmd/fast-agent-harness ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `8f7666c231b65575fc3af2c199d4960f2aa2898b`.
 
 ## Milestone 3 - Full Regression And Runtime Smoke (P0)
 
