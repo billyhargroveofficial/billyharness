@@ -529,7 +529,7 @@ an old binary.
     - Provide a safe Telegram smoke target, or run the service against a
       temporary dry-run/fake Bot API endpoint, before marking live Telegram
       slash-command smoke complete.
-  - commit: pending.
+  - commit: `d854069cd26608e1b3ef6c4d4a2d846b2e6c4bb1`.
 
 ## Milestone 5 - Nice-To-Have Polish After Hygiene (P1)
 
@@ -541,12 +541,50 @@ P0 is green.
   - acceptance: same data, better grouping; no hidden accounting.
   - status: open.
 
-- [ ] PH-05.2 Add one command that summarizes current harness health.
+- [x] PH-05.2 Add one command that summarizes current harness health.
   - idea: `fast-agent-harness doctor runtime` or extending existing `doctor`.
   - acceptance: reports config, auth presence, gateway URL, service binary age,
     strict hygiene status, session store size, tool-output size, and current
     model/provider.
-  - status: open.
+  - status: completed 2026-07-02.
+  - evidence: extended the existing `doctor`/`health` command instead of
+    adding a parallel command. JSON output now includes a `runtime` block with
+    current provider/model, gateway URL, auth presence booleans without secret
+    values, deployed service-binary path/size/mtime/age, gateway session store
+    size, tool-output store size, and strict hygiene status. Human output now
+    prints compact `runtime:` and `auth:` summary lines before the existing
+    checks.
+  - live output evidence: `/root/.local/go/bin/go run
+    ./cmd/fast-agent-harness doctor -json -build=false` passed and reported
+    provider `openai-codex`, model `gpt-5.5`, gateway URL
+    `http://127.0.0.1:8765`, Codex auth file present, deployed binary
+    `/root/billyharness/bin/fast-agent-harness` at `19753555` bytes with
+    mtime `2026-07-02T08:18:52Z`, gateway session store size `54460781`
+    bytes, tool-output size `6072659` bytes, and strict hygiene status
+    `fail` because the unrelated dirty worktree currently has
+    `internal/gateway/session_store_test.go: 1372 LOC > 1200`.
+  - verification evidence:
+    in the main worktree, `/root/.local/go/bin/go test -run
+    'Test.*Doctor.*|Test.*Hygiene.*|TestCollectDoctorReportIncludesProjectHealth'
+    -count=1 ./cmd/fast-agent-harness` passed;
+    `/root/.local/go/bin/go test -count=1 ./cmd/fast-agent-harness` passed.
+    After unrelated dirty Telegram edits landed, the same main-worktree package
+    test failed in `internal/telegrambot/runner.go` with
+    `too many arguments in call to b.admit.RecordAdmitted`, and
+    `/root/.local/go/bin/go build -o /tmp/fast-agent-harness-doctor-smoke
+    ./cmd/fast-agent-harness` also failed with that signature mismatch plus an
+    earlier `undefined: strconv`. To isolate this task, a clean detached
+    worktree at pushed `HEAD` `d854069cd26608e1b3ef6c4d4a2d846b2e6c4bb1`
+    was created at `/tmp/billyharness-ph05-doctor-clean`, only the
+    `doctor.go`/`doctor_test.go` diff was applied, and the following commands
+    passed there:
+    `/root/.local/go/bin/go test -run
+    'Test.*Doctor.*|Test.*Hygiene.*|TestCollectDoctorReportIncludesProjectHealth'
+    -count=1 ./cmd/fast-agent-harness`,
+    `/root/.local/go/bin/go test -count=1 ./cmd/fast-agent-harness`, and
+    `/root/.local/go/bin/go build -o
+    /tmp/fast-agent-harness-doctor-smoke-clean ./cmd/fast-agent-harness`.
+  - commit: pending.
 
 - [ ] PH-05.3 Add benchmarks only for measured hot spots.
   - likely targets: web summary/context bloat, toolrender rendering, gateway

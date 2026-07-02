@@ -42,11 +42,22 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	if err := os.MkdirAll(repo, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("BILLYHARNESS_HOME", filepath.Join(root, "home"))
+	billyHome := filepath.Join(root, "home")
+	t.Setenv("BILLYHARNESS_HOME", billyHome)
 	t.Setenv("FAST_AGENT_MODEL", "deepseek-v4-pro")
 	t.Setenv("DEEPSEEK_REASONING_EFFORT", "xhigh")
+	t.Setenv("DEEPSEEK_API_KEY", "present")
+	writeTestFile(t, repo, "cmd/fast-agent-harness/doctor.go", "package main\n")
+	writeTestFile(t, repo, "bin/fast-agent-harness", "binary\n")
+	writeTestFile(t, billyHome, "gateway-sessions/session/events.jsonl", "{}\n")
+	writeTestFile(t, billyHome, "tool-output/ref.txt", "output\n")
+	writeTestFile(t, billyHome, "auth/credentials.json", "{}\n")
+	writeTestFile(t, billyHome, "auth/codex.json", "{}\n")
 
 	runner := &fakeDoctorRunner{responses: map[string]fakeDoctorResponse{
+		doctorRunnerKey(repo, "git", "ls-files", "--", "*.go"): {
+			out: "cmd/fast-agent-harness/doctor.go\n",
+		},
 		doctorRunnerKey(repo, "git", "status", "--short"): {
 			out: "",
 		},
@@ -94,6 +105,24 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	if report.Config.MaxToolRounds == 0 || report.Config.MCPAllowedServers == "" || report.Config.WebSummaryMode == "" {
 		t.Fatalf("runtime/tool diagnostics = %#v", report.Config.RuntimeToolSnapshot)
 	}
+	if report.Runtime.Provider != "deepseek" || report.Runtime.Model != "deepseek-v4-pro" || report.Runtime.GatewayURL == "" {
+		t.Fatalf("Runtime provider/model/gateway = %#v", report.Runtime)
+	}
+	if !report.Runtime.Auth.APIKeyEnvSet || !report.Runtime.Auth.CredentialFileExists || !report.Runtime.Auth.CodexAuthFileExists {
+		t.Fatalf("Runtime auth presence = %#v", report.Runtime.Auth)
+	}
+	if !report.Runtime.ServiceBinary.Exists || report.Runtime.ServiceBinary.SizeBytes == 0 || report.Runtime.ServiceBinary.AgeSeconds < 0 {
+		t.Fatalf("Runtime service binary = %#v", report.Runtime.ServiceBinary)
+	}
+	if !report.Runtime.GatewaySessionStore.Exists || report.Runtime.GatewaySessionStore.SizeBytes == 0 {
+		t.Fatalf("Runtime session store = %#v", report.Runtime.GatewaySessionStore)
+	}
+	if !report.Runtime.ToolOutputStore.Exists || report.Runtime.ToolOutputStore.SizeBytes == 0 {
+		t.Fatalf("Runtime tool output store = %#v", report.Runtime.ToolOutputStore)
+	}
+	if report.Runtime.StrictHygiene.Status != "ok" || report.Runtime.StrictHygiene.TrackedGoFiles != 1 {
+		t.Fatalf("Runtime strict hygiene = %#v", report.Runtime.StrictHygiene)
+	}
 	assertDoctorCheck(t, report, "git status", "ok")
 	assertDoctorCheck(t, report, "build check", "ok")
 	assertDoctorCheck(t, report, "service billyharness-gateway.service", "ok")
@@ -108,7 +137,7 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	var buf bytes.Buffer
 	printDoctorReport(&buf, report)
 	out := buf.String()
-	for _, want := range []string{"billyharness doctor", "model=deepseek-v4-pro", "settings:", "checks:"} {
+	for _, want := range []string{"billyharness doctor", "model=deepseek-v4-pro", "settings:", "runtime:", "strict_hygiene=ok", "tool_output=", "auth:", "checks:"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("formatted report missing %q:\n%s", want, out)
 		}
@@ -122,6 +151,10 @@ func TestDoctorReportTracksFailuresForStrictMode(t *testing.T) {
 	}}
 	if !doctorHasFailures(report) {
 		t.Fatal("doctorHasFailures = false, want true")
+	}
+	report = doctorReport{Runtime: doctorRuntimeStatus{StrictHygiene: doctorHygieneStatus{Status: "fail"}}}
+	if !doctorHasFailures(report) {
+		t.Fatal("doctorHasFailures ignored strict hygiene failure")
 	}
 }
 

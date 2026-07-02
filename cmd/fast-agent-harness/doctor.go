@@ -28,23 +28,70 @@ type doctorOptions struct {
 }
 
 type doctorReport struct {
-	Version           string             `json:"version"`
-	GeneratedAt       string             `json:"generated_at"`
-	CWD               string             `json:"cwd"`
-	RepoDir           string             `json:"repo_dir,omitempty"`
-	BillyHome         string             `json:"billy_home"`
-	SettingsPath      string             `json:"settings_path"`
-	EnvPath           string             `json:"env_path"`
-	MCPConfigPath     string             `json:"mcp_config_path"`
-	CodexAuthPath     string             `json:"codex_auth_path"`
-	GatewaySessionDir string             `json:"gateway_session_dir"`
-	Config            doctorConfigStatus `json:"config"`
-	Checks            []doctorCheck      `json:"checks"`
+	Version           string              `json:"version"`
+	GeneratedAt       string              `json:"generated_at"`
+	CWD               string              `json:"cwd"`
+	RepoDir           string              `json:"repo_dir,omitempty"`
+	BillyHome         string              `json:"billy_home"`
+	SettingsPath      string              `json:"settings_path"`
+	EnvPath           string              `json:"env_path"`
+	MCPConfigPath     string              `json:"mcp_config_path"`
+	CodexAuthPath     string              `json:"codex_auth_path"`
+	GatewaySessionDir string              `json:"gateway_session_dir"`
+	Config            doctorConfigStatus  `json:"config"`
+	Runtime           doctorRuntimeStatus `json:"runtime"`
+	Checks            []doctorCheck       `json:"checks"`
 }
 
 type doctorConfigStatus struct {
 	config.ProviderAuthSnapshot
 	config.RuntimeToolSnapshot
+}
+
+type doctorRuntimeStatus struct {
+	Provider            string              `json:"provider"`
+	Model               string              `json:"model"`
+	GatewayURL          string              `json:"gateway_url,omitempty"`
+	Auth                doctorAuthPresence  `json:"auth"`
+	ServiceBinary       doctorFileStatus    `json:"service_binary"`
+	GatewaySessionStore doctorPathUsage     `json:"gateway_session_store"`
+	ToolOutputStore     doctorPathUsage     `json:"tool_output_store"`
+	StrictHygiene       doctorHygieneStatus `json:"strict_hygiene"`
+}
+
+type doctorAuthPresence struct {
+	Provider             string `json:"provider"`
+	APIKeyEnv            string `json:"api_key_env,omitempty"`
+	APIKeyEnvSet         bool   `json:"api_key_env_set"`
+	CredentialFile       string `json:"credential_file,omitempty"`
+	CredentialFileExists bool   `json:"credential_file_exists"`
+	CodexAuthFile        string `json:"codex_auth_file,omitempty"`
+	CodexAuthFileExists  bool   `json:"codex_auth_file_exists"`
+}
+
+type doctorFileStatus struct {
+	Path       string `json:"path,omitempty"`
+	Exists     bool   `json:"exists"`
+	SizeBytes  int64  `json:"size_bytes,omitempty"`
+	ModTime    string `json:"mod_time,omitempty"`
+	AgeSeconds int64  `json:"age_seconds,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+type doctorPathUsage struct {
+	Path      string `json:"path"`
+	Exists    bool   `json:"exists"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+type doctorHygieneStatus struct {
+	Status            string `json:"status"`
+	TrackedGoFiles    int    `json:"tracked_go_files,omitempty"`
+	LargeFiles        int    `json:"large_files,omitempty"`
+	MissingFiles      int    `json:"missing_files,omitempty"`
+	AllowedLargeFiles int    `json:"allowed_large_files,omitempty"`
+	Detail            string `json:"detail,omitempty"`
 }
 
 type doctorCheck struct {
@@ -132,11 +179,124 @@ func collectDoctorReport(ctx context.Context, cfg config.Config, opts doctorOpti
 		repoDir, report.Checks = resolveDoctorRepo(ctx, cwd, opts, runner, report.Checks)
 	}
 	report.RepoDir = repoDir
+	report.Runtime = collectDoctorRuntime(ctx, cfg, repoDir, opts, runner)
 	report.Checks = append(report.Checks, doctorGitStatus(ctx, repoDir, opts, runner))
 	report.Checks = append(report.Checks, doctorBuildStatus(ctx, repoDir, opts, runner))
 	report.Checks = append(report.Checks, doctorServiceStatuses(ctx, opts, runner)...)
 	report.Checks = append(report.Checks, doctorGatewayStatus(ctx, cfg, opts))
 	return report
+}
+
+func collectDoctorRuntime(ctx context.Context, cfg config.Config, repoDir string, opts doctorOptions, runner doctorCommandRunner) doctorRuntimeStatus {
+	providerAuth := cfg.ProviderAuthSnapshot()
+	gatewayURL := ""
+	if candidates := gatewayURLCandidates(cfg); len(candidates) > 0 {
+		gatewayURL = candidates[0]
+	}
+	return doctorRuntimeStatus{
+		Provider:            providerAuth.Provider,
+		Model:               providerAuth.Model,
+		GatewayURL:          gatewayURL,
+		Auth:                doctorAuthPresenceStatus(providerAuth),
+		ServiceBinary:       doctorFileStatusFor(filepath.Join(repoDir, "bin", "fast-agent-harness"), time.Now()),
+		GatewaySessionStore: doctorPathUsageFor(gateway.DefaultSessionStoreDir()),
+		ToolOutputStore:     doctorPathUsageFor(filepath.Join(config.BillyHomeDir(), "tool-output")),
+		StrictHygiene:       doctorStrictHygieneStatus(ctx, repoDir, opts, runner),
+	}
+}
+
+func doctorAuthPresenceStatus(auth config.ProviderAuthSnapshot) doctorAuthPresence {
+	apiKeySet := false
+	if strings.TrimSpace(auth.APIKeyEnv) != "" {
+		_, apiKeySet = os.LookupEnv(auth.APIKeyEnv)
+	}
+	return doctorAuthPresence{
+		Provider:             auth.Provider,
+		APIKeyEnv:            auth.APIKeyEnv,
+		APIKeyEnvSet:         apiKeySet,
+		CredentialFile:       auth.CredentialFile,
+		CredentialFileExists: regularFileExists(auth.CredentialFile),
+		CodexAuthFile:        auth.CodexAuthFile,
+		CodexAuthFileExists:  regularFileExists(auth.CodexAuthFile),
+	}
+}
+
+func regularFileExists(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func doctorFileStatusFor(path string, now time.Time) doctorFileStatus {
+	path = strings.TrimSpace(path)
+	status := doctorFileStatus{Path: path}
+	if path == "" {
+		status.Error = "empty path"
+		return status
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return status
+		}
+		status.Error = err.Error()
+		return status
+	}
+	if info.IsDir() {
+		status.Exists = true
+		status.Error = "path is a directory"
+		return status
+	}
+	status.Exists = true
+	status.SizeBytes = info.Size()
+	status.ModTime = info.ModTime().UTC().Format(time.RFC3339)
+	if !now.IsZero() {
+		age := now.Sub(info.ModTime())
+		if age < 0 {
+			age = 0
+		}
+		status.AgeSeconds = int64(age.Seconds())
+	}
+	return status
+}
+
+func doctorPathUsageFor(path string) doctorPathUsage {
+	size, exists, err := pathSize(path)
+	usage := doctorPathUsage{
+		Path:      path,
+		Exists:    exists,
+		SizeBytes: size,
+	}
+	if err != nil {
+		usage.Error = err.Error()
+	}
+	return usage
+}
+
+func doctorStrictHygieneStatus(ctx context.Context, repoDir string, opts doctorOptions, runner doctorCommandRunner) doctorHygieneStatus {
+	if strings.TrimSpace(repoDir) == "" {
+		return doctorHygieneStatus{Status: "skip", Detail: "repository directory unknown"}
+	}
+	report, err := collectHygieneReport(ctx, hygieneOptions{RepoDir: repoDir, Timeout: opts.Timeout}, runner)
+	if err != nil {
+		return doctorHygieneStatus{Status: "fail", Detail: err.Error()}
+	}
+	status := doctorHygieneStatus{
+		Status:            "ok",
+		TrackedGoFiles:    report.Source.TrackedGoFiles,
+		LargeFiles:        len(report.Source.LargeFiles),
+		MissingFiles:      len(report.Source.MissingFiles),
+		AllowedLargeFiles: len(report.Source.AllowedLargeFiles),
+		Detail:            "large source files: none",
+	}
+	if err := hygieneStrictError(report.Source); err != nil {
+		status.Status = "fail"
+		status.Detail = err.Error()
+	}
+	return status
 }
 
 func resolveDoctorRepo(ctx context.Context, cwd string, opts doctorOptions, runner doctorCommandRunner, checks []doctorCheck) (string, []doctorCheck) {
@@ -297,6 +457,22 @@ func printDoctorReport(w io.Writer, report doctorReport) {
 		report.Config.WebCacheMaxBytes,
 		report.Config.GatewayAddr,
 	)
+	fmt.Fprintf(w, "runtime: provider=%s model=%s gateway=%s strict_hygiene=%s service_binary=%s age=%s sessions=%s tool_output=%s\n",
+		report.Runtime.Provider,
+		report.Runtime.Model,
+		report.Runtime.GatewayURL,
+		report.Runtime.StrictHygiene.Status,
+		doctorFileSummary(report.Runtime.ServiceBinary),
+		doctorAgeSummary(report.Runtime.ServiceBinary.AgeSeconds),
+		doctorPathUsageSummary(report.Runtime.GatewaySessionStore),
+		doctorPathUsageSummary(report.Runtime.ToolOutputStore),
+	)
+	fmt.Fprintf(w, "auth: provider=%s api_key_env=%s credential_file=%s codex_auth=%s\n",
+		report.Runtime.Auth.Provider,
+		presenceSummary(report.Runtime.Auth.APIKeyEnv, report.Runtime.Auth.APIKeyEnvSet),
+		presenceSummary(report.Runtime.Auth.CredentialFile, report.Runtime.Auth.CredentialFileExists),
+		presenceSummary(report.Runtime.Auth.CodexAuthFile, report.Runtime.Auth.CodexAuthFileExists),
+	)
 	fmt.Fprintln(w, "checks:")
 	for _, check := range report.Checks {
 		detail := strings.TrimSpace(check.Detail)
@@ -308,7 +484,48 @@ func printDoctorReport(w io.Writer, report doctorReport) {
 	}
 }
 
+func doctorFileSummary(status doctorFileStatus) string {
+	if strings.TrimSpace(status.Error) != "" {
+		return status.Path + " error:" + status.Error
+	}
+	if !status.Exists {
+		return status.Path + " missing"
+	}
+	return fmt.Sprintf("%s %s", status.Path, humanBytes(status.SizeBytes))
+}
+
+func doctorPathUsageSummary(usage doctorPathUsage) string {
+	if strings.TrimSpace(usage.Error) != "" {
+		return usage.Path + " error:" + usage.Error
+	}
+	if !usage.Exists {
+		return usage.Path + " missing"
+	}
+	return usage.Path + " " + humanBytes(usage.SizeBytes)
+}
+
+func doctorAgeSummary(seconds int64) string {
+	if seconds <= 0 {
+		return "0s"
+	}
+	return (time.Duration(seconds) * time.Second).Round(time.Second).String()
+}
+
+func presenceSummary(label string, present bool) string {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		label = "<unset>"
+	}
+	if present {
+		return label + ":present"
+	}
+	return label + ":missing"
+}
+
 func doctorHasFailures(report doctorReport) bool {
+	if report.Runtime.StrictHygiene.Status == "fail" {
+		return true
+	}
 	for _, check := range report.Checks {
 		if check.Status == "fail" {
 			return true
