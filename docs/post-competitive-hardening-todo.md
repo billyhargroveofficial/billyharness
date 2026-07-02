@@ -340,7 +340,7 @@ Goal: prove the cleaned code still behaves like the current deployed harness.
     `internal/gateway` importing `internal/attachments`; the exact broad rerun
     passed after those in-flight edits settled, so no PH-03.2 code change was
     needed.
-  - commit: pending.
+  - commit: `1b18ee2bfe2f145ef8715af3bdff462c88244aeb`.
 
 - [ ] PH-03.3 Build the binary from current source.
   - verification:
