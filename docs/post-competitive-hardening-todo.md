@@ -465,12 +465,71 @@ an old binary.
       A live Telegram `/status` message was not sent in this restart task
       because no safe chat target was specified; carry the real slash-command
       smoke into PH-04.3 or block it with an explicit chat-target requirement.
-  - commit: pending.
+  - commit: `a8859d7bd13fbd1c158a3c78e5d240cae2eae9ab`.
 
-- [ ] PH-04.3 Verify Telegram and TUI smoke flows after restart.
+- [!] PH-04.3 Verify Telegram and TUI smoke flows after restart.
   - acceptance: `/context`, `/commands`, `/memory list`, `/mcp`, a simple
     prompt, and interruption by a second prompt work without stale tool cells.
-  - status: open.
+  - status: blocked 2026-07-02.
+  - evidence:
+    - TUI gateway smoke passed under a PTY against the restarted gateway:
+      `TERM=dumb ./bin/fast-agent-harness tui -plain -gateway
+      http://127.0.0.1:8765` created gateway session
+      `f47e6018`.
+    - TUI `/context` rendered the shared context report with source buckets and
+      top contributors, and updated status to `context shown`.
+    - TUI `/commands` rendered shared command-registry rows including
+      built-in action metadata, and updated status to `commands shown`.
+    - TUI `/memory list` rendered `memory entries: 0` and `no memory entries`,
+      and updated status to `memory shown`.
+    - TUI `/mcp` rendered connected MCP servers and native tools after the
+      restart, including `telegram`, `telegram-parilka`, `github`, and
+      `context7`, and updated status to `mcp status shown`.
+    - TUI simple prompt smoke passed: `Reply with exactly SMOKE_OK.` completed
+      in about 3 seconds with assistant text `SMOKE_OK` and no tool calls.
+    - TUI long-run smoke stayed coherent while rendering a harmless
+      `shell_exec` for `sleep 12; echo FIRST_DONE`, but a second prompt typed
+      during the active run stayed in the composer while the TUI showed
+      `busy`; it did not submit an interrupting run from the TUI path.
+    - Direct deployed gateway interruption smoke exposed a blocker. A fresh
+      session `69b82313ded81cb3a462408641e0bce6` started a long
+      `shell_exec` run; a concurrent second `POST
+      /v1/sessions/69b82313ded81cb3a462408641e0bce6/run` with
+      `interrupt_policy:"interrupt"` returned
+      `{"data":"interrupt active session run: context deadline exceeded","type":"run.failed"}`.
+      Replayed events with `after_seq=0&follow=false` then showed
+      `run.failed interrupted by newer session run`, `session.status` with the
+      same last error, `tool.call_progress` aborted, `tool.call_aborted`,
+      `step.completed failed context canceled`, and the replacement provider
+      call failing with `Post "https://chatgpt.com/backend-api/codex/responses":
+      context canceled`; no `SECOND_DIRECT_OK` replacement response was
+      produced.
+    - Services remained healthy after the negative smoke:
+      `/health` returned
+      `{"model":"gpt-5.5","ok":true,"provider":"openai-codex"}`,
+      both systemd services were `active`, and `/v1/processes` returned
+      `no managed shell processes`.
+    - Live Telegram slash-command smoke was not sent because no safe target
+      chat/user/thread was specified. The deployed Telegram process is active
+      and polling, but `/status`, `/context`, `/commands`, `/memory list`,
+      `/mcp`, a prompt, and a second-prompt interruption would post into a real
+      Telegram chat.
+  - blocker:
+    - Gateway interrupt replacement is not reliable in the deployed smoke when
+      the active run is inside a long shell tool; the replacement request
+      times out while canceling and the continued first run's next provider
+      call receives `context canceled`.
+    - Real Telegram slash-command verification needs an explicit safe chat
+      target or a deployed dry-run/fake Bot API harness.
+  - next action:
+    - Add or fix a regression around deployed/session interrupt replacement
+      during a cancellable shell tool so the first run terminates and the
+      second prompt starts with a fresh context instead of inheriting the
+      canceled context.
+    - Provide a safe Telegram smoke target, or run the service against a
+      temporary dry-run/fake Bot API endpoint, before marking live Telegram
+      slash-command smoke complete.
+  - commit: pending.
 
 ## Milestone 5 - Nice-To-Have Polish After Hygiene (P1)
 
