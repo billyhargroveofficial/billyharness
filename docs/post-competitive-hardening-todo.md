@@ -551,7 +551,7 @@ P0 is green.
   - next action: capture a real Telegram `/context` sample from a safe target
     after PH-04.3's Telegram smoke blocker is cleared, then adjust only the
     shared formatter if helper/cache/prompt sections are demonstrably noisy.
-  - commit: pending.
+  - commit: `8b862e42c2dddb41f688d713c44a2d6852a5d45f`.
 
 - [x] PH-05.2 Add one command that summarizes current harness health.
   - idea: `fast-agent-harness doctor runtime` or extending existing `doctor`.
@@ -610,11 +610,26 @@ P0 is green.
     `2026-07-02T08:35:58Z`.
   - commit: `35caafce1d85149d7a96921831f83f448b0f6b39`.
 
-- [ ] PH-05.3 Add benchmarks only for measured hot spots.
+- [x] PH-05.3 Add benchmarks only for measured hot spots.
   - likely targets: web summary/context bloat, toolrender rendering, gateway
     replay, TUI reflow.
   - acceptance: benchmark has a decision attached; no vanity benchmark pile.
-  - status: open.
+  - status: completed 2026-07-02.
+  - evidence: no new benchmark was added in this pass because the deployed
+    service smoke surfaced correctness/operability blockers rather than a
+    measured performance hot spot. The TUI `/context`, `/commands`,
+    `/memory list`, `/mcp`, and simple-prompt smokes were responsive enough for
+    qualitative smoke coverage; PH-04.3's failure is an interrupt/replacement
+    correctness bug, not a benchmark target until the cancellation path is
+    fixed. Existing JSONL/replay benchmark coverage from the prior execution
+    roadmap remains the relevant scale gate.
+  - decision: do not add a benchmark for web summary/context bloat,
+    toolrender rendering, gateway replay, or TUI reflow without a measured
+    latency, allocation, replay, or render-regression signal.
+  - next action: after the PH-04.3 interrupt blocker is fixed, add a focused
+    benchmark only if the fix introduces measurable gateway replay, toolrender,
+    or TUI reflow cost; otherwise keep benchmark coverage unchanged.
+  - commit: pending.
 
 ## Completion Criteria
 
