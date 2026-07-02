@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/displayfmt"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -82,16 +83,7 @@ func RunSummaryBody(summary RunSummary) string {
 }
 
 func compactNumber(value int64) string {
-	switch {
-	case value >= 1_000_000:
-		return fmt.Sprintf("%.1fm", float64(value)/1_000_000)
-	case value >= 10_000:
-		return fmt.Sprintf("%.0fk", float64(value)/1_000)
-	case value >= 1_000:
-		return fmt.Sprintf("%.1fk", float64(value)/1_000)
-	default:
-		return fmt.Sprintf("%d", value)
-	}
+	return displayfmt.CompactTerminal(value)
 }
 
 func compactDuration(d time.Duration) string {

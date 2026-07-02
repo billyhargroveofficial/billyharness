@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/clientux/projector"
+	"github.com/billyhargroveofficial/billyharness/internal/displayfmt"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/toolrender"
 )
@@ -582,13 +583,7 @@ func toolLifecycleFailureSummary(event protocol.Event) (string, string) {
 }
 
 func compactInt(value int64) string {
-	if value >= 1_000_000 {
-		return fmt.Sprintf("%.2fM", float64(value)/1_000_000)
-	}
-	if value >= 1000 {
-		return fmt.Sprintf("%.1fk", float64(value)/1000)
-	}
-	return fmt.Sprint(value)
+	return displayfmt.CompactContext(value)
 }
 
 func telegramContextThresholdText(value any) string {
@@ -646,12 +641,5 @@ func contextThresholdData(value any) protocol.ContextThresholdEvent {
 }
 
 func percentText(used, window int64) string {
-	if window <= 0 {
-		return "0%"
-	}
-	percent := float64(used) / float64(window) * 100
-	if percent < 10 {
-		return fmt.Sprintf("%.1f%%", percent)
-	}
-	return fmt.Sprintf("%.0f%%", percent)
+	return displayfmt.ContextPercent(used, window)
 }

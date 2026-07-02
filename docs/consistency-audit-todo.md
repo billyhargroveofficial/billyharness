@@ -773,11 +773,25 @@ Candidate files:
 
 ### 22. Centralize compact number and percent formatting
 
-- [ ] `compactInt`, `compactNumber`, and context percent formatting exist in
+- [x] `compactInt`, `compactNumber`, and context percent formatting exist in
   several packages with different precision. Consolidate where practical or
   document why client-specific variants remain.
-- [ ] Keep style adapters thin: Telegram Markdown/HTML escaping remains local,
+- [x] Keep style adapters thin: Telegram Markdown/HTML escaping remains local,
   terminal color/style remains local.
+
+Evidence:
+
+- Added `internal/displayfmt` as the shared source for compact context,
+  terminal, and tool number styles plus compact/fixed context percent
+  formatting.
+- Telegram, TUI inline status/transcript summaries, gateway `/context`
+  formatting, and tool rendering now delegate their local wrappers to
+  `displayfmt`; client-specific escaping, color, icons, and wording remain in
+  the client packages.
+- Added formatter regression tests covering preserved `M`/`m` suffixes,
+  precision, trailing-zero trimming, negative compact values, and compact vs
+  fixed percent policies.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/displayfmt ./internal/telegrambot ./internal/tui ./internal/tui/transcript ./internal/gatewayclient ./internal/toolrender`.
 
 Files:
 

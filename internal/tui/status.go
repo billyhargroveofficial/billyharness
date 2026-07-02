@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/displayfmt"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 )
 
@@ -120,10 +121,7 @@ func (m Model) contextText() string {
 		return compactNumber(used)
 	}
 	percent := float64(used) / float64(window) * 100
-	text := fmt.Sprintf("%s/%s %.1f%%", compactNumber(used), compactNumber(window), percent)
-	if percent >= 10 {
-		text = fmt.Sprintf("%s/%s %.0f%%", compactNumber(used), compactNumber(window), percent)
-	}
+	text := fmt.Sprintf("%s/%s %s", compactNumber(used), compactNumber(window), displayfmt.ContextPercentValue(percent))
 	if m.runtime.ContextWindowSource == "override" {
 		text += " override"
 	}
@@ -140,14 +138,7 @@ func (m Model) contextCompactText() string {
 		return compactNumber(threshold)
 	}
 	percent := float64(threshold) / float64(window) * 100
-	if percent < 10 {
-		text := fmt.Sprintf("%s %.1f%%", compactNumber(threshold), percent)
-		if m.runtime.ContextCompactSource == "override" {
-			text += " override"
-		}
-		return text
-	}
-	text := fmt.Sprintf("%s %.0f%%", compactNumber(threshold), percent)
+	text := fmt.Sprintf("%s %s", compactNumber(threshold), displayfmt.ContextPercentValue(percent))
 	if m.runtime.ContextCompactSource == "override" {
 		text += " override"
 	}
@@ -160,11 +151,7 @@ func (m Model) contextPercentText() string {
 	if window <= 0 {
 		return compactNumber(used)
 	}
-	percent := float64(used) / float64(window) * 100
-	if percent < 10 {
-		return fmt.Sprintf("%.1f%%", percent)
-	}
-	return fmt.Sprintf("%.0f%%", percent)
+	return displayfmt.ContextPercent(used, window)
 }
 
 func (m Model) costText() string {

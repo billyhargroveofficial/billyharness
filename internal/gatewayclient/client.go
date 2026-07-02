@@ -9,11 +9,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/displayfmt"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewaybase"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
@@ -404,7 +404,7 @@ func FormatSessionContext(resp gatewayapi.SessionContextResponse) string {
 	}
 	if resp.ContextWindowTokens > 0 {
 		source := contextWindowSourceSuffix(resp.ContextWindowSource)
-		fmt.Fprintf(&b, "active context: %s / %s (%.1f%%%s)\n", compactContextNumber(resp.EstimatedTokens), compactContextNumber(resp.ContextWindowTokens), resp.PercentUsed, source)
+		fmt.Fprintf(&b, "active context: %s / %s (%s%s)\n", compactContextNumber(resp.EstimatedTokens), compactContextNumber(resp.ContextWindowTokens), displayfmt.FixedPercentValue(resp.PercentUsed, 1), source)
 	} else {
 		fmt.Fprintf(&b, "active context: %s\n", compactContextNumber(resp.EstimatedTokens))
 	}
@@ -413,7 +413,7 @@ func FormatSessionContext(resp gatewayapi.SessionContextResponse) string {
 		if resp.OverCompactThreshold {
 			state = "over"
 		}
-		fmt.Fprintf(&b, "compact threshold: %s (%.1f%%, %s)\n", compactContextNumber(resp.ContextCompactTokens), resp.CompactThresholdPercent, state)
+		fmt.Fprintf(&b, "compact threshold: %s (%s, %s)\n", compactContextNumber(resp.ContextCompactTokens), displayfmt.FixedPercentValue(resp.CompactThresholdPercent, 1), state)
 	}
 	if runtimeText := formatContextRuntime(resp.Runtime); runtimeText != "" {
 		fmt.Fprintf(&b, "runtime: %s\n", runtimeText)
@@ -480,7 +480,7 @@ func FormatSessionContext(resp gatewayapi.SessionContextResponse) string {
 			if len(flags) > 0 {
 				flagText = ", " + strings.Join(flags, ", ")
 			}
-			fmt.Fprintf(&b, "  %s: %s (%.1f%%, %d msg%s)\n", source.Source, compactContextNumber(source.EstimatedTokens), source.Percent, source.MessageCount, flagText)
+			fmt.Fprintf(&b, "  %s: %s (%s, %d msg%s)\n", source.Source, compactContextNumber(source.EstimatedTokens), displayfmt.FixedPercentValue(source.Percent, 1), source.MessageCount, flagText)
 		}
 	}
 	if len(resp.TopContributors) > 0 {
@@ -757,20 +757,7 @@ func streamGapDroppedEvents(data any) int64 {
 }
 
 func compactContextNumber(value int64) string {
-	abs := value
-	if abs < 0 {
-		abs = -abs
-	}
-	switch {
-	case abs >= 1_000_000:
-		return fmt.Sprintf("%.2fM", float64(value)/1_000_000)
-	case abs >= 10_000:
-		return fmt.Sprintf("%.1fk", float64(value)/1_000)
-	case abs >= 1_000:
-		return fmt.Sprintf("%.1fk", float64(value)/1_000)
-	default:
-		return strconv.FormatInt(value, 10)
-	}
+	return displayfmt.CompactContext(value)
 }
 
 func compactByteNumber(value int64) string {

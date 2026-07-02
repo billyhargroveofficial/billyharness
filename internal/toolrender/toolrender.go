@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/billyhargroveofficial/billyharness/internal/displayfmt"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -893,7 +894,7 @@ func CompactDurationMS(ms int64) string {
 	case ms < 1000:
 		return fmt.Sprintf("%dms", ms)
 	case ms < 60_000:
-		return trimFloat(float64(ms)/1000) + "s"
+		return trimDurationFloat(float64(ms)/1000) + "s"
 	default:
 		minutes := ms / 60_000
 		seconds := (ms % 60_000) / 1000
@@ -902,17 +903,10 @@ func CompactDurationMS(ms int64) string {
 }
 
 func CompactInt(value int64) string {
-	switch {
-	case value >= 1_000_000:
-		return trimFloat(float64(value)/1_000_000) + "M"
-	case value >= 1_000:
-		return trimFloat(float64(value)/1_000) + "k"
-	default:
-		return fmt.Sprint(value)
-	}
+	return displayfmt.CompactTool(value)
 }
 
-func trimFloat(value float64) string {
+func trimDurationFloat(value float64) string {
 	text := fmt.Sprintf("%.1f", value)
 	return strings.TrimSuffix(text, ".0")
 }
