@@ -184,7 +184,7 @@ Goal: make `fast-agent-harness hygiene -strict` pass without changing behavior.
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
   - commit: `1c101defee44404d409e3467bf87df31b35e32a4`.
 
-- [ ] PH-01.4 Split oversized focused test files.
+- [x] PH-01.4 Split oversized focused test files.
   - current issues:
     - `internal/agent/tool_attempt_test.go`: 1416 LOC
     - `internal/tui/interaction_status_test.go`: 1391 LOC
@@ -193,7 +193,21 @@ Goal: make `fast-agent-harness hygiene -strict` pass without changing behavior.
     introducing shared mutable test state.
   - verification:
     `go test -count=1 ./internal/agent ./internal/tui ./internal/gateway`
-  - status: open.
+  - status: completed 2026-07-02.
+  - evidence: split agent parallel/cancel/output-ref/MCP cases into
+    `internal/agent/tool_attempt_parallel_test.go`, TUI transcript-selection
+    cases into `internal/tui/interaction_selection_test.go`, and gateway
+    stream writer/stall cases into
+    `internal/gateway/session_stream_events_test.go`. Assertions and helper
+    usage were preserved; no shared mutable fixtures were added. New line
+    counts are 909/523 LOC for the agent tests, 1100/301 LOC for the TUI
+    tests, and 1043/172 LOC for the gateway tests, all below the 1200 LOC
+    `_test.go` budget.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/agent ./internal/tui
+    ./internal/gateway` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] PH-01.5 Make strict hygiene pass.
   - acceptance: no handwritten `.go` file exceeds 1500 LOC and no `_test.go`
