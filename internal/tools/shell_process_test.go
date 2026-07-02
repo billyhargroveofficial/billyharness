@@ -36,6 +36,13 @@ func TestShellExecBackgroundOutputCursorAndKill(t *testing.T) {
 	if processID == "" || !strings.Contains(start.Content, processID) {
 		t.Fatalf("start result = %#v", start)
 	}
+	if start.Metadata["display_group"] != "shell" ||
+		start.Metadata["display_path"] != root ||
+		start.Metadata["background"] != true ||
+		start.Metadata["retry_semantics"] != "managed_process_start_not_replay_safe" ||
+		!strings.Contains(start.Metadata["display_summary"].(string), processID) {
+		t.Fatalf("start display metadata = %#v", start.Metadata)
+	}
 
 	output := waitForShellOutput(t, registry, processID, 0, 64, 0, "start")
 	if output.OutputRef == "" || !strings.HasPrefix(output.OutputRef, filepath.Join(home, "tool-output")) {
@@ -48,6 +55,12 @@ func TestShellExecBackgroundOutputCursorAndKill(t *testing.T) {
 	if next <= 0 {
 		t.Fatalf("next cursor = %d metadata=%#v", next, output.Metadata)
 	}
+	if output.Metadata["display_group"] != "shell" ||
+		output.Metadata["display_target"] != processID ||
+		output.Metadata["display_collapse_default"] != true ||
+		output.Metadata["retry_semantics"] != "cursor_read_replay_safe" {
+		t.Fatalf("output display metadata = %#v", output.Metadata)
+	}
 
 	kill, err := registry.Call(context.Background(), protocol.ToolCall{
 		Name:      "shell_kill",
@@ -58,6 +71,12 @@ func TestShellExecBackgroundOutputCursorAndKill(t *testing.T) {
 	}
 	if !strings.Contains(kill.Content, processID) {
 		t.Fatalf("kill result = %#v", kill)
+	}
+	if kill.Metadata["display_group"] != "shell" ||
+		kill.Metadata["display_target"] != processID ||
+		kill.Metadata["display_collapse_default"] != true ||
+		kill.Metadata["retry_semantics"] != "terminate_not_replay_safe" {
+		t.Fatalf("kill display metadata = %#v", kill.Metadata)
 	}
 	waitForManagedShellExit(t, registry, processID)
 }

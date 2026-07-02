@@ -394,10 +394,11 @@ func TestWriteToolEnabledCreatesDirectories(t *testing.T) {
 	registry := NewRegistry(cfg)
 
 	target := filepath.Join(root, "nested", "out.txt")
-	if _, err := registry.Call(context.Background(), protocol.ToolCall{
+	result, err := registry.Call(context.Background(), protocol.ToolCall{
 		Name:      "fs_write_file",
 		Arguments: rawArgs(map[string]any{"path": target, "content": "hello"}),
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	bytes, err := os.ReadFile(target)
@@ -407,6 +408,14 @@ func TestWriteToolEnabledCreatesDirectories(t *testing.T) {
 	if string(bytes) != "hello" {
 		t.Fatalf("content = %q", bytes)
 	}
+	if result.Metadata["display_group"] != "filesystem" ||
+		result.Metadata["display_path"] != target ||
+		result.Metadata["display_target"] != "out.txt" ||
+		result.Metadata["display_collapse_default"] != true ||
+		result.Metadata["retry_semantics"] != "overwrite_replay_safe" ||
+		anyInt64(result.Metadata["bytes_written"]) != 5 {
+		t.Fatalf("write metadata = %#v", result.Metadata)
+	}
 }
 
 func TestFSMakeDirEnabledAndRejectsOutsideWorkspace(t *testing.T) {
@@ -415,14 +424,21 @@ func TestFSMakeDirEnabledAndRejectsOutsideWorkspace(t *testing.T) {
 	cfg.WorkspaceRoots = []string{root}
 	cfg.AutoApproveDangerous = true
 	registry := NewRegistry(cfg)
-	if _, err := registry.Call(context.Background(), protocol.ToolCall{
+	result, err := registry.Call(context.Background(), protocol.ToolCall{
 		Name:      "fs_make_dir",
 		Arguments: rawArgs(map[string]any{"path": "nested/dir"}),
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if info, err := os.Stat(filepath.Join(root, "nested", "dir")); err != nil || !info.IsDir() {
 		t.Fatalf("directory not created: info=%v err=%v", info, err)
+	}
+	if result.Metadata["display_group"] != "filesystem" ||
+		result.Metadata["display_target"] != "dir" ||
+		result.Metadata["retry_semantics"] != "idempotent_mkdir_all" ||
+		result.Metadata["existed"] != false {
+		t.Fatalf("mkdir metadata = %#v", result.Metadata)
 	}
 	if _, err := registry.Call(context.Background(), protocol.ToolCall{
 		Name:      "fs_make_dir",
@@ -755,6 +771,13 @@ func TestShellExecGateAndWorkspaceCWD(t *testing.T) {
 	}
 	if !strings.Contains(strings.TrimSpace(result.Content), root) {
 		t.Fatalf("pwd output = %q, want workspace root %q", result.Content, root)
+	}
+	if result.Metadata["display_group"] != "shell" ||
+		result.Metadata["display_path"] != root ||
+		result.Metadata["background"] != false ||
+		result.Metadata["retry_semantics"] != "shell_not_replay_safe" ||
+		!strings.Contains(fmt.Sprint(result.Metadata["display_target"]), "pwd") {
+		t.Fatalf("shell metadata = %#v", result.Metadata)
 	}
 }
 

@@ -104,15 +104,19 @@ func (r *Registry) handleFSEdit(_ context.Context, args json.RawMessage) (Result
 	if err := atomicWriteFile(path, afterBytes, info.Mode().Perm()); err != nil {
 		return Result{}, err
 	}
-	metadata := map[string]any{
-		"path":            path,
-		"edit_count":      len(in.Edits),
-		"replacements":    replacements,
-		"before_sha256":   beforeHash,
-		"after_sha256":    afterHash,
-		"before_bytes":    len(beforeBytes),
-		"after_bytes":     len(afterBytes),
-		"display_summary": fmt.Sprintf("edited %s: %d replacement%s", filepath.Base(path), replacements, pluralSuffix(replacements)),
+	summary := fmt.Sprintf("edited %s: %d replacement%s", fileDisplayTarget(path), replacements, pluralSuffix(replacements))
+	metadata := fileDisplayMetadata(path, summary)
+	metadata["edit_count"] = len(in.Edits)
+	metadata["replacements"] = replacements
+	metadata["before_sha256"] = beforeHash
+	metadata["after_sha256"] = afterHash
+	metadata["before_bytes"] = len(beforeBytes)
+	metadata["after_bytes"] = len(afterBytes)
+	metadata["retry_semantics"] = "guarded_exact_match"
+	if strings.TrimSpace(in.ExpectedSHA256) != "" {
+		metadata["mutation_guard"] = "expected_sha256"
+	} else {
+		metadata["mutation_guard"] = "old_string"
 	}
 	return Result{
 		Content:  fmt.Sprintf("edited %s: %d edit%s, %d replacement%s", path, len(in.Edits), pluralSuffix(len(in.Edits)), replacements, pluralSuffix(replacements)),

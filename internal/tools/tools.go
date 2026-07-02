@@ -581,6 +581,27 @@ func errorResult(code, content string) Result {
 	return Result{Content: content, IsError: true, ErrorCode: code}
 }
 
+func fileDisplayMetadata(path, summary string) map[string]any {
+	target := fileDisplayTarget(path)
+	return map[string]any{
+		"path":                     path,
+		"display_group":            "filesystem",
+		"display_target":           target,
+		"display_path":             path,
+		"display_summary":          summary,
+		"display_preview":          summary,
+		"display_collapse_default": true,
+	}
+}
+
+func fileDisplayTarget(path string) string {
+	target := filepath.Base(strings.TrimSpace(path))
+	if target == "" || target == "." || target == string(filepath.Separator) {
+		return strings.TrimSpace(path)
+	}
+	return target
+}
+
 func validationErrorResult(toolName string, err error) Result {
 	detail := "invalid tool arguments"
 	if err != nil {
@@ -848,7 +869,19 @@ func (r *Registry) addFSWrite() {
 			if err != nil {
 				return Result{}, err
 			}
-			return Result{Content: fmt.Sprintf("wrote %d bytes to %s", n, path)}, nil
+			action := "wrote"
+			retrySemantics := "overwrite_replay_safe"
+			if in.Append {
+				action = "appended"
+				retrySemantics = "append_not_replay_safe"
+			}
+			summary := fmt.Sprintf("%s %s (%d bytes)", action, fileDisplayTarget(path), n)
+			metadata := fileDisplayMetadata(path, summary)
+			metadata["bytes_written"] = n
+			metadata["append"] = in.Append
+			metadata["create_dirs"] = createDirs
+			metadata["retry_semantics"] = retrySemantics
+			return Result{Content: fmt.Sprintf("wrote %d bytes to %s", n, path), Metadata: metadata}, nil
 		},
 	})
 }
@@ -872,10 +905,18 @@ func (r *Registry) addFSMkdir() {
 			if err != nil {
 				return Result{}, err
 			}
+			existed := false
+			if info, err := os.Stat(path); err == nil && info.IsDir() {
+				existed = true
+			}
 			if err := os.MkdirAll(path, 0o755); err != nil {
 				return Result{}, err
 			}
-			return Result{Content: "created " + path}, nil
+			summary := fmt.Sprintf("ensured directory %s", fileDisplayTarget(path))
+			metadata := fileDisplayMetadata(path, summary)
+			metadata["existed"] = existed
+			metadata["retry_semantics"] = "idempotent_mkdir_all"
+			return Result{Content: "created " + path, Metadata: metadata}, nil
 		},
 	})
 }

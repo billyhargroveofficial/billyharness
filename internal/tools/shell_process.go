@@ -88,9 +88,11 @@ func (r *Registry) handleShellExec(ctx context.Context, args json.RawMessage) (R
 	if reason, blocked := destructiveGitCommandReason(in.Argv); blocked {
 		result := errorResult("destructive_git_command", reason)
 		result.Metadata = map[string]any{
-			"guardrail": "destructive_git",
-			"argv":      append([]string(nil), in.Argv...),
+			"guardrail":       "destructive_git",
+			"argv":            append([]string(nil), in.Argv...),
+			"retry_semantics": "blocked_guardrail",
 		}
+		applyShellDisplayMetadata(result.Metadata, in, cwd, "blocked destructive git command")
 		return result, fmt.Errorf("%s", reason)
 	}
 	if in.Background {
@@ -243,23 +245,76 @@ func parseShellExecInput(args json.RawMessage) (shellExecInput, bool, error) {
 	return in, explicitMaxOutput, nil
 }
 
+func shellExecMetadata(in shellExecInput, cwd string) map[string]any {
+	metadata := map[string]any{
+		"argv":             append([]string(nil), in.Argv...),
+		"cwd":              cwd,
+		"timeout_sec":      in.TimeoutSec,
+		"max_output_bytes": in.MaxOutputBytes,
+		"background":       in.Background,
+		"retry_semantics":  "shell_not_replay_safe",
+	}
+	applyShellDisplayMetadata(metadata, in, cwd, "ran shell command")
+	return metadata
+}
+
+func applyShellDisplayMetadata(metadata map[string]any, in shellExecInput, cwd, summary string) {
+	if metadata == nil {
+		return
+	}
+	target := compactShellCommand(in.Argv)
+	if target == "" {
+		target = "shell command"
+	}
+	metadata["display_group"] = "shell"
+	metadata["display_target"] = target
+	metadata["display_preview"] = target
+	metadata["display_summary"] = summary + ": " + target
+	metadata["display_collapse_default"] = true
+	if cwd != "" {
+		metadata["display_path"] = cwd
+	}
+}
+
+func compactShellCommand(argv []string) string {
+	parts := make([]string, 0, len(argv))
+	for _, arg := range argv {
+		arg = strings.TrimSpace(arg)
+		if arg != "" {
+			parts = append(parts, arg)
+		}
+	}
+	return truncate(strings.Join(parts, " "), 160)
+}
+
 func runForegroundShell(ctx context.Context, in shellExecInput, cwd string, explicitMaxOutput bool) (Result, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(in.TimeoutSec)*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(cmdCtx, in.Argv[0], in.Argv[1:]...)
 	cmd.Dir = cwd
 	output, err := cmd.CombinedOutput()
-	text := string(output)
-	if explicitMaxOutput {
-		text = truncate(text, in.MaxOutputBytes)
+	rawText := string(output)
+	text := rawText
+	truncated := false
+	if explicitMaxOutput && len(rawText) > in.MaxOutputBytes {
+		text = truncate(rawText, in.MaxOutputBytes)
+		truncated = true
 	}
+	metadata := shellExecMetadata(in, cwd)
+	metadata["output_bytes"] = len(rawText)
+	metadata["returned_output_bytes"] = len(text)
+	metadata["truncated"] = truncated
 	if cmdCtx.Err() != nil {
-		return Result{Content: text}, cmdCtx.Err()
+		return Result{Content: text, Metadata: metadata, Truncated: truncated}, cmdCtx.Err()
 	}
 	if err != nil {
-		return Result{Content: text}, fmt.Errorf("command failed: %w", err)
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			metadata["exit_code"] = exitErr.ExitCode()
+		}
+		return Result{Content: text, Metadata: metadata, Truncated: truncated}, fmt.Errorf("command failed: %w", err)
 	}
-	return Result{Content: text}, nil
+	metadata["exit_code"] = 0
+	return Result{Content: text, Metadata: metadata, Truncated: truncated}, nil
 }
 
 func (r *Registry) startManagedShell(in shellExecInput, cwd string) (Result, error) {
@@ -301,6 +356,11 @@ func (r *Registry) startManagedShell(in shellExecInput, cwd string) (Result, err
 	metadata["pid"] = cmd.Process.Pid
 	metadata["running"] = true
 	metadata["next_cursor"] = int64(0)
+	metadata["background"] = true
+	metadata["timeout_sec"] = in.TimeoutSec
+	metadata["max_output_bytes"] = in.MaxOutputBytes
+	metadata["retry_semantics"] = "managed_process_start_not_replay_safe"
+	applyShellDisplayMetadata(metadata, in, cwd, "started background shell "+id)
 	return Result{
 		Content:  fmt.Sprintf("started background shell %s pid=%d", id, cmd.Process.Pid),
 		Metadata: metadata,
@@ -339,6 +399,12 @@ func (r *Registry) handleShellOutput(_ context.Context, args json.RawMessage) (R
 	if in.TailBytes > 0 {
 		metadata["tail_bytes"] = in.TailBytes
 	}
+	metadata["retry_semantics"] = "cursor_read_replay_safe"
+	metadata["display_group"] = "shell"
+	metadata["display_target"] = proc.id
+	metadata["display_summary"] = fmt.Sprintf("read %s output (%d bytes)", proc.id, len(slice.Content))
+	metadata["display_preview"] = compactManagedShellPreview(slice.Content)
+	metadata["display_collapse_default"] = true
 	if strings.TrimSpace(slice.Content) != "" {
 		ref, err := tooloutput.Store(tooloutput.StoreRequest{
 			Parts:                 []string{"shell_output", proc.id},
@@ -370,6 +436,11 @@ func (r *Registry) handleShellKill(_ context.Context, args json.RawMessage) (Res
 	if proc.isExited() {
 		metadata := proc.metadata()
 		metadata["process_id"] = proc.id
+		metadata["retry_semantics"] = "idempotent_already_exited"
+		metadata["display_group"] = "shell"
+		metadata["display_target"] = proc.id
+		metadata["display_summary"] = "process already exited " + proc.id
+		metadata["display_collapse_default"] = true
 		return Result{Content: "process already exited " + proc.id, Metadata: metadata}, nil
 	}
 	if err := terminateManagedShell(proc); err != nil {
@@ -377,6 +448,11 @@ func (r *Registry) handleShellKill(_ context.Context, args json.RawMessage) (Res
 	}
 	metadata := proc.metadata()
 	metadata["process_id"] = proc.id
+	metadata["retry_semantics"] = "terminate_not_replay_safe"
+	metadata["display_group"] = "shell"
+	metadata["display_target"] = proc.id
+	metadata["display_summary"] = "terminated " + proc.id
+	metadata["display_collapse_default"] = true
 	return Result{Content: "terminated " + proc.id, Metadata: metadata}, nil
 }
 

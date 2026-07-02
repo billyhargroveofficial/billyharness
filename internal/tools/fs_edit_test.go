@@ -58,6 +58,14 @@ func TestFSEditFileAppliesExactEditsAtomically(t *testing.T) {
 		result.Metadata["after_sha256"] != sha256Hex(edited) {
 		t.Fatalf("metadata = %#v", result.Metadata)
 	}
+	if result.Metadata["display_group"] != "filesystem" ||
+		result.Metadata["display_path"] != target ||
+		result.Metadata["display_target"] != "note.txt" ||
+		result.Metadata["display_collapse_default"] != true ||
+		result.Metadata["retry_semantics"] != "guarded_exact_match" ||
+		result.Metadata["mutation_guard"] != "expected_sha256" {
+		t.Fatalf("display/retry metadata = %#v", result.Metadata)
+	}
 }
 
 func TestFSEditFileFailuresDoNotMutateFile(t *testing.T) {

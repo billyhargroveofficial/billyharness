@@ -184,14 +184,37 @@ bounded fixes without derailing the main hardening roadmap.
   - commit: pending.
   - status: completed.
 
-- [ ] RS-01.2 Harden mutating tool contracts.
+- [x] RS-01.2 Harden mutating tool contracts.
   - target areas: `fs_write_file`, `fs_edit_file`, `fs_make_dir`,
     `shell_exec`, managed processes, checkpoint/preview if touched.
   - acceptance: write/edit/shell tools expose stable preview/result metadata,
     compact display labels, bounded output refs, and safe retry semantics.
   - verification: tool contract tests plus replay/projector tests for compact
     tool summaries.
-  - status: open.
+  - implementation, 2026-07-02:
+    - `fs_write_file`, `fs_edit_file`, and `fs_make_dir` now expose stable
+      filesystem display metadata: `display_group`, `display_target`,
+      `display_path`, `display_summary`, `display_preview`, and
+      `display_collapse_default`.
+    - mutating filesystem tools now record explicit retry semantics:
+      overwrite writes are `overwrite_replay_safe`, append writes are
+      `append_not_replay_safe`, edits are `guarded_exact_match` with
+      `mutation_guard`, and directory creation is `idempotent_mkdir_all`.
+    - foreground `shell_exec`, background shell start, `shell_output`, and
+      `shell_kill` now carry stable shell display metadata plus explicit retry
+      semantics such as `shell_not_replay_safe`,
+      `managed_process_start_not_replay_safe`, `cursor_read_replay_safe`, and
+      `terminate_not_replay_safe`.
+    - existing agent checkpointing/output-ref behavior remains the bounded
+      replay surface for mutating tool results; existing projector/toolrender
+      tests were rerun to verify compact metadata still renders through shared
+      primitives.
+  - verification:
+    - `/root/.local/go/bin/go test -count=1 ./internal/tools`
+    - `/root/.local/go/bin/go test -count=1 ./internal/agent`
+    - `/root/.local/go/bin/go test -count=1 ./internal/toolrender ./internal/tui/transcript`
+  - commit: pending.
+  - status: completed.
 
 ## Milestone 2 - Architecture And Decomposition Pressure (P0)
 
