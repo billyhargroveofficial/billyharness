@@ -58,6 +58,7 @@ func (b *Bot) handlePolledUpdate(ctx context.Context, update Update) {
 			return
 		}
 	}
+	inputSeq := b.interruptActiveRunForInput(msg, messageChatScope(msg), false)
 	admission, err := b.admitTelegramPromptUpdate(ctx, update)
 	if err != nil {
 		var reject *telegramDurableInputError
@@ -74,7 +75,7 @@ func (b *Bot) handlePolledUpdate(ctx context.Context, update Update) {
 			msg.Chat.ID, messageChatKey(msg), update.UpdateID, admission.InputID, admission.Response.State)
 		return
 	}
-	admission.InputSeq = b.interruptActiveRunForInput(msg, messageChatScope(msg), false)
+	admission.InputSeq = inputSeq
 	go b.handleMessageWithAdmission(ctx, msg, admission)
 }
 

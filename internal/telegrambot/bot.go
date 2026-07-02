@@ -46,6 +46,7 @@ type Bot struct {
 	saveMu   sync.Mutex
 	chatMux  map[string]*sync.Mutex
 	cancel   map[string]context.CancelFunc
+	runDone  map[string]<-chan struct{}
 	inputSeq map[string]int64
 }
 
@@ -92,6 +93,7 @@ func New(opts Options, client *Client, harness Harness) (*Bot, error) {
 		state:    state,
 		chatMux:  map[string]*sync.Mutex{},
 		cancel:   map[string]context.CancelFunc{},
+		runDone:  map[string]<-chan struct{}{},
 		inputSeq: map[string]int64{},
 	}, nil
 }

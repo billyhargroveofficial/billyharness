@@ -93,13 +93,14 @@ func TestSessionInputRequestFromRunIncludesMetadata(t *testing.T) {
 		Attachments:     []protocol.AttachmentRef{{ID: "att_test", Kind: protocol.AttachmentKindImage, StorageRef: "att_test.png", SHA256: "abc123"}},
 		InterruptPolicy: "interrupt",
 		ClientID:        "tui",
+		ClientType:      "tui",
 		Metadata: map[string]string{
 			"prompt_command":                 "review",
 			"prompt_command_original":        "/review internal/tui",
 			"prompt_command_expanded_sha256": "abc123",
 		},
 	})
-	if input.InputID != "input-1" || input.Prompt != "expanded prompt" || input.ClientID != "tui" ||
+	if input.InputID != "input-1" || input.Prompt != "expanded prompt" || input.ClientID != "tui" || input.ClientType != "tui" ||
 		len(input.Attachments) != 1 || input.Attachments[0].ID != "att_test" {
 		t.Fatalf("input request = %#v", input)
 	}

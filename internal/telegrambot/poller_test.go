@@ -39,6 +39,13 @@ type telegramUserInputAnswer struct {
 	Request   gatewayapi.UserInputAnswerRequest
 }
 
+type interruptBeforeAdmissionHarness struct {
+	telegramAdmissionHarness
+
+	cancelled           <-chan struct{}
+	admittedAfterCancel chan bool
+}
+
 func newTelegramAdmissionHarness() *telegramAdmissionHarness {
 	return &telegramAdmissionHarness{
 		admitted: make(chan gatewayapi.SessionInputRequest, 4),
@@ -67,6 +74,16 @@ func (h *telegramAdmissionHarness) AdmitSessionInput(_ context.Context, sessionI
 		resp.State = "admitted"
 	}
 	return resp, nil
+}
+
+func (h *interruptBeforeAdmissionHarness) AdmitSessionInput(ctx context.Context, sessionID string, input gatewayapi.SessionInputRequest) (gatewayapi.SessionInputResponse, error) {
+	select {
+	case <-h.cancelled:
+		h.admittedAfterCancel <- true
+	default:
+		h.admittedAfterCancel <- false
+	}
+	return h.telegramAdmissionHarness.AdmitSessionInput(ctx, sessionID, input)
 }
 
 func (h *telegramAdmissionHarness) RunSession(_ context.Context, sessionID string, run gatewayapi.RunRequest, emit func(protocol.Event)) error {
@@ -104,8 +121,11 @@ func TestTelegramPromptAdmissionAdvancesOffsetAfterGatewayAdmission(t *testing.T
 	}
 
 	run := receive(t, harness.ran, "run")
-	if run.InputID != "telegram-update-42" || run.ClientID != "telegram:123:u1001" {
+	if run.InputID != "telegram-update-42" || run.ClientID != "telegram:123:u1001" || run.ClientType != "telegram" {
 		t.Fatalf("run request = %#v", run)
+	}
+	if run.Metadata["update_id"] != "42" || run.Metadata["message_id"] == "" || run.Metadata["user_id"] != "1001" {
+		t.Fatalf("run metadata = %#v", run.Metadata)
 	}
 	waitForState(t, statePath, func(state State) bool {
 		chat := state.Chats[userChatKey(123, 0, 1001)]
@@ -198,6 +218,9 @@ func TestTelegramPhotoCaptionAdmissionDownloadsAttachment(t *testing.T) {
 	run := receive(t, harness.ran, "photo run")
 	if run.Prompt != admitted.Prompt || len(run.Attachments) != 1 || run.Attachments[0].ID != ref.ID {
 		t.Fatalf("run = %#v", run)
+	}
+	if run.ClientType != "telegram" || run.Metadata["attachment_count"] != "1" || run.Metadata["vision_input"] != "true" || run.Metadata["thread_id"] != "8" {
+		t.Fatalf("run metadata = type %q metadata %#v", run.ClientType, run.Metadata)
 	}
 	waitForState(t, statePath, func(state State) bool {
 		chat := state.Chats[userChatKey(123, 8, 1001)]
@@ -401,6 +424,34 @@ func TestTelegramAdmissionFailureDoesNotAdvanceOffsetOrRun(t *testing.T) {
 	}
 	if chat := state.Chats[userChatKey(123, 0, 1001)]; chat.SessionID != "session-1" {
 		t.Fatalf("chat state should keep retryable session id, got %#v", chat)
+	}
+}
+
+func TestTelegramPollerInterruptsActiveRunBeforeAdmission(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "telegram-state.json")
+	cancelled := make(chan struct{})
+	done := make(chan struct{})
+	base := newTelegramAdmissionHarness()
+	harness := &interruptBeforeAdmissionHarness{
+		telegramAdmissionHarness: *base,
+		cancelled:                cancelled,
+		admittedAfterCancel:      make(chan bool, 1),
+	}
+	bot := newAdmissionTestBot(t, statePath, &harness.telegramAdmissionHarness)
+	bot.harness = harness
+	bot.setCancelWithDone(userChatKey(123, 0, 1001), func() {
+		close(cancelled)
+		close(done)
+	}, done)
+
+	bot.handlePolledUpdate(context.Background(), telegramTextUpdate(46, "replacement"))
+
+	if !receive(t, harness.admittedAfterCancel, "admission ordering") {
+		t.Fatal("poller admitted replacement before interrupting active run")
+	}
+	admitted := receive(t, harness.admitted, "admission")
+	if admitted.Prompt != "replacement" || admitted.InterruptPolicy != gatewayapi.InterruptPolicyInterrupt {
+		t.Fatalf("admission = %#v", admitted)
 	}
 }
 

@@ -357,14 +357,31 @@ Files:
 
 ### 10. Standardize interrupt/new-message behavior
 
-- [ ] When a new Telegram message arrives while a run is active, cancel or
+- [x] When a new Telegram message arrives while a run is active, cancel or
   interrupt the active run, wait for stale events to stop, and then admit the
   new input.
-- [ ] Ensure late events from the interrupted run cannot update the new
+- [x] Ensure late events from the interrupted run cannot update the new
   progress message.
-- [ ] Include run id or input sequence in progress/update routing, not just
+- [x] Include run id or input sequence in progress/update routing, not just
   chat/session id.
-- [ ] Preserve `/cancel` as an explicit cancellation command.
+- [x] Preserve `/cancel` as an explicit cancellation command.
+
+Evidence:
+
+- Telegram now tracks a per-chat run-done signal alongside the active cancel
+  function. New non-command input marks a new input sequence, cancels the active
+  run, requests gateway cancellation, waits for the old run to stop, then
+  continues with admission/routing for the replacement input.
+- Polled updates now interrupt before durable prompt admission, matching direct
+  message handling and preventing an active local run from rendering during the
+  admission window.
+- Late assistant, tool-requested, and tool-progress events emitted after
+  cancellation remain filtered by input sequence; the superseded-run regression
+  rejects all old late content in Telegram edits.
+- `/cancel` still uses the explicit cancel path and remains covered by
+  `TestCancelCommandBypassesActiveRunLock`.
+- Tests: `/root/.local/go/bin/go test -run 'TestTelegramPollerInterruptsActiveRunBeforeAdmission|Test.*Telegram.*Interrupt.*|Test.*Late.*|Test.*Stale.*|TestSupersededTelegramRunDoesNotRenderLateOldAnswer|TestNewTelegramMessageInterruptsActiveRunAndRunsLatestPrompt' -count=1 ./internal/telegrambot ./internal/gateway`.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/telegrambot ./internal/gateway`.
 
 Files:
 

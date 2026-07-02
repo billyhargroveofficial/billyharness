@@ -885,6 +885,7 @@ func sessionInputRequestFromRun(req RunRequest) gatewayapi.SessionInputRequest {
 		Attachments:     append([]protocol.AttachmentRef(nil), req.Attachments...),
 		InterruptPolicy: req.InterruptPolicy,
 		ClientID:        req.ClientID,
+		ClientType:      req.ClientType,
 		Metadata:        req.Metadata,
 	}
 }

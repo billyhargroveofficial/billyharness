@@ -146,14 +146,24 @@ func (b *Bot) ackOffset(updateID int) {
 }
 
 func (b *Bot) setCancel(key string, cancel context.CancelFunc) {
+	b.setCancelWithDone(key, cancel, nil)
+}
+
+func (b *Bot) setCancelWithDone(key string, cancel context.CancelFunc, done <-chan struct{}) {
 	b.mu.Lock()
 	b.cancel[key] = cancel
+	if done != nil {
+		b.runDone[key] = done
+	} else {
+		delete(b.runDone, key)
+	}
 	b.mu.Unlock()
 }
 
 func (b *Bot) clearCancel(key string) {
 	b.mu.Lock()
 	delete(b.cancel, key)
+	delete(b.runDone, key)
 	b.mu.Unlock()
 }
 
@@ -174,14 +184,42 @@ func (b *Bot) inputSuperseded(key string, seq int64) bool {
 }
 
 func (b *Bot) cancelChat(key string) bool {
+	_, ok := b.cancelChatWithDone(key)
+	return ok
+}
+
+func (b *Bot) cancelChatWithDone(key string) (<-chan struct{}, bool) {
 	b.mu.Lock()
 	cancel := b.cancel[key]
+	done := b.runDone[key]
 	b.mu.Unlock()
 	if cancel == nil {
-		return false
+		return nil, false
 	}
 	cancel()
-	return true
+	return done, true
+}
+
+func waitForRunDone(done <-chan struct{}) {
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		log.Printf("telegram interrupted run did not stop before timeout")
+	}
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func (b *Bot) cancelGatewaySession(sessionID string) {

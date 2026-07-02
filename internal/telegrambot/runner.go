@@ -20,6 +20,7 @@ type telegramPromptAdmission struct {
 	UpdateID    int
 	InputID     string
 	ClientID    string
+	Metadata    map[string]string
 	InputSeq    int64
 	Prompt      string
 	Attachments []protocol.AttachmentRef
@@ -82,9 +83,13 @@ func (b *Bot) handleMessageWithAdmission(parent context.Context, msg Message, ad
 		return
 	}
 	runCtx, cancel := context.WithCancel(parent)
-	b.setCancel(key, cancel)
-	defer b.clearCancel(key)
-	defer cancel()
+	runDone := make(chan struct{})
+	b.setCancelWithDone(key, cancel, runDone)
+	defer func() {
+		b.clearCancel(key)
+		cancel()
+		close(runDone)
+	}()
 	if b.inputSuperseded(key, inputSeq) {
 		log.Printf("telegram dropped superseded message before run chat=%d key=%s seq=%d", msg.Chat.ID, key, inputSeq)
 		b.clearPendingInput(key, admission.InputID)
@@ -104,6 +109,7 @@ func (b *Bot) handleMessageWithAdmission(parent context.Context, msg Message, ad
 	runReq := gatewayapi.RunRequest{
 		InputID:         admission.InputID,
 		ClientID:        admission.ClientID,
+		ClientType:      "telegram",
 		Prompt:          prompt,
 		Attachments:     attachments,
 		Model:           state.Model,
@@ -112,6 +118,7 @@ func (b *Bot) handleMessageWithAdmission(parent context.Context, msg Message, ad
 		MaxToolRounds:   b.opts.MaxToolRounds,
 		AccessMode:      config.NormalizeAccessMode(state.AccessMode),
 		InterruptPolicy: gatewayapi.InterruptPolicyInterrupt,
+		Metadata:        cloneStringMap(admission.Metadata),
 	}
 	runStarted := time.Now()
 	firstDelta := time.Time{}
@@ -260,6 +267,7 @@ func (b *Bot) admitTelegramPromptUpdate(ctx context.Context, update Update) (tel
 		UpdateID:    update.UpdateID,
 		InputID:     resp.InputID,
 		ClientID:    clientID,
+		Metadata:    cloneStringMap(metadata),
 		Prompt:      prompt,
 		Attachments: append([]protocol.AttachmentRef(nil), refs...),
 		Response:    resp,
@@ -459,12 +467,13 @@ func (b *Bot) interruptActiveRunForInput(msg Message, scope ChatScope, isCommand
 	}
 	key := scope.Key()
 	inputSeq := b.markLatestInput(key)
-	if b.cancelChat(key) {
+	if done, cancelled := b.cancelChatWithDone(key); cancelled {
 		state := b.chatStateWithLegacy(key, scope.LegacyKey())
 		if state.SessionID != "" {
 			b.cancelGatewaySession(state.SessionID)
 		}
 		log.Printf("telegram new message interrupted active run chat=%d key=%s seq=%d", msg.Chat.ID, key, inputSeq)
+		waitForRunDone(done)
 	}
 	return inputSeq
 }

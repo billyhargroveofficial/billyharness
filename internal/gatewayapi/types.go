@@ -13,6 +13,7 @@ type RunRequest struct {
 	Attachments     []protocol.AttachmentRef `json:"attachments,omitempty"`
 	InputID         string                   `json:"input_id,omitempty"`
 	ClientID        string                   `json:"client_id,omitempty"`
+	ClientType      string                   `json:"client_type,omitempty"`
 	Provider        string                   `json:"provider,omitempty"`
 	Model           string                   `json:"model,omitempty"`
 	Profile         string                   `json:"profile,omitempty"`

@@ -184,6 +184,16 @@ func (h *lateSuccessInterruptHarness) RunSession(ctx context.Context, _ string, 
 		close(h.firstStarted)
 		<-ctx.Done()
 		h.cancelOnce.Do(func() { close(h.firstCancelled) })
+		emit(protocol.Event{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{
+			ID:        "old-tool-should-not-render",
+			Name:      "web_search",
+			Arguments: json.RawMessage(`{"query":"old query should not render"}`),
+		}})
+		emit(protocol.Event{Type: protocol.EventToolCallProgress, CallID: "old-tool-should-not-render", Data: protocol.ToolProgressEvent{
+			CallID:  "old-tool-should-not-render",
+			Name:    "web_search",
+			Message: "old tool progress should not render",
+		}})
 		emit(protocol.Event{Type: protocol.EventAssistantDelta, Data: "old answer should not render"})
 		return nil
 	default:

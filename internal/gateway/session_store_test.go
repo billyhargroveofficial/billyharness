@@ -618,6 +618,50 @@ func TestGatewaySessionInputAdmissionDurableAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestGatewaySessionRunReusesPreAdmittedTelegramInput(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+
+	create := httptest.NewRecorder()
+	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", nil))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	body := `{"input_id":"telegram-update-42","prompt":"describe image","interrupt_policy":"interrupt","client_id":"telegram:123:u1001","client_type":"telegram","metadata":{"chat_id":"123","message_id":"7","update_id":"42","user_id":"1001"}}`
+	admit := httptest.NewRecorder()
+	server.Handler().ServeHTTP(admit, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/inputs", strings.NewReader(body)))
+	if admit.Code != http.StatusCreated {
+		t.Fatalf("admit status = %d body=%s", admit.Code, admit.Body.String())
+	}
+
+	run := httptest.NewRecorder()
+	server.Handler().ServeHTTP(run, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/run", strings.NewReader(body)))
+	if run.Code != http.StatusOK {
+		t.Fatalf("run status = %d body=%s", run.Code, run.Body.String())
+	}
+	inputsPath := filepath.Join(storeDir, created.ID, sessionInputsJSONLName)
+	records := readSessionInputRecords(t, inputsPath)
+	if len(records) != 3 {
+		t.Fatalf("input record count = %d records=%#v", len(records), records)
+	}
+	if records[0].Kind != sessionInputAdmitted || records[1].Kind != sessionInputPromoted || records[2].Kind != sessionInputCompleted {
+		t.Fatalf("input record kinds = %#v", records)
+	}
+	if records[0].Request.ClientType != "telegram" || records[0].Request.Metadata["update_id"] != "42" {
+		t.Fatalf("admitted request = %#v", records[0].Request)
+	}
+}
+
 func TestGatewaySessionRunRecordsInputPromotionAndCompletion(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"

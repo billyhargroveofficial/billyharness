@@ -256,8 +256,10 @@ func TestSupersededTelegramRunDoesNotRenderLateOldAnswer(t *testing.T) {
 	mu.Lock()
 	joined := strings.Join(edits, "\n---\n")
 	mu.Unlock()
-	if strings.Contains(joined, "old answer should not render") {
-		t.Fatalf("superseded old answer leaked into telegram edits:\n%s", joined)
+	for _, notWant := range []string{"old answer should not render", "old query should not render", "old tool progress should not render"} {
+		if strings.Contains(joined, notWant) {
+			t.Fatalf("superseded old content leaked into telegram edits %q:\n%s", notWant, joined)
+		}
 	}
 	if !strings.Contains(joined, "Interrupted by newer message.") {
 		t.Fatalf("old placeholder was not marked interrupted:\n%s", joined)
