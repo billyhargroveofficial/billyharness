@@ -112,7 +112,7 @@ bounded fixes without derailing the main hardening roadmap.
       direct edit/test outputs were present.
   - mapped to: RS-01.1, RS-01.2, RS-02.1, RS-02.2, RS-03.1, RS-03.2,
     RS-04.1, RS-04.2, and NH-00.1.
-  - commit: pending.
+  - commit: 0436175.
   - status: completed.
 
 - [x] RS-00.2 Decide whether to rerun missing agents.
@@ -127,7 +127,7 @@ bounded fixes without derailing the main hardening roadmap.
       the already documented solo-harness filter, and rerunning broad
       competitor/product research would risk platform/marketplace bloat outside
       this follow-up's scope.
-  - commit: pending.
+  - commit: 0436175.
   - status: completed.
 
 - [x] RS-00.3 Map recovered findings into either this TODO or the main roadmap.
@@ -151,7 +151,7 @@ bounded fixes without derailing the main hardening roadmap.
     - NH-00.1 in the main hardening roadmap is updated as completed so the
       reconciliation source of truth points back here instead of leaving the
       evidence in Codex logs.
-  - commit: pending.
+  - commit: 0436175.
   - status: completed.
 
 ## Milestone 1 - Tool Contracts, Edit, And Shell Recovery (P0)
@@ -181,7 +181,7 @@ bounded fixes without derailing the main hardening roadmap.
     - `/root/.local/go/bin/go test -count=1 ./internal/tools`
     - `/root/.local/go/bin/go test -count=1 ./internal/agent`
     - `/root/.local/go/bin/go test -count=1 ./internal/provider`
-  - commit: pending.
+  - commit: 42c852a.
   - status: completed.
 
 - [x] RS-01.2 Harden mutating tool contracts.
@@ -213,7 +213,7 @@ bounded fixes without derailing the main hardening roadmap.
     - `/root/.local/go/bin/go test -count=1 ./internal/tools`
     - `/root/.local/go/bin/go test -count=1 ./internal/agent`
     - `/root/.local/go/bin/go test -count=1 ./internal/toolrender ./internal/tui/transcript`
-  - commit: pending.
+  - commit: 6dc62f0.
   - status: completed.
 
 ## Milestone 2 - Architecture And Decomposition Pressure (P0)
@@ -262,7 +262,7 @@ bounded fixes without derailing the main hardening roadmap.
   - result: architecture guard passed; strict hygiene passed with no large
     source-file exceptions. Runtime artifact sizes were reported but not part
     of this source decomposition task.
-  - commit: pending.
+  - commit: 593289a.
   - status: completed.
 
 - [x] RS-02.2 Split only if a real owner boundary is found.
@@ -281,7 +281,7 @@ bounded fixes without derailing the main hardening roadmap.
       registry core vs individual tool families, or TUI runtime vs transcript
       rendering. Any such split must update `docs/architecture.md` in the same
       commit.
-  - commit: pending.
+  - commit: 593289a.
   - status: completed.
 
 ## Milestone 3 - TUI/Terminal UX Regression Pass (P1)
@@ -317,7 +317,7 @@ bounded fixes without derailing the main hardening roadmap.
   - result: no duplicate TUI implementation was added; the regression below
     uses the existing action registry, gateway submit path, transcript cells,
     and presentation-policy tests.
-  - commit: pending.
+  - commit: 83dc223.
   - status: completed.
 
 - [x] RS-03.2 Add regression tests for noisy tool events and SSH input.
@@ -342,21 +342,71 @@ bounded fixes without derailing the main hardening roadmap.
     - `/root/.local/go/bin/go test -count=1 ./internal/tui`
     - `/root/.local/go/bin/go test -count=1 ./internal/tui/transcript ./internal/tui/selection ./internal/tui/render`
     - `/root/.local/go/bin/go test -count=1 ./internal/clientux ./internal/clientux/projector ./internal/commandregistry ./internal/toolrender`
-  - commit: pending.
+  - commit: 83dc223.
   - status: completed.
 
 ## Milestone 4 - Web/Search/Extract Quality And Failover (P1)
 
-- [ ] RS-04.1 Add product-level web tool tests.
+- [x] RS-04.1 Add product-level web tool tests.
   - acceptance: tests cover provider query options, citation/evidence shape,
     markdown readability, table/list/code fallback, and summary/output-ref
     behavior.
-  - status: open.
+  - implementation, 2026-07-02:
+    - `web_search` now accepts bounded `freshness_days`,
+      `include_domains`, and `exclude_domains` options. Tavily receives
+      freshness/domain options as provider request fields, Exa receives
+      include/exclude domains and a freshness start date, and native
+      DuckDuckGo Lite search post-filters domain constraints.
+    - search results now return stable metadata for backend, query, result
+      count, freshness, and domain filters. Provider results preserve
+      citation/evidence fields such as `url`, `content`, `score`, and
+      `published_date` without including raw page text.
+    - HTML cleanup now preserves readable table rows/cells, list boundaries,
+      and code/preformatted text fallback instead of flattening everything into
+      one dense paragraph.
+    - existing summary/output-ref coverage was verified alongside the new
+      tests: web fetch/extract/crawl still keep raw source text out of the
+      inline response, store full text in output refs, expose summary/accounting
+      metadata, cache output-ref-backed compact results, and fall back to
+      extractive summaries when model summaries fail or time out.
+  - verification:
+    - `/root/.local/go/bin/go test -count=1 ./internal/webtools`
+    - `/root/.local/go/bin/go test -count=1 ./internal/tools`
+  - commit: pending.
+  - status: completed.
 
-- [ ] RS-04.2 Define backend failover policy.
+- [x] RS-04.2 Define backend failover policy.
   - acceptance: native web, Tavily, Exa, and provider-backed summaries have a
     deterministic priority, timeout, budget, and error-reporting policy.
-  - status: open.
+  - policy, 2026-07-02:
+    - `web_search` defaults to native DuckDuckGo Lite when no backend is
+      configured. If Tavily or Exa is configured, that provider is attempted
+      first; missing API key is treated as an explicit configuration error and
+      does not fall back silently.
+    - configured-provider runtime/request failures fall back to native search
+      and report `web_backend_attempted`, `web_backend_failed`,
+      `web_backend_error`, and
+      `web_failover_policy=configured_backend_then_native` in metadata.
+    - native search remains public-host validated through the shared
+      `webtools.Client`, uses the existing max-byte budget, clamps result
+      limits to 1..10, and applies domain include/exclude filters after parsing
+      up to a bounded result window.
+    - Tavily and Exa use the existing backend HTTP client timeout/retry
+      behavior, cleaned domain lists capped at 10 entries, and freshness hints
+      capped at 3650 days.
+    - `web_extract` keeps the configured Tavily/Exa provider-or-error contract
+      because silently switching extraction source semantics can change
+      evidence. Existing cache/output-ref behavior remains the bounded recovery
+      path.
+    - provider-backed summaries remain an optional helper lane with configured
+      timeout, token budget, and no tool calls. Summary failure records
+      `websum_error`, falls back to extractive summary, and leaves raw text in
+      output refs.
+  - verification:
+    - `/root/.local/go/bin/go test -count=1 ./internal/webtools`
+    - `/root/.local/go/bin/go test -count=1 ./internal/tools`
+  - commit: pending.
+  - status: completed.
 
 ## Milestone 5 - Solo Product Coherence (P1)
 

@@ -9,7 +9,9 @@ import (
 
 var (
 	anchorRE   = regexp.MustCompile(`(?is)<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)</a>`)
-	brRE       = regexp.MustCompile(`(?i)<br\s*/?>|</p>|</div>|</li>|</h[1-6]>`)
+	cellRE     = regexp.MustCompile(`(?i)</t[dh]>`)
+	rowRE      = regexp.MustCompile(`(?i)</tr>`)
+	blockRE    = regexp.MustCompile(`(?i)<br\s*/?>|</p>|</div>|</li>|</h[1-6]>|</pre>|</blockquote>`)
 	scriptRE   = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
 	styleRE    = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
 	noscriptRE = regexp.MustCompile(`(?is)<noscript[^>]*>.*?</noscript>`)
@@ -106,7 +108,9 @@ func cleanHTMLText(body string) string {
 	body = scriptRE.ReplaceAllString(body, " ")
 	body = styleRE.ReplaceAllString(body, " ")
 	body = noscriptRE.ReplaceAllString(body, " ")
-	body = brRE.ReplaceAllString(body, "\n")
+	body = cellRE.ReplaceAllString(body, " | ")
+	body = rowRE.ReplaceAllString(body, "\n")
+	body = blockRE.ReplaceAllString(body, "\n")
 	body = tagRE.ReplaceAllString(body, " ")
 	body = html.UnescapeString(body)
 	body = spaceRE.ReplaceAllString(body, " ")

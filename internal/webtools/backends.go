@@ -23,8 +23,11 @@ const (
 )
 
 type SearchRequest struct {
-	Query string
-	Limit int
+	Query          string
+	Limit          int
+	FreshnessDays  int
+	IncludeDomains []string
+	ExcludeDomains []string
 }
 
 type SearchResponse struct {
@@ -121,6 +124,16 @@ func (c TavilyClient) Search(ctx context.Context, req SearchRequest) (SearchResp
 		"include_answer":      false,
 		"include_raw_content": false,
 	}
+	if days := normalizedFreshnessDays(req.FreshnessDays); days > 0 {
+		payload["topic"] = "news"
+		payload["days"] = days
+	}
+	if domains := cleanDomains(req.IncludeDomains); len(domains) > 0 {
+		payload["include_domains"] = domains
+	}
+	if domains := cleanDomains(req.ExcludeDomains); len(domains) > 0 {
+		payload["exclude_domains"] = domains
+	}
 	var raw struct {
 		Results []struct {
 			Title         string  `json:"title"`
@@ -194,6 +207,15 @@ func (c ExaClient) Search(ctx context.Context, req SearchRequest) (SearchRespons
 	payload := map[string]any{
 		"query":      strings.TrimSpace(req.Query),
 		"numResults": normalizedSearchLimit(req.Limit),
+	}
+	if domains := cleanDomains(req.IncludeDomains); len(domains) > 0 {
+		payload["includeDomains"] = domains
+	}
+	if domains := cleanDomains(req.ExcludeDomains); len(domains) > 0 {
+		payload["excludeDomains"] = domains
+	}
+	if days := normalizedFreshnessDays(req.FreshnessDays); days > 0 {
+		payload["startPublishedDate"] = time.Now().UTC().AddDate(0, 0, -days).Format("2006-01-02")
 	}
 	var raw struct {
 		Results []struct {
@@ -403,6 +425,39 @@ func normalizedSearchLimit(value int) int {
 		return 10
 	}
 	return value
+}
+
+func normalizedFreshnessDays(value int) int {
+	if value <= 0 {
+		return 0
+	}
+	if value > 3650 {
+		return 3650
+	}
+	return value
+}
+
+func cleanDomains(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		value = strings.TrimPrefix(value, "https://")
+		value = strings.TrimPrefix(value, "http://")
+		if slash := strings.IndexByte(value, '/'); slash >= 0 {
+			value = value[:slash]
+		}
+		value = strings.Trim(value, ". ")
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+		if len(out) >= 10 {
+			break
+		}
+	}
+	return out
 }
 
 func cleanURLs(values []string) []string {

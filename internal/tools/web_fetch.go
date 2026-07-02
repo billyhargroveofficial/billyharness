@@ -9,9 +9,15 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/webtools"
 )
 
-func searchDuckDuckGoLite(ctx context.Context, query string, limit int) ([]searchResult, error) {
+var duckDuckGoLiteBaseURL = "https://lite.duckduckgo.com/lite/"
+
+func duckDuckGoLiteSearchURL(query string) string {
 	values := url.Values{"q": []string{query}}
-	searchURL := "https://lite.duckduckgo.com/lite/?" + values.Encode()
+	return duckDuckGoLiteBaseURL + "?" + values.Encode()
+}
+
+func searchDuckDuckGoLite(ctx context.Context, query string, limit int) ([]searchResult, error) {
+	searchURL := duckDuckGoLiteSearchURL(query)
 	body, _, _, err := httpGet(ctx, searchURL, maxWebBytes)
 	if err != nil {
 		return nil, err

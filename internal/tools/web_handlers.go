@@ -92,14 +92,17 @@ func (r *Registry) addWebSearch() {
 	r.add(Tool{
 		Spec: protocol.ToolSpec{
 			Name:        "web_search",
-			Description: "Search the web via DuckDuckGo Lite and return public result URLs. No API key required.",
-			Parameters:  raw(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer","default":5}},"required":["query"],"additionalProperties":false}`),
+			Description: "Search the web via the configured backend or DuckDuckGo Lite and return public result URLs. Optional freshness/domain filters are provider hints and native post-filters.",
+			Parameters:  raw(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer","default":5},"freshness_days":{"type":"integer","default":0,"description":"Prefer results published within this many days when the backend supports it."},"include_domains":{"type":"array","items":{"type":"string"},"maxItems":10,"description":"Only include these domains when supported; native search post-filters by domain."},"exclude_domains":{"type":"array","items":{"type":"string"},"maxItems":10,"description":"Exclude these domains when supported; native search post-filters by domain."}},"required":["query"],"additionalProperties":false}`),
 			Risk:        protocol.RiskNetwork,
 		},
 		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in struct {
-				Query string `json:"query"`
-				Limit int    `json:"limit"`
+				Query          string   `json:"query"`
+				Limit          int      `json:"limit"`
+				FreshnessDays  int      `json:"freshness_days"`
+				IncludeDomains []string `json:"include_domains"`
+				ExcludeDomains []string `json:"exclude_domains"`
 			}
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
@@ -110,27 +113,43 @@ func (r *Registry) addWebSearch() {
 			if in.Limit <= 0 || in.Limit > 10 {
 				in.Limit = 5
 			}
+			searchReq := webtools.SearchRequest{
+				Query:          in.Query,
+				Limit:          in.Limit,
+				FreshnessDays:  in.FreshnessDays,
+				IncludeDomains: in.IncludeDomains,
+				ExcludeDomains: in.ExcludeDomains,
+			}
 			if backend := r.webSearchBackend(); backend != webtools.BackendNative {
-				results, key, err := r.webBackendSearch(ctx, backend, in.Query, in.Limit)
+				results, key, err := r.webBackendSearch(ctx, backend, searchReq)
 				if err != nil {
-					return Result{}, err
+					if !shouldFallbackFromWebBackendSearch(err) {
+						return Result{}, err
+					}
+					nativeResults, nativeErr := r.nativeSearch(ctx, searchReq)
+					if nativeErr != nil {
+						return Result{}, fmt.Errorf("%s web search failed: %v; native fallback failed: %w", backend, err, nativeErr)
+					}
+					out, _ := json.MarshalIndent(nativeResults, "", "  ")
+					metadata := webSearchMetadata(webtools.BackendNative, searchReq, webBackendKey{}, len(nativeResults))
+					metadata["web_backend_attempted"] = backend
+					metadata["web_backend_failed"] = true
+					metadata["web_backend_error"] = truncate(err.Error(), 240)
+					metadata["web_failover_policy"] = "configured_backend_then_native"
+					return Result{Content: string(out), Metadata: metadata}, nil
 				}
 				out, _ := json.MarshalIndent(results, "", "  ")
-				return Result{Content: string(out), Metadata: map[string]any{
-					"web_backend":         results.Backend,
-					"web_query":           strings.TrimSpace(in.Query),
-					"web_backend_key_env": key.EnvVar,
-					"web_backend_key_src": key.Source,
-					"helper_api_calls":    results.Usage.APICalls,
-					"helper_cost_usd":     results.Usage.CostUSD,
-				}}, nil
+				metadata := webSearchMetadata(results.Backend, searchReq, key, len(results.Results))
+				metadata["helper_api_calls"] = results.Usage.APICalls
+				metadata["helper_cost_usd"] = results.Usage.CostUSD
+				return Result{Content: string(out), Metadata: metadata}, nil
 			}
-			results, err := searchDuckDuckGoLite(ctx, in.Query, in.Limit)
+			results, err := r.nativeSearch(ctx, searchReq)
 			if err != nil {
 				return Result{}, err
 			}
 			out, _ := json.MarshalIndent(results, "", "  ")
-			return Result{Content: string(out)}, nil
+			return Result{Content: string(out), Metadata: webSearchMetadata(webtools.BackendNative, searchReq, webBackendKey{}, len(results))}, nil
 		},
 	})
 }

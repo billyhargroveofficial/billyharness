@@ -3,7 +3,9 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -15,6 +17,15 @@ type webBackendKey struct {
 	Value  string
 	EnvVar string
 	Source string
+}
+
+type webBackendMissingKeyError struct {
+	Backend string
+	EnvVar  string
+}
+
+func (e webBackendMissingKeyError) Error() string {
+	return fmt.Sprintf("%s backend missing API key env %s", e.Backend, e.EnvVar)
 }
 
 func (r *Registry) webSearchBackend() string {
@@ -61,12 +72,12 @@ func (r *Registry) resolveWebBackendKey(backend string) (webBackendKey, error) {
 	}
 	value, source, ok := config.LookupEnvDotenvOrFiles(envName, r.toolPolicy.WebHermesEnvFiles)
 	if !ok {
-		return webBackendKey{}, fmt.Errorf("%s backend missing API key env %s", backend, envName)
+		return webBackendKey{}, webBackendMissingKeyError{Backend: backend, EnvVar: envName}
 	}
 	return webBackendKey{Value: value, EnvVar: envName, Source: source}, nil
 }
 
-func (r *Registry) webBackendSearch(ctx context.Context, backend string, query string, limit int) (webtools.SearchResponse, webBackendKey, error) {
+func (r *Registry) webBackendSearch(ctx context.Context, backend string, req webtools.SearchRequest) (webtools.SearchResponse, webBackendKey, error) {
 	key, err := r.resolveWebBackendKey(backend)
 	if err != nil {
 		return webtools.SearchResponse{}, webBackendKey{}, err
@@ -79,7 +90,7 @@ func (r *Registry) webBackendSearch(ctx context.Context, backend string, query s
 			HTTPClient: r.webBackendHTTP,
 			Sleep:      r.webBackendSleep,
 		})
-		resp, err := client.Search(ctx, webtools.SearchRequest{Query: query, Limit: limit})
+		resp, err := client.Search(ctx, req)
 		return resp, key, err
 	case webtools.BackendExa:
 		client := webtools.NewExaClient(webtools.BackendClientOptions{
@@ -88,11 +99,127 @@ func (r *Registry) webBackendSearch(ctx context.Context, backend string, query s
 			HTTPClient: r.webBackendHTTP,
 			Sleep:      r.webBackendSleep,
 		})
-		resp, err := client.Search(ctx, webtools.SearchRequest{Query: query, Limit: limit})
+		resp, err := client.Search(ctx, req)
 		return resp, key, err
 	default:
 		return webtools.SearchResponse{}, key, fmt.Errorf("unsupported web search backend %q", backend)
 	}
+}
+
+func (r *Registry) nativeSearch(ctx context.Context, req webtools.SearchRequest) ([]searchResult, error) {
+	query := strings.TrimSpace(req.Query)
+	limit := normalizedNativeSearchLimit(req.Limit)
+	parseLimit := limit
+	if len(req.IncludeDomains) > 0 || len(req.ExcludeDomains) > 0 {
+		parseLimit = 50
+	}
+	searchURL := duckDuckGoLiteSearchURL(query)
+	body, _, _, err := httpGetWithClient(ctx, r.nativeWebHTTPClient(), searchURL, maxWebBytes)
+	if err != nil {
+		return nil, err
+	}
+	results := parseSearchResults(searchURL, string(body), parseLimit)
+	return filterSearchResults(results, req, limit), nil
+}
+
+func normalizedNativeSearchLimit(value int) int {
+	if value <= 0 {
+		return 5
+	}
+	if value > 10 {
+		return 10
+	}
+	return value
+}
+
+func filterSearchResults(results []searchResult, req webtools.SearchRequest, limit int) []searchResult {
+	include := normalizedSearchDomains(req.IncludeDomains)
+	exclude := normalizedSearchDomains(req.ExcludeDomains)
+	out := make([]searchResult, 0, minInt(limit, len(results)))
+	for _, result := range results {
+		if !searchResultAllowedByDomains(result.URL, include, exclude) {
+			continue
+		}
+		out = append(out, result)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func normalizedSearchDomains(values []string) map[string]bool {
+	out := map[string]bool{}
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		value = strings.TrimPrefix(value, "https://")
+		value = strings.TrimPrefix(value, "http://")
+		if slash := strings.IndexByte(value, '/'); slash >= 0 {
+			value = value[:slash]
+		}
+		value = strings.Trim(value, ". ")
+		if value != "" {
+			out[value] = true
+		}
+	}
+	return out
+}
+
+func searchResultAllowedByDomains(rawURL string, include, exclude map[string]bool) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(strings.Trim(u.Hostname(), ". "))
+	if host == "" {
+		return false
+	}
+	for domain := range exclude {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return false
+		}
+	}
+	if len(include) == 0 {
+		return true
+	}
+	for domain := range include {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return true
+		}
+	}
+	return false
+}
+
+func webSearchMetadata(backend string, req webtools.SearchRequest, key webBackendKey, resultCount int) map[string]any {
+	metadata := map[string]any{
+		"web_backend":      backend,
+		"web_query":        strings.TrimSpace(req.Query),
+		"web_result_count": resultCount,
+	}
+	if key.EnvVar != "" {
+		metadata["web_backend_key_env"] = key.EnvVar
+	}
+	if key.Source != "" {
+		metadata["web_backend_key_src"] = key.Source
+	}
+	if req.FreshnessDays > 0 {
+		metadata["web_freshness_days"] = req.FreshnessDays
+	}
+	if len(req.IncludeDomains) > 0 {
+		metadata["web_include_domains"] = append([]string(nil), req.IncludeDomains...)
+	}
+	if len(req.ExcludeDomains) > 0 {
+		metadata["web_exclude_domains"] = append([]string(nil), req.ExcludeDomains...)
+	}
+	return metadata
+}
+
+func shouldFallbackFromWebBackendSearch(err error) bool {
+	if err == nil {
+		return false
+	}
+	var missing webBackendMissingKeyError
+	return !errors.As(err, &missing)
 }
 
 func (r *Registry) webBackendExtract(ctx context.Context, backend string, rawURL string, query string) (webtools.ExtractResponse, webBackendKey, error) {
