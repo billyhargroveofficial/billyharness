@@ -29,6 +29,8 @@ type Info struct {
 	Subscription          bool
 	Pricing               Pricing
 	Known                 bool
+	InputModalities       []string
+	VisionInput           bool
 	ContextWindowTokens   int64
 	MaxOutputTokens       int
 	ReasoningModes        []string
@@ -63,6 +65,7 @@ type CapabilityPolicyRequest struct {
 	RequireToolCalls   bool
 	RequireParallel    bool
 	RequireStreaming   bool
+	RequireVisionInput bool
 	HelperKind         string
 	AllowUnknownModels bool
 }
@@ -95,11 +98,19 @@ func Lookup(model string) Info {
 	}
 }
 
+func InputCapabilityLabel(model string) string {
+	if Lookup(model).VisionInput {
+		return "vision-capable"
+	}
+	return "text-only"
+}
+
 func deepSeekInfo(model string) Info {
 	return Info{
 		Model:                 model,
 		Provider:              ProviderDeepSeek,
 		Known:                 true,
+		InputModalities:       []string{"text"},
 		ContextWindowTokens:   1_000_000,
 		MaxOutputTokens:       8_192,
 		ReasoningModes:        []string{"off", "low", "medium", "high", "xhigh", "max"},
@@ -121,6 +132,8 @@ func codexInfo(model string, known bool) Info {
 		Provider:              ProviderOpenAICodex,
 		Subscription:          true,
 		Known:                 known,
+		InputModalities:       []string{"text", "image"},
+		VisionInput:           true,
 		ContextWindowTokens:   1_000_000,
 		MaxOutputTokens:       8_192,
 		ReasoningModes:        []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"},
@@ -141,6 +154,7 @@ func mockInfo(model string) Info {
 		Model:                 model,
 		Provider:              ProviderMock,
 		Known:                 true,
+		InputModalities:       []string{"text"},
 		ContextWindowTokens:   1_000_000,
 		MaxOutputTokens:       8_192,
 		ReasoningModes:        []string{"off", "low", "medium", "high", "xhigh", "max"},
@@ -233,6 +247,12 @@ func ValidateCapabilityPolicy(req CapabilityPolicyRequest) error {
 	}
 	if req.RequireStreaming && info.Known && !info.Streaming {
 		return fmt.Errorf("unsupported %s %q on provider %q: streaming is required", scope, model, provider)
+	}
+	if req.RequireVisionInput && !info.VisionInput {
+		if !info.Known && info.Provider == "" {
+			return fmt.Errorf("unsupported %s %q on provider %q: image input is required but model capabilities are unknown", scope, model, provider)
+		}
+		return fmt.Errorf("unsupported %s %q on provider %q: image input is required", scope, model, provider)
 	}
 	if req.RequireToolCalls && info.Known && !info.ToolCalls {
 		return fmt.Errorf("unsupported %s %q on provider %q: tool calls are required", scope, model, provider)

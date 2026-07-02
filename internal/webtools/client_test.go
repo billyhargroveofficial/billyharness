@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -85,6 +87,101 @@ func TestClientFetchesNormalPublicHost(t *testing.T) {
 	calls := dialer.Calls()
 	if len(calls) != 1 || calls[0] != "93.184.216.34:80" {
 		t.Fatalf("dial calls = %#v", calls)
+	}
+}
+
+func TestTavilySearchAndExtract(t *testing.T) {
+	var seenAuth []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenAuth = append(seenAuth, r.Header.Get("Authorization"))
+		switch r.URL.Path {
+		case "/search":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"title":"One","url":"https://example.com/1","content":"short snippet","score":0.9,"raw_content":"must not parse"}]}`))
+		case "/extract":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"url":"https://example.com/1","raw_content":"full extracted text"}],"failed_results":[{"url":"https://bad.example","error":"blocked"}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := NewTavilyClient(BackendClientOptions{BaseURL: server.URL, APIKey: "tvly-secret", HTTPClient: server.Client()})
+
+	search, err := client.Search(context.Background(), SearchRequest{Query: "hello", Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if search.Backend != BackendTavily || search.Usage.APICalls != 1 || len(search.Results) != 1 ||
+		search.Results[0].Content != "short snippet" || strings.Contains(search.Results[0].Content, "must not parse") {
+		t.Fatalf("search = %#v", search)
+	}
+	extract, err := client.Extract(context.Background(), ExtractRequest{URLs: []string{"https://example.com/1", "https://bad.example"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(extract.Results) != 2 || extract.Results[0].Text != "full extracted text" || extract.Results[1].Error != "blocked" {
+		t.Fatalf("extract = %#v", extract)
+	}
+	for _, auth := range seenAuth {
+		if auth != "Bearer tvly-secret" {
+			t.Fatalf("auth header = %q", auth)
+		}
+	}
+}
+
+func TestExaSearchRetryAfterAndContents(t *testing.T) {
+	var calls int
+	var slept []time.Duration
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != "exa-secret" {
+			t.Fatalf("missing x-api-key: %q", r.Header.Get("x-api-key"))
+		}
+		switch r.URL.Path {
+		case "/search":
+			calls++
+			if calls == 1 {
+				w.Header().Set("Retry-After", "2")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte(`{"error":"slow down"}`))
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"title":"Two","url":"https://example.com/2","text":"raw page text should not leak","score":0.8}],"costDollars":{"total":0.001}}`))
+		case "/contents":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"title":"Two","url":"https://example.com/2","text":"exa extracted text"}],"costDollars":{"total":0.002}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := NewExaClient(BackendClientOptions{
+		BaseURL:    server.URL,
+		APIKey:     "exa-secret",
+		HTTPClient: server.Client(),
+		Sleep: func(_ context.Context, d time.Duration) error {
+			slept = append(slept, d)
+			return nil
+		},
+	})
+
+	search, err := client.Search(context.Background(), SearchRequest{Query: "hello", Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || len(slept) != 1 || slept[0] != 2*time.Second {
+		t.Fatalf("retry calls=%d slept=%v", calls, slept)
+	}
+	if len(search.Results) != 1 || search.Results[0].Content != "" || search.Usage.CostUSD != 0.001 {
+		t.Fatalf("search = %#v", search)
+	}
+	extract, err := client.Extract(context.Background(), ExtractRequest{URLs: []string{"https://example.com/2"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(extract.Results) != 1 || extract.Results[0].Text != "exa extracted text" || extract.Usage.CostUSD != 0.002 {
+		t.Fatalf("extract = %#v", extract)
 	}
 }
 

@@ -40,6 +40,8 @@ type Renderer struct {
 	HelperModelHit   int64
 	HelperModelMiss  int64
 	HelperModelAPI   int64
+	HelperAPICalls   int
+	HelperCostUSD    float64
 	ContextWindow    int64
 	Started          time.Time
 	LastEventAt      time.Time
@@ -169,6 +171,8 @@ func (r *Renderer) applySnapshot(snapshot projector.Snapshot) {
 	r.HelperModelHit = snapshot.HelperModelCacheHitTokens
 	r.HelperModelMiss = snapshot.HelperModelCacheMissTokens
 	r.HelperModelAPI = snapshot.HelperModelAPITokens
+	r.HelperAPICalls = snapshot.HelperAPICalls
+	r.HelperCostUSD = snapshot.HelperCostUSD
 	r.LastError = snapshot.LastError
 	r.Done = snapshot.RunState == projector.RunStateCompleted
 }
@@ -276,6 +280,12 @@ func (r *Renderer) footerLineWithContext(includeContext bool) string {
 	}
 	if r.ToolSummaryIn+r.ToolSummaryOut > 0 || r.HelperModelAPI > 0 {
 		parts = append(parts, fmt.Sprintf("sumapi %s", compactInt(r.HelperModelAPI)))
+	}
+	if r.HelperAPICalls > 0 {
+		parts = append(parts, fmt.Sprintf("api calls %d", r.HelperAPICalls))
+	}
+	if r.HelperCostUSD > 0 {
+		parts = append(parts, fmt.Sprintf("api cost $%.4f", r.HelperCostUSD))
 	}
 	if len(parts) == 0 {
 		return "⚡ streaming"

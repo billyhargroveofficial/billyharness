@@ -8,6 +8,7 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -83,6 +84,50 @@ func (c *Client) GetUpdates(ctx context.Context, offset, timeoutSec int) ([]Upda
 		"allowed_updates": []string{"message"},
 	}, &updates)
 	return updates, err
+}
+
+func (c *Client) GetFile(ctx context.Context, fileID string) (TelegramFile, error) {
+	fileID = strings.TrimSpace(fileID)
+	if fileID == "" {
+		return TelegramFile{}, fmt.Errorf("telegram file_id is required")
+	}
+	var file TelegramFile
+	err := c.post(ctx, 0, "getFile", map[string]any{"file_id": fileID}, &file)
+	return file, err
+}
+
+func (c *Client) DownloadFile(ctx context.Context, filePath string, maxBytes int64) ([]byte, error) {
+	if c.token == "" {
+		return nil, fmt.Errorf("telegram bot token is empty")
+	}
+	escaped, err := escapeTelegramFilePath(filePath)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/file/bot"+c.token+"/"+escaped, nil)
+	if err != nil {
+		return nil, redactTelegramError(err, c.token)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, redactTelegramError(err, c.token)
+	}
+	defer resp.Body.Close()
+	limit := int64(4 << 20)
+	if maxBytes > 0 {
+		limit = maxBytes + 1
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, BotError{Code: resp.StatusCode, Description: strings.TrimSpace(string(body))}
+	}
+	if maxBytes > 0 && int64(len(body)) > maxBytes {
+		return nil, fmt.Errorf("telegram file %q exceeds max size %d", filePath, maxBytes)
+	}
+	return body, nil
 }
 
 func (c *Client) SendMessage(ctx context.Context, chatID int64, text, parseMode string, threadID int) (SentMessage, error) {
@@ -377,4 +422,20 @@ func fallbackText(text, parseMode string) string {
 		}
 	}
 	return html.UnescapeString(out.String())
+}
+
+func escapeTelegramFilePath(filePath string) (string, error) {
+	filePath = strings.Trim(strings.TrimSpace(filePath), "/")
+	if filePath == "" {
+		return "", fmt.Errorf("telegram file_path is required")
+	}
+	parts := strings.Split(filePath, "/")
+	escaped := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return "", fmt.Errorf("invalid telegram file_path %q", filePath)
+		}
+		escaped = append(escaped, url.PathEscape(part))
+	}
+	return strings.Join(escaped, "/"), nil
 }

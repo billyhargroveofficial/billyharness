@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,14 +17,16 @@ import (
 )
 
 type telegramPromptAdmission struct {
-	UpdateID   int
-	InputID    string
-	ClientID   string
-	InputSeq   int64
-	Response   gatewayapi.SessionInputResponse
-	State      ChatState
-	StateReady bool
-	SkipRun    bool
+	UpdateID    int
+	InputID     string
+	ClientID    string
+	InputSeq    int64
+	Prompt      string
+	Attachments []protocol.AttachmentRef
+	Response    gatewayapi.SessionInputResponse
+	State       ChatState
+	StateReady  bool
+	SkipRun     bool
 }
 
 type userInputAnswerHarness interface {
@@ -41,13 +44,17 @@ func (b *Bot) handleMessageWithAdmission(parent context.Context, msg Message, ad
 		_ = b.sendPlain(parent, msg, "Chat is not allowlisted for this bot.")
 		return
 	}
-	text := strings.TrimSpace(msg.Text)
-	if bypassActiveRunLock(text) {
-		b.handleCommand(parent, msg, text)
+	prompt := telegramMessagePrompt(msg)
+	attachments := append([]protocol.AttachmentRef(nil), admission.Attachments...)
+	if admission.StateReady || admission.InputID != "" || len(admission.Attachments) > 0 {
+		prompt = admission.Prompt
+	}
+	if bypassActiveRunLock(prompt) {
+		b.handleCommand(parent, msg, prompt)
 		return
 	}
-	isCommand := strings.HasPrefix(text, "/")
-	if !isCommand {
+	isCommand := strings.HasPrefix(prompt, "/")
+	if !isCommand && !telegramMessageHasMedia(msg) {
 		answered, err := b.answerPendingUserInput(parent, msg, 0)
 		if answered {
 			if err != nil {
@@ -71,7 +78,7 @@ func (b *Bot) handleMessageWithAdmission(parent context.Context, msg Message, ad
 		return
 	}
 	if isCommand {
-		b.handleCommand(parent, msg, text)
+		b.handleCommand(parent, msg, prompt)
 		return
 	}
 	runCtx, cancel := context.WithCancel(parent)
@@ -97,7 +104,8 @@ func (b *Bot) handleMessageWithAdmission(parent context.Context, msg Message, ad
 	runReq := gatewayapi.RunRequest{
 		InputID:         admission.InputID,
 		ClientID:        admission.ClientID,
-		Prompt:          text,
+		Prompt:          prompt,
+		Attachments:     attachments,
 		Model:           state.Model,
 		Profile:         state.Profile,
 		ReasoningEffort: state.ReasoningEffort,
@@ -207,15 +215,26 @@ func (b *Bot) admitTelegramPromptUpdate(ctx context.Context, update Update) (tel
 	if err != nil {
 		return telegramPromptAdmission{}, err
 	}
+	prompt := telegramMessagePrompt(msg)
+	refs, err := b.prepareTelegramAttachments(ctx, msg, state)
+	if err != nil {
+		return telegramPromptAdmission{}, err
+	}
 	inputID := telegramInputID(update.UpdateID)
 	clientID := telegramClientID(scope)
+	metadata := telegramInputMetadata(update.UpdateID, msg, scope)
+	if len(refs) > 0 {
+		metadata["attachment_count"] = strconv.Itoa(len(refs))
+		metadata["vision_input"] = "true"
+	}
 	resp, err := b.harness.AdmitSessionInput(ctx, state.SessionID, gatewayapi.SessionInputRequest{
 		InputID:         inputID,
-		Prompt:          strings.TrimSpace(msg.Text),
+		Prompt:          prompt,
+		Attachments:     append([]protocol.AttachmentRef(nil), refs...),
 		InterruptPolicy: gatewayapi.InterruptPolicyInterrupt,
 		ClientID:        clientID,
 		ClientType:      "telegram",
-		Metadata:        telegramInputMetadata(update.UpdateID, msg, scope),
+		Metadata:        metadata,
 	})
 	if err != nil {
 		return telegramPromptAdmission{}, err
@@ -223,7 +242,7 @@ func (b *Bot) admitTelegramPromptUpdate(ctx context.Context, update Update) (tel
 	if strings.TrimSpace(resp.InputID) == "" {
 		resp.InputID = inputID
 	}
-	if err := b.admit.RecordAdmitted(update.UpdateID, msg, state.SessionID, resp); err != nil {
+	if err := b.admit.RecordAdmitted(update.UpdateID, msg, state.SessionID, resp, prompt, len(refs)); err != nil {
 		return telegramPromptAdmission{}, err
 	}
 	skipRun := resp.Duplicate && resp.State != "" && resp.State != "admitted"
@@ -238,13 +257,15 @@ func (b *Bot) admitTelegramPromptUpdate(ctx context.Context, update Update) (tel
 	log.Printf("telegram admitted update=%d chat=%d key=%s session=%s input=%s state=%s duplicate=%t skip_run=%t",
 		update.UpdateID, msg.Chat.ID, key, short(state.SessionID), resp.InputID, resp.State, resp.Duplicate, skipRun)
 	return telegramPromptAdmission{
-		UpdateID:   update.UpdateID,
-		InputID:    resp.InputID,
-		ClientID:   clientID,
-		Response:   resp,
-		State:      state,
-		StateReady: true,
-		SkipRun:    skipRun,
+		UpdateID:    update.UpdateID,
+		InputID:     resp.InputID,
+		ClientID:    clientID,
+		Prompt:      prompt,
+		Attachments: append([]protocol.AttachmentRef(nil), refs...),
+		Response:    resp,
+		State:       state,
+		StateReady:  true,
+		SkipRun:     skipRun,
 	}, nil
 }
 
@@ -267,7 +288,7 @@ func (b *Bot) answerPendingUserInput(ctx context.Context, msg Message, updateID 
 		return true, err
 	}
 	answer := gatewayapi.UserInputAnswerRequest{
-		Text:   strings.TrimSpace(msg.Text),
+		Text:   telegramMessagePrompt(msg),
 		Source: "telegram",
 	}
 	if updateID > 0 {

@@ -200,6 +200,11 @@ func configSpecs() []configSpec {
 		boolSpec("web_cache_enabled", []string{"FAST_AGENT_WEB_CACHE_ENABLED", "BILLYHARNESS_WEB_CACHE_ENABLED"}, func(c Config) any { return c.WebCacheEnabled }, func(c *Config, v bool) { c.WebCacheEnabled = v }),
 		durationSecondsSpec("web_cache_ttl_sec", []string{"FAST_AGENT_WEB_CACHE_TTL_SEC", "BILLYHARNESS_WEB_CACHE_TTL_SEC"}, func(c Config) any { return c.WebCacheTTL }, func(c *Config, v time.Duration) { c.WebCacheTTL = v }),
 		int64Spec("web_cache_max_bytes", []string{"FAST_AGENT_WEB_CACHE_MAX_BYTES", "BILLYHARNESS_WEB_CACHE_MAX_BYTES"}, func(c Config) any { return c.WebCacheMaxBytes }, func(c *Config, v int64) { c.WebCacheMaxBytes = v }),
+		stringSpec("web_search_backend", []string{"BILLYHARNESS_WEB_SEARCH_BACKEND", "FAST_AGENT_WEB_SEARCH_BACKEND"}, func(c Config) any { return NormalizeWebBackend(c.WebSearchBackend) }, func(c *Config, v string) { c.WebSearchBackend = NormalizeWebBackend(v) }),
+		stringSpec("web_extract_backend", []string{"BILLYHARNESS_WEB_EXTRACT_BACKEND", "FAST_AGENT_WEB_EXTRACT_BACKEND"}, func(c Config) any { return NormalizeWebBackend(c.WebExtractBackend) }, func(c *Config, v string) { c.WebExtractBackend = NormalizeWebBackend(v) }),
+		stringSpec("web_tavily_api_key_env", []string{"BILLYHARNESS_WEB_TAVILY_API_KEY_ENV", "FAST_AGENT_WEB_TAVILY_API_KEY_ENV"}, func(c Config) any { return c.WebTavilyAPIKeyEnv }, func(c *Config, v string) { c.WebTavilyAPIKeyEnv = v }),
+		stringSpec("web_exa_api_key_env", []string{"BILLYHARNESS_WEB_EXA_API_KEY_ENV", "FAST_AGENT_WEB_EXA_API_KEY_ENV"}, func(c Config) any { return c.WebExaAPIKeyEnv }, func(c *Config, v string) { c.WebExaAPIKeyEnv = v }),
+		stringListSpec("web_hermes_env_files", []string{"BILLYHARNESS_WEB_HERMES_ENV_FILES", "FAST_AGENT_WEB_HERMES_ENV_FILES"}, func(c Config) any { return c.WebHermesEnvFiles }, func(c *Config, v []string) { c.WebHermesEnvFiles = v }),
 		durationSecondsSpec("request_timeout_sec", []string{"FAST_AGENT_REQUEST_TIMEOUT_SEC"}, func(c Config) any { return c.RequestTimeout }, func(c *Config, v time.Duration) { c.RequestTimeout = v }),
 		durationSecondsSpec("stream_idle_timeout_sec", []string{"FAST_AGENT_STREAM_IDLE_TIMEOUT_SEC"}, func(c Config) any { return c.StreamIdleTimeout }, func(c *Config, v time.Duration) { c.StreamIdleTimeout = v }),
 		intSpec("project_doc_max_bytes", []string{"FAST_AGENT_PROJECT_DOC_MAX_BYTES"}, func(c Config) any { return c.ProjectDocMaxBytes }, func(c *Config, v int) { c.ProjectDocMaxBytes = v }),
@@ -498,12 +503,20 @@ func (s *resolveState) finalizeDerivedValues() {
 	beforeWebProvider := s.cfg.WebSummaryProvider
 	beforeWebModel := s.cfg.WebSummaryModel
 	beforeWebMode := s.cfg.WebSummaryMode
+	beforeSearchBackend := s.cfg.WebSearchBackend
+	beforeExtractBackend := s.cfg.WebExtractBackend
 	beforeCompactStrategy := s.cfg.ContextCompactStrategy
 	beforeCompactProvider := s.cfg.ContextCompactSummaryProvider
 	beforeCompactModel := s.cfg.ContextCompactSummaryModel
 	s.cfg.ApplyWebSummaryDefaults()
 	if s.cfg.WebSummaryMode != beforeWebMode {
 		s.record("web_summary_mode", s.cfg.WebSummaryMode, SourceDerived, "", "web_summary_mode", false, "normalized from "+beforeWebMode, "")
+	}
+	if s.cfg.WebSearchBackend != beforeSearchBackend {
+		s.record("web_search_backend", s.cfg.WebSearchBackend, SourceDerived, "", "web_search_backend", false, "normalized from "+beforeSearchBackend, "")
+	}
+	if s.cfg.WebExtractBackend != beforeExtractBackend {
+		s.record("web_extract_backend", s.cfg.WebExtractBackend, SourceDerived, "", "web_extract_backend", false, "normalized from "+beforeExtractBackend, "")
 	}
 	if s.cfg.WebSummaryModel != beforeWebModel {
 		sourceKey := "provider"

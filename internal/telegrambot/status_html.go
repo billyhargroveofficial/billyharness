@@ -77,7 +77,7 @@ func StatusHTML(state ChatState, opts Options) string {
 	}
 	return "<b>Status</b>\n" +
 		"session: <code>" + esc(short(state.SessionID)) + "</code>\n" +
-		"model: <code>" + esc(fallback(state.Model, opts.Model)) + "</code>\n" +
+		"model: <code>" + esc(modelWithCapability(fallback(state.Model, opts.Model))) + "</code>\n" +
 		"profile: <code>" + esc(fallback(state.Profile, opts.Profile)) + "</code>\n" +
 		"access mode: <code>" + esc(config.NormalizeAccessMode(fallback(state.AccessMode, opts.AccessMode))) + "</code>\n" +
 		"reasoning: <code>" + esc(fallback(state.ReasoningEffort, opts.ReasoningEffort)) + "</code>\n" +

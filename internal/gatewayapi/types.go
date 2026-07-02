@@ -9,29 +9,31 @@ import (
 )
 
 type RunRequest struct {
-	Prompt          string            `json:"prompt"`
-	InputID         string            `json:"input_id,omitempty"`
-	ClientID        string            `json:"client_id,omitempty"`
-	Provider        string            `json:"provider,omitempty"`
-	Model           string            `json:"model,omitempty"`
-	Profile         string            `json:"profile,omitempty"`
-	Thinking        string            `json:"thinking,omitempty"`
-	ReasoningEffort string            `json:"reasoning_effort,omitempty"`
-	MaxToolRounds   int               `json:"max_tool_rounds,omitempty"`
-	AccessMode      string            `json:"access_mode,omitempty"`
-	InterruptPolicy string            `json:"interrupt_policy,omitempty"`
-	Metadata        map[string]string `json:"metadata,omitempty"`
+	Prompt          string                   `json:"prompt"`
+	Attachments     []protocol.AttachmentRef `json:"attachments,omitempty"`
+	InputID         string                   `json:"input_id,omitempty"`
+	ClientID        string                   `json:"client_id,omitempty"`
+	Provider        string                   `json:"provider,omitempty"`
+	Model           string                   `json:"model,omitempty"`
+	Profile         string                   `json:"profile,omitempty"`
+	Thinking        string                   `json:"thinking,omitempty"`
+	ReasoningEffort string                   `json:"reasoning_effort,omitempty"`
+	MaxToolRounds   int                      `json:"max_tool_rounds,omitempty"`
+	AccessMode      string                   `json:"access_mode,omitempty"`
+	InterruptPolicy string                   `json:"interrupt_policy,omitempty"`
+	Metadata        map[string]string        `json:"metadata,omitempty"`
 }
 
 const InterruptPolicyInterrupt = "interrupt"
 
 type SessionInputRequest struct {
-	InputID         string            `json:"input_id"`
-	Prompt          string            `json:"prompt"`
-	InterruptPolicy string            `json:"interrupt_policy,omitempty"`
-	ClientID        string            `json:"client_id,omitempty"`
-	ClientType      string            `json:"client_type,omitempty"`
-	Metadata        map[string]string `json:"metadata,omitempty"`
+	InputID         string                   `json:"input_id"`
+	Prompt          string                   `json:"prompt"`
+	Attachments     []protocol.AttachmentRef `json:"attachments,omitempty"`
+	InterruptPolicy string                   `json:"interrupt_policy,omitempty"`
+	ClientID        string                   `json:"client_id,omitempty"`
+	ClientType      string                   `json:"client_type,omitempty"`
+	Metadata        map[string]string        `json:"metadata,omitempty"`
 }
 
 type SessionInputResponse struct {
@@ -85,25 +87,27 @@ type ManagedProcessResponse struct {
 }
 
 type SessionStatus struct {
-	ID              string       `json:"id"`
-	Created         time.Time    `json:"created"`
-	Running         bool         `json:"running"`
-	RunSeq          int64        `json:"run_seq"`
-	StartedAt       time.Time    `json:"started_at,omitempty"`
-	FinishedAt      time.Time    `json:"finished_at,omitempty"`
-	LastEvent       string       `json:"last_event,omitempty"`
-	LastEventAt     time.Time    `json:"last_event_at,omitempty"`
-	Model           string       `json:"model,omitempty"`
-	Provider        string       `json:"provider,omitempty"`
-	Profile         string       `json:"profile,omitempty"`
-	ReasoningEffort string       `json:"reasoning_effort,omitempty"`
-	AccessMode      string       `json:"access_mode,omitempty"`
-	Owner           SessionOwner `json:"owner,omitempty"`
-	MessageCount    int          `json:"message_count"`
-	ModelCalls      int          `json:"model_calls"`
-	ToolCalls       int          `json:"tool_calls"`
-	DroppedEvents   int64        `json:"dropped_events,omitempty"`
-	LastError       string       `json:"last_error,omitempty"`
+	ID               string       `json:"id"`
+	Created          time.Time    `json:"created"`
+	Running          bool         `json:"running"`
+	RunSeq           int64        `json:"run_seq"`
+	StartedAt        time.Time    `json:"started_at,omitempty"`
+	FinishedAt       time.Time    `json:"finished_at,omitempty"`
+	LastEvent        string       `json:"last_event,omitempty"`
+	LastEventAt      time.Time    `json:"last_event_at,omitempty"`
+	Model            string       `json:"model,omitempty"`
+	Provider         string       `json:"provider,omitempty"`
+	Profile          string       `json:"profile,omitempty"`
+	ReasoningEffort  string       `json:"reasoning_effort,omitempty"`
+	AccessMode       string       `json:"access_mode,omitempty"`
+	Owner            SessionOwner `json:"owner,omitempty"`
+	MessageCount     int          `json:"message_count"`
+	AttachmentCount  int          `json:"attachment_count,omitempty"`
+	ImageSubmissions int          `json:"image_submissions,omitempty"`
+	ModelCalls       int          `json:"model_calls"`
+	ToolCalls        int          `json:"tool_calls"`
+	DroppedEvents    int64        `json:"dropped_events,omitempty"`
+	LastError        string       `json:"last_error,omitempty"`
 }
 
 type SessionListResponse struct {
@@ -111,36 +115,42 @@ type SessionListResponse struct {
 }
 
 type SessionSummary struct {
-	ID              string       `json:"id"`
-	Created         time.Time    `json:"created"`
-	Running         bool         `json:"running"`
-	RunSeq          int64        `json:"run_seq"`
-	MessageCount    int          `json:"message_count"`
-	DroppedEvents   int64        `json:"dropped_events,omitempty"`
-	LastEvent       string       `json:"last_event,omitempty"`
-	LastEventAt     time.Time    `json:"last_event_at,omitempty"`
-	Model           string       `json:"model,omitempty"`
-	Provider        string       `json:"provider,omitempty"`
-	Profile         string       `json:"profile,omitempty"`
-	ReasoningEffort string       `json:"reasoning_effort,omitempty"`
-	AccessMode      string       `json:"access_mode,omitempty"`
-	Owner           SessionOwner `json:"owner,omitempty"`
-	LastError       string       `json:"last_error,omitempty"`
+	ID               string       `json:"id"`
+	Created          time.Time    `json:"created"`
+	Running          bool         `json:"running"`
+	RunSeq           int64        `json:"run_seq"`
+	MessageCount     int          `json:"message_count"`
+	AttachmentCount  int          `json:"attachment_count,omitempty"`
+	ImageSubmissions int          `json:"image_submissions,omitempty"`
+	DroppedEvents    int64        `json:"dropped_events,omitempty"`
+	LastEvent        string       `json:"last_event,omitempty"`
+	LastEventAt      time.Time    `json:"last_event_at,omitempty"`
+	Model            string       `json:"model,omitempty"`
+	Provider         string       `json:"provider,omitempty"`
+	Profile          string       `json:"profile,omitempty"`
+	ReasoningEffort  string       `json:"reasoning_effort,omitempty"`
+	AccessMode       string       `json:"access_mode,omitempty"`
+	Owner            SessionOwner `json:"owner,omitempty"`
+	LastError        string       `json:"last_error,omitempty"`
 }
 
 type SessionResponse struct {
-	ID           string             `json:"id"`
-	Created      time.Time          `json:"created"`
-	MessageCount int                `json:"message_count"`
-	Messages     []protocol.Message `json:"messages,omitempty"`
-	Running      bool               `json:"running"`
-	Owner        SessionOwner       `json:"owner,omitempty"`
-	Status       SessionStatus      `json:"status"`
+	ID               string             `json:"id"`
+	Created          time.Time          `json:"created"`
+	MessageCount     int                `json:"message_count"`
+	AttachmentCount  int                `json:"attachment_count,omitempty"`
+	ImageSubmissions int                `json:"image_submissions,omitempty"`
+	Messages         []protocol.Message `json:"messages,omitempty"`
+	Running          bool               `json:"running"`
+	Owner            SessionOwner       `json:"owner,omitempty"`
+	Status           SessionStatus      `json:"status"`
 }
 
 type SessionContextResponse struct {
 	ID                      string               `json:"id"`
 	MessageCount            int                  `json:"message_count"`
+	AttachmentCount         int                  `json:"attachment_count,omitempty"`
+	ImageSubmissions        int                  `json:"image_submissions,omitempty"`
 	EstimatedTokens         int64                `json:"estimated_tokens"`
 	ContextWindowTokens     int64                `json:"context_window_tokens"`
 	ContextCompactTokens    int64                `json:"context_compact_tokens"`
@@ -168,25 +178,27 @@ type ContextRuntime struct {
 }
 
 type ContextUsage struct {
-	ModelCalls              int   `json:"model_calls,omitempty"`
-	ToolCalls               int   `json:"tool_calls,omitempty"`
-	InputTokens             int64 `json:"input_tokens,omitempty"`
-	OutputTokens            int64 `json:"output_tokens,omitempty"`
-	CacheHitTokens          int64 `json:"cache_hit_tokens,omitempty"`
-	CacheMissTokens         int64 `json:"cache_miss_tokens,omitempty"`
-	ReasoningTokens         int64 `json:"reasoning_tokens,omitempty"`
-	LastInputTokens         int64 `json:"last_input_tokens,omitempty"`
-	LastOutputTokens        int64 `json:"last_output_tokens,omitempty"`
-	LastCacheHitTokens      int64 `json:"last_cache_hit_tokens,omitempty"`
-	LastCacheMissTokens     int64 `json:"last_cache_miss_tokens,omitempty"`
-	WebSummaryInputTokens   int64 `json:"web_summary_input_tokens,omitempty"`
-	WebSummaryOutputTokens  int64 `json:"web_summary_output_tokens,omitempty"`
-	HelperModelCalls        int   `json:"helper_model_calls,omitempty"`
-	HelperModelInputTokens  int64 `json:"helper_model_input_tokens,omitempty"`
-	HelperModelOutputTokens int64 `json:"helper_model_output_tokens,omitempty"`
-	HelperModelCacheHit     int64 `json:"helper_model_cache_hit_tokens,omitempty"`
-	HelperModelCacheMiss    int64 `json:"helper_model_cache_miss_tokens,omitempty"`
-	HelperModelAPITokens    int64 `json:"helper_model_api_tokens,omitempty"`
+	ModelCalls              int     `json:"model_calls,omitempty"`
+	ToolCalls               int     `json:"tool_calls,omitempty"`
+	InputTokens             int64   `json:"input_tokens,omitempty"`
+	OutputTokens            int64   `json:"output_tokens,omitempty"`
+	CacheHitTokens          int64   `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens         int64   `json:"cache_miss_tokens,omitempty"`
+	ReasoningTokens         int64   `json:"reasoning_tokens,omitempty"`
+	LastInputTokens         int64   `json:"last_input_tokens,omitempty"`
+	LastOutputTokens        int64   `json:"last_output_tokens,omitempty"`
+	LastCacheHitTokens      int64   `json:"last_cache_hit_tokens,omitempty"`
+	LastCacheMissTokens     int64   `json:"last_cache_miss_tokens,omitempty"`
+	WebSummaryInputTokens   int64   `json:"web_summary_input_tokens,omitempty"`
+	WebSummaryOutputTokens  int64   `json:"web_summary_output_tokens,omitempty"`
+	HelperModelCalls        int     `json:"helper_model_calls,omitempty"`
+	HelperModelInputTokens  int64   `json:"helper_model_input_tokens,omitempty"`
+	HelperModelOutputTokens int64   `json:"helper_model_output_tokens,omitempty"`
+	HelperModelCacheHit     int64   `json:"helper_model_cache_hit_tokens,omitempty"`
+	HelperModelCacheMiss    int64   `json:"helper_model_cache_miss_tokens,omitempty"`
+	HelperModelAPITokens    int64   `json:"helper_model_api_tokens,omitempty"`
+	HelperAPICalls          int     `json:"helper_api_calls,omitempty"`
+	HelperCostUSD           float64 `json:"helper_cost_usd,omitempty"`
 }
 
 type ContextPrompt struct {

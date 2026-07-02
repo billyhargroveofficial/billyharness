@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -19,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/attachments"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/secrets"
@@ -38,6 +40,7 @@ type Codex struct {
 	CodexClientID     string
 	Auth              *codexAuth
 	Client            *http.Client
+	AttachmentStore   attachments.Store
 	authMu            sync.Mutex
 }
 
@@ -251,7 +254,10 @@ func (c *Codex) refreshAuthLocked(ctx context.Context) error {
 }
 
 func (c *Codex) body(req Request) ([]byte, error) {
-	input, instructions := codexInput(req.Messages)
+	input, instructions, err := c.codexInput(req.Messages)
+	if err != nil {
+		return nil, err
+	}
 	tools, err := codexTools(req.Tools)
 	if err != nil {
 		return nil, err
@@ -284,9 +290,10 @@ func (c *Codex) body(req Request) ([]byte, error) {
 	return json.Marshal(payload)
 }
 
-func codexInput(messages []protocol.Message) ([]map[string]any, string) {
+func (c *Codex) codexInput(messages []protocol.Message) ([]map[string]any, string, error) {
 	var input []map[string]any
 	var instructions []string
+	imageNumber := 0
 	for _, msg := range messages {
 		switch msg.Role {
 		case protocol.RoleSystem:
@@ -294,7 +301,11 @@ func codexInput(messages []protocol.Message) ([]map[string]any, string) {
 				instructions = append(instructions, msg.Content)
 			}
 		case protocol.RoleUser:
-			input = append(input, codexMessage("user", "input_text", msg.Content))
+			content, err := c.codexUserContent(msg, &imageNumber)
+			if err != nil {
+				return nil, "", err
+			}
+			input = append(input, codexMessageContent("user", content))
 		case protocol.RoleAssistant:
 			if msg.Content != "" {
 				input = append(input, codexMessage("assistant", "output_text", msg.Content))
@@ -315,17 +326,116 @@ func codexInput(messages []protocol.Message) ([]map[string]any, string) {
 			})
 		}
 	}
-	return input, strings.Join(instructions, "\n\n")
+	return input, strings.Join(instructions, "\n\n"), nil
+}
+
+func (c *Codex) codexUserContent(msg protocol.Message, imageNumber *int) ([]map[string]any, error) {
+	parts := protocol.MessagePartsOrText(msg)
+	if len(msg.Parts) > 0 && strings.TrimSpace(msg.Content) != "" && !messagePartsHaveText(msg.Parts) {
+		parts = append([]protocol.MessagePart{protocol.TextPart(msg.Content)}, parts...)
+	}
+	if len(parts) == 0 {
+		return []map[string]any{{"type": "input_text", "text": ""}}, nil
+	}
+	content := make([]map[string]any, 0, len(parts))
+	for _, part := range parts {
+		switch part.Type {
+		case protocol.MessagePartText:
+			if part.Text != "" {
+				content = append(content, map[string]any{"type": "input_text", "text": part.Text})
+			}
+		case protocol.MessagePartAttachment:
+			if part.Attachment == nil {
+				return nil, errors.New("attachment part is missing metadata")
+			}
+			if part.Attachment.Kind != "" && part.Attachment.Kind != protocol.AttachmentKindImage {
+				return nil, fmt.Errorf("unsupported attachment kind %q for Codex input", part.Attachment.Kind)
+			}
+			item, err := c.codexImageContent(*part.Attachment, imageNumber)
+			if err != nil {
+				return nil, err
+			}
+			content = append(content, item...)
+		}
+	}
+	if len(content) == 0 {
+		content = append(content, map[string]any{"type": "input_text", "text": ""})
+	}
+	return content, nil
+}
+
+func (c *Codex) codexImageContent(ref protocol.AttachmentRef, imageNumber *int) ([]map[string]any, error) {
+	store := c.attachmentStore()
+	data, resolved, err := store.Read(ref)
+	if err != nil {
+		return nil, fmt.Errorf("resolve image attachment %s: %w", firstNonEmpty(ref.ID, ref.FileName, "unknown"), err)
+	}
+	number := 1
+	if imageNumber != nil {
+		(*imageNumber)++
+		number = *imageNumber
+	}
+	mimeType := strings.TrimSpace(resolved.MIMEType)
+	if mimeType == "" {
+		prefix := data
+		if len(prefix) > 512 {
+			prefix = prefix[:512]
+		}
+		mimeType = http.DetectContentType(prefix)
+	}
+	if !strings.HasPrefix(mimeType, "image/") {
+		return nil, fmt.Errorf("attachment %s has unsupported MIME type %q", resolved.ID, mimeType)
+	}
+	image := map[string]any{
+		"type":      "input_image",
+		"image_url": "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data),
+	}
+	if detail := codexImageDetail(resolved.Detail); detail != "" {
+		image["detail"] = detail
+	}
+	return []map[string]any{
+		{"type": "input_text", "text": fmt.Sprintf("[Image #%d]", number)},
+		image,
+	}, nil
+}
+
+func messagePartsHaveText(parts []protocol.MessagePart) bool {
+	for _, part := range parts {
+		if part.Type == protocol.MessagePartText && part.Text != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Codex) attachmentStore() attachments.Store {
+	if c != nil && strings.TrimSpace(c.AttachmentStore.Root) != "" {
+		return c.AttachmentStore
+	}
+	return attachments.DefaultStore()
 }
 
 func codexMessage(role, contentType, text string) map[string]any {
+	return codexMessageContent(role, []map[string]any{{
+		"type": contentType,
+		"text": text,
+	}})
+}
+
+func codexMessageContent(role string, content []map[string]any) map[string]any {
 	return map[string]any{
-		"type": "message",
-		"role": role,
-		"content": []map[string]any{{
-			"type": contentType,
-			"text": text,
-		}},
+		"type":    "message",
+		"role":    role,
+		"content": content,
+	}
+}
+
+func codexImageDetail(detail protocol.AttachmentDetail) string {
+	switch detail {
+	case protocol.AttachmentDetailAuto, protocol.AttachmentDetailLow, protocol.AttachmentDetailHigh:
+		return string(detail)
+	default:
+		return ""
 	}
 }
 

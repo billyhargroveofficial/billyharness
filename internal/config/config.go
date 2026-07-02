@@ -38,6 +38,11 @@ type Config struct {
 	WebCacheEnabled               bool
 	WebCacheTTL                   time.Duration
 	WebCacheMaxBytes              int64
+	WebSearchBackend              string
+	WebExtractBackend             string
+	WebTavilyAPIKeyEnv            string
+	WebExaAPIKeyEnv               string
+	WebHermesEnvFiles             []string
 	RequestTimeout                time.Duration
 	StreamIdleTimeout             time.Duration
 	WorkspaceRoots                []string

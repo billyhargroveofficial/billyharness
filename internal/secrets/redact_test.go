@@ -14,6 +14,7 @@ func TestRedactExactEnvironmentAndPatterns(t *testing.T) {
 		`{"refresh_token":"refresh-secret-value"}`,
 		"sk-testsecret123456789",
 		"github_pat_123456789012345678901234567890",
+		"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
 	}, "\n")
 	out := Redact(input, "literal-secret")
 	for _, leaked := range []string{
@@ -23,6 +24,8 @@ func TestRedactExactEnvironmentAndPatterns(t *testing.T) {
 		"refresh-secret-value",
 		"sk-testsecret",
 		"github_pat_",
+		"data:image",
+		"iVBORw0KGgo",
 	} {
 		if strings.Contains(out, leaked) {
 			t.Fatalf("redaction leaked %q in %q", leaked, out)

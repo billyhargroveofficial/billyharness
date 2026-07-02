@@ -52,6 +52,8 @@ type Snapshot struct {
 	HelperModelCacheHitTokens  int64
 	HelperModelCacheMissTokens int64
 	HelperModelAPITokens       int64
+	HelperAPICalls             int
+	HelperCostUSD              float64
 
 	ToolsByCallID     map[string]ToolItem
 	ContextThresholds []ContextThreshold
@@ -530,14 +532,19 @@ func (p *Projector) observeProviderHelperUsage(event protocol.Event) {
 	}
 	cacheHit := nonNegative(usage.CacheHitTokens)
 	cacheMiss := nonNegative(usage.CacheMissTokens)
-	p.snapshot.HelperModelCalls++
-	p.snapshot.HelperModelInputTokens += inputTokens
-	p.snapshot.HelperModelOutputTokens += outputTokens
-	p.snapshot.HelperModelCacheHitTokens += cacheHit
-	p.snapshot.HelperModelCacheMissTokens += cacheMiss
-	p.snapshot.HelperModelAPITokens += apiTokens
-	p.snapshot.ToolSummaryAPITokens += apiTokens
-	if strings.TrimSpace(usage.Kind) == "web_summary" {
+	kind := strings.TrimSpace(usage.Kind)
+	if kind == "web_summary" || apiTokens > 0 || inputTokens > 0 || outputTokens > 0 || cacheHit > 0 || cacheMiss > 0 {
+		p.snapshot.HelperModelCalls++
+		p.snapshot.HelperModelInputTokens += inputTokens
+		p.snapshot.HelperModelOutputTokens += outputTokens
+		p.snapshot.HelperModelCacheHitTokens += cacheHit
+		p.snapshot.HelperModelCacheMissTokens += cacheMiss
+		p.snapshot.HelperModelAPITokens += apiTokens
+		p.snapshot.ToolSummaryAPITokens += apiTokens
+	}
+	p.snapshot.HelperAPICalls += usage.APICalls
+	p.snapshot.HelperCostUSD += usage.CostUSD
+	if kind == "web_summary" {
 		callID := firstNonEmpty(usage.CallID, event.CallID)
 		if callID != "" {
 			p.helperUsageCalls[callID] = true

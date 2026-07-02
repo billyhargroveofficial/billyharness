@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"net"
 	"net/http"
@@ -87,6 +90,7 @@ func TestSessionInputRequestFromRunIncludesMetadata(t *testing.T) {
 	input := sessionInputRequestFromRun(RunRequest{
 		InputID:         "input-1",
 		Prompt:          "expanded prompt",
+		Attachments:     []protocol.AttachmentRef{{ID: "att_test", Kind: protocol.AttachmentKindImage, StorageRef: "att_test.png", SHA256: "abc123"}},
 		InterruptPolicy: "interrupt",
 		ClientID:        "tui",
 		Metadata: map[string]string{
@@ -95,7 +99,8 @@ func TestSessionInputRequestFromRunIncludesMetadata(t *testing.T) {
 			"prompt_command_expanded_sha256": "abc123",
 		},
 	})
-	if input.InputID != "input-1" || input.Prompt != "expanded prompt" || input.ClientID != "tui" {
+	if input.InputID != "input-1" || input.Prompt != "expanded prompt" || input.ClientID != "tui" ||
+		len(input.Attachments) != 1 || input.Attachments[0].ID != "att_test" {
 		t.Fatalf("input request = %#v", input)
 	}
 	if input.Metadata["prompt_command_original"] != "/review internal/tui" ||
@@ -942,4 +947,19 @@ func eventStatus(t *testing.T, event protocol.Event) SessionStatus {
 		t.Fatal(err)
 	}
 	return status
+}
+
+func gatewayPNGBytes(t *testing.T, width, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x), G: uint8(y), B: 128, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }

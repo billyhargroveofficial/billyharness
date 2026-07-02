@@ -15,6 +15,14 @@ func modelAlias(value string) string {
 	return modelinfo.NormalizeAlias(value)
 }
 
+func modelWithCapability(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		model = "the current model"
+	}
+	return model + " (" + modelinfo.InputCapabilityLabel(model) + ")"
+}
+
 func fallback(value, fallback string) string {
 	if strings.TrimSpace(value) != "" {
 		return value

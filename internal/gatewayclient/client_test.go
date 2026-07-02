@@ -145,6 +145,7 @@ func TestAdmitSessionInputPostsTypedRequest(t *testing.T) {
 	resp, err := New(server.URL).AdmitSessionInput(context.Background(), "session-1", gatewayapi.SessionInputRequest{
 		InputID:         "input-1",
 		Prompt:          "hello",
+		Attachments:     []protocol.AttachmentRef{{ID: "att_test", Kind: protocol.AttachmentKindImage, StorageRef: "att_test.png", SHA256: "abc123"}},
 		InterruptPolicy: gatewayapi.InterruptPolicyInterrupt,
 		ClientID:        "telegram:1",
 	})
@@ -154,7 +155,8 @@ func TestAdmitSessionInputPostsTypedRequest(t *testing.T) {
 	if resp.InputID != "input-1" || resp.State != "admitted" || resp.Seq != 1 {
 		t.Fatalf("response = %#v", resp)
 	}
-	if got.InputID != "input-1" || got.Prompt != "hello" || got.InterruptPolicy != gatewayapi.InterruptPolicyInterrupt || got.ClientID != "telegram:1" {
+	if got.InputID != "input-1" || got.Prompt != "hello" || got.InterruptPolicy != gatewayapi.InterruptPolicyInterrupt || got.ClientID != "telegram:1" ||
+		len(got.Attachments) != 1 || got.Attachments[0].ID != "att_test" {
 		t.Fatalf("request = %#v", got)
 	}
 }

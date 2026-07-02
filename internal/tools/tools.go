@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,6 +16,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/filesearch"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/skills"
 	"github.com/billyhargroveofficial/billyharness/internal/tools/discovery"
 	"github.com/billyhargroveofficial/billyharness/internal/webtools"
 )
@@ -40,8 +42,6 @@ const (
 	webMaxLinks              = 20
 	maxWriteBytes            = 2 * 1024 * 1024
 	maxExecOutput            = 512 * 1024
-	defaultSkillReadChars    = 12 * 1024
-	maxSkillReadChars        = 60 * 1024
 )
 
 type Result struct {
@@ -97,6 +97,10 @@ type Registry struct {
 	webSummarizer   webtools.Summarizer
 	webSummarySlots chan struct{}
 	webSummarySeq   int64
+	webBackendHTTP  *http.Client
+	webBackendSleep func(context.Context, time.Duration) error
+	tavilyBaseURL   string
+	exaBaseURL      string
 }
 
 type RegistryOption func(*Registry)
@@ -138,6 +142,25 @@ func RegistrySettingsFromConfig(cfg config.Config) RegistrySettings {
 func WithWebSummarizer(summarizer webtools.Summarizer) RegistryOption {
 	return func(r *Registry) {
 		r.webSummarizer = summarizer
+	}
+}
+
+func WithWebBackendHTTPClient(client *http.Client) RegistryOption {
+	return func(r *Registry) {
+		r.webBackendHTTP = client
+	}
+}
+
+func WithWebBackendBaseURLs(tavilyBaseURL, exaBaseURL string) RegistryOption {
+	return func(r *Registry) {
+		r.tavilyBaseURL = tavilyBaseURL
+		r.exaBaseURL = exaBaseURL
+	}
+}
+
+func WithWebBackendSleep(sleep func(context.Context, time.Duration) error) RegistryOption {
+	return func(r *Registry) {
+		r.webBackendSleep = sleep
 	}
 }
 
@@ -593,7 +616,7 @@ func normalizeParallelMetadata(name string, risk protocol.Risk, meta ParallelMet
 
 func defaultParallelMetadata(name string, risk protocol.Risk) ParallelMetadata {
 	switch name {
-	case "time_now", "fs_read_file", "fs_list", "fs_search", "fs_grep", "fs_glob", "fs_find_files", "tool_search", "skill_list", "skill_read", "web_cache_status":
+	case "time_now", "fs_read_file", "fs_list", "fs_search", "fs_grep", "fs_glob", "fs_find_files", "tool_search", "skill_list", "skill_read", "skill_view", "web_cache_status":
 		return ParallelMetadata{Policy: ParallelPolicyReadOnly, Idempotent: true, Cancellable: true}
 	case "web_search", "web_fetch", "web_extract", "web_crawl":
 		return ParallelMetadata{Policy: ParallelPolicyNetworkRateLimited, Idempotent: true, RateLimitKey: "web", Cancellable: true, MaxConcurrency: 3}
@@ -955,8 +978,8 @@ func (r *Registry) addSkills() {
 	r.add(Tool{
 		Spec: protocol.ToolSpec{
 			Name:        "skill_list",
-			Description: "List available billyharness skills without injecting their contents into the prompt. Reads $BILLYHARNESS_HOME/skills and project .billyharness/skills; .claude/skills requires include_compat=true.",
-			Parameters:  raw(`{"type":"object","properties":{"query":{"type":"string","description":"Optional case-insensitive name/summary/source filter."},"source":{"type":"string","description":"Optional source filter: home, project, or claude_compat."},"include_compat":{"type":"boolean","default":false,"description":"Also list project .claude/skills as compatibility input."},"limit":{"type":"integer","default":40}},"additionalProperties":false}`),
+			Description: "List available local SKILL.md packages without injecting their contents into the prompt. Compatibility sources such as .claude and Hermes skills require include_compat=true.",
+			Parameters:  raw(`{"type":"object","properties":{"query":{"type":"string","description":"Optional case-insensitive name/description/source/tag filter."},"source":{"type":"string","description":"Optional source filter: home, project, claude_compat, hermes_home, hermes_runtime, or hermes_optional."},"include_compat":{"type":"boolean","default":false,"description":"Also list compatibility sources: project .claude/skills, /root/.hermes/skills, /opt/hermes-agent-src/skills, and /opt/hermes-agent-src/optional-skills."},"limit":{"type":"integer","default":40}},"additionalProperties":false}`),
 			Risk:        protocol.RiskReadOnly,
 		},
 		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
@@ -969,56 +992,73 @@ func (r *Registry) addSkills() {
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
 			}
-			if in.Limit <= 0 || in.Limit > 200 {
-				in.Limit = 40
-			}
-			skills := r.discoverSkills(in.IncludeCompat)
-			query := strings.ToLower(strings.TrimSpace(in.Query))
-			source := normalizeSkillSource(in.Source)
-			var items []skillListItem
-			truncated := false
-			for _, skill := range skills {
-				if source != "" && skill.Source != source {
-					continue
-				}
-				haystack := strings.ToLower(skill.Name + " " + skill.Source + " " + skill.Summary)
-				if query != "" && !discovery.Matches(haystack, query) {
-					continue
-				}
-				if len(items) >= in.Limit {
-					truncated = true
-					break
-				}
-				items = append(items, skillListItem{
-					Name:    skill.Name,
-					Source:  skill.Source,
-					Path:    skill.Path,
-					Summary: skill.Summary,
-				})
+			list, err := skills.List(r.skillsOptions(in.IncludeCompat), skills.ListRequest{
+				Query:  in.Query,
+				Source: in.Source,
+				Limit:  in.Limit,
+			})
+			if err != nil {
+				return Result{}, err
 			}
 			out, _ := json.MarshalIndent(map[string]any{
-				"skills":    items,
-				"truncated": truncated,
+				"skills":    list.Items,
+				"truncated": list.Truncated,
 				"metrics": map[string]any{
-					"discovered":       len(skills),
-					"returned":         len(items),
+					"discovered":       list.Discovered,
+					"returned":         len(list.Items),
 					"include_compat":   in.IncludeCompat,
 					"content_injected": false,
 				},
 			}, "", "  ")
 			return Result{Content: string(out), Metadata: map[string]any{
-				"skills_discovered": len(skills),
-				"skills_returned":   len(items),
-				"truncated":         truncated,
+				"skills_discovered": list.Discovered,
+				"skills_returned":   len(list.Items),
+				"truncated":         list.Truncated,
 				"include_compat":    in.IncludeCompat,
 			}}, nil
 		},
 	})
+	r.addSkillViewTool("skill_read", "Read one skill's SKILL.md on demand with a hard output cap. Use skill_list first when the exact name is unknown.")
+	r.addSkillViewTool("skill_view", "View one skill's SKILL.md or a bounded linked support file from references/, templates/, scripts/, or assets/.")
 	r.add(Tool{
 		Spec: protocol.ToolSpec{
-			Name:        "skill_read",
-			Description: "Read one skill's SKILL.md on demand with a hard output cap. Use skill_list first when the exact name is unknown.",
-			Parameters:  raw(`{"type":"object","properties":{"name":{"type":"string","description":"Skill directory name, for example imagegen or code-review."},"source":{"type":"string","description":"Optional source filter: home, project, or claude_compat."},"include_compat":{"type":"boolean","default":false,"description":"Allow reading project .claude/skills compatibility input."},"max_chars":{"type":"integer","default":12288}},"required":["name"],"additionalProperties":false}`),
+			Name:        "skill_import",
+			Description: "Copy one selected local compatibility skill into $BILLYHARNESS_HOME/skills and record source path plus SHA-256 metadata. Does not auto-import optional skills.",
+			Parameters:  raw(`{"type":"object","properties":{"name":{"type":"string","description":"Skill name to import."},"source":{"type":"string","description":"Optional source filter, usually hermes_home, hermes_runtime, hermes_optional, or claude_compat."},"force":{"type":"boolean","default":false,"description":"Replace an existing home skill with the same normalized name."}},"required":["name"],"additionalProperties":false}`),
+			Risk:        protocol.RiskWrite,
+		},
+		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
+			var in struct {
+				Name   string `json:"name"`
+				Source string `json:"source"`
+				Force  bool   `json:"force"`
+			}
+			if err := json.Unmarshal(args, &in); err != nil {
+				return Result{}, err
+			}
+			imported, err := skills.Import(r.skillsOptions(true), skills.ImportRequest{Name: in.Name, Source: in.Source, Force: in.Force})
+			if err != nil {
+				return Result{}, err
+			}
+			out, _ := json.MarshalIndent(imported, "", "  ")
+			return Result{Content: string(out), Metadata: map[string]any{
+				"skill_name":        imported.Name,
+				"skill_source":      imported.Source,
+				"skill_destination": imported.Destination,
+				"skill_sha256":      imported.SHA256,
+				"files_copied":      imported.FilesCopied,
+				"bytes_copied":      imported.BytesCopied,
+			}}, nil
+		},
+	})
+}
+
+func (r *Registry) addSkillViewTool(name, description string) {
+	r.add(Tool{
+		Spec: protocol.ToolSpec{
+			Name:        name,
+			Description: description,
+			Parameters:  raw(`{"type":"object","properties":{"name":{"type":"string","description":"Skill name, for example imagegen or code-review."},"source":{"type":"string","description":"Optional source filter: home, project, claude_compat, hermes_home, hermes_runtime, or hermes_optional."},"include_compat":{"type":"boolean","default":false,"description":"Allow reading compatibility sources."},"file_path":{"type":"string","description":"Optional bounded support file under references/, templates/, scripts/, or assets/."},"max_chars":{"type":"integer","default":12288}},"required":["name"],"additionalProperties":false}`),
 			Risk:        protocol.RiskReadOnly,
 		},
 		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
@@ -1026,172 +1066,56 @@ func (r *Registry) addSkills() {
 				Name          string `json:"name"`
 				Source        string `json:"source"`
 				IncludeCompat bool   `json:"include_compat"`
+				FilePath      string `json:"file_path"`
 				MaxChars      int    `json:"max_chars"`
 			}
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
 			}
-			name := normalizeSkillName(in.Name)
-			if name == "" {
-				return Result{}, fmt.Errorf("name required")
+			view, err := skills.View(r.skillsOptions(in.IncludeCompat), skills.ViewRequest{
+				Name:     in.Name,
+				Source:   in.Source,
+				FilePath: in.FilePath,
+				MaxChars: in.MaxChars,
+			})
+			if err != nil {
+				return Result{}, err
 			}
-			maxChars := normalizedSkillReadChars(in.MaxChars)
-			source := normalizeSkillSource(in.Source)
-			for _, skill := range r.discoverSkills(in.IncludeCompat) {
-				if skill.Name != name {
-					continue
-				}
-				if source != "" && skill.Source != source {
-					continue
-				}
-				body, err := os.ReadFile(skill.Path)
-				if err != nil {
-					return Result{}, err
-				}
-				content, truncated := truncateRunesWithSimpleMarker(string(body), maxChars)
-				out, _ := json.MarshalIndent(map[string]any{
-					"name":           skill.Name,
-					"source":         skill.Source,
-					"path":           skill.Path,
-					"content":        content,
-					"truncated":      truncated,
-					"content_bytes":  len(body),
-					"returned_chars": len([]rune(content)),
-				}, "", "  ")
-				return Result{Content: string(out), Metadata: map[string]any{
-					"skill_name":     skill.Name,
-					"skill_source":   skill.Source,
-					"skill_path":     skill.Path,
-					"content_bytes":  len(body),
-					"returned_chars": len([]rune(content)),
-					"truncated":      truncated,
-				}, Truncated: truncated}, nil
+			out, _ := json.MarshalIndent(map[string]any{
+				"name":           view.Skill.Name,
+				"source":         view.Skill.Source,
+				"category":       view.Skill.Category,
+				"path":           view.Skill.Path,
+				"description":    view.Skill.Description,
+				"tags":           view.Skill.Tags,
+				"support_files":  view.Skill.SupportFiles,
+				"file_path":      view.FilePath,
+				"content":        view.Content,
+				"truncated":      view.Truncated,
+				"content_bytes":  view.ContentBytes,
+				"returned_chars": view.ReturnedChars,
+			}, "", "  ")
+			metadata := map[string]any{
+				"skill_name":     view.Skill.Name,
+				"skill_source":   view.Skill.Source,
+				"skill_path":     view.Skill.Path,
+				"content_bytes":  view.ContentBytes,
+				"returned_chars": view.ReturnedChars,
+				"truncated":      view.Truncated,
 			}
-			return Result{}, fmt.Errorf("skill %q not found", in.Name)
+			if view.FilePath != "" {
+				metadata["file_path"] = view.FilePath
+			}
+			return Result{Content: string(out), Metadata: metadata, Truncated: view.Truncated}, nil
 		},
 	})
 }
 
-type skillRecord struct {
-	Name    string
-	Source  string
-	Path    string
-	Summary string
-}
-
-type skillListItem struct {
-	Name    string `json:"name"`
-	Source  string `json:"source"`
-	Path    string `json:"path"`
-	Summary string `json:"summary,omitempty"`
-}
-
-func (r *Registry) discoverSkills(includeCompat bool) []skillRecord {
-	var dirs []skillSearchDir
-	dirs = append(dirs, skillSearchDir{Source: "home", Path: filepath.Join(config.BillyHomeDir(), "skills")})
-	for _, root := range r.toolPolicy.WorkspaceRoots {
-		root = strings.TrimSpace(root)
-		if root == "" {
-			continue
-		}
-		dirs = append(dirs, skillSearchDir{Source: "project", Path: filepath.Join(root, ".billyharness", "skills")})
-		if includeCompat {
-			dirs = append(dirs, skillSearchDir{Source: "claude_compat", Path: filepath.Join(root, ".claude", "skills")})
-		}
+func (r *Registry) skillsOptions(includeCompat bool) skills.Options {
+	return skills.Options{
+		WorkspaceRoots: r.toolPolicy.WorkspaceRoots,
+		IncludeCompat:  includeCompat,
 	}
-	var out []skillRecord
-	seen := map[string]bool{}
-	for _, dir := range dirs {
-		entries, err := os.ReadDir(dir.Path)
-		if err != nil {
-			continue
-		}
-		sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			name := normalizeSkillName(entry.Name())
-			if name == "" {
-				continue
-			}
-			path := filepath.Join(dir.Path, entry.Name(), "SKILL.md")
-			info, err := os.Stat(path)
-			if err != nil || info.IsDir() {
-				continue
-			}
-			key := dir.Source + "/" + name
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			out = append(out, skillRecord{
-				Name:    name,
-				Source:  dir.Source,
-				Path:    path,
-				Summary: skillSummary(path),
-			})
-		}
-	}
-	return out
-}
-
-type skillSearchDir struct {
-	Source string
-	Path   string
-}
-
-func skillSummary(path string) string {
-	bytes, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(bytes), "\n") {
-		line = strings.TrimSpace(strings.TrimPrefix(line, "#"))
-		if line != "" && !strings.HasPrefix(line, "---") {
-			return truncate(oneLine(line), 200)
-		}
-	}
-	return ""
-}
-
-func normalizeSkillName(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	value = strings.ReplaceAll(value, " ", "-")
-	value = strings.ReplaceAll(value, "_", "-")
-	return strings.Trim(value, ".-")
-}
-
-func normalizeSkillSource(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	value = strings.ReplaceAll(value, "-", "_")
-	switch value {
-	case "compat", "claude", "claude_skills":
-		return "claude_compat"
-	default:
-		return value
-	}
-}
-
-func normalizedSkillReadChars(value int) int {
-	if value <= 0 {
-		return defaultSkillReadChars
-	}
-	if value > maxSkillReadChars {
-		return maxSkillReadChars
-	}
-	return value
-}
-
-func truncateRunesWithSimpleMarker(text string, maxRunes int) (string, bool) {
-	runes := []rune(text)
-	if len(runes) <= maxRunes {
-		return text, false
-	}
-	if maxRunes < 32 {
-		maxRunes = 32
-	}
-	return string(runes[:maxRunes]) + "\n...[truncated]", true
 }
 
 func (r *Registry) addMCPGateway() {

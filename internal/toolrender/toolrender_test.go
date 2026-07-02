@@ -339,6 +339,51 @@ func TestTelegramCallLineCoversCommonToolTargets(t *testing.T) {
 	}
 }
 
+func TestWebBackendResultLabelsAreCompact(t *testing.T) {
+	search := protocol.ToolResult{
+		Name: "web_search",
+		Metadata: map[string]any{
+			"web_backend": "exa",
+			"web_query":   "agent loop benchmark",
+		},
+	}
+	searchSummary, ok := ResultSummaryFor(search, "web_search", StyleTelegram)
+	if !ok || !strings.Contains(searchSummary.Line, `web_search exa "agent loop benchmark"`) {
+		t.Fatalf("search summary = %#v ok=%v", searchSummary, ok)
+	}
+
+	extract := protocol.ToolResult{
+		Name: "web_extract",
+		Metadata: map[string]any{
+			"web_backend": "tavily",
+			"web_url":     "https://example.com/docs/path?secret=hidden",
+		},
+	}
+	extractSummary, ok := ResultSummaryFor(extract, "web_extract", StyleTUI)
+	if !ok || !strings.Contains(extractSummary.Line, "web_extract tavily example.com/docs/path?…") {
+		t.Fatalf("extract summary = %#v ok=%v", extractSummary, ok)
+	}
+	if strings.Contains(extractSummary.Line, "secret=hidden") {
+		t.Fatalf("extract summary leaked URL query: %q", extractSummary.Line)
+	}
+}
+
+func TestVisionImageLabelIsMetadataOnly(t *testing.T) {
+	label := VisionImageLabel(protocol.AttachmentRef{
+		ID:         "att_secret",
+		StorageRef: "private/path/att_secret.png",
+		FileName:   "screen.png",
+		Width:      640,
+		Height:     480,
+	})
+	if label != "vision image screen.png 640x480" {
+		t.Fatalf("label = %q", label)
+	}
+	if strings.Contains(label, "private/path") || strings.Contains(label, "att_secret") {
+		t.Fatalf("label leaked internal ref: %q", label)
+	}
+}
+
 func TestToolRenderFSGrepGlob(t *testing.T) {
 	grep := CallLine(protocol.ToolCall{
 		Name:      "fs_grep",

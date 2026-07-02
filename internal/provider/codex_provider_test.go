@@ -1,17 +1,25 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/attachments"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/secrets"
 	"github.com/billyhargroveofficial/billyharness/internal/testkit"
 )
 
@@ -445,6 +453,89 @@ func TestCodexBodyBuildsResponsesRequest(t *testing.T) {
 	}
 }
 
+func TestCodexBodySerializesImageAttachment(t *testing.T) {
+	store := attachments.NewStore(filepath.Join(t.TempDir(), "attachments"))
+	ref, err := store.StoreImageBytes("screen.png", providerPNGBytes(t, 2, 3), protocol.AttachmentDetailHigh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Codex{AttachmentStore: store}
+	body, err := c.body(Request{
+		Model: "gpt-5.5",
+		Messages: []protocol.Message{{
+			Role:    protocol.RoleUser,
+			Content: "caption",
+			Parts: []protocol.MessagePart{
+				protocol.TextPart("caption"),
+				protocol.AttachmentPart(ref),
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	input := payload["input"].([]any)
+	message := input[0].(map[string]any)
+	content := message["content"].([]any)
+	if len(content) != 3 {
+		t.Fatalf("content = %#v", content)
+	}
+	if content[0].(map[string]any)["text"] != "caption" ||
+		content[1].(map[string]any)["text"] != "[Image #1]" {
+		t.Fatalf("text content = %#v", content)
+	}
+	image := content[2].(map[string]any)
+	if image["type"] != "input_image" ||
+		!strings.HasPrefix(image["image_url"].(string), "data:image/png;base64,") ||
+		image["detail"] != "high" {
+		t.Fatalf("image content = %#v", image)
+	}
+	sessionPayload, err := json.Marshal([]protocol.Message{{Role: protocol.RoleUser, Content: "caption", Parts: []protocol.MessagePart{protocol.TextPart("caption"), protocol.AttachmentPart(ref)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(sessionPayload), "data:image") || strings.Contains(string(sessionPayload), "base64") {
+		t.Fatalf("session payload leaked image bytes: %s", sessionPayload)
+	}
+	redacted := secrets.Redact(string(body))
+	if strings.Contains(redacted, "data:image") || strings.Contains(redacted, "base64,") {
+		t.Fatalf("redaction left image data URL: %s", redacted)
+	}
+}
+
+func TestCodexBodyMissingImageAttachmentReturnsBoundedError(t *testing.T) {
+	store := attachments.NewStore(filepath.Join(t.TempDir(), "attachments"))
+	ref, err := store.StoreImageBytes("screen.png", providerPNGBytes(t, 1, 1), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := store.Resolve(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(resolved.Path); err != nil {
+		t.Fatal(err)
+	}
+	_, err = (&Codex{AttachmentStore: store}).body(Request{
+		Model: "gpt-5.5",
+		Messages: []protocol.Message{{
+			Role:  protocol.RoleUser,
+			Parts: []protocol.MessagePart{protocol.AttachmentPart(ref)},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), ref.ID) {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), "data:image") || strings.Contains(err.Error(), "base64") {
+		t.Fatalf("error leaked image data: %v", err)
+	}
+}
+
 func TestCodexBodyDisablesParallelToolCallsWithoutTools(t *testing.T) {
 	c := &Codex{}
 	body, err := c.body(Request{
@@ -717,4 +808,19 @@ func parseTestResponsesSSE(t *testing.T, sse string) []Event {
 		out = append(out, event)
 	}
 	return out
+}
+
+func providerPNGBytes(t *testing.T, width, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x), G: uint8(y), B: 128, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }

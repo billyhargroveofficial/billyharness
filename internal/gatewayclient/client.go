@@ -454,6 +454,13 @@ func FormatSessionContext(resp gatewayapi.SessionContextResponse) string {
 		fmt.Fprintf(&b, "session: %s\n", resp.ID)
 	}
 	fmt.Fprintf(&b, "messages: %d\n", resp.MessageCount)
+	if resp.AttachmentCount > 0 || resp.ImageSubmissions > 0 {
+		fmt.Fprintf(&b, "attachments: %d", resp.AttachmentCount)
+		if resp.ImageSubmissions > 0 {
+			fmt.Fprintf(&b, " image_submissions=%d", resp.ImageSubmissions)
+		}
+		b.WriteByte('\n')
+	}
 	if resp.ContextWindowTokens > 0 {
 		fmt.Fprintf(&b, "active context: %s / %s (%.1f%%)\n", compactContextNumber(resp.EstimatedTokens), compactContextNumber(resp.ContextWindowTokens), resp.PercentUsed)
 	} else {
@@ -607,7 +614,7 @@ func formatContextUsage(usage gatewayapi.ContextUsage) string {
 			compactContextNumber(usage.LastCacheMissTokens),
 		)
 	}
-	if usage.WebSummaryInputTokens > 0 || usage.WebSummaryOutputTokens > 0 || usage.HelperModelAPITokens > 0 || usage.HelperModelInputTokens > 0 || usage.HelperModelOutputTokens > 0 || usage.HelperModelCacheHit > 0 || usage.HelperModelCacheMiss > 0 {
+	if usage.WebSummaryInputTokens > 0 || usage.WebSummaryOutputTokens > 0 || usage.HelperModelAPITokens > 0 || usage.HelperModelInputTokens > 0 || usage.HelperModelOutputTokens > 0 || usage.HelperModelCacheHit > 0 || usage.HelperModelCacheMiss > 0 || usage.HelperAPICalls > 0 || usage.HelperCostUSD > 0 {
 		fmt.Fprintf(&b, "helper usage: websum=%s→%s helper=%s→%s helper_api=%s",
 			compactContextNumber(usage.WebSummaryInputTokens),
 			compactContextNumber(usage.WebSummaryOutputTokens),
@@ -615,6 +622,12 @@ func formatContextUsage(usage gatewayapi.ContextUsage) string {
 			compactContextNumber(usage.HelperModelOutputTokens),
 			compactContextNumber(usage.HelperModelAPITokens),
 		)
+		if usage.HelperAPICalls > 0 {
+			fmt.Fprintf(&b, " provider_api_calls=%d", usage.HelperAPICalls)
+		}
+		if usage.HelperCostUSD > 0 {
+			fmt.Fprintf(&b, " provider_cost=$%.6f", usage.HelperCostUSD)
+		}
 		if usage.HelperModelCacheHit > 0 || usage.HelperModelCacheMiss > 0 {
 			fmt.Fprintf(&b, " helper_cache_hit=%s helper_cache_miss=%s",
 				compactContextNumber(usage.HelperModelCacheHit),

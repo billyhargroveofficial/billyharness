@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -306,6 +308,126 @@ func TestWebOutputMetadataReportsMissingArtifact(t *testing.T) {
 	}
 	if meta[tooloutput.MetadataOutputRefHashError] == "" {
 		t.Fatalf("metadata should report missing output_ref stat error: %#v", meta)
+	}
+}
+
+func TestWebSearchExaBackendOmitsRawPageText(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	t.Setenv("TEST_EXA_WEB_KEY", "exa-secret-for-test")
+	var sawKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawKey = r.Header.Get("x-api-key")
+		if r.URL.Path != "/search" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"title":"Result","url":"https://example.com/r","text":"RAW_SEARCH_TEXT_SHOULD_NOT_LEAK","score":0.7}],"costDollars":{"total":0.003}}`))
+	}))
+	t.Cleanup(server.Close)
+	cfg := config.Default()
+	cfg.WebSearchBackend = "exa"
+	cfg.WebExaAPIKeyEnv = "TEST_EXA_WEB_KEY"
+	registry := NewRegistry(cfg, WithWebBackendBaseURLs("", server.URL), WithWebBackendHTTPClient(server.Client()))
+
+	result, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "web_search",
+		Arguments: rawArgs(map[string]any{"query": "golang", "limit": 1}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sawKey != "exa-secret-for-test" {
+		t.Fatalf("x-api-key = %q", sawKey)
+	}
+	if !strings.Contains(result.Content, `"backend": "exa"`) || !strings.Contains(result.Content, `"url": "https://example.com/r"`) {
+		t.Fatalf("search content = %s", result.Content)
+	}
+	if strings.Contains(result.Content, "RAW_SEARCH_TEXT_SHOULD_NOT_LEAK") {
+		t.Fatalf("search leaked raw page text: %s", result.Content)
+	}
+	if result.Metadata["web_backend"] != "exa" || result.Metadata["web_query"] != "golang" || result.Metadata["helper_api_calls"] != 1 {
+		t.Fatalf("search metadata = %#v", result.Metadata)
+	}
+}
+
+func TestWebSearchBackendMissingKeyDoesNotLeakSecrets(t *testing.T) {
+	cfg := config.Default()
+	cfg.WebSearchBackend = "tavily"
+	cfg.WebTavilyAPIKeyEnv = "MISSING_TAVILY_KEY_FOR_TEST"
+	t.Setenv("MISSING_TAVILY_KEY_FOR_TEST", "")
+	registry := NewRegistry(cfg)
+
+	_, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "web_search",
+		Arguments: rawArgs(map[string]any{"query": "golang"}),
+	})
+	if err == nil || !strings.Contains(err.Error(), "MISSING_TAVILY_KEY_FOR_TEST") {
+		t.Fatalf("missing key err = %v", err)
+	}
+	if strings.Contains(err.Error(), "TAVILY_API_KEY=") {
+		t.Fatalf("error leaked key-like assignment: %v", err)
+	}
+}
+
+func TestWebExtractTavilyBackendStoresOutputRefAndUsesHermesEnvFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	hermesEnv := filepath.Join(home, "hermes.env")
+	if err := os.WriteFile(hermesEnv, []byte("TAVILY_FROM_HERMES=tvly-secret-for-test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if got := r.Header.Get("Authorization"); got != "Bearer tvly-secret-for-test" {
+			t.Fatalf("authorization = %q", got)
+		}
+		if r.URL.Path != "/extract" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"url":"https://example.com/article","raw_content":"Important provider text. ` + strings.Repeat("More evidence. ", 120) + `TAIL_ONLY_IN_OUTPUT_REF"}]}`))
+	}))
+	t.Cleanup(server.Close)
+	cfg := config.Default()
+	cfg.WebExtractBackend = "tavily"
+	cfg.WebTavilyAPIKeyEnv = "TAVILY_FROM_HERMES"
+	cfg.WebHermesEnvFiles = []string{hermesEnv}
+	registry := NewRegistry(cfg, WithWebBackendBaseURLs(server.URL, ""), WithWebBackendHTTPClient(server.Client()))
+
+	call := protocol.ToolCall{
+		Name:      "web_extract",
+		Arguments: rawArgs(map[string]any{"url": "https://example.com/article", "query": "evidence"}),
+	}
+	result, err := registry.Call(context.Background(), call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OutputRef == "" || result.Metadata["web_backend"] != "tavily" ||
+		result.Metadata["web_url"] != "https://example.com/article" ||
+		result.Metadata["web_backend_key_src"] != "configured_env_file" ||
+		result.Metadata["helper_api_calls"] != 1 {
+		t.Fatalf("extract result metadata=%#v output_ref=%q", result.Metadata, result.OutputRef)
+	}
+	if strings.Contains(result.Content, "TAIL_ONLY_IN_OUTPUT_REF") || strings.Contains(result.Content, "tvly-secret-for-test") {
+		t.Fatalf("compact output leaked raw tail or secret: %s", result.Content)
+	}
+	body, err := os.ReadFile(result.OutputRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "TAIL_ONLY_IN_OUTPUT_REF") {
+		t.Fatalf("output ref missing full provider text")
+	}
+	cached, err := registry.Call(context.Background(), call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("backend requests = %d, want cached second call", requests)
+	}
+	if cached.OutputRef != result.OutputRef || cached.Metadata["web_cache_hit"] != true {
+		t.Fatalf("cached result metadata=%#v output_ref=%q", cached.Metadata, cached.OutputRef)
 	}
 }
 

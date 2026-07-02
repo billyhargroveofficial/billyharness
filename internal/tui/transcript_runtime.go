@@ -786,7 +786,7 @@ func contextToolCategory(b transcript.Cell) (string, bool) {
 		return "web", true
 	case "mcp_list_tools", "mcp_call":
 		return "mcp", true
-	case "skill_list", "skill_read":
+	case "skill_list", "skill_read", "skill_view", "skill_import":
 		return "skills", true
 	case "time_now":
 		return "time", true

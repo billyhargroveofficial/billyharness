@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/agent"
+	"github.com/billyhargroveofficial/billyharness/internal/attachments"
 	"github.com/billyhargroveofficial/billyharness/internal/checkpoint"
 	"github.com/billyhargroveofficial/billyharness/internal/clientux"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
@@ -611,8 +612,12 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if strings.TrimSpace(req.Prompt) == "" {
-		writeError(w, http.StatusBadRequest, "prompt required")
+	if !runRequestHasInput(req) {
+		writeError(w, http.StatusBadRequest, "prompt or attachment required")
+		return
+	}
+	if err := validateAttachmentRefs(req.Attachments); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	streamEvents(w, func(emit func(protocol.Event)) error {
@@ -624,7 +629,10 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		return a.RunWithPromptOptions(r.Context(), req.Prompt, promptSubmitOptionsFromRun(req, "gateway"), emit)
+		messages := agent.InitialMessagesFromSettings(s.instructions)
+		messages = append(messages, protocol.UserMessage(req.Prompt, req.Attachments))
+		_, err = a.RunMessagesWithPromptOptions(r.Context(), messages, promptSubmitOptionsFromRun(req, "gateway"), emit)
+		return err
 	})
 }
 
@@ -639,8 +647,8 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if strings.TrimSpace(req.Prompt) == "" {
-		writeError(w, http.StatusBadRequest, "prompt required")
+	if !runRequestHasInput(req) {
+		writeError(w, http.StatusBadRequest, "prompt or attachment required")
 		return
 	}
 	interruptPolicy, err := normalizeInterruptPolicy(req.InterruptPolicy)
@@ -653,6 +661,11 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 		var conflict *sessionInputConflictError
 		if errors.As(err, &conflict) {
 			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		var validation *sessionInputValidationError
+		if errors.As(err, &validation) {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "input admission failed: "+err.Error())
@@ -679,9 +692,10 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 		if err := s.promoteSessionInput(session, admission.InputID, runSeq); err != nil {
 			return err
 		}
-		err = session.Thread.Run(r.Context(), sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
+		userMessage := protocol.UserMessage(req.Prompt, req.Attachments)
+		err = session.Thread.RunMessage(r.Context(), sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
 			return a.RunMessagesWithPromptOptions(ctx, messages, promptSubmitOptionsFromRun(req, "gateway_session"), emit)
-		}), req.Prompt, func(event protocol.Event) {
+		}), userMessage, func(event protocol.Event) {
 			if event.Type == protocol.EventRunStarted {
 				session.beginRunStatus(statusReq)
 			}
@@ -722,8 +736,8 @@ func (s *Server) handleSessionInput(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if strings.TrimSpace(req.Prompt) == "" {
-		writeError(w, http.StatusBadRequest, "prompt required")
+	if !sessionInputRequestHasInput(req) {
+		writeError(w, http.StatusBadRequest, "prompt or attachment required")
 		return
 	}
 	if _, err := normalizeInterruptPolicy(req.InterruptPolicy); err != nil {
@@ -735,6 +749,11 @@ func (s *Server) handleSessionInput(w http.ResponseWriter, r *http.Request) {
 		var conflict *sessionInputConflictError
 		if errors.As(err, &conflict) {
 			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		var validation *sessionInputValidationError
+		if errors.As(err, &validation) {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "input admission failed: "+err.Error())
@@ -863,10 +882,35 @@ func sessionInputRequestFromRun(req RunRequest) gatewayapi.SessionInputRequest {
 	return gatewayapi.SessionInputRequest{
 		InputID:         req.InputID,
 		Prompt:          req.Prompt,
+		Attachments:     append([]protocol.AttachmentRef(nil), req.Attachments...),
 		InterruptPolicy: req.InterruptPolicy,
 		ClientID:        req.ClientID,
 		Metadata:        req.Metadata,
 	}
+}
+
+func runRequestHasInput(req RunRequest) bool {
+	return strings.TrimSpace(req.Prompt) != "" || len(req.Attachments) > 0
+}
+
+func sessionInputRequestHasInput(req gatewayapi.SessionInputRequest) bool {
+	return strings.TrimSpace(req.Prompt) != "" || len(req.Attachments) > 0
+}
+
+func validateAttachmentRefs(refs []protocol.AttachmentRef) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	store := attachments.DefaultStore()
+	for _, ref := range refs {
+		if ref.Kind != "" && ref.Kind != protocol.AttachmentKindImage {
+			return fmt.Errorf("unsupported attachment kind %q", ref.Kind)
+		}
+		if _, err := store.Resolve(ref); err != nil {
+			return fmt.Errorf("invalid attachment %s: %w", firstNonEmpty(ref.ID, ref.FileName, "unknown"), err)
+		}
+	}
+	return nil
 }
 
 func promptSubmitOptionsFromRun(req RunRequest, fallbackSource string) agent.PromptSubmitOptions {
@@ -1082,34 +1126,38 @@ func sessionResponse(session *Session, includeMessages bool) SessionResponse {
 		messages = session.messages()
 	}
 	return SessionResponse{
-		ID:           session.ID,
-		Created:      session.Created,
-		MessageCount: status.MessageCount,
-		Messages:     messages,
-		Running:      status.Running,
-		Owner:        status.Owner,
-		Status:       status,
+		ID:               session.ID,
+		Created:          session.Created,
+		MessageCount:     status.MessageCount,
+		AttachmentCount:  status.AttachmentCount,
+		ImageSubmissions: status.ImageSubmissions,
+		Messages:         messages,
+		Running:          status.Running,
+		Owner:            status.Owner,
+		Status:           status,
 	}
 }
 
 func sessionSummary(session *Session) SessionSummary {
 	status := session.Status()
 	return SessionSummary{
-		ID:              session.ID,
-		Created:         session.Created,
-		Running:         status.Running,
-		RunSeq:          status.RunSeq,
-		MessageCount:    status.MessageCount,
-		DroppedEvents:   status.DroppedEvents,
-		LastEvent:       status.LastEvent,
-		LastEventAt:     status.LastEventAt,
-		Model:           status.Model,
-		Provider:        status.Provider,
-		Profile:         status.Profile,
-		ReasoningEffort: status.ReasoningEffort,
-		AccessMode:      status.AccessMode,
-		Owner:           status.Owner,
-		LastError:       status.LastError,
+		ID:               session.ID,
+		Created:          session.Created,
+		Running:          status.Running,
+		RunSeq:           status.RunSeq,
+		MessageCount:     status.MessageCount,
+		AttachmentCount:  status.AttachmentCount,
+		ImageSubmissions: status.ImageSubmissions,
+		DroppedEvents:    status.DroppedEvents,
+		LastEvent:        status.LastEvent,
+		LastEventAt:      status.LastEventAt,
+		Model:            status.Model,
+		Provider:         status.Provider,
+		Profile:          status.Profile,
+		ReasoningEffort:  status.ReasoningEffort,
+		AccessMode:       status.AccessMode,
+		Owner:            status.Owner,
+		LastError:        status.LastError,
 	}
 }
 

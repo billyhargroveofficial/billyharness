@@ -102,6 +102,46 @@ func TestTelegramCommandsCommandShowsRegistryAndProfiles(t *testing.T) {
 	}
 }
 
+func TestTelegramModelCommandAndStatusShowInputCapability(t *testing.T) {
+	var sent []string
+	client := newTelegramAPIClient(t, "bottoken", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			text, _ := payload["text"].(string)
+			sent = append(sent, text)
+			writeTelegramResult(w, SentMessage{MessageID: 14 + len(sent), Chat: Chat{ID: 123}})
+		},
+	})
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      t.TempDir() + "/state.json",
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, scriptedHarness{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/model"})
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/model gpt"})
+	if len(sent) != 2 {
+		t.Fatalf("sent = %#v", sent)
+	}
+	if !strings.Contains(sent[0], "deepseek-v4-flash (text-only)") {
+		t.Fatalf("current model reply = %q", sent[0])
+	}
+	if !strings.Contains(sent[1], "gpt-5.5 (vision-capable)") {
+		t.Fatalf("set model reply = %q", sent[1])
+	}
+
+	html := StatusHTML(ChatState{Model: "gpt-5.5"}, Options{Model: "deepseek-v4-flash"})
+	if !strings.Contains(html, "model: <code>gpt-5.5 (vision-capable)</code>") {
+		t.Fatalf("status html = %q", html)
+	}
+}
+
 func TestTelegramContextCommandShowsSessionContext(t *testing.T) {
 	var sentText string
 	var parseMode string

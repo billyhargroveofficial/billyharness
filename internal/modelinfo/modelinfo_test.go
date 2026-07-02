@@ -56,6 +56,9 @@ func TestLookupIncludesCapabilityMetadata(t *testing.T) {
 	flash := Lookup("deepseek-v4-flash")
 	if flash.ContextWindowTokens != 1_000_000 || !flash.ToolCalls || !flash.ParallelToolCalls || !flash.Streaming ||
 		flash.MaxOutputTokens != 8192 ||
+		flash.VisionInput ||
+		!hasString(flash.InputModalities, "text") ||
+		hasString(flash.InputModalities, "image") ||
 		flash.HelperModels.WebSummary != "deepseek-v4-flash" ||
 		flash.HelperModels.Memory != "deepseek-v4-flash" ||
 		flash.CostMode != "metered" ||
@@ -68,12 +71,24 @@ func TestLookupIncludesCapabilityMetadata(t *testing.T) {
 	gpt := Lookup("gpt-5.5")
 	if gpt.ContextWindowTokens != 1_000_000 || !gpt.ToolCalls || !gpt.Streaming ||
 		gpt.MaxOutputTokens != 8192 ||
+		!gpt.VisionInput ||
+		!hasString(gpt.InputModalities, "text") ||
+		!hasString(gpt.InputModalities, "image") ||
 		gpt.HelperModels.WebSummary != "gpt-5.4-mini" ||
 		gpt.HelperModels.Memory != "gpt-5.4-mini" ||
 		gpt.CostMode != "subscription" ||
 		!hasString(gpt.ReasoningModes, "minimal") ||
 		!hasString(gpt.CacheAccountingFields, "cache_miss_tokens") {
 		t.Fatalf("gpt capabilities = %#v", gpt)
+	}
+}
+
+func TestInputCapabilityLabel(t *testing.T) {
+	if got := InputCapabilityLabel("deepseek-v4-flash"); got != "text-only" {
+		t.Fatalf("deepseek label = %q", got)
+	}
+	if got := InputCapabilityLabel("gpt"); got != "vision-capable" {
+		t.Fatalf("gpt label = %q", got)
 	}
 }
 
@@ -112,6 +127,28 @@ func TestValidateCapabilityPolicyRejectsUnsupportedSettings(t *testing.T) {
 		AllowUnknownModels: true,
 	}); err != nil {
 		t.Fatalf("custom unknown model should be allowed: %v", err)
+	}
+	if err := ValidateCapabilityPolicy(CapabilityPolicyRequest{
+		Provider:           "openai-codex",
+		Model:              "gpt-5.5",
+		RequireVisionInput: true,
+	}); err != nil {
+		t.Fatalf("codex vision should be allowed: %v", err)
+	}
+	if err := ValidateCapabilityPolicy(CapabilityPolicyRequest{
+		Provider:           "deepseek",
+		Model:              "deepseek-v4-flash",
+		RequireVisionInput: true,
+	}); err == nil || !strings.Contains(err.Error(), "image input is required") {
+		t.Fatalf("deepseek vision error = %v", err)
+	}
+	if err := ValidateCapabilityPolicy(CapabilityPolicyRequest{
+		Provider:           "my-openai-compatible",
+		Model:              "unknown-model",
+		RequireVisionInput: true,
+		AllowUnknownModels: true,
+	}); err == nil || !strings.Contains(err.Error(), "image input is required") {
+		t.Fatalf("unknown vision error = %v", err)
 	}
 }
 

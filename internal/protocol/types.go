@@ -22,12 +22,13 @@ const (
 )
 
 type Message struct {
-	Role             Role       `json:"role"`
-	Content          string     `json:"content,omitempty"`
-	Name             string     `json:"name,omitempty"`
-	ToolCallID       string     `json:"tool_call_id,omitempty"`
-	ReasoningContent string     `json:"reasoning_content,omitempty"`
-	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	Role             Role          `json:"role"`
+	Content          string        `json:"content,omitempty"`
+	Parts            []MessagePart `json:"parts,omitempty"`
+	Name             string        `json:"name,omitempty"`
+	ToolCallID       string        `json:"tool_call_id,omitempty"`
+	ReasoningContent string        `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall    `json:"tool_calls,omitempty"`
 }
 
 type ToolCall struct {
@@ -206,6 +207,7 @@ type ProviderHelperUsageEvent struct {
 	CacheMissTokens int64   `json:"cache_miss_tokens,omitempty"`
 	ReasoningTokens int64   `json:"reasoning_tokens,omitempty"`
 	APITokens       int64   `json:"api_tokens,omitempty"`
+	APICalls        int     `json:"api_calls,omitempty"`
 	CostUSD         float64 `json:"cost_usd,omitempty"`
 }
 

@@ -106,9 +106,14 @@ func (m Model) replayGatewayEventsCmd(fallbackCreate bool) tea.Cmd {
 }
 
 func (m Model) gatewayRunRequest(prompt string, metadata ...map[string]string) gatewayapi.RunRequest {
+	return m.gatewayRunRequestWithAttachments(prompt, nil, metadata...)
+}
+
+func (m Model) gatewayRunRequestWithAttachments(prompt string, refs []protocol.AttachmentRef, metadata ...map[string]string) gatewayapi.RunRequest {
 	thinking := m.currentThinking()
 	req := gatewayapi.RunRequest{
 		Prompt:          prompt,
+		Attachments:     cloneAttachmentRefs(refs),
 		ClientID:        "tui",
 		Provider:        m.currentProvider(),
 		Model:           m.currentModel(),
@@ -285,8 +290,8 @@ func formatTurnChangeApply(label string, out gatewayapi.SessionUndoResponse) str
 	return strings.Join(lines, "\n")
 }
 
-func (m Model) runGateway(prompt string, metadata ...map[string]string) {
-	runReq := m.gatewayRunRequest(prompt, metadata...)
+func (m Model) runGateway(prompt string, refs []protocol.AttachmentRef, metadata ...map[string]string) {
+	runReq := m.gatewayRunRequestWithAttachments(prompt, refs, metadata...)
 	client := &gatewayclient.Client{BaseURL: m.gatewayURL, Client: http.DefaultClient}
 	result, err := client.RunSessionResult(context.Background(), m.sessionID, runReq, func(event protocol.Event) {
 		m.events <- streamEventMsg{event: event}

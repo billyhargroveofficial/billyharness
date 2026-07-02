@@ -128,6 +128,14 @@ var sharedActionDefinitions = []ActionDefinition{
 		TelegramSummary: "preview latest turn diff",
 	},
 	{
+		ID:        "vision.attach",
+		Title:     "Attach Image",
+		Category:  "message",
+		Slash:     "/attach",
+		SlashArgs: "PATH|remove N|clear",
+		Summary:   "attach or remove image input",
+	},
+	{
 		ID:              "undo.apply",
 		Title:           "Undo Change",
 		Category:        "session",

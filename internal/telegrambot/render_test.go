@@ -408,6 +408,26 @@ func TestRendererFooterShowsHelperUsageTokens(t *testing.T) {
 	}
 }
 
+func TestRendererFooterShowsWebBackendHelperUsage(t *testing.T) {
+	r := NewRenderer()
+	r.Apply(protocol.Event{Type: protocol.EventProviderHelperUsage, Data: protocol.ProviderHelperUsageEvent{
+		Kind:     "web_backend",
+		Provider: "exa",
+		APICalls: 1,
+		CostUSD:  0.003,
+	}})
+
+	footer := r.footerLine()
+	for _, want := range []string{"api calls 1", "api cost $0.0030"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("footer missing %q: %q", want, footer)
+		}
+	}
+	if strings.Contains(footer, "helper ") || strings.Contains(footer, "sumapi") {
+		t.Fatalf("backend API usage counted as model helper usage: %q", footer)
+	}
+}
+
 func TestRendererFinalRichMarkdownPreservesRichMarkdown(t *testing.T) {
 	r := NewRenderer()
 	r.Apply(protocol.Event{Type: protocol.EventAssistantDelta, Data: `## Погода

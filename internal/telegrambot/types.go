@@ -8,13 +8,17 @@ type Update struct {
 }
 
 type Message struct {
-	MessageID int      `json:"message_id"`
-	From      *User    `json:"from,omitempty"`
-	Chat      Chat     `json:"chat"`
-	Date      int64    `json:"date,omitempty"`
-	Text      string   `json:"text,omitempty"`
-	ThreadID  int      `json:"message_thread_id,omitempty"`
-	Entities  []Entity `json:"entities,omitempty"`
+	MessageID       int         `json:"message_id"`
+	From            *User       `json:"from,omitempty"`
+	Chat            Chat        `json:"chat"`
+	Date            int64       `json:"date,omitempty"`
+	Text            string      `json:"text,omitempty"`
+	Caption         string      `json:"caption,omitempty"`
+	ThreadID        int         `json:"message_thread_id,omitempty"`
+	Entities        []Entity    `json:"entities,omitempty"`
+	CaptionEntities []Entity    `json:"caption_entities,omitempty"`
+	Photo           []PhotoSize `json:"photo,omitempty"`
+	Document        *Document   `json:"document,omitempty"`
 }
 
 type User struct {
@@ -35,6 +39,29 @@ type Entity struct {
 	Type   string `json:"type"`
 	Offset int    `json:"offset"`
 	Length int    `json:"length"`
+}
+
+type PhotoSize struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id,omitempty"`
+	Width        int    `json:"width,omitempty"`
+	Height       int    `json:"height,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
+}
+
+type Document struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id,omitempty"`
+	FileName     string `json:"file_name,omitempty"`
+	MIMEType     string `json:"mime_type,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
+}
+
+type TelegramFile struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
+	FilePath     string `json:"file_path,omitempty"`
 }
 
 type SentMessage struct {

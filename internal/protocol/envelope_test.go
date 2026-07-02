@@ -227,7 +227,7 @@ func TestEventEnricherExtractsUserInputIDs(t *testing.T) {
 		Questions: []UserInputQuestion{{
 			ID:       "q1",
 			Question: "Continue?",
-			Options: []UserInputOption{{ID: "yes", Label: "Yes", Description: "Continue"}},
+			Options:  []UserInputOption{{ID: "yes", Label: "Yes", Description: "Continue"}},
 		}},
 	}
 	event := EnrichEvent(Event{

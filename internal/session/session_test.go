@@ -34,6 +34,50 @@ func TestRunPreservesHistoryAcrossPrompts(t *testing.T) {
 	}
 }
 
+func TestRunInputAppendsAttachmentParts(t *testing.T) {
+	s := New([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	ref := protocol.AttachmentRef{
+		ID:         "att_test",
+		Kind:       protocol.AttachmentKindImage,
+		StorageRef: "att_test.png",
+		FileName:   "screen.png",
+		SHA256:     "abc123",
+	}
+	var captured []protocol.Message
+	runner := RunnerFunc(func(_ context.Context, messages []protocol.Message, _ func(protocol.Event)) ([]protocol.Message, error) {
+		captured = messages
+		return append(messages, protocol.Message{Role: protocol.RoleAssistant, Content: "ok"}), nil
+	})
+
+	if err := s.RunInput(context.Background(), runner, "look", []protocol.AttachmentRef{ref}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(captured) != 2 {
+		t.Fatalf("captured messages = %#v", captured)
+	}
+	user := captured[1]
+	if user.Content != "look" || user.AttachmentCount() != 1 || len(user.Parts) != 2 ||
+		user.Parts[0].Text != "look" || user.Parts[1].Attachment == nil || user.Parts[1].Attachment.ID != "att_test" {
+		t.Fatalf("user message = %#v", user)
+	}
+	ref.ID = "mutated"
+	if got := s.Messages()[1].Parts[1].Attachment.ID; got != "att_test" {
+		t.Fatalf("stored attachment aliased caller ref: %q", got)
+	}
+}
+
+func TestRunInputTextOnlyPreservesLegacyMessageShape(t *testing.T) {
+	s := New(nil)
+	if err := s.RunInput(context.Background(), RunnerFunc(func(_ context.Context, messages []protocol.Message, _ func(protocol.Event)) ([]protocol.Message, error) {
+		if len(messages) != 1 || messages[0].Content != "hello" || len(messages[0].Parts) != 0 {
+			t.Fatalf("text-only message = %#v", messages)
+		}
+		return messages, nil
+	}), "hello", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunReturnsBusyForConcurrentRun(t *testing.T) {
 	s := New([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
 	if s.InputPolicy() != InputPolicyRejectWhileActive {

@@ -21,22 +21,23 @@ type telegramAdmissionStore struct {
 }
 
 type telegramAdmissionRecord struct {
-	SchemaVersion int       `json:"schema_version"`
-	Seq           int64     `json:"seq"`
-	Timestamp     time.Time `json:"ts"`
-	Kind          string    `json:"kind"`
-	UpdateID      int       `json:"update_id"`
-	MessageID     int       `json:"message_id,omitempty"`
-	ChatID        int64     `json:"chat_id,omitempty"`
-	ThreadID      int       `json:"thread_id,omitempty"`
-	UserID        int64     `json:"user_id,omitempty"`
-	Key           string    `json:"key,omitempty"`
-	Reason        string    `json:"reason,omitempty"`
-	SessionID     string    `json:"session_id,omitempty"`
-	InputID       string    `json:"input_id,omitempty"`
-	PromptSHA256  string    `json:"prompt_sha256,omitempty"`
-	GatewayState  string    `json:"gateway_state,omitempty"`
-	Duplicate     bool      `json:"duplicate,omitempty"`
+	SchemaVersion   int       `json:"schema_version"`
+	Seq             int64     `json:"seq"`
+	Timestamp       time.Time `json:"ts"`
+	Kind            string    `json:"kind"`
+	UpdateID        int       `json:"update_id"`
+	MessageID       int       `json:"message_id,omitempty"`
+	ChatID          int64     `json:"chat_id,omitempty"`
+	ThreadID        int       `json:"thread_id,omitempty"`
+	UserID          int64     `json:"user_id,omitempty"`
+	Key             string    `json:"key,omitempty"`
+	Reason          string    `json:"reason,omitempty"`
+	SessionID       string    `json:"session_id,omitempty"`
+	InputID         string    `json:"input_id,omitempty"`
+	PromptSHA256    string    `json:"prompt_sha256,omitempty"`
+	AttachmentCount int       `json:"attachment_count,omitempty"`
+	GatewayState    string    `json:"gateway_state,omitempty"`
+	Duplicate       bool      `json:"duplicate,omitempty"`
 }
 
 func newTelegramAdmissionStore(statePath string) telegramAdmissionStore {
@@ -69,30 +70,31 @@ func (s *telegramAdmissionStore) RecordIgnored(update Update, reason string) err
 		record.ThreadID = update.Message.ThreadID
 		record.UserID = messageUserID(*update.Message)
 		record.Key = messageChatKey(*update.Message)
-		record.PromptSHA256 = telegramPromptHash(update.Message.Text)
+		record.PromptSHA256 = telegramPromptHash(telegramMessagePrompt(*update.Message))
 	}
 	return s.append(record)
 }
 
-func (s *telegramAdmissionStore) RecordAdmitted(updateID int, msg Message, sessionID string, resp gatewayapi.SessionInputResponse) error {
+func (s *telegramAdmissionStore) RecordAdmitted(updateID int, msg Message, sessionID string, resp gatewayapi.SessionInputResponse, prompt string, attachmentCount int) error {
 	if s == nil || strings.TrimSpace(s.path) == "" {
 		return nil
 	}
 	record := telegramAdmissionRecord{
-		SchemaVersion: telegramAdmissionSchemaVersion,
-		Timestamp:     time.Now().UTC(),
-		Kind:          "admitted",
-		UpdateID:      updateID,
-		MessageID:     msg.MessageID,
-		ChatID:        msg.Chat.ID,
-		ThreadID:      msg.ThreadID,
-		UserID:        messageUserID(msg),
-		Key:           messageChatKey(msg),
-		SessionID:     sessionID,
-		InputID:       resp.InputID,
-		PromptSHA256:  telegramPromptHash(msg.Text),
-		GatewayState:  resp.State,
-		Duplicate:     resp.Duplicate,
+		SchemaVersion:   telegramAdmissionSchemaVersion,
+		Timestamp:       time.Now().UTC(),
+		Kind:            "admitted",
+		UpdateID:        updateID,
+		MessageID:       msg.MessageID,
+		ChatID:          msg.Chat.ID,
+		ThreadID:        msg.ThreadID,
+		UserID:          messageUserID(msg),
+		Key:             messageChatKey(msg),
+		SessionID:       sessionID,
+		InputID:         resp.InputID,
+		PromptSHA256:    telegramPromptHash(prompt),
+		AttachmentCount: attachmentCount,
+		GatewayState:    resp.State,
+		Duplicate:       resp.Duplicate,
 	}
 	return s.append(record)
 }

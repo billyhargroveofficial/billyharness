@@ -2,6 +2,7 @@ package telegrambot
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 	"time"
@@ -32,12 +33,12 @@ func (b *Bot) Run(ctx context.Context) error {
 }
 
 func (b *Bot) handlePolledUpdate(ctx context.Context, update Update) {
-	if update.Message == nil || strings.TrimSpace(update.Message.Text) == "" {
+	if update.Message == nil || !telegramMessageProcessable(*update.Message) {
 		b.ackIgnoredUpdate(update, "empty_message")
 		return
 	}
 	msg := *update.Message
-	text := strings.TrimSpace(msg.Text)
+	text := telegramMessagePrompt(msg)
 	if !b.allowed(msg) {
 		b.handleMessage(ctx, msg)
 		b.ackIgnoredUpdate(update, "not_allowlisted")
@@ -48,15 +49,22 @@ func (b *Bot) handlePolledUpdate(ctx context.Context, update Update) {
 		b.ackIgnoredUpdate(update, "command_handled")
 		return
 	}
-	answered, answerErr := b.answerPendingUserInput(ctx, msg, update.UpdateID)
-	if answered {
-		if answerErr == nil {
-			b.ackOffset(update.UpdateID)
+	if !telegramMessageHasMedia(msg) {
+		answered, answerErr := b.answerPendingUserInput(ctx, msg, update.UpdateID)
+		if answered {
+			if answerErr == nil {
+				b.ackOffset(update.UpdateID)
+			}
+			return
 		}
-		return
 	}
 	admission, err := b.admitTelegramPromptUpdate(ctx, update)
 	if err != nil {
+		var reject *telegramDurableInputError
+		if errors.As(err, &reject) {
+			b.rejectPolledUpdate(ctx, update, reject)
+			return
+		}
 		log.Printf("telegram prompt admission failed update=%d chat=%d: %v", update.UpdateID, msg.Chat.ID, err)
 		return
 	}
@@ -76,4 +84,21 @@ func (b *Bot) ackIgnoredUpdate(update Update, reason string) {
 		return
 	}
 	b.ackOffset(update.UpdateID)
+}
+
+func (b *Bot) rejectPolledUpdate(ctx context.Context, update Update, reject *telegramDurableInputError) {
+	if update.Message == nil || reject == nil {
+		return
+	}
+	if strings.TrimSpace(reject.UserMessage) != "" {
+		if err := b.sendPlain(ctx, *update.Message, reject.UserMessage); err != nil {
+			log.Printf("telegram rejected-update notice failed update=%d reason=%s: %v", update.UpdateID, reject.Reason, err)
+			return
+		}
+	}
+	reason := reject.Reason
+	if strings.TrimSpace(reason) == "" {
+		reason = "rejected"
+	}
+	b.ackIgnoredUpdate(update, reason)
 }

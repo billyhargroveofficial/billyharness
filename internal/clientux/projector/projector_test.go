@@ -195,6 +195,23 @@ func TestProjectorTracksHelperUsageWithoutDoubleCountingToolMetadata(t *testing.
 	}
 }
 
+func TestProjectorTracksWebBackendHelperUsageSeparately(t *testing.T) {
+	p := New()
+	snap := p.Apply(protocol.Event{Seq: 1, Type: protocol.EventProviderHelperUsage, Data: protocol.ProviderHelperUsageEvent{
+		Kind:     "web_backend",
+		Provider: "exa",
+		CallID:   "call-search",
+		APICalls: 1,
+		CostUSD:  0.003,
+	}})
+	if snap.HelperModelCalls != 0 || snap.HelperModelAPITokens != 0 || snap.ToolSummaryAPITokens != 0 {
+		t.Fatalf("backend usage counted as model usage = %#v", snap)
+	}
+	if snap.HelperAPICalls != 1 || snap.HelperCostUSD != 0.003 {
+		t.Fatalf("backend helper usage = %#v", snap)
+	}
+}
+
 func TestProjectorReplaysTodoPlanState(t *testing.T) {
 	p := New()
 	state := protocol.TodoState{Todos: []protocol.TodoItem{

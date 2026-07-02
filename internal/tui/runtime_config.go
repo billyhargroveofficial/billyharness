@@ -115,8 +115,13 @@ func (m *Model) setTheme(value string) bool {
 func (m *Model) cycleModel() {
 	m.modelIndex = (m.modelIndex + 1) % len(m.models)
 	m.refreshConfigProjections()
-	m.status = "model " + m.currentModel()
+	m.status = m.modelStatusText()
 	_ = m.saveSettings()
+}
+
+func (m Model) modelStatusText() string {
+	model := m.currentModel()
+	return "model " + model + " (" + modelinfo.InputCapabilityLabel(model) + ")"
 }
 
 func (m *Model) setModel(value string) bool {
@@ -142,7 +147,7 @@ func (m *Model) setModel(value string) bool {
 		}
 	}
 	m.refreshConfigProjections()
-	m.status = "model " + m.currentModel()
+	m.status = m.modelStatusText()
 	_ = m.saveSettings()
 	return true
 }

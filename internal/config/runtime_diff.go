@@ -150,6 +150,11 @@ func runtimeDiffConfigFromSettings(base Config, settings RuntimeDiffSettings) Co
 	cfg.WebCacheEnabled = settings.ToolPolicy.WebCacheEnabled
 	cfg.WebCacheTTL = settings.ToolPolicy.WebCacheTTL
 	cfg.WebCacheMaxBytes = settings.ToolPolicy.WebCacheMaxBytes
+	cfg.WebSearchBackend = settings.ToolPolicy.WebSearchBackend
+	cfg.WebExtractBackend = settings.ToolPolicy.WebExtractBackend
+	cfg.WebTavilyAPIKeyEnv = settings.ToolPolicy.WebTavilyAPIKeyEnv
+	cfg.WebExaAPIKeyEnv = settings.ToolPolicy.WebExaAPIKeyEnv
+	cfg.WebHermesEnvFiles = cloneStrings(settings.ToolPolicy.WebHermesEnvFiles)
 	cfg.RequestTimeout = settings.Runtime.RequestTimeout
 	cfg.StreamIdleTimeout = settings.Runtime.StreamIdleTimeout
 	cfg.WorkspaceRoots = cloneStrings(settings.ToolPolicy.WorkspaceRoots)

@@ -90,6 +90,7 @@ type Model struct {
 	sessionID           string
 	lastGatewayEventSeq int64
 	messages            []protocol.Message
+	attachments         []protocol.AttachmentRef
 	version             string
 
 	models         []string
@@ -739,6 +740,7 @@ func (m Model) View() tea.View {
 	ta := m.textarea
 	ta.SetStyles(styles.textarea)
 	input := styles.input.Width(m.inputContentWidth(styles)).Render(ta.View())
+	attachments := m.attachmentChipsView()
 	popup := m.inputPopupView()
 	runStatus := m.runStatusView()
 	status := styles.status.Width(m.statusContentWidth(styles)).Render(m.inlineStatusView())
@@ -748,6 +750,9 @@ func (m Model) View() tea.View {
 	}
 	if runStatus != "" {
 		parts = append(parts, runStatus)
+	}
+	if attachments != "" {
+		parts = append(parts, attachments)
 	}
 	parts = append(parts, input, status)
 	v := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, parts...))
@@ -780,9 +785,10 @@ func (m *Model) resize(gotoBottom bool) {
 	ta.SetStyles(styles.textarea)
 	inputH := lipgloss.Height(styles.input.Width(inputContentW).Render(ta.View()))
 	runStatusH := lipgloss.Height(m.runStatusView())
+	attachmentsH := lipgloss.Height(m.attachmentChipsView())
 	statusH := lipgloss.Height(styles.status.Width(m.statusContentWidth(styles)).Render(m.inlineStatusView()))
 	popupH := m.inputPopupHeight()
-	vh := max(4, m.height-inputH-runStatusH-statusH-popupH)
+	vh := max(4, m.height-inputH-runStatusH-attachmentsH-statusH-popupH)
 	m.viewport.SetHeight(vh)
 	if needsTranscriptReflow {
 		m.reflow(gotoBottom)
@@ -886,13 +892,17 @@ func (m *Model) send() (tea.Model, tea.Cmd) {
 		m.reflow(m.followOutput)
 		return *m, m.authSaveCmd(provider, prompt)
 	}
-	if prompt == "" {
+	if prompt == "" && len(m.attachments) == 0 {
 		m.status = "empty prompt"
 		m.reflow(m.followOutput)
 		return *m, nil
 	}
 	if m.pendingUserInput != nil {
 		return m.submitUserInputAnswer(prompt)
+	}
+	if len(m.attachments) == 0 && m.attachPastedImagePath(prompt) {
+		m.reflow(m.followOutput)
+		return *m, nil
 	}
 	if strings.HasPrefix(prompt, "/") {
 		if command, prefix, ok := m.slashArgMode(); ok {
@@ -931,6 +941,12 @@ func (m *Model) submitPrompt(prompt string) (tea.Model, tea.Cmd) {
 		m.promptCommandMeta = nil
 		return *m, nil
 	}
+	if len(m.attachments) > 0 && !m.attachmentsSupported() {
+		m.status = "image input unsupported by " + m.currentModel()
+		m.reflow(m.followOutput)
+		m.promptCommandMeta = nil
+		return *m, nil
+	}
 	if m.gatewayURL != "" && m.sessionID == "" {
 		m.status = "gateway session not ready"
 		m.reflow(m.followOutput)
@@ -938,10 +954,12 @@ func (m *Model) submitPrompt(prompt string) (tea.Model, tea.Cmd) {
 		return *m, nil
 	}
 	promptMetadata := copyPromptMetadata(m.promptCommandMeta)
+	pendingAttachments := cloneAttachmentRefs(m.attachments)
 	m.promptCommandMeta = nil
 	m.textarea.SetValue("")
 	m.textarea.SetHeight(1)
-	m.addBlock("user", "USER", prompt)
+	m.attachments = nil
+	m.addBlock("user", "USER", promptWithAttachmentChips(prompt, pendingAttachments))
 	m.busy = true
 	m.err = ""
 	m.status = "running"
@@ -952,9 +970,9 @@ func (m *Model) submitPrompt(prompt string) (tea.Model, tea.Cmd) {
 	}
 	_ = m.saveCurrentSession()
 	if m.gatewayURL != "" {
-		go m.runGateway(prompt, promptMetadata)
+		go m.runGateway(prompt, pendingAttachments, promptMetadata)
 	} else {
-		go m.runLocal(prompt, promptMetadata)
+		go m.runLocal(prompt, pendingAttachments, promptMetadata)
 	}
 	m.reflow(true)
 	return *m, tea.Batch(m.waitEventCmd(), m.tickCmd())
@@ -993,8 +1011,8 @@ func (m Model) eventBatchCmd() tea.Cmd {
 	})
 }
 
-func (m Model) runLocal(prompt string, metadata map[string]string) {
-	next, err := tuiruntime.RunLocal(context.Background(), m.runtimeClientSettings(), m.messages, prompt, metadata, func(event protocol.Event) {
+func (m Model) runLocal(prompt string, refs []protocol.AttachmentRef, metadata map[string]string) {
+	next, err := tuiruntime.RunLocal(context.Background(), m.runtimeClientSettings(), m.messages, prompt, refs, metadata, func(event protocol.Event) {
 		m.events <- streamEventMsg{event: event}
 	})
 	m.events <- runDoneMsg{messages: next, err: err}

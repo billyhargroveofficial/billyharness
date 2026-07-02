@@ -252,13 +252,13 @@ func (b *Bot) handleModelCommand(ctx context.Context, msg Message, scope ChatSco
 	key := scope.Key()
 	state := b.chatStateWithLegacy(key, scope.LegacyKey())
 	if arg == "" {
-		_ = b.sendPlain(ctx, msg, "Current model: "+fallback(state.Model, b.opts.Model))
+		_ = b.sendPlain(ctx, msg, "Current model: "+modelWithCapability(fallback(state.Model, b.opts.Model)))
 		return
 	}
 	state.Model = modelAlias(arg)
 	state.UpdatedAt = time.Now().UTC()
 	b.setChatState(key, state)
-	_ = b.sendPlain(ctx, msg, "Model: "+state.Model)
+	_ = b.sendPlain(ctx, msg, "Model: "+modelWithCapability(state.Model))
 }
 
 func (b *Bot) handleProfileCommand(ctx context.Context, msg Message, scope ChatScope, arg string) {

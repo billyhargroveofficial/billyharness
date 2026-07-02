@@ -800,12 +800,13 @@ func TestSkillsListAndReadAreOnDemandBoundedAndCompatOptional(t *testing.T) {
 	t.Setenv("BILLYHARNESS_HOME", home)
 	writeSkill(t, filepath.Join(home, "skills", "teacher", "SKILL.md"), "# Teacher\nHome skill body")
 	writeSkill(t, filepath.Join(project, ".billyharness", "skills", "review", "SKILL.md"), "# Review\nProject skill body with more text")
+	writeSkill(t, filepath.Join(project, ".billyharness", "skills", "review", "references", "guide.md"), strings.Repeat("guide", 20))
 	writeSkill(t, filepath.Join(project, ".claude", "skills", "legacy", "SKILL.md"), "# Legacy\nClaude compat body")
 
 	cfg := config.Default()
 	cfg.WorkspaceRoots = []string{project}
 	registry := NewRegistry(cfg)
-	if !hasSpec(registry.Specs(), "skill_list") || !hasSpec(registry.Specs(), "skill_read") {
+	if !hasSpec(registry.Specs(), "skill_list") || !hasSpec(registry.Specs(), "skill_read") || !hasSpec(registry.Specs(), "skill_view") {
 		t.Fatalf("skill tools missing from specs: %#v", registry.Specs())
 	}
 
@@ -864,6 +865,41 @@ func TestSkillsListAndReadAreOnDemandBoundedAndCompatOptional(t *testing.T) {
 	}
 	if !strings.Contains(legacy.Content, "Claude compat body") {
 		t.Fatalf("legacy skill read = %s", legacy.Content)
+	}
+
+	view, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "skill_view",
+		Arguments: rawArgs(map[string]any{
+			"name":      "review",
+			"source":    "project",
+			"file_path": "references/guide.md",
+			"max_chars": 12,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.Truncated || view.Metadata["file_path"] != "references/guide.md" || !strings.Contains(view.Content, `...[truncated]`) {
+		t.Fatalf("bounded skill_view support file=%#v content=\n%s", view, view.Content)
+	}
+
+	imported, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "skill_import",
+		Arguments: rawArgs(map[string]any{
+			"name":   "legacy",
+			"source": "claude_compat",
+			"force":  true,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(imported.Content, `"source": "claude_compat"`) ||
+		!strings.Contains(imported.Content, `"destination":`) {
+		t.Fatalf("skill_import content=\n%s", imported.Content)
+	}
+	if _, err := os.Stat(filepath.Join(home, "skills", "legacy", "billyharness.skill.json")); err != nil {
+		t.Fatalf("import metadata missing: %v", err)
 	}
 }
 

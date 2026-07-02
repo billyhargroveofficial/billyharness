@@ -157,6 +157,20 @@ func actionRegistry() []actionSpec {
 			},
 		},
 		{
+			id:        "vision.attach",
+			title:     "Attach Image",
+			category:  "message",
+			slash:     "/attach",
+			slashArgs: "PATH|remove N|clear",
+			summary:   "attach or remove image input",
+			run: func(m *Model, arg string) (bool, tea.Cmd) {
+				if err := m.applyAttachCommand(arg); err != nil {
+					m.status = err.Error()
+				}
+				return true, nil
+			},
+		},
+		{
 			id:        "undo.apply",
 			title:     "Undo Change",
 			category:  "session",

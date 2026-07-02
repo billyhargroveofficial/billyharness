@@ -204,7 +204,11 @@ func (m *Model) handleSlashCommand(prompt string) (bool, tea.Cmd) {
 	}
 	action, ok := actionForSlash(command)
 	if ok && m.actionEnabled(action) && action.run != nil {
-		return action.run(m, strings.ToLower(rawArg))
+		arg := strings.ToLower(rawArg)
+		if action.id == "vision.attach" {
+			arg = rawArg
+		}
+		return action.run(m, arg)
 	}
 	if custom, ok := m.promptCommand(command); ok {
 		return m.runPromptCommand(custom, rawArg)

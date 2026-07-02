@@ -42,6 +42,15 @@ type RuntimeToolSnapshot struct {
 	WebCacheEnabled               bool   `json:"web_cache_enabled"`
 	WebCacheTTLMS                 int64  `json:"web_cache_ttl_ms"`
 	WebCacheMaxBytes              int64  `json:"web_cache_max_bytes"`
+	WebSearchBackend              string `json:"web_search_backend"`
+	WebExtractBackend             string `json:"web_extract_backend"`
+	WebTavilyAPIKeyEnv            string `json:"web_tavily_api_key_env"`
+	WebTavilyAPIKeyPresent        bool   `json:"web_tavily_api_key_present"`
+	WebTavilyAPIKeySource         string `json:"web_tavily_api_key_source,omitempty"`
+	WebExaAPIKeyEnv               string `json:"web_exa_api_key_env"`
+	WebExaAPIKeyPresent           bool   `json:"web_exa_api_key_present"`
+	WebExaAPIKeySource            string `json:"web_exa_api_key_source,omitempty"`
+	WebHermesEnvFileCount         int    `json:"web_hermes_env_file_count"`
 	MaxToolRounds                 int    `json:"max_tool_rounds"`
 	MaxParallelTools              int    `json:"max_parallel_tools"`
 	GatewayAddr                   string `json:"gateway_addr"`
@@ -116,6 +125,8 @@ func (c Config) RuntimeToolSnapshot() RuntimeToolSnapshot {
 	tools := c.ToolPolicySettings()
 	diagnostics := c.DiagnosticsSettings()
 	mcp := c.MCPSettings()
+	_, tavilySource, tavilyOK := LookupEnvDotenvOrFiles(tools.WebTavilyAPIKeyEnv, tools.WebHermesEnvFiles)
+	_, exaSource, exaOK := LookupEnvDotenvOrFiles(tools.WebExaAPIKeyEnv, tools.WebHermesEnvFiles)
 	return RuntimeToolSnapshot{
 		ContextWindowTokens:           limits.ContextWindowTokens,
 		ContextCompactTokens:          limits.ContextCompactTokens,
@@ -128,6 +139,15 @@ func (c Config) RuntimeToolSnapshot() RuntimeToolSnapshot {
 		WebCacheEnabled:               tools.WebCacheEnabled,
 		WebCacheTTLMS:                 tools.WebCacheTTL.Milliseconds(),
 		WebCacheMaxBytes:              tools.WebCacheMaxBytes,
+		WebSearchBackend:              tools.WebSearchBackend,
+		WebExtractBackend:             tools.WebExtractBackend,
+		WebTavilyAPIKeyEnv:            tools.WebTavilyAPIKeyEnv,
+		WebTavilyAPIKeyPresent:        tavilyOK,
+		WebTavilyAPIKeySource:         tavilySource,
+		WebExaAPIKeyEnv:               tools.WebExaAPIKeyEnv,
+		WebExaAPIKeyPresent:           exaOK,
+		WebExaAPIKeySource:            exaSource,
+		WebHermesEnvFileCount:         len(tools.WebHermesEnvFiles),
 		MaxToolRounds:                 limits.MaxToolRounds,
 		MaxParallelTools:              limits.MaxParallelTools,
 		GatewayAddr:                   c.GatewayAddr,

@@ -39,10 +39,12 @@ func newGatewaySessionWithOwner(id string, created time.Time, messages []protoco
 		events:  newEventHub(),
 	}
 	session.status = SessionStatus{
-		ID:           id,
-		Created:      created,
-		Owner:        session.Owner,
-		MessageCount: len(messages),
+		ID:               id,
+		Created:          created,
+		Owner:            session.Owner,
+		MessageCount:     len(messages),
+		AttachmentCount:  protocol.MessageAttachmentCount(messages),
+		ImageSubmissions: protocol.MessageImageSubmissionCount(messages),
 	}
 	return session
 }
@@ -111,11 +113,13 @@ func (s *Session) ensureRuntime() {
 	}
 	if s.status.ID == "" {
 		s.status = SessionStatus{
-			ID:           s.ID,
-			Created:      s.Created,
-			Owner:        s.Owner,
-			Running:      s.Thread != nil && s.Thread.Running(),
-			MessageCount: len(s.messages()),
+			ID:               s.ID,
+			Created:          s.Created,
+			Owner:            s.Owner,
+			Running:          s.Thread != nil && s.Thread.Running(),
+			MessageCount:     len(s.messages()),
+			AttachmentCount:  protocol.MessageAttachmentCount(s.messages()),
+			ImageSubmissions: protocol.MessageImageSubmissionCount(s.messages()),
 		}
 	}
 	if s.status.Owner == (gatewayapi.SessionOwner{}) {
@@ -140,7 +144,10 @@ func (s *Session) Status() SessionStatus {
 	hub := s.events
 	s.mu.Unlock()
 	status.Running = s.Thread != nil && s.Thread.Running()
-	status.MessageCount = len(s.messages())
+	messages := s.messages()
+	status.MessageCount = len(messages)
+	status.AttachmentCount = protocol.MessageAttachmentCount(messages)
+	status.ImageSubmissions = protocol.MessageImageSubmissionCount(messages)
 	status.DroppedEvents = hub.Dropped()
 	status.Owner = s.Owner
 	return status
@@ -162,7 +169,10 @@ func (s *Session) restoreStatus(status SessionStatus) {
 		status.Owner = s.Owner
 	}
 	status.Running = s.Thread != nil && s.Thread.Running()
-	status.MessageCount = len(s.messages())
+	messages := s.messages()
+	status.MessageCount = len(messages)
+	status.AttachmentCount = protocol.MessageAttachmentCount(messages)
+	status.ImageSubmissions = protocol.MessageImageSubmissionCount(messages)
 	s.status = status
 	s.mu.Unlock()
 }
@@ -230,7 +240,10 @@ func (s *Session) beginRunStatus(req RunRequest) {
 	s.status.Profile = req.Profile
 	s.status.ReasoningEffort = req.ReasoningEffort
 	s.status.AccessMode = config.NormalizeAccessMode(req.AccessMode)
-	s.status.MessageCount = len(s.messages())
+	messages := s.messages()
+	s.status.MessageCount = len(messages)
+	s.status.AttachmentCount = protocol.MessageAttachmentCount(messages)
+	s.status.ImageSubmissions = protocol.MessageImageSubmissionCount(messages)
 	s.status.ModelCalls = 0
 	s.status.ToolCalls = 0
 	s.status.LastError = ""
@@ -292,14 +305,20 @@ func (s *Session) observeRunEvent(event protocol.Event) (protocol.Event, bool) {
 	case protocol.EventRunCompleted:
 		s.status.Running = false
 		s.status.FinishedAt = now
-		s.status.MessageCount = len(s.messages())
+		messages := s.messages()
+		s.status.MessageCount = len(messages)
+		s.status.AttachmentCount = protocol.MessageAttachmentCount(messages)
+		s.status.ImageSubmissions = protocol.MessageImageSubmissionCount(messages)
 		s.status.LastError = ""
 		status := s.status
 		statusEvent = &protocol.Event{Type: protocol.EventSessionStatus, Data: status}
 	case protocol.EventRunFailed:
 		s.status.Running = false
 		s.status.FinishedAt = now
-		s.status.MessageCount = len(s.messages())
+		messages := s.messages()
+		s.status.MessageCount = len(messages)
+		s.status.AttachmentCount = protocol.MessageAttachmentCount(messages)
+		s.status.ImageSubmissions = protocol.MessageImageSubmissionCount(messages)
 		s.status.LastError = fmt.Sprint(event.Data)
 		status := s.status
 		statusEvent = &protocol.Event{Type: protocol.EventSessionStatus, Data: status}

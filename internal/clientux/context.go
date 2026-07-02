@@ -2,6 +2,7 @@ package clientux
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -116,6 +117,8 @@ func BuildContextResponseWithOptions(limits config.RuntimeLimits, id string, mes
 	return gatewayapi.SessionContextResponse{
 		ID:                      id,
 		MessageCount:            len(messages),
+		AttachmentCount:         protocol.MessageAttachmentCount(messages),
+		ImageSubmissions:        protocol.MessageImageSubmissionCount(messages),
 		EstimatedTokens:         estimatedTokens,
 		ContextWindowTokens:     contextWindow,
 		ContextCompactTokens:    compactAt,
@@ -271,13 +274,18 @@ func (m *contextEventMetrics) observeHelperUsage(event protocol.Event) {
 	if api == 0 {
 		api = usage.InputTokens + usage.OutputTokens
 	}
-	m.usage.HelperModelCalls++
-	m.usage.HelperModelInputTokens += usage.InputTokens
-	m.usage.HelperModelOutputTokens += usage.OutputTokens
-	m.usage.HelperModelAPITokens += api
-	m.usage.HelperModelCacheHit += usage.CacheHitTokens
-	m.usage.HelperModelCacheMiss += usage.CacheMissTokens
-	if strings.TrimSpace(usage.Kind) == "web_summary" {
+	kind := strings.TrimSpace(usage.Kind)
+	if kind == "web_summary" || api > 0 || usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.CacheHitTokens > 0 || usage.CacheMissTokens > 0 {
+		m.usage.HelperModelCalls++
+		m.usage.HelperModelInputTokens += usage.InputTokens
+		m.usage.HelperModelOutputTokens += usage.OutputTokens
+		m.usage.HelperModelAPITokens += api
+		m.usage.HelperModelCacheHit += usage.CacheHitTokens
+		m.usage.HelperModelCacheMiss += usage.CacheMissTokens
+	}
+	m.usage.HelperAPICalls += usage.APICalls
+	m.usage.HelperCostUSD += usage.CostUSD
+	if kind == "web_summary" {
 		callID := firstContextString(usage.CallID, event.CallID)
 		if callID != "" {
 			m.helperSeen[callID] = true
@@ -492,6 +500,12 @@ func contextSourceContributions(msg protocol.Message) []contextSourceContributio
 func messagePreviewText(msg protocol.Message) string {
 	if strings.TrimSpace(msg.Content) != "" {
 		return msg.Content
+	}
+	if count := msg.AttachmentCount(); count > 0 {
+		if count == 1 {
+			return "[1 attachment]"
+		}
+		return fmt.Sprintf("[%d attachments]", count)
 	}
 	if len(msg.ToolCalls) == 0 {
 		return ""

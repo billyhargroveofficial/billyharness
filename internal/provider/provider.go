@@ -309,6 +309,18 @@ func (d *DeepSeek) stream(ctx context.Context, req Request, events chan<- Event)
 }
 
 func (d *DeepSeek) body(req Request) ([]byte, error) {
+	if count := protocol.MessageAttachmentCount(req.Messages); count > 0 {
+		model := firstNonEmpty(req.Model, d.Model)
+		err := modelinfo.ValidateCapabilityPolicy(modelinfo.CapabilityPolicyRequest{
+			Provider:           modelinfo.ProviderDeepSeek,
+			Model:              model,
+			RequireVisionInput: true,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("unsupported model %q on provider %q: image input is required for %d attachment(s)", model, modelinfo.ProviderDeepSeek, count)
+	}
 	messages := make([]map[string]any, 0, len(req.Messages))
 	for _, msg := range req.Messages {
 		item := map[string]any{"role": string(msg.Role)}

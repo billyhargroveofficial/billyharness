@@ -15,6 +15,7 @@ var patterns = []*regexp.Regexp{
 	regexp.MustCompile(`\bgh[opsu]_[A-Za-z0-9_]{20,}\b`),
 	regexp.MustCompile(`\by0__[A-Za-z0-9_-]{20,}\b`),
 	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b`),
+	regexp.MustCompile(`data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=_-]+`),
 }
 
 func Redact(input string, secrets ...string) string {

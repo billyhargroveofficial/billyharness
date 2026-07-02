@@ -83,6 +83,14 @@ func (s *Session) InputPolicy() InputPolicy {
 }
 
 func (s *Session) Run(ctx context.Context, runner Runner, prompt string, emit func(protocol.Event)) error {
+	return s.RunMessage(ctx, runner, protocol.Message{Role: protocol.RoleUser, Content: prompt}, emit)
+}
+
+func (s *Session) RunInput(ctx context.Context, runner Runner, prompt string, attachments []protocol.AttachmentRef, emit func(protocol.Event)) error {
+	return s.RunMessage(ctx, runner, protocol.UserMessage(prompt, attachments), emit)
+}
+
+func (s *Session) RunMessage(ctx context.Context, runner Runner, userMessage protocol.Message, emit func(protocol.Event)) error {
 	if runner == nil {
 		return errors.New("session runner is nil")
 	}
@@ -98,7 +106,10 @@ func (s *Session) Run(ctx context.Context, runner Runner, prompt string, emit fu
 		}
 		return ErrBusy
 	}
-	runMessages := append(base, protocol.Message{Role: protocol.RoleUser, Content: prompt})
+	if userMessage.Role == "" {
+		userMessage.Role = protocol.RoleUser
+	}
+	runMessages := append(base, cloneMessages([]protocol.Message{userMessage})[0])
 	next, err := runner.RunMessages(runCtx, runMessages, emit)
 	// Cancellation rollback policy: interrupted runs restore the pre-run
 	// transcript and discard the prompt plus any late runner messages. The event
@@ -241,6 +252,7 @@ func cloneMessages(messages []protocol.Message) []protocol.Message {
 	out := make([]protocol.Message, len(messages))
 	for i, msg := range messages {
 		out[i] = msg
+		out[i].Parts = protocol.CloneMessageParts(msg.Parts)
 		if len(msg.ToolCalls) > 0 {
 			out[i].ToolCalls = make([]protocol.ToolCall, len(msg.ToolCalls))
 			for j, call := range msg.ToolCalls {

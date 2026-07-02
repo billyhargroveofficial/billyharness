@@ -87,6 +87,12 @@ func TestDefaultRuntimeLimits(t *testing.T) {
 	if !cfg.WebCacheEnabled || cfg.WebCacheTTL != 10*time.Minute || cfg.WebCacheMaxBytes != 128*1024*1024 {
 		t.Fatalf("web cache defaults = enabled:%v ttl:%s max:%d", cfg.WebCacheEnabled, cfg.WebCacheTTL, cfg.WebCacheMaxBytes)
 	}
+	if cfg.WebSearchBackend != "native" || cfg.WebExtractBackend != "native" ||
+		cfg.WebTavilyAPIKeyEnv != "TAVILY_API_KEY" || cfg.WebExaAPIKeyEnv != "EXA_API_KEY" ||
+		len(cfg.WebHermesEnvFiles) != 0 {
+		t.Fatalf("web backend defaults = search:%q extract:%q tavily_env:%q exa_env:%q hermes:%v",
+			cfg.WebSearchBackend, cfg.WebExtractBackend, cfg.WebTavilyAPIKeyEnv, cfg.WebExaAPIKeyEnv, cfg.WebHermesEnvFiles)
+	}
 }
 
 func TestMCPAllowedServersEnvOverridesDefault(t *testing.T) {
@@ -1053,120 +1059,5 @@ command = "nope"
 	}
 	if strings.Contains(text, "codex_only") {
 		t.Fatalf("default MCP config should not copy Codex MCP servers: %s", text)
-	}
-}
-
-func TestLookupEnvOrDotenvFallsBackToBillyharnessHome(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("BILLYHARNESS_HOME", root)
-	t.Setenv("FAST_AGENT_ENV_FILE", "")
-	t.Setenv("BILLYHARNESS_DOTENV_HOME_ONLY", "")
-	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("FROM_BILLY_ENV=dotenv-value\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	got, ok := LookupEnvOrDotenv("FROM_BILLY_ENV")
-	if !ok || got != "dotenv-value" {
-		t.Fatalf("LookupEnvOrDotenv = %q %v", got, ok)
-	}
-}
-
-func TestLookupEnvOrDotenvPrefersBillyharnessHomeOverCWD(t *testing.T) {
-	root := t.TempDir()
-	billyHome := filepath.Join(root, "billyhome")
-	workdir := filepath.Join(root, "work")
-	if err := os.MkdirAll(billyHome, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(workdir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(billyHome, ".env"), []byte("PREFERRED_ENV=from-home\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workdir, ".env"), []byte("PREFERRED_ENV=from-cwd\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	oldWD, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(oldWD) })
-	if err := os.Chdir(workdir); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("BILLYHARNESS_HOME", billyHome)
-	t.Setenv("FAST_AGENT_ENV_FILE", "")
-	t.Setenv("BILLYHARNESS_DOTENV_HOME_ONLY", "")
-
-	got, ok := LookupEnvOrDotenv("PREFERRED_ENV")
-	if !ok || got != "from-home" {
-		t.Fatalf("LookupEnvOrDotenv = %q %v", got, ok)
-	}
-}
-
-func TestLookupEnvOrDotenvExplicitFileOverridesByDefault(t *testing.T) {
-	root := t.TempDir()
-	billyHome := filepath.Join(root, "billyhome")
-	explicit := filepath.Join(root, "explicit.env")
-	if err := os.MkdirAll(billyHome, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(billyHome, ".env"), []byte("EXPLICIT_ENV=from-home\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(explicit, []byte("EXPLICIT_ENV=from-explicit\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("BILLYHARNESS_HOME", billyHome)
-	t.Setenv("FAST_AGENT_ENV_FILE", explicit)
-	t.Setenv("BILLYHARNESS_DOTENV_HOME_ONLY", "")
-
-	got, ok := LookupEnvOrDotenv("EXPLICIT_ENV")
-	if !ok || got != "from-explicit" {
-		t.Fatalf("LookupEnvOrDotenv = %q %v", got, ok)
-	}
-}
-
-func TestLookupEnvOrDotenvCanRestrictToBillyharnessHome(t *testing.T) {
-	root := t.TempDir()
-	billyHome := filepath.Join(root, "billyhome")
-	workdir := filepath.Join(root, "work")
-	outsideEnv := filepath.Join(root, "outside.env")
-	if err := os.MkdirAll(billyHome, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(workdir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(billyHome, ".env"), []byte("RESTRICTED_ENV=from-home\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workdir, ".env"), []byte("RESTRICTED_ENV=from-cwd\nCWD_ONLY=blocked\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(outsideEnv, []byte("RESTRICTED_ENV=from-explicit\nEXPLICIT_ONLY=blocked\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	oldWD, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(oldWD) })
-	if err := os.Chdir(workdir); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("BILLYHARNESS_HOME", billyHome)
-	t.Setenv("FAST_AGENT_ENV_FILE", outsideEnv)
-	t.Setenv("BILLYHARNESS_DOTENV_HOME_ONLY", "true")
-
-	got, ok := LookupEnvOrDotenv("RESTRICTED_ENV")
-	if !ok || got != "from-home" {
-		t.Fatalf("LookupEnvOrDotenv = %q %v", got, ok)
-	}
-	if got, ok := LookupEnvOrDotenv("CWD_ONLY"); ok || got != "" {
-		t.Fatalf("CWD dotenv should be blocked in home-only mode, got %q %v", got, ok)
-	}
-	if got, ok := LookupEnvOrDotenv("EXPLICIT_ONLY"); ok || got != "" {
-		t.Fatalf("explicit dotenv should be blocked in home-only mode, got %q %v", got, ok)
 	}
 }

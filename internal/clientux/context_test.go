@@ -61,6 +61,32 @@ func TestContextStatusClassifiesSourcesAndThresholds(t *testing.T) {
 	}
 }
 
+func TestContextStatusCountsAttachmentsWithoutImageBytes(t *testing.T) {
+	cfg := config.Default()
+	resp := BuildContextResponse(cfg.RuntimeLimits(), "session-images", []protocol.Message{
+		protocol.UserMessage("", []protocol.AttachmentRef{{
+			ID:         "att_test",
+			Kind:       protocol.AttachmentKindImage,
+			StorageRef: "att_test.png",
+			FileName:   "screen.png",
+			MIMEType:   "image/png",
+			SizeBytes:  123,
+			Width:      1,
+			Height:     1,
+			SHA256:     "abc123",
+		}}),
+	})
+	if resp.AttachmentCount != 1 || resp.ImageSubmissions != 1 || resp.EstimatedTokens > 8 {
+		t.Fatalf("context response = %#v", resp)
+	}
+	if formatted := gatewayclient.FormatSessionContext(resp); !strings.Contains(formatted, "attachments: 1 image_submissions=1") {
+		t.Fatalf("formatted context missing image metrics: %q", formatted)
+	}
+	if len(resp.TopContributors) != 1 || resp.TopContributors[0].Preview != "[1 attachment]" {
+		t.Fatalf("top contributors = %#v", resp.TopContributors)
+	}
+}
+
 func TestContextReportV2IncludesEventsRuntimePromptAndHelperUsage(t *testing.T) {
 	cfg := config.Default()
 	cfg.ContextWindowTokens = 1000
@@ -105,7 +131,14 @@ func TestContextReportV2IncludesEventsRuntimePromptAndHelperUsage(t *testing.T) 
 				CacheMissTokens: 40,
 				APITokens:       100,
 			}},
-			{Seq: 6, Type: protocol.EventToolCallFinished, CallID: "call-web", Data: protocol.ToolResult{CallID: "call-web", Name: "web_fetch", Metadata: map[string]any{
+			{Seq: 6, Type: protocol.EventProviderHelperUsage, Data: protocol.ProviderHelperUsageEvent{
+				Kind:     "web_backend",
+				Provider: "exa",
+				CallID:   "call-search",
+				APICalls: 1,
+				CostUSD:  0.003,
+			}},
+			{Seq: 7, Type: protocol.EventToolCallFinished, CallID: "call-web", Data: protocol.ToolResult{CallID: "call-web", Name: "web_fetch", Metadata: map[string]any{
 				"tool_summary_input_tokens":          200,
 				"tool_summary_output_tokens":         25,
 				"tool_summary_api_input_tokens":      90,
@@ -115,8 +148,8 @@ func TestContextReportV2IncludesEventsRuntimePromptAndHelperUsage(t *testing.T) 
 				"tool_summary_api_cache_hit_tokens":  50,
 				"tool_summary_api_cache_miss_tokens": 40,
 			}}},
-			{Seq: 7, Type: protocol.EventToolOutputRefCreated},
-			{Seq: 8, Type: protocol.EventContextCompacted, Data: map[string]any{
+			{Seq: 8, Type: protocol.EventToolOutputRefCreated},
+			{Seq: 9, Type: protocol.EventContextCompacted, Data: map[string]any{
 				"compaction_id":           "compact-1",
 				"summary_strategy":        "deterministic",
 				"before_estimated_tokens": 800,
@@ -137,9 +170,11 @@ func TestContextReportV2IncludesEventsRuntimePromptAndHelperUsage(t *testing.T) 
 		t.Fatalf("usage = %#v", resp.Usage)
 	}
 	if resp.Usage.WebSummaryInputTokens != 200 || resp.Usage.WebSummaryOutputTokens != 25 ||
+		resp.Usage.HelperModelCalls != 1 ||
 		resp.Usage.HelperModelInputTokens != 90 || resp.Usage.HelperModelOutputTokens != 10 ||
 		resp.Usage.HelperModelCacheHit != 50 || resp.Usage.HelperModelCacheMiss != 40 ||
-		resp.Usage.HelperModelAPITokens != 100 {
+		resp.Usage.HelperModelAPITokens != 100 ||
+		resp.Usage.HelperAPICalls != 1 || resp.Usage.HelperCostUSD != 0.003 {
 		t.Fatalf("helper usage = %#v", resp.Usage)
 	}
 	if resp.Prompt.InventoryHash != "inventory-sha" || resp.Prompt.SectionCount != 1 ||
@@ -154,7 +189,7 @@ func TestContextReportV2IncludesEventsRuntimePromptAndHelperUsage(t *testing.T) 
 		t.Fatalf("output refs = %#v", resp.OutputRefs)
 	}
 	formatted := gatewayclient.FormatSessionContext(resp)
-	for _, want := range []string{"runtime:", "cache: hit=90", "helper usage: websum=200", "prompt sections:", "prompt cache: status=changed", "last compaction:", "output refs:"} {
+	for _, want := range []string{"runtime:", "cache: hit=90", "helper usage: websum=200", "provider_api_calls=1", "provider_cost=$0.003000", "prompt sections:", "prompt cache: status=changed", "last compaction:", "output refs:"} {
 		if !strings.Contains(formatted, want) {
 			t.Fatalf("formatted v2 context missing %q:\n%s", want, formatted)
 		}

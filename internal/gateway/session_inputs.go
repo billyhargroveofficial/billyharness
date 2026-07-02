@@ -13,6 +13,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/eventlog"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
+	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
 const (
@@ -55,11 +56,29 @@ type sessionInputConflictError struct {
 	inputID string
 }
 
+type sessionInputValidationError struct {
+	err error
+}
+
 func (e *sessionInputConflictError) Error() string {
 	if e == nil {
 		return ""
 	}
 	return fmt.Sprintf("input_id %q already exists with different body", e.inputID)
+}
+
+func (e *sessionInputValidationError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *sessionInputValidationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
 }
 
 func (s *sessionStore) AdmitInput(session *Session, req gatewayapi.SessionInputRequest) (gatewayapi.SessionInputResponse, error) {
@@ -71,10 +90,13 @@ func (s *sessionStore) AdmitInput(session *Session, req gatewayapi.SessionInputR
 	if err != nil {
 		return gatewayapi.SessionInputResponse{}, err
 	}
-	if strings.TrimSpace(req.Prompt) == "" {
-		return gatewayapi.SessionInputResponse{}, fmt.Errorf("prompt required")
+	if !sessionInputRequestHasInput(req) {
+		return gatewayapi.SessionInputResponse{}, &sessionInputValidationError{err: fmt.Errorf("prompt or attachment required")}
 	}
 	req.InputID = inputID
+	if err := validateAttachmentRefs(req.Attachments); err != nil {
+		return gatewayapi.SessionInputResponse{}, &sessionInputValidationError{err: err}
+	}
 	if s == nil || strings.TrimSpace(s.dir) == "" || session == nil {
 		return gatewayapi.SessionInputResponse{InputID: inputID, State: sessionInputAdmitted}, nil
 	}
@@ -340,10 +362,33 @@ func normalizeSessionInputRequest(req gatewayapi.SessionInputRequest) gatewayapi
 	req.InterruptPolicy = strings.ToLower(strings.TrimSpace(req.InterruptPolicy))
 	req.ClientID = strings.TrimSpace(req.ClientID)
 	req.ClientType = strings.TrimSpace(req.ClientType)
+	req.Attachments = normalizeAttachmentRefs(req.Attachments)
 	if len(req.Metadata) == 0 {
 		req.Metadata = nil
 	}
 	return req
+}
+
+func normalizeAttachmentRefs(refs []protocol.AttachmentRef) []protocol.AttachmentRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]protocol.AttachmentRef, 0, len(refs))
+	for _, ref := range refs {
+		ref.ID = strings.TrimSpace(ref.ID)
+		ref.StorageRef = strings.TrimSpace(ref.StorageRef)
+		ref.FileName = strings.TrimSpace(ref.FileName)
+		ref.MIMEType = strings.TrimSpace(ref.MIMEType)
+		ref.SHA256 = strings.TrimSpace(ref.SHA256)
+		if ref.ID == "" && ref.StorageRef == "" && ref.SHA256 == "" {
+			continue
+		}
+		out = append(out, ref)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func hashSessionInputRequest(req gatewayapi.SessionInputRequest) (string, error) {

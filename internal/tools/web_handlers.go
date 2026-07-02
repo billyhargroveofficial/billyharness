@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/webtools"
 )
 
 func (r *Registry) addWebFetch() {
@@ -65,6 +66,16 @@ func (r *Registry) addWebExtract() {
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
 			}
+			if backend := r.webExtractBackend(); backend != webtools.BackendNative {
+				return r.fetchProviderExtractPageResult(ctx, backend, in.URL, webFetchOptions{
+					Query:       in.Query,
+					MaxBytes:    in.MaxBytes,
+					MaxChars:    in.MaxChars,
+					MaxTokens:   in.MaxTokens,
+					IncludeText: in.IncludeText,
+					MaxLinks:    in.MaxLinks,
+				})
+			}
 			return r.fetchCompactPageResult(ctx, "web_extract", in.URL, webFetchOptions{
 				Query:       in.Query,
 				MaxBytes:    in.MaxBytes,
@@ -98,6 +109,21 @@ func (r *Registry) addWebSearch() {
 			}
 			if in.Limit <= 0 || in.Limit > 10 {
 				in.Limit = 5
+			}
+			if backend := r.webSearchBackend(); backend != webtools.BackendNative {
+				results, key, err := r.webBackendSearch(ctx, backend, in.Query, in.Limit)
+				if err != nil {
+					return Result{}, err
+				}
+				out, _ := json.MarshalIndent(results, "", "  ")
+				return Result{Content: string(out), Metadata: map[string]any{
+					"web_backend":         results.Backend,
+					"web_query":           strings.TrimSpace(in.Query),
+					"web_backend_key_env": key.EnvVar,
+					"web_backend_key_src": key.Source,
+					"helper_api_calls":    results.Usage.APICalls,
+					"helper_cost_usd":     results.Usage.CostUSD,
+				}}, nil
 			}
 			results, err := searchDuckDuckGoLite(ctx, in.Query, in.Limit)
 			if err != nil {

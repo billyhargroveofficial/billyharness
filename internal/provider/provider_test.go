@@ -62,6 +62,41 @@ func TestDeepSeekBodyThinkingHigh(t *testing.T) {
 	}
 }
 
+func TestDeepSeekStreamRejectsImageInputBeforeHTTP(t *testing.T) {
+	var called atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called.Add(1)
+	}))
+	t.Cleanup(server.Close)
+	d := &DeepSeek{
+		BaseURL:           server.URL,
+		APIKey:            "secret",
+		RequestTimeout:    time.Second,
+		StreamIdleTimeout: time.Second,
+		Client:            server.Client(),
+	}
+	events, errs := d.Stream(context.Background(), Request{
+		Model: "deepseek-v4-flash",
+		Messages: []protocol.Message{{
+			Role:    protocol.RoleUser,
+			Content: "look",
+			Parts: []protocol.MessagePart{
+				protocol.TextPart("look"),
+				protocol.AttachmentPart(protocol.AttachmentRef{ID: "att_test", Kind: protocol.AttachmentKindImage}),
+			},
+		}},
+	})
+	for range events {
+	}
+	err := <-errs
+	if err == nil || !strings.Contains(err.Error(), "image input is required") {
+		t.Fatalf("err = %v", err)
+	}
+	if called.Load() != 0 {
+		t.Fatalf("DeepSeek HTTP server was called %d time(s)", called.Load())
+	}
+}
+
 func TestIsCodexProviderReroutesOSeriesModels(t *testing.T) {
 	for _, model := range []string{"gpt-5.5", "o1-preview", "o3-mini", "o4-mini"} {
 		cfg := config.Config{Provider: "deepseek", Model: model}

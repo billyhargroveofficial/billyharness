@@ -34,6 +34,14 @@ func (c *Config) ApplyModelProviderDefaults() {
 
 func (c *Config) ApplyWebSummaryDefaults() {
 	c.WebSummaryMode = NormalizeWebSummaryMode(c.WebSummaryMode)
+	c.WebSearchBackend = NormalizeWebBackend(c.WebSearchBackend)
+	c.WebExtractBackend = NormalizeWebBackend(c.WebExtractBackend)
+	if strings.TrimSpace(c.WebTavilyAPIKeyEnv) == "" {
+		c.WebTavilyAPIKeyEnv = "TAVILY_API_KEY"
+	}
+	if strings.TrimSpace(c.WebExaAPIKeyEnv) == "" {
+		c.WebExaAPIKeyEnv = "EXA_API_KEY"
+	}
 	c.WebSummaryModel = modelinfo.NormalizeAlias(c.WebSummaryModel)
 	if c.DisableSpark && modelinfo.IsSparkModel(c.WebSummaryModel) {
 		c.WebSummaryModel = "gpt-5.4-mini"
@@ -74,6 +82,19 @@ func NormalizeWebSummaryMode(value string) string {
 		return "model"
 	default:
 		return "extractive"
+	}
+}
+
+func NormalizeWebBackend(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "exa":
+		return "exa"
+	case "tavily":
+		return "tavily"
+	case "auto":
+		return "auto"
+	default:
+		return "native"
 	}
 }
 
@@ -153,6 +174,10 @@ func builtInConfig() Config {
 		WebCacheEnabled:           true,
 		WebCacheTTL:               10 * time.Minute,
 		WebCacheMaxBytes:          128 * 1024 * 1024,
+		WebSearchBackend:          "native",
+		WebExtractBackend:         "native",
+		WebTavilyAPIKeyEnv:        "TAVILY_API_KEY",
+		WebExaAPIKeyEnv:           "EXA_API_KEY",
 		RequestTimeout:            240 * time.Second,
 		StreamIdleTimeout:         60 * time.Second,
 		WorkspaceRoots:            []string{filepath.Clean(cwd)},

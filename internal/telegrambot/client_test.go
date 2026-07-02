@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,6 +32,48 @@ func TestClientSendMessageUsesThreadAndParseMode(t *testing.T) {
 	}
 	if captured["parse_mode"] != "HTML" || captured["message_thread_id"] != float64(7) {
 		t.Fatalf("captured payload = %#v", captured)
+	}
+}
+
+func TestClientGetFileAndDownloadFile(t *testing.T) {
+	var getFilePayload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.EscapedPath() {
+		case "/botbottoken/getFile":
+			if err := json.NewDecoder(r.Body).Decode(&getFilePayload); err != nil {
+				t.Errorf("decode getFile: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			writeTelegramResult(w, TelegramFile{
+				FileID:       "file-1",
+				FileUniqueID: "unique-1",
+				FileSize:     5,
+				FilePath:     "photos/my file.png",
+			})
+		case "/file/botbottoken/photos/my%20file.png":
+			_, _ = w.Write([]byte("image"))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := NewClient(ClientOptions{BaseURL: server.URL, Token: "bottoken", MinInterval: time.Nanosecond})
+
+	file, err := client.GetFile(context.Background(), "file-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if getFilePayload["file_id"] != "file-1" || file.FilePath != "photos/my file.png" || file.FileUniqueID != "unique-1" {
+		t.Fatalf("getFile payload=%#v result=%#v", getFilePayload, file)
+	}
+	data, err := client.DownloadFile(context.Background(), file.FilePath, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "image" {
+		t.Fatalf("downloaded %q", data)
 	}
 }
 

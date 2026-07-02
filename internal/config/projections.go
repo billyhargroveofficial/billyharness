@@ -72,6 +72,11 @@ type ToolPolicySettings struct {
 	WebCacheEnabled           bool
 	WebCacheTTL               time.Duration
 	WebCacheMaxBytes          int64
+	WebSearchBackend          string
+	WebExtractBackend         string
+	WebTavilyAPIKeyEnv        string
+	WebExaAPIKeyEnv           string
+	WebHermesEnvFiles         []string
 }
 
 type DiagnosticsSettings struct {
@@ -195,6 +200,11 @@ func (c Config) ToolPolicySettings() ToolPolicySettings {
 		WebCacheEnabled:           cfg.WebCacheEnabled,
 		WebCacheTTL:               cfg.WebCacheTTL,
 		WebCacheMaxBytes:          cfg.WebCacheMaxBytes,
+		WebSearchBackend:          cfg.WebSearchBackend,
+		WebExtractBackend:         cfg.WebExtractBackend,
+		WebTavilyAPIKeyEnv:        cfg.WebTavilyAPIKeyEnv,
+		WebExaAPIKeyEnv:           cfg.WebExaAPIKeyEnv,
+		WebHermesEnvFiles:         cloneStrings(cfg.WebHermesEnvFiles),
 	}
 }
 

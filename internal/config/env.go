@@ -74,6 +74,31 @@ func LookupEnvOrDotenv(key string) (string, bool) {
 	return value, value != ""
 }
 
+func LookupEnvDotenvOrFiles(key string, extraFiles []string) (string, string, bool) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", "", false
+	}
+	if value, ok := os.LookupEnv(key); ok && strings.TrimSpace(value) != "" {
+		return value, "environment", true
+	}
+	for _, path := range findDotenvFiles() {
+		if value, ok := dotenvValueFromFile(path, key); ok && strings.TrimSpace(value) != "" {
+			return value, ".env", true
+		}
+	}
+	for _, path := range extraFiles {
+		path = filepath.Clean(strings.TrimSpace(path))
+		if path == "." || path == "" {
+			continue
+		}
+		if value, ok := dotenvValueFromFile(path, key); ok && strings.TrimSpace(value) != "" {
+			return value, "configured_env_file", true
+		}
+	}
+	return "", "", false
+}
+
 func dotenvValue(key string) string {
 	for _, path := range findDotenvFiles() {
 		if value, ok := dotenvValueFromFile(path, key); ok {

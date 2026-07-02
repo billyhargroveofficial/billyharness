@@ -447,13 +447,23 @@ func providerHelperUsageFromToolResult(result toolExecutionResult) (protocol.Pro
 	cacheHit := metadataInt64(metadata, "tool_summary_api_cache_hit_tokens")
 	cacheMiss := metadataInt64(metadata, "tool_summary_api_cache_miss_tokens")
 	externalModel := metadataBool(metadata, "tool_summary_external_model_used")
-	if !externalModel && apiTokens <= 0 && cacheHit <= 0 && cacheMiss <= 0 {
+	helperAPICalls := metadataInt64(metadata, "helper_api_calls")
+	helperCost := metadataFloat64(metadata, "helper_cost_usd")
+	if !externalModel && apiTokens <= 0 && cacheHit <= 0 && cacheMiss <= 0 && helperAPICalls <= 0 && helperCost <= 0 {
 		return protocol.ProviderHelperUsageEvent{}, false
 	}
+	kind := "web_summary"
+	provider := metadataString(metadata, "summarizer_provider")
+	model := firstNonEmptyString(metadataString(metadata, "summarizer_model"), metadataString(metadata, "websum_model"))
+	if !externalModel && apiTokens <= 0 && cacheHit <= 0 && cacheMiss <= 0 {
+		kind = "web_backend"
+		provider = metadataString(metadata, "web_backend")
+		model = ""
+	}
 	return protocol.ProviderHelperUsageEvent{
-		Kind:            "web_summary",
-		Provider:        metadataString(metadata, "summarizer_provider"),
-		Model:           firstNonEmptyString(metadataString(metadata, "summarizer_model"), metadataString(metadata, "websum_model")),
+		Kind:            kind,
+		Provider:        provider,
+		Model:           model,
 		RunID:           result.RunID,
 		TurnID:          result.TurnID,
 		StepID:          result.StepID,
@@ -464,7 +474,8 @@ func providerHelperUsageFromToolResult(result toolExecutionResult) (protocol.Pro
 		CacheHitTokens:  cacheHit,
 		CacheMissTokens: cacheMiss,
 		APITokens:       apiTokens,
-		CostUSD:         metadataFloat64(metadata, "tool_summary_estimated_cost_usd"),
+		APICalls:        int(helperAPICalls),
+		CostUSD:         metadataFloat64(metadata, "tool_summary_estimated_cost_usd") + helperCost,
 	}, true
 }
 

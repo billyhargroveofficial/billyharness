@@ -26,7 +26,7 @@ func InitialMessages(settings config.InstructionSettings) []protocol.Message {
 	return agent.InitialMessagesFromSettings(settings)
 }
 
-func RunLocal(ctx context.Context, settings Settings, messages []protocol.Message, prompt string, metadata map[string]string, onEvent func(protocol.Event)) ([]protocol.Message, error) {
+func RunLocal(ctx context.Context, settings Settings, messages []protocol.Message, prompt string, refs []protocol.AttachmentRef, metadata map[string]string, onEvent func(protocol.Event)) ([]protocol.Message, error) {
 	prov, err := provider.NewFromBinding(settings.ProviderBinding)
 	if err != nil {
 		return nil, err
@@ -38,7 +38,7 @@ func RunLocal(ctx context.Context, settings Settings, messages []protocol.Messag
 	defer registry.Close()
 	a := agent.NewFromSettings(agentSettings(settings), prov, registry)
 	msgs := append([]protocol.Message(nil), messages...)
-	msgs = append(msgs, protocol.Message{Role: protocol.RoleUser, Content: prompt})
+	msgs = append(msgs, protocol.UserMessage(prompt, refs))
 	return a.RunMessagesWithPromptOptions(ctx, msgs, agent.PromptSubmitOptions{Source: "tui", Metadata: metadata}, onEvent)
 }
 

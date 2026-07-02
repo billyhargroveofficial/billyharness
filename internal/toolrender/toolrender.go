@@ -45,6 +45,21 @@ func CallName(data any) string {
 	return "call"
 }
 
+func VisionImageLabel(ref protocol.AttachmentRef) string {
+	name := strings.TrimSpace(ref.FileName)
+	if name == "" {
+		name = strings.TrimSpace(ref.ID)
+	}
+	if name == "" {
+		name = "image"
+	}
+	label := "vision image " + CompactText(name, 64)
+	if ref.Width > 0 && ref.Height > 0 {
+		label += fmt.Sprintf(" %dx%d", ref.Width, ref.Height)
+	}
+	return label
+}
+
 func CallArgs(data any) map[string]any {
 	bytes, _ := json.Marshal(data)
 	call, ok := DecodeCall(data)
@@ -133,6 +148,9 @@ func ResultSummaryFor(data any, base string, style Style) (ResultSummary, bool) 
 	if base == "" {
 		base = result.Name
 	}
+	if webBase := webBackendResultBase(result); webBase != "" {
+		base = webBase
+	}
 	summary := ResultSummary{
 		Key:       key,
 		IsError:   result.IsError,
@@ -205,6 +223,37 @@ func ResultSummaryFromCompact(compact protocol.ToolCompact, base string, style S
 		EstimatedTokens: compact.EstimatedTokens,
 		OriginalBytes:   compact.OriginalBytes,
 	}
+}
+
+func webBackendResultBase(result protocol.ToolResult) string {
+	backend := strings.TrimSpace(metadataString(result.Metadata, "web_backend"))
+	if backend == "" || backend == "native" {
+		return ""
+	}
+	switch result.Name {
+	case "web_search":
+		query := compactQuoted(metadataString(result.Metadata, "web_query"), 80)
+		if query == "" {
+			return "web_search " + backend
+		}
+		return "web_search " + backend + " " + query
+	case "web_extract":
+		urlText := CompactURL(metadataString(result.Metadata, "web_url"), 72)
+		if urlText == "-" {
+			return "web_extract " + backend
+		}
+		return "web_extract " + backend + " " + urlText
+	default:
+		return ""
+	}
+}
+
+func compactQuoted(value string, limit int) string {
+	text := CompactArg(value, limit)
+	if text == "-" {
+		return ""
+	}
+	return fmt.Sprintf("%q", text)
 }
 
 func TodoStateFromMetadata(metadata map[string]any) (protocol.TodoState, bool) {
@@ -982,6 +1031,24 @@ func filepathBase(path string) string {
 		return path[idx+1:]
 	}
 	return path
+}
+
+func metadataString(metadata map[string]any, key string) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	value, ok := metadata[key]
+	if !ok || value == nil {
+		return ""
+	}
+	switch value := value.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case fmt.Stringer:
+		return strings.TrimSpace(value.String())
+	default:
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
 }
 
 func metadataInt(metadata map[string]any, key string) int64 {
