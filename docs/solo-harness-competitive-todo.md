@@ -685,7 +685,7 @@ Milestone 4 final verification:
     'Test.*Memory.*|TestMemory.*Auto.*Extract|TestInitialMessagesInjectMemory.*|TestCompactMessagesReportsProtectedPrefixPolicyAndCompactedBudget|TestSnapshotInstructionHashIncludesProtectedUserContext|TestPromptInventoryIsStableAndOmitsArbitraryUserText|TestContextStatusClassifiesSourcesAndThresholds|TestActionRegistryBacksSlashCommandsAndHelp|TestTelegramCommandMetadataDrivesHelpAndBypass|TestCallLineSnapshotsCommonTools|TestConfigInspectJSONDoesNotLeakDotenvSecrets'
     -count=1 ./internal/... ./cmd/fast-agent-harness` passed on pushed
     `HEAD` `e346c6b8d21aa1202e0afe3207cb119711e20bf0`.
-  - commit: pending.
+  - commit: `e346c6b8d21aa1202e0afe3207cb119711e20bf0`.
 
 ## Milestone 5 - Interop Without Platform Bloat (P1)
 
@@ -809,7 +809,7 @@ Milestone 5 final verification:
   - status: completed 2026-07-01.
   - evidence: the exact command above passed on pushed `HEAD`
     `3218d79563b361b6f0eba014640de2d195b009c4`.
-  - commit: pending.
+  - commit: `3218d79563b361b6f0eba014640de2d195b009c4`.
 
 ## Milestone 6 - UX Polish With Hard Boundaries (P1)
 

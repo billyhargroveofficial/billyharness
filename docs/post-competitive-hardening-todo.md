@@ -84,13 +84,23 @@ Goal: make the new active plan and git state clean before touching runtime code.
     `git status --short` was clean.
   - commit: `456d4d46db912297dd50e700d6099be7c82a8c1a`.
 
-- [ ] PH-00.2 Resolve active TODO `commit: pending` leftovers.
+- [x] PH-00.2 Resolve active TODO `commit: pending` leftovers.
   - target files: `docs/solo-harness-competitive-todo.md`.
   - acceptance: final verification blocks for Milestone 4 and Milestone 5 no
     longer say `commit: pending` unless a real missing commit is identified.
   - verification: `rg -n "commit: pending" docs/solo-harness-competitive-todo.md`
     returns no active-roadmap pending entries.
-  - status: open.
+  - status: completed 2026-07-02.
+  - evidence: replaced the Milestone 4 final verification placeholder with the
+    pushed verification `HEAD`
+    `e346c6b8d21aa1202e0afe3207cb119711e20bf0`, and replaced the Milestone 5
+    placeholder with pushed verification `HEAD`
+    `3218d79563b361b6f0eba014640de2d195b009c4`. No real missing commit was
+    identified; both hashes were already recorded in the corresponding
+    verification evidence.
+  - verification evidence: `rg -n "commit: pending"
+    docs/solo-harness-competitive-todo.md` returned no matches.
+  - commit: pending.
 
 - [ ] PH-00.3 Mark old harness-research roadmap as historical if it is no
   longer active.
