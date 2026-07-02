@@ -141,7 +141,7 @@ Goal: make `fast-agent-harness hygiene -strict` pass without changing behavior.
     `/root/.local/go/bin/go test -count=1 ./internal/gateway
     ./internal/gatewayclient ./internal/eventlog` passed;
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `7f919a3b8d224ceb040b3e35fb33ef9b666d4f91`.
 
 - [ ] PH-01.2 Split `internal/tui/transcript_runtime.go`.
   - current issue: 1559 LOC, above the 1500 LOC source budget.
