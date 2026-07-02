@@ -143,7 +143,7 @@ Goal: make `fast-agent-harness hygiene -strict` pass without changing behavior.
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
   - commit: `7f919a3b8d224ceb040b3e35fb33ef9b666d4f91`.
 
-- [ ] PH-01.2 Split `internal/tui/transcript_runtime.go`.
+- [x] PH-01.2 Split `internal/tui/transcript_runtime.go`.
   - current issue: 1559 LOC, above the 1500 LOC source budget.
   - likely seams: event-to-cell projection, context/status cells, tool cells,
     streaming/live-tail cells, selection/no-select metadata.
@@ -151,7 +151,18 @@ Goal: make `fast-agent-harness hygiene -strict` pass without changing behavior.
     context cells render exactly as before.
   - verification:
     `go test -count=1 ./internal/tui ./internal/tui/transcript ./internal/tui/render ./internal/tui/selection`
-  - status: open.
+  - status: completed 2026-07-02.
+  - evidence: split semantic copy and viewport selection helpers into
+    `internal/tui/selection_runtime.go`, leaving transcript projection,
+    context/status cells, tool cells, streaming cells, and render caching in
+    `internal/tui/transcript_runtime.go`. `transcript_runtime.go` is now 1403
+    LOC, below the 1500 LOC source budget.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/tui
+    ./internal/tui/transcript ./internal/tui/render ./internal/tui/selection`
+    passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] PH-01.3 Split `internal/tui/tui.go`.
   - current issue: 1530 LOC, above the 1500 LOC source budget.
