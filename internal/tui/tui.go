@@ -157,6 +157,8 @@ type Model struct {
 	runStartHelperHit    int64
 	runStartHelperMiss   int64
 	runStartHelperAPI    int64
+	runStartHelperCalls  int
+	runStartHelperCost   float64
 	inputTok             int64
 	outputTok            int64
 	cacheHitTok          int64
@@ -174,6 +176,8 @@ type Model struct {
 	helperModelCacheHit  int64
 	helperModelCacheMiss int64
 	helperModelAPITok    int64
+	helperAPICalls       int
+	helperCostUSD        float64
 	slashIndex           int
 	slashDismissed       string
 	fileResolver         *filesearch.Resolver
@@ -1086,6 +1090,8 @@ func (m Model) loadContextStatus() (string, error) {
 			HelperModelCacheHit:     m.helperModelCacheHit,
 			HelperModelCacheMiss:    m.helperModelCacheMiss,
 			HelperModelAPITokens:    m.helperModelAPITok,
+			HelperAPICalls:          m.helperAPICalls,
+			HelperCostUSD:           m.helperCostUSD,
 		},
 	})
 	return gatewayclient.FormatSessionContext(resp), nil

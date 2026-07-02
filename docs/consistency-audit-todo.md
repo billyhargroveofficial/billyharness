@@ -253,14 +253,27 @@ Tests:
 
 ### 7. Unify helper/web-summary usage accounting
 
-- [ ] Decide exact labels for helper work:
+- [x] Decide exact labels for helper work:
   - `websum in→out`: content compression done for web tools.
   - `sumapi`: provider/model tokens spent by helper summarization.
   - `api calls/cost`: external API backends such as Tavily/Exa when used.
-- [ ] TUI currently lacks some helper API call/cost visibility that Telegram
+- [x] TUI currently lacks some helper API call/cost visibility that Telegram
   already receives from `clientux/projector.Snapshot`.
-- [ ] Make `/context`, Telegram final footer, and TUI status use the same
+- [x] Make `/context`, Telegram final footer, and TUI status use the same
   projected helper usage summary.
+
+Evidence:
+
+- `/context` now uses the same user-facing helper labels as the live clients:
+  `websum`, `sumapi`, `api calls`, and `api cost`; legacy
+  `provider_api_calls`, `provider_cost`, and `helper_api` labels are covered by
+  a formatter regression test.
+- TUI now projects `HelperAPICalls` and `HelperCostUSD` from the shared
+  `clientux/projector.Snapshot`, includes them in local `/context`, and renders
+  `api calls`/`api cost` in the inline status.
+- Telegram final footer already had the target labels; gateway context tests now
+  assert the same helper summary wording through the shared formatter.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/clientux ./internal/gatewayclient ./internal/telegrambot ./internal/tui`.
 
 Files:
 

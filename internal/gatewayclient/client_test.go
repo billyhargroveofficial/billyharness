@@ -75,6 +75,29 @@ func TestFormatSessionContextExplainsProviderCacheCounters(t *testing.T) {
 	}
 }
 
+func TestFormatSessionContextLabelsHelperUsageLikeClientFooters(t *testing.T) {
+	text := FormatSessionContext(gatewayapi.SessionContextResponse{
+		ID: "session-helpers",
+		Usage: gatewayapi.ContextUsage{
+			WebSummaryInputTokens:   20_000,
+			WebSummaryOutputTokens:  900,
+			HelperModelInputTokens:  1_200,
+			HelperModelOutputTokens: 80,
+			HelperModelAPITokens:    1_280,
+			HelperAPICalls:          2,
+			HelperCostUSD:           0.0045,
+		},
+	})
+	for _, want := range []string{"helper usage: websum=20.0k→900", "helper=1.2k→80", "sumapi=1.3k", "api calls=2", "api cost=$0.004500"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("context report missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "provider_api_calls") || strings.Contains(text, "provider_cost") || strings.Contains(text, "helper_api") {
+		t.Fatalf("context report used legacy helper labels:\n%s", text)
+	}
+}
+
 func TestCreateSessionWithOwnerSendsOwnerMetadata(t *testing.T) {
 	var got gatewayapi.CreateSessionRequest
 	server := testkit.NewRouteServer(t, testkit.Route{

@@ -580,6 +580,20 @@ func TestInlineStatusLabelsCacheCountersWhenLargerThanContext(t *testing.T) {
 	}
 }
 
+func TestInlineStatusShowsHelperAPICallsAndCost(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 240
+	m.helperAPICalls = 2
+	m.helperCostUSD = 0.0045
+
+	status := stripANSITest(m.inlineStatusView())
+	for _, want := range []string{"api calls 2", "api cost $0.0045"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status missing %q: %q", want, status)
+		}
+	}
+}
+
 func TestTUIAccountingMatchesClientUXProjector(t *testing.T) {
 	events := []protocol.Event{
 		{Type: protocol.EventRunStarted},
@@ -610,6 +624,12 @@ func TestTUIAccountingMatchesClientUXProjector(t *testing.T) {
 				"tool_summary_api_output_tokens": int64(10),
 			},
 		}},
+		{Type: protocol.EventProviderHelperUsage, Data: protocol.ProviderHelperUsageEvent{
+			Kind:     "web_backend",
+			Provider: "exa",
+			APICalls: 2,
+			CostUSD:  0.0045,
+		}},
 		{Type: protocol.EventRunCompleted},
 	}
 
@@ -639,6 +659,9 @@ func TestTUIAccountingMatchesClientUXProjector(t *testing.T) {
 		m.toolSummaryAPITok != snapshot.ToolSummaryAPITokens {
 		t.Fatalf("tool summary = in:%d out:%d api:%d, projector=%#v",
 			m.toolSummaryInTok, m.toolSummaryOutTok, m.toolSummaryAPITok, snapshot)
+	}
+	if m.helperAPICalls != snapshot.HelperAPICalls || m.helperCostUSD != snapshot.HelperCostUSD {
+		t.Fatalf("helper api = calls:%d cost:%f, projector=%#v", m.helperAPICalls, m.helperCostUSD, snapshot)
 	}
 	if m.status != "completed" || snapshot.RunState != uxprojector.RunStateCompleted {
 		t.Fatalf("terminal state = tui:%q projector:%q", m.status, snapshot.RunState)
@@ -901,7 +924,7 @@ func TestContextCommandShowsGatewayContextReport(t *testing.T) {
 			CompactThresholdPercent: 60,
 			Estimator:               "chars_div_4",
 			Runtime:                 gatewayapi.ContextRuntime{Model: "deepseek-v4-flash", ReasoningMode: "high", AccessMode: "build"},
-			Usage:                   gatewayapi.ContextUsage{CacheHitTokens: 700, CacheMissTokens: 300, WebSummaryInputTokens: 20000, WebSummaryOutputTokens: 900, HelperModelAPITokens: 20900},
+			Usage:                   gatewayapi.ContextUsage{CacheHitTokens: 700, CacheMissTokens: 300, WebSummaryInputTokens: 20000, WebSummaryOutputTokens: 900, HelperModelAPITokens: 20900, HelperAPICalls: 2, HelperCostUSD: 0.0045},
 			Prompt:                  gatewayapi.ContextPrompt{SectionCount: 2, ApproxTokens: 1200, TotalBytes: 4800, CacheStatus: "changed", CacheReason: "tool_schema_changed"},
 			Sources: []gatewayapi.ContextSource{
 				{Source: "web_summaries", MessageCount: 2, EstimatedTokens: 320000, Percent: 55.2},
@@ -929,7 +952,7 @@ func TestContextCommandShowsGatewayContextReport(t *testing.T) {
 	if msg.err != nil {
 		t.Fatal(msg.err)
 	}
-	for _, want := range []string{"active context: 580.0k / 1.00M", "compact threshold: 600.0k (60.0%, below)", "runtime: model=deepseek-v4-flash", "provider cache: hit=700", "helper usage: websum=20.0k", "prompt cache: status=changed", "thresholds: ●50% ○70%", "web_summaries", "top contributors"} {
+	for _, want := range []string{"active context: 580.0k / 1.00M", "compact threshold: 600.0k (60.0%, below)", "runtime: model=deepseek-v4-flash", "provider cache: hit=700", "helper usage: websum=20.0k", "sumapi=20.9k", "api calls=2", "api cost=$0.004500", "prompt cache: status=changed", "thresholds: ●50% ○70%", "web_summaries", "top contributors"} {
 		if !strings.Contains(msg.text, want) {
 			t.Fatalf("context report missing %q:\n%s", want, msg.text)
 		}

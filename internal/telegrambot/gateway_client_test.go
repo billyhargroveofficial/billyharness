@@ -70,7 +70,7 @@ func TestGatewayClientContextStatusUsesSharedFormatter(t *testing.T) {
 				PercentUsed:             58,
 				CompactThresholdPercent: 60,
 				Runtime:                 gatewayapi.ContextRuntime{Model: "deepseek-v4-flash", ReasoningMode: "high"},
-				Usage:                   gatewayapi.ContextUsage{CacheHitTokens: 700, CacheMissTokens: 300, WebSummaryInputTokens: 20000, WebSummaryOutputTokens: 900, HelperModelAPITokens: 20900},
+				Usage:                   gatewayapi.ContextUsage{CacheHitTokens: 700, CacheMissTokens: 300, WebSummaryInputTokens: 20000, WebSummaryOutputTokens: 900, HelperModelAPITokens: 20900, HelperAPICalls: 2, HelperCostUSD: 0.0045},
 				Prompt:                  gatewayapi.ContextPrompt{SectionCount: 2, ApproxTokens: 1200, TotalBytes: 4800, CacheStatus: "changed", CacheReason: "tool_schema_changed"},
 				Sources: []gatewayapi.ContextSource{{
 					Source:          "web_summaries",
@@ -90,7 +90,7 @@ func TestGatewayClientContextStatusUsesSharedFormatter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"active context: 580.0k / 1.00M", "compact threshold: 600.0k (60.0%, below)", "runtime: model=deepseek-v4-flash", "provider cache: hit=700", "helper usage: websum=20.0k", "prompt cache: status=changed", "thresholds: ●50% ○70%", "web_summaries"} {
+	for _, want := range []string{"active context: 580.0k / 1.00M", "compact threshold: 600.0k (60.0%, below)", "runtime: model=deepseek-v4-flash", "provider cache: hit=700", "helper usage: websum=20.0k", "sumapi=20.9k", "api calls=2", "api cost=$0.004500", "prompt cache: status=changed", "thresholds: ●50% ○70%", "web_summaries"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("context status missing %q: %q", want, text)
 		}

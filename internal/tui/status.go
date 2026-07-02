@@ -53,6 +53,12 @@ func (m Model) inlineStatusView() string {
 	if m.toolSummaryInTok > 0 || m.toolSummaryOutTok > 0 || m.helperModelAPITok > 0 {
 		bottom = append(bottom, statusSegment{"sumapi " + compactNumber(m.helperModelAPITok), styles.statusDim})
 	}
+	if m.helperAPICalls > 0 {
+		bottom = append(bottom, statusSegment{"api calls " + strconv.Itoa(m.helperAPICalls), styles.statusDim})
+	}
+	if m.helperCostUSD > 0 {
+		bottom = append(bottom, statusSegment{fmt.Sprintf("api cost $%.4f", m.helperCostUSD), styles.statusDim})
+	}
 	bottom = append(bottom,
 		statusSegment{"agent turns " + strconv.Itoa(m.modelCalls), styles.statusDim},
 		statusSegment{"tools " + strconv.Itoa(m.toolCalls), styles.statusDim},

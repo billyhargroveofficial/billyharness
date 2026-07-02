@@ -639,7 +639,7 @@ func formatContextUsage(usage gatewayapi.ContextUsage) string {
 		)
 	}
 	if usage.WebSummaryInputTokens > 0 || usage.WebSummaryOutputTokens > 0 || usage.HelperModelAPITokens > 0 || usage.HelperModelInputTokens > 0 || usage.HelperModelOutputTokens > 0 || usage.HelperModelCacheHit > 0 || usage.HelperModelCacheMiss > 0 || usage.HelperAPICalls > 0 || usage.HelperCostUSD > 0 {
-		fmt.Fprintf(&b, "helper usage: websum=%s→%s helper=%s→%s helper_api=%s",
+		fmt.Fprintf(&b, "helper usage: websum=%s→%s helper=%s→%s sumapi=%s",
 			compactContextNumber(usage.WebSummaryInputTokens),
 			compactContextNumber(usage.WebSummaryOutputTokens),
 			compactContextNumber(usage.HelperModelInputTokens),
@@ -647,10 +647,10 @@ func formatContextUsage(usage gatewayapi.ContextUsage) string {
 			compactContextNumber(usage.HelperModelAPITokens),
 		)
 		if usage.HelperAPICalls > 0 {
-			fmt.Fprintf(&b, " provider_api_calls=%d", usage.HelperAPICalls)
+			fmt.Fprintf(&b, " api calls=%d", usage.HelperAPICalls)
 		}
 		if usage.HelperCostUSD > 0 {
-			fmt.Fprintf(&b, " provider_cost=$%.6f", usage.HelperCostUSD)
+			fmt.Fprintf(&b, " api cost=$%.6f", usage.HelperCostUSD)
 		}
 		if usage.HelperModelCacheHit > 0 || usage.HelperModelCacheMiss > 0 {
 			fmt.Fprintf(&b, " helper_cache_hit=%s helper_cache_miss=%s",
