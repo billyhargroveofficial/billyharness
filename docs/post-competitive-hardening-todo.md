@@ -284,14 +284,33 @@ Goal: verify decomposition helped architecture instead of just moving lines.
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
   - commit: `95718f8cdf3ddb8bf210f0b47e24b58815d5cbfa`.
 
-- [ ] PH-02.3 Remove accidental duplicate abstractions if found.
+- [x] PH-02.3 Remove accidental duplicate abstractions if found.
   - likely areas: context formatting, command metadata, tool display, output
     refs, MCP prompt metadata, memory command plumbing.
   - acceptance: shared logic stays in `clientux`, `commandregistry`,
     `toolrender`, `tooloutput`, or `memory` rather than being reimplemented in
     TUI and Telegram.
   - verification: focused tests for any touched package.
-  - status: open.
+  - status: completed 2026-07-02.
+  - evidence: reviewed the likely duplication zones and found no accidental
+    duplicate abstraction that should be removed in this pass. `/context`
+    reporting is built in `internal/clientux` and formatted by
+    `internal/gatewayclient` for CLI, TUI, and Telegram. Command search
+    metadata lives in `internal/commandregistry` over shared
+    `clientux.ActionDefinition` data, while TUI and Telegram keep only
+    adapter-specific dispatch, keybinding, and argument-menu state. Tool
+    lifecycle display stays in `internal/toolrender` and protocol
+    `ToolCompact`; output-ref storage and metadata keys stay in
+    `internal/tooloutput`; MCP prompt metadata flows from `mcpclient` through
+    the tools snapshot into `commandregistry`; manual memory command and tool
+    plumbing share `internal/memory` operations.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/clientux
+    ./internal/gatewayclient ./internal/commandregistry ./internal/toolrender
+    ./internal/tooloutput ./internal/memory ./internal/mcpclient
+    ./internal/tools ./internal/tui ./internal/telegrambot
+    ./cmd/fast-agent-harness ./internal/architecture` passed.
+  - commit: pending.
 
 ## Milestone 3 - Full Regression And Runtime Smoke (P0)
 
