@@ -222,11 +222,21 @@ Tests:
 
 ### 6. Align tool-call counting semantics
 
-- [ ] Choose one semantic for all user-facing tool counters. Preferred:
+- [x] Choose one semantic for all user-facing tool counters. Preferred:
   count `tool.call_requested` because it represents model-requested tool use.
-- [ ] Update `/context` to match the projector if needed; it currently counts
+- [x] Update `/context` to match the projector if needed; it currently counts
   `tool.call_started` while `clientux/projector` counts requested calls.
-- [ ] Make failed/permission-denied/skipped tool calls count consistently.
+- [x] Make failed/permission-denied/skipped tool calls count consistently.
+
+Evidence:
+
+- `/context` now increments tool activity from `tool.call_requested`, matching
+  the shared client projector used by Telegram and TUI.
+- Added synthetic event replay coverage for requested-only, failed, aborted,
+  and started-only tool lifecycle events across `/context`, the shared
+  projector, Telegram final footer, and TUI inline status. Started-only events
+  are visible as lifecycle state but do not inflate user-facing tool totals.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/clientux ./internal/clientux/projector ./internal/telegrambot ./internal/tui`.
 
 Files:
 

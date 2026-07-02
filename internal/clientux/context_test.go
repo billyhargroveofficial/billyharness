@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	uxprojector "github.com/billyhargroveofficial/billyharness/internal/clientux/projector"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
@@ -121,7 +122,7 @@ func TestContextReportV2IncludesEventsRuntimePromptAndHelperUsage(t *testing.T) 
 			}},
 			{Seq: 2, Type: protocol.EventProviderUsageUpdate, Data: map[string]any{"input_tokens": 100, "output_tokens": 5, "cache_hit_tokens": 70, "cache_miss_tokens": 30}},
 			{Seq: 3, Type: protocol.EventProviderUsageUpdate, Data: map[string]any{"input_tokens": 125, "output_tokens": 8, "cache_hit_tokens": 90, "cache_miss_tokens": 35}},
-			{Seq: 4, Type: protocol.EventToolCallStarted},
+			{Seq: 4, Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{ID: "call-web", Name: "web_fetch"}},
 			{Seq: 5, Type: protocol.EventProviderHelperUsage, Data: protocol.ProviderHelperUsageEvent{
 				Kind:            "web_summary",
 				CallID:          "call-web",
@@ -193,5 +194,47 @@ func TestContextReportV2IncludesEventsRuntimePromptAndHelperUsage(t *testing.T) 
 		if !strings.Contains(formatted, want) {
 			t.Fatalf("formatted v2 context missing %q:\n%s", want, formatted)
 		}
+	}
+}
+
+func TestContextToolCountMatchesRequestedToolCalls(t *testing.T) {
+	cfg := config.Default()
+	events := toolCountSemanticsEvents()
+
+	p := uxprojector.New()
+	var snapshot uxprojector.Snapshot
+	for _, event := range events {
+		snapshot = p.Apply(event)
+	}
+	if snapshot.ToolCalls != 3 {
+		t.Fatalf("projector tool calls = %d, want 3", snapshot.ToolCalls)
+	}
+
+	resp := BuildContextResponseWithOptions(cfg.RuntimeLimits(), "session-tools", nil, ContextReportOptions{Events: events})
+	if resp.Usage.ToolCalls != snapshot.ToolCalls {
+		t.Fatalf("/context tool calls = %d, projector = %d", resp.Usage.ToolCalls, snapshot.ToolCalls)
+	}
+	formatted := gatewayclient.FormatSessionContext(resp)
+	if !strings.Contains(formatted, "activity: model_calls=1 tools=3") {
+		t.Fatalf("formatted context missing requested-count activity:\n%s", formatted)
+	}
+	if strings.Contains(formatted, "tools=4") {
+		t.Fatalf("formatted context counted started-only tool:\n%s", formatted)
+	}
+}
+
+func toolCountSemanticsEvents() []protocol.Event {
+	return []protocol.Event{
+		{Seq: 1, Type: protocol.EventRunStarted},
+		{Seq: 2, Type: protocol.EventModelCallStarted},
+		{Seq: 3, Type: protocol.EventToolCallRequested, CallID: "call-requested-only", Data: protocol.ToolCall{ID: "call-requested-only", Name: "time_now"}},
+		{Seq: 4, Type: protocol.EventToolCallRequested, CallID: "call-failed", Data: protocol.ToolCall{ID: "call-failed", Name: "shell_exec"}},
+		{Seq: 5, Type: protocol.EventToolCallStarted, CallID: "call-failed"},
+		{Seq: 6, Type: protocol.EventToolCallFailed, CallID: "call-failed", Data: protocol.ToolResult{CallID: "call-failed", Name: "shell_exec", Content: "permission denied", IsError: true}},
+		{Seq: 7, Type: protocol.EventToolCallRequested, CallID: "call-aborted", Data: protocol.ToolCall{ID: "call-aborted", Name: "web_fetch"}},
+		{Seq: 8, Type: protocol.EventToolCallStarted, CallID: "call-aborted"},
+		{Seq: 9, Type: protocol.EventToolCallAborted, CallID: "call-aborted", Data: protocol.ToolResult{CallID: "call-aborted", Name: "web_fetch", Content: "interrupted", IsError: true}},
+		{Seq: 10, Type: protocol.EventToolCallStarted, CallID: "call-started-only"},
+		{Seq: 11, Type: protocol.EventRunCompleted},
 	}
 }

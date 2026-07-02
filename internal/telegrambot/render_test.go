@@ -312,6 +312,23 @@ func TestRendererFooterShowsChatTotalsForTurnsAndTools(t *testing.T) {
 	}
 }
 
+func TestRendererToolCountUsesRequestedCalls(t *testing.T) {
+	r := NewRenderer()
+	for _, event := range toolCountSemanticsEvents() {
+		r.Apply(event)
+	}
+	if r.ToolCalls != 3 {
+		t.Fatalf("renderer tool calls = %d, want 3", r.ToolCalls)
+	}
+	footer := r.footerLine()
+	if !strings.Contains(footer, "🛠 tools 3") {
+		t.Fatalf("footer missing requested-count tool total: %q", footer)
+	}
+	if strings.Contains(footer, "tools 4") {
+		t.Fatalf("footer counted started-only tool: %q", footer)
+	}
+}
+
 func TestStreamPlainTextShowsContextAboveProgress(t *testing.T) {
 	renderer := NewRendererWithContextWindow(10_000)
 	renderer.Apply(protocol.Event{Type: protocol.EventRunStarted})
@@ -341,6 +358,22 @@ func TestStreamPlainTextShowsContextAboveProgress(t *testing.T) {
 	}
 	if strings.Count(text, "🪟 ctx") != 1 {
 		t.Fatalf("running stream should show context once:\n%s", text)
+	}
+}
+
+func toolCountSemanticsEvents() []protocol.Event {
+	return []protocol.Event{
+		{Seq: 1, Type: protocol.EventRunStarted},
+		{Seq: 2, Type: protocol.EventModelCallStarted},
+		{Seq: 3, Type: protocol.EventToolCallRequested, CallID: "call-requested-only", Data: protocol.ToolCall{ID: "call-requested-only", Name: "time_now"}},
+		{Seq: 4, Type: protocol.EventToolCallRequested, CallID: "call-failed", Data: protocol.ToolCall{ID: "call-failed", Name: "shell_exec"}},
+		{Seq: 5, Type: protocol.EventToolCallStarted, CallID: "call-failed"},
+		{Seq: 6, Type: protocol.EventToolCallFailed, CallID: "call-failed", Data: protocol.ToolResult{CallID: "call-failed", Name: "shell_exec", Content: "permission denied", IsError: true}},
+		{Seq: 7, Type: protocol.EventToolCallRequested, CallID: "call-aborted", Data: protocol.ToolCall{ID: "call-aborted", Name: "web_fetch"}},
+		{Seq: 8, Type: protocol.EventToolCallStarted, CallID: "call-aborted"},
+		{Seq: 9, Type: protocol.EventToolCallAborted, CallID: "call-aborted", Data: protocol.ToolResult{CallID: "call-aborted", Name: "web_fetch", Content: "interrupted", IsError: true}},
+		{Seq: 10, Type: protocol.EventToolCallStarted, CallID: "call-started-only"},
+		{Seq: 11, Type: protocol.EventRunCompleted},
 	}
 }
 

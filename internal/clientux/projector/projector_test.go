@@ -212,6 +212,28 @@ func TestProjectorTracksWebBackendHelperUsageSeparately(t *testing.T) {
 	}
 }
 
+func TestProjectorToolCountUsesRequestedCalls(t *testing.T) {
+	p := New()
+	var snap Snapshot
+	for _, event := range toolCountSemanticsEvents() {
+		snap = p.Apply(event)
+	}
+	if snap.ToolCalls != 3 {
+		t.Fatalf("tool calls = %d, want requested-only count 3", snap.ToolCalls)
+	}
+	for _, callID := range []string{"call-requested-only", "call-failed", "call-aborted", "call-started-only"} {
+		if _, ok := snap.ToolsByCallID[callID]; !ok {
+			t.Fatalf("missing tool %s in %#v", callID, snap.ToolsByCallID)
+		}
+	}
+	if snap.ToolsByCallID["call-requested-only"].Status != "requested" ||
+		snap.ToolsByCallID["call-failed"].Status != "failed" ||
+		snap.ToolsByCallID["call-aborted"].Status != "aborted" ||
+		snap.ToolsByCallID["call-started-only"].Status != "running" {
+		t.Fatalf("tool statuses = %#v", snap.ToolsByCallID)
+	}
+}
+
 func TestProjectorReplaysTodoPlanState(t *testing.T) {
 	p := New()
 	state := protocol.TodoState{Todos: []protocol.TodoItem{
@@ -237,6 +259,22 @@ func TestProjectorReplaysTodoPlanState(t *testing.T) {
 	snap = p.Apply(protocol.Event{Seq: 2, Type: protocol.EventRunStarted})
 	if len(snap.TodoState.Todos) != 3 || snap.TodoState.Todos[1].Status != "in_progress" {
 		t.Fatalf("todo state did not survive run start: %#v", snap.TodoState)
+	}
+}
+
+func toolCountSemanticsEvents() []protocol.Event {
+	return []protocol.Event{
+		{Seq: 1, Type: protocol.EventRunStarted},
+		{Seq: 2, Type: protocol.EventModelCallStarted},
+		{Seq: 3, Type: protocol.EventToolCallRequested, CallID: "call-requested-only", Data: protocol.ToolCall{ID: "call-requested-only", Name: "time_now"}},
+		{Seq: 4, Type: protocol.EventToolCallRequested, CallID: "call-failed", Data: protocol.ToolCall{ID: "call-failed", Name: "shell_exec"}},
+		{Seq: 5, Type: protocol.EventToolCallStarted, CallID: "call-failed"},
+		{Seq: 6, Type: protocol.EventToolCallFailed, CallID: "call-failed", Data: protocol.ToolResult{CallID: "call-failed", Name: "shell_exec", Content: "permission denied", IsError: true}},
+		{Seq: 7, Type: protocol.EventToolCallRequested, CallID: "call-aborted", Data: protocol.ToolCall{ID: "call-aborted", Name: "web_fetch"}},
+		{Seq: 8, Type: protocol.EventToolCallStarted, CallID: "call-aborted"},
+		{Seq: 9, Type: protocol.EventToolCallAborted, CallID: "call-aborted", Data: protocol.ToolResult{CallID: "call-aborted", Name: "web_fetch", Content: "interrupted", IsError: true}},
+		{Seq: 10, Type: protocol.EventToolCallStarted, CallID: "call-started-only"},
+		{Seq: 11, Type: protocol.EventRunCompleted},
 	}
 }
 

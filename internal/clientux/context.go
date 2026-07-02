@@ -163,7 +163,7 @@ func contextEventReport(events []protocol.Event) contextEventMetrics {
 			metrics.observeModelCall(event.Data)
 		case protocol.EventModelCallFinished:
 			metrics.observeModelCall(event.Data)
-		case protocol.EventToolCallStarted:
+		case protocol.EventToolCallRequested:
 			metrics.usage.ToolCalls++
 		case protocol.EventProviderUsageUpdate:
 			delta, current := metrics.usageAcc.Apply(contextUsageFromData(event.Data))

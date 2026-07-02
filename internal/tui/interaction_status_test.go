@@ -645,6 +645,47 @@ func TestTUIAccountingMatchesClientUXProjector(t *testing.T) {
 	}
 }
 
+func TestTUIToolCountUsesRequestedCalls(t *testing.T) {
+	events := toolCountSemanticsEvents()
+	m := newTestModel(t)
+	m.width = 220
+	p := uxprojector.New()
+	var snapshot uxprojector.Snapshot
+	for _, event := range events {
+		snapshot = p.Apply(event)
+		m.applyEvent(event)
+	}
+	if snapshot.ToolCalls != 3 {
+		t.Fatalf("projector tool calls = %d, want 3", snapshot.ToolCalls)
+	}
+	if m.toolCalls != snapshot.ToolCalls {
+		t.Fatalf("tui tool calls = %d, projector = %d", m.toolCalls, snapshot.ToolCalls)
+	}
+	status := stripANSITest(m.inlineStatusView())
+	if !strings.Contains(status, "tools 3") {
+		t.Fatalf("status missing requested-count tool total: %q", status)
+	}
+	if strings.Contains(status, "tools 4") {
+		t.Fatalf("status counted started-only tool: %q", status)
+	}
+}
+
+func toolCountSemanticsEvents() []protocol.Event {
+	return []protocol.Event{
+		{Seq: 1, Type: protocol.EventRunStarted},
+		{Seq: 2, Type: protocol.EventModelCallStarted},
+		{Seq: 3, Type: protocol.EventToolCallRequested, CallID: "call-requested-only", Data: protocol.ToolCall{ID: "call-requested-only", Name: "time_now"}},
+		{Seq: 4, Type: protocol.EventToolCallRequested, CallID: "call-failed", Data: protocol.ToolCall{ID: "call-failed", Name: "shell_exec"}},
+		{Seq: 5, Type: protocol.EventToolCallStarted, CallID: "call-failed"},
+		{Seq: 6, Type: protocol.EventToolCallFailed, CallID: "call-failed", Data: protocol.ToolResult{CallID: "call-failed", Name: "shell_exec", Content: "permission denied", IsError: true}},
+		{Seq: 7, Type: protocol.EventToolCallRequested, CallID: "call-aborted", Data: protocol.ToolCall{ID: "call-aborted", Name: "web_fetch"}},
+		{Seq: 8, Type: protocol.EventToolCallStarted, CallID: "call-aborted"},
+		{Seq: 9, Type: protocol.EventToolCallAborted, CallID: "call-aborted", Data: protocol.ToolResult{CallID: "call-aborted", Name: "web_fetch", Content: "interrupted", IsError: true}},
+		{Seq: 10, Type: protocol.EventToolCallStarted, CallID: "call-started-only"},
+		{Seq: 11, Type: protocol.EventRunCompleted},
+	}
+}
+
 func TestLightThemeStatusLineUsesThemeBackground(t *testing.T) {
 	styles := newThemeStyles(tuiThemes["light"])
 	rendered := styles.status.Render("status")
