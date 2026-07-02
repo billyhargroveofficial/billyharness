@@ -24,7 +24,8 @@ name = "billy"
 provider = "deepseek"
 model = "deepseek-v4-flash"
 reasoning_effort = "high"
-context_limit = 1000000
+# Optional: set context_window_tokens only for a deliberate override.
+# Omit it to use the selected model's metadata.
 web_summary_mode = "extractive"
 tool_policy = "solo-full-access"
 mcp_allowlist = ["telegram", "telegram-parilka", "github", "context7"]

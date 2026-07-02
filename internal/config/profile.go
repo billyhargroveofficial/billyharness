@@ -132,7 +132,6 @@ func builtInProfileMetadata(profile string) (ProfileMetadata, bool) {
 		Thinking:             "enabled",
 		ReasoningEffort:      "high",
 		DisableSpark:         &disableSpark,
-		ContextWindowTokens:  1_000_000,
 		WebSummaryMode:       "extractive",
 		ToolPolicy:           "solo-full-access",
 		MCPAllowlist:         []string{"telegram", "telegram-parilka", "github", "context7"},
@@ -181,7 +180,6 @@ model = "deepseek-v4-flash"
 thinking = "enabled"
 reasoning_effort = "high"
 disable_spark = true
-context_window_tokens = 1000000
 web_summary_mode = "extractive"
 tool_policy = "solo-full-access"
 mcp_allowlist = ["telegram", "telegram-parilka", "github", "context7"]

@@ -116,15 +116,27 @@ Tests:
 
 ### 3. Remove or quarantine legacy 1M fallbacks
 
-- [ ] Keep `1_000_000` only where it is the real DeepSeek/mock default, test
+- [x] Keep `1_000_000` only where it is the real DeepSeek/mock default, test
   fixture data, or a clearly named fallback for unknown models.
-- [ ] Rename ambiguous fallback constants such as Telegram/TUI
+- [x] Rename ambiguous fallback constants such as Telegram/TUI
   `defaultContextWindowTokens` to make clear whether they mean
   `unknownModelFallback`, `deepSeekDefault`, or `legacySettingsFallback`.
-- [ ] Update docs/examples that still imply all profiles/models use a 1M
+- [x] Update docs/examples that still imply all profiles/models use a 1M
   context window.
-- [ ] Add a small hygiene test or script that fails on new ambiguous hardcoded
+- [x] Add a small hygiene test or script that fails on new ambiguous hardcoded
   context-window values in runtime paths.
+
+Evidence:
+
+- Runtime 1M compatibility values are now named as legacy settings or unknown
+  model fallback; built-in DeepSeek runtime defaults derive from `modelinfo`.
+- Built-in/profile examples no longer write `context_window_tokens = 1000000`
+  by default, and `docs/profiles.md` tells users to omit context overrides
+  unless deliberate.
+- Added `internal/config/hygiene_test.go` to reject ambiguous
+  `defaultContextWindowTokens`, stale `context_limit`, and unlabelled runtime
+  hardcoded 1M context-window values.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/config ./internal/telegrambot ./internal/tui ./internal/trace`.
 
 Known stale/ambiguous locations:
 

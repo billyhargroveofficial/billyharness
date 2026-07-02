@@ -9,7 +9,9 @@ import (
 )
 
 const (
-	defaultContextWindowTokens = 1000000
+	// legacySettingsContextWindowTokens is a compatibility value for old TUI
+	// settings; runtime config re-derives model windows from modelinfo.
+	legacySettingsContextWindowTokens = 1000000
 )
 
 type appSettings struct {
@@ -60,7 +62,7 @@ func defaultAppSettings() appSettings {
 		ToolView:                  "collapsed",
 		ThinkView:                 "expanded",
 		TranscriptMode:            "rich",
-		ContextWindowTokens:       defaultContextWindowTokens,
+		ContextWindowTokens:       legacySettingsContextWindowTokens,
 		InputPricePer1MTokens:     0,
 		OutputPricePer1MTokens:    0,
 		CacheHitPricePer1MTokens:  0,
@@ -82,7 +84,7 @@ func (s appSettings) normalized() appSettings {
 		s.TranscriptMode = "rich"
 	}
 	if s.ContextWindowTokens <= 0 || s.ContextWindowTokens == 128000 {
-		s.ContextWindowTokens = defaultContextWindowTokens
+		s.ContextWindowTokens = legacySettingsContextWindowTokens
 	}
 	if s.LastProfile == "" {
 		s.LastProfile = "billy"

@@ -10,7 +10,9 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 )
 
-const legacyDefaultContextWindowTokens int64 = 1_000_000
+// legacySettingsContextWindowTokens recognizes old settings.json/profile values
+// so model-derived limits can replace them when the selected model changes.
+const legacySettingsContextWindowTokens int64 = 1_000_000
 
 func Default() Config {
 	return MustResolve().Config
@@ -45,7 +47,7 @@ func (c *Config) applyModelContextWindowDefault() {
 	if c.contextWindowExplicitOverride && c.ContextWindowTokens > 0 {
 		return
 	}
-	if c.ContextWindowTokens <= 0 || c.ContextWindowTokens == 128_000 || (info.Provider == modelinfo.ProviderOpenAICodex && c.ContextWindowTokens == legacyDefaultContextWindowTokens) {
+	if c.ContextWindowTokens <= 0 || c.ContextWindowTokens == 128_000 || (info.Provider == modelinfo.ProviderOpenAICodex && c.ContextWindowTokens == legacySettingsContextWindowTokens) {
 		c.ContextWindowTokens = info.ContextWindowTokens
 	}
 }
@@ -189,9 +191,11 @@ func (c *Config) ApplyBillySettingsDefaults() {
 
 func builtInConfig() Config {
 	cwd, _ := os.Getwd()
+	defaultModel := "deepseek-v4-flash"
+	defaultContextWindow := modelinfo.Lookup(defaultModel).ContextWindowTokens
 	return Config{
 		Provider:                  "deepseek",
-		Model:                     "deepseek-v4-flash",
+		Model:                     defaultModel,
 		Profile:                   DefaultProfileName,
 		BaseURL:                   "https://api.deepseek.com",
 		APIKeyEnv:                 "DEEPSEEK_API_KEY",
@@ -209,8 +213,8 @@ func builtInConfig() Config {
 		MaxToolRounds:             100,
 		MaxParallelTools:          4,
 		ProviderMaxRetries:        2,
-		ContextWindowTokens:       1_000_000,
-		ContextCompactTokens:      600_000,
+		ContextWindowTokens:       defaultContextWindow,
+		ContextCompactTokens:      int(defaultContextWindow * 60 / 100),
 		ContextCompactKeep:        32,
 		ContextCompactMaxChars:    120_000,
 		ContextCompactStrategy:    "deterministic",

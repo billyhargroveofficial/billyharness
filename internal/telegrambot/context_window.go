@@ -25,5 +25,5 @@ func resolveContextWindowForModel(model string, fallback int64, source string) c
 		}
 		return contextWindowResolution{Tokens: fallback, Source: source}
 	}
-	return contextWindowResolution{Tokens: defaultContextWindowTokens, Source: "fallback"}
+	return contextWindowResolution{Tokens: unknownModelContextWindowFallbackTokens, Source: "fallback"}
 }

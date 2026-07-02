@@ -14,7 +14,10 @@ import (
 const telegramLimit = 4096
 const telegramRichLimit = 32768
 const telegramLiveProgressLimit = 1900
-const defaultContextWindowTokens = 1_000_000
+
+// unknownModelContextWindowFallbackTokens is used only when modelinfo has no
+// context metadata and the caller did not provide a runtime fallback.
+const unknownModelContextWindowFallbackTokens = 1_000_000
 
 type Renderer struct {
 	Content          strings.Builder
@@ -59,7 +62,7 @@ type RenderEvent struct {
 }
 
 func NewRenderer() *Renderer {
-	return NewRendererWithContextWindow(defaultContextWindowTokens)
+	return NewRendererWithContextWindow(unknownModelContextWindowFallbackTokens)
 }
 
 func NewRendererWithContextWindow(contextWindow int64) *Renderer {
@@ -68,7 +71,7 @@ func NewRendererWithContextWindow(contextWindow int64) *Renderer {
 
 func NewRendererWithContextWindowAndTotals(contextWindow int64, agentTurns, toolCalls int) *Renderer {
 	if contextWindow <= 0 {
-		contextWindow = defaultContextWindowTokens
+		contextWindow = unknownModelContextWindowFallbackTokens
 	}
 	return &Renderer{
 		Started:        time.Now(),
