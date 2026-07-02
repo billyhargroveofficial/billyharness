@@ -371,7 +371,7 @@ func (b *Bot) startLiveRunView(ctx context.Context, msg Message, state ChatState
 	if err != nil {
 		return nil, err
 	}
-	contextWindow := effectiveContextWindowForModel(state.Model, b.opts.ContextWindow)
+	contextWindow := resolveContextWindowForModel(state.Model, b.opts.ContextWindow, b.opts.ContextWindowSource).Tokens
 	view := &telegramLiveRunView{
 		sent:          sent,
 		renderer:      NewRendererWithContextWindowAndTotals(contextWindow, state.AgentTurns, state.ToolCalls),
@@ -422,7 +422,7 @@ func (v *telegramLiveRunView) Reset(state ChatState) {
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	v.contextWindow = effectiveContextWindowForModel(state.Model, v.contextWindow)
+	v.contextWindow = resolveContextWindowForModel(state.Model, v.contextWindow, "").Tokens
 	v.renderer = NewRendererWithContextWindowAndTotals(v.contextWindow, state.AgentTurns, state.ToolCalls)
 	v.tools = NewToolProgress()
 	v.model = state.Model

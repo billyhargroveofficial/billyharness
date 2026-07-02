@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 )
 
 func TestAPIKeyFallsBackToDotenv(t *testing.T) {
@@ -351,6 +353,83 @@ func TestApplyModelProviderDefaultsUsesCodexModelContextWindows(t *testing.T) {
 	}
 }
 
+func TestResolveModelContextWindowsFollowModelInfo(t *testing.T) {
+	tests := map[string]int64{
+		"gpt-5.5":             256_000,
+		"gpt-5.4-mini":        256_000,
+		"gpt-5.3-codex-spark": 128_000,
+		"deepseek-v4-flash":   1_000_000,
+		"deepseek-v4-pro":     1_000_000,
+	}
+	for model, want := range tests {
+		t.Run(model, func(t *testing.T) {
+			t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+			t.Setenv("FAST_AGENT_ENV_FILE", "")
+			t.Setenv("FAST_AGENT_MODEL", model)
+			resolved, err := Resolve()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := resolved.Config.ContextWindowTokens; got != want {
+				t.Fatalf("ContextWindowTokens = %d, want %d", got, want)
+			}
+			if got := modelinfo.Lookup(model).ContextWindowTokens; got != want {
+				t.Fatalf("modelinfo context = %d, want %d", got, want)
+			}
+			if resolved.Config.ContextWindowSourceLabel() == "override" {
+				t.Fatalf("model-derived context should not be labeled override")
+			}
+		})
+	}
+}
+
+func TestResolvePreservesExplicitContextWindowOverride(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	t.Setenv("FAST_AGENT_MODEL", "gpt-5.5")
+	t.Setenv("FAST_AGENT_CONTEXT_WINDOW_TOKENS", "1000000")
+
+	resolved, err := Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolved.Config.ContextWindowTokens; got != 1_000_000 {
+		t.Fatalf("ContextWindowTokens = %d, want explicit override 1000000", got)
+	}
+	if !resolved.Config.ContextWindowExplicitOverride() || resolved.Config.ContextWindowSourceLabel() != "override" {
+		t.Fatalf("context override provenance not preserved")
+	}
+	value, ok := resolved.Value("context_window_tokens")
+	if !ok {
+		t.Fatalf("missing context_window_tokens resolved value")
+	}
+	if value.Source != SourceEnvironment || !strings.Contains(value.Warning, "explicit override") || !strings.Contains(value.Warning, "256000") {
+		t.Fatalf("context override value = %#v", value)
+	}
+}
+
+func TestResolveIgnoresStaleSettingsContextWindowForCodex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	body := []byte(`{"last_selected_model":"gpt-5.5","context_window_tokens":1000000}`)
+	if err := os.WriteFile(filepath.Join(home, "settings.json"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolved.Config.ContextWindowTokens; got != 256_000 {
+		t.Fatalf("ContextWindowTokens = %d, want model-derived 256000", got)
+	}
+	value, ok := resolved.Value("context_window_tokens")
+	if !ok || value.Source != SourceDerived {
+		t.Fatalf("context_window_tokens value = %#v, want derived", value)
+	}
+}
+
 func TestWebSummaryModelDefaultsFollowProviderWithoutSpark(t *testing.T) {
 	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
 	t.Setenv("FAST_AGENT_WEB_SUMMARY_MODE", "model")
@@ -378,6 +457,13 @@ func TestProfileDisableSparkRewritesSparkUnlessOverridden(t *testing.T) {
 		t.Fatalf("spark should be disabled by billy profile: disable=%v model=%q provider=%q", cfg.DisableSpark, cfg.Model, cfg.Provider)
 	}
 
+	t.Setenv("FAST_AGENT_MODEL", "gpt-5.3-codex-spark")
+	cfg = Default()
+	if !cfg.DisableSpark || cfg.Model != "gpt-5.3-codex-spark" || cfg.ContextWindowTokens != 128_000 {
+		t.Fatalf("explicit spark id should keep spark metadata: disable=%v model=%q context=%d", cfg.DisableSpark, cfg.Model, cfg.ContextWindowTokens)
+	}
+
+	t.Setenv("FAST_AGENT_MODEL", "spark")
 	t.Setenv("FAST_AGENT_DISABLE_SPARK", "false")
 	cfg = Default()
 	if cfg.DisableSpark || cfg.Model != "gpt-5.3-codex-spark" || cfg.Provider != "openai-codex" {

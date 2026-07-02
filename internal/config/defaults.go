@@ -27,8 +27,9 @@ func (c Config) APIKey() string {
 }
 
 func (c *Config) ApplyModelProviderDefaults() {
+	rawModel := c.Model
 	c.Model = modelinfo.NormalizeAlias(c.Model)
-	if c.DisableSpark && modelinfo.IsSparkModel(c.Model) {
+	if c.DisableSpark && modelinfo.IsSparkAlias(rawModel) {
 		c.Model = "gpt-5.4-mini"
 	}
 	c.Provider = modelinfo.ProviderForModel(c.Model, c.Provider)
@@ -41,9 +42,30 @@ func (c *Config) applyModelContextWindowDefault() {
 	if info.ContextWindowTokens <= 0 {
 		return
 	}
+	if c.contextWindowExplicitOverride && c.ContextWindowTokens > 0 {
+		return
+	}
 	if c.ContextWindowTokens <= 0 || c.ContextWindowTokens == 128_000 || (info.Provider == modelinfo.ProviderOpenAICodex && c.ContextWindowTokens == legacyDefaultContextWindowTokens) {
 		c.ContextWindowTokens = info.ContextWindowTokens
 	}
+}
+
+func (c Config) ContextWindowExplicitOverride() bool {
+	return c.contextWindowExplicitOverride && c.ContextWindowTokens > 0
+}
+
+func (c Config) ContextWindowSourceLabel() string {
+	if c.ContextWindowExplicitOverride() {
+		return "override"
+	}
+	info := modelinfo.Lookup(c.Model)
+	if info.ContextWindowTokens > 0 && c.ContextWindowTokens == info.ContextWindowTokens {
+		return "model"
+	}
+	if c.ContextWindowTokens > 0 {
+		return "fallback"
+	}
+	return ""
 }
 
 func (c *Config) applyContextCompactDefault() {
@@ -65,8 +87,9 @@ func (c *Config) ApplyWebSummaryDefaults() {
 	if strings.TrimSpace(c.WebExaAPIKeyEnv) == "" {
 		c.WebExaAPIKeyEnv = "EXA_API_KEY"
 	}
+	rawWebSummaryModel := c.WebSummaryModel
 	c.WebSummaryModel = modelinfo.NormalizeAlias(c.WebSummaryModel)
-	if c.DisableSpark && modelinfo.IsSparkModel(c.WebSummaryModel) {
+	if c.DisableSpark && modelinfo.IsSparkAlias(rawWebSummaryModel) {
 		c.WebSummaryModel = "gpt-5.4-mini"
 	}
 	c.WebSummaryProvider = modelinfo.NormalizeProvider(c.WebSummaryProvider)
@@ -86,8 +109,9 @@ func (c *Config) ApplyWebSummaryDefaults() {
 		c.WebSummaryTimeout = 60 * time.Second
 	}
 	c.ContextCompactStrategy = NormalizeContextCompactStrategy(c.ContextCompactStrategy)
+	rawContextCompactSummaryModel := c.ContextCompactSummaryModel
 	c.ContextCompactSummaryModel = modelinfo.NormalizeAlias(c.ContextCompactSummaryModel)
-	if c.DisableSpark && modelinfo.IsSparkModel(c.ContextCompactSummaryModel) {
+	if c.DisableSpark && modelinfo.IsSparkAlias(rawContextCompactSummaryModel) {
 		c.ContextCompactSummaryModel = "gpt-5.4-mini"
 	}
 	c.ContextCompactSummaryProvider = modelinfo.NormalizeProvider(c.ContextCompactSummaryProvider)

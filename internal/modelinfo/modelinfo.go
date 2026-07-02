@@ -381,6 +381,17 @@ func IsSparkModel(model string) bool {
 	return NormalizeAlias(model) == "gpt-5.3-codex-spark"
 }
 
+func IsSparkAlias(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	model = strings.Join(strings.Fields(model), " ")
+	switch model {
+	case "spark", "codex spark":
+		return true
+	default:
+		return false
+	}
+}
+
 func IsDeepSeekModel(model string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "deepseek-")
 }

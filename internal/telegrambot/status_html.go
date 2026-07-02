@@ -58,7 +58,7 @@ func formatProviderStatusText(name string, status credentials.ProviderStatus) st
 
 func StatusHTML(state ChatState, opts Options) string {
 	model := fallback(state.Model, opts.Model)
-	contextWindow := effectiveContextWindowForModel(model, opts.ContextWindow)
+	contextWindow := resolveContextWindowForModel(model, opts.ContextWindow, opts.ContextWindowSource)
 	var allowedChats []string
 	for chat := range opts.AllowedChatIDs {
 		allowedChats = append(allowedChats, strconv.FormatInt(chat, 10))
@@ -87,10 +87,21 @@ func StatusHTML(state ChatState, opts Options) string {
 		"tools: <code>" + esc(strconv.Itoa(state.ToolCalls)) + "</code>\n" +
 		"event cursor: <code>" + esc(strconv.FormatInt(state.LastEventSeq, 10)) + "</code>\n" +
 		"pending input: <code>" + esc(statusPendingInput(state)) + "</code>\n" +
-		"context window: <code>" + esc(compactInt(contextWindow)) + "</code>\n" +
+		"context window: <code>" + esc(compactInt(contextWindow.Tokens)) + "</code>" + esc(contextWindowStatusSuffix(contextWindow.Source)) + "\n" +
 		"send: <code>" + esc(fmt.Sprint(opts.SendEnabled && !opts.DryRunDefault)) + "</code>\n" +
 		"allowed chats: <code>" + esc(strings.Join(allowedChats, ",")) + "</code>\n" +
 		"allowed users: <code>" + esc(strings.Join(allowedUsers, ",")) + "</code>"
+}
+
+func contextWindowStatusSuffix(source string) string {
+	switch strings.TrimSpace(source) {
+	case "override":
+		return " (override)"
+	case "fallback":
+		return " (fallback)"
+	default:
+		return ""
+	}
 }
 
 func statusPendingInput(state ChatState) string {

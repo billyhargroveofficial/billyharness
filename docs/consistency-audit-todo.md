@@ -36,19 +36,30 @@ formatters, and config resolution sharper.
 
 ### 1. Make model context windows a single runtime source of truth
 
-- [ ] Ensure every user-facing context-window value comes from
+- [x] Ensure every user-facing context-window value comes from
   `internal/modelinfo.Lookup(model).ContextWindowTokens` unless the user has an
   explicit context override.
-- [ ] Make explicit overrides visible as overrides, not silent derived model
+- [x] Make explicit overrides visible as overrides, not silent derived model
   defaults.
-- [ ] Preserve `deepseek-v4-flash` and `deepseek-v4-pro` at `1_000_000`;
+- [x] Preserve `deepseek-v4-flash` and `deepseek-v4-pro` at `1_000_000`;
   preserve Codex/OAuth defaults currently encoded as:
   - `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`: `256_000`
   - `gpt-5.5-pro`, `gpt-5.4-pro`: `400_000`
   - `gpt-5.3-codex-spark`: `128_000`
-- [ ] Add a focused test that `/status`, `/context`, TUI inline status, and
+- [x] Add a focused test that `/status`, `/context`, TUI inline status, and
   `config inspect` all agree for `gpt-5.5`, `gpt-5.4-mini`,
   `gpt-5.3-codex-spark`, and both DeepSeek models.
+
+Evidence:
+
+- Implemented runtime context-window provenance through config/runtime limits,
+  Telegram status options, gateway `/context` responses, and TUI inline status.
+- Explicit context-window overrides from config/env/CLI/gateway now stay
+  visible as `override`; stale settings/profile 1M values still re-derive for
+  Codex models.
+- Preserved explicit full model id `gpt-5.3-codex-spark` at 128k while keeping
+  the `spark` shorthand subject to the profile's disable-spark preference.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/modelinfo ./internal/config ./internal/telegrambot ./internal/tui ./internal/gatewayclient ./cmd/fast-agent-harness`.
 
 Files to inspect/change:
 

@@ -40,6 +40,7 @@ type RuntimeLimits struct {
 	ProviderMaxRetries            int
 	MaxToolOutputBytes            int
 	ContextWindowTokens           int64
+	ContextWindowSource           string
 	ContextCompactTokens          int
 	ContextCompactKeep            int
 	ContextCompactMaxChars        int
@@ -163,6 +164,7 @@ func (c Config) RuntimeLimits() RuntimeLimits {
 		ProviderMaxRetries:            c.ProviderMaxRetries,
 		MaxToolOutputBytes:            c.MaxToolOutputBytes,
 		ContextWindowTokens:           c.ContextWindowTokens,
+		ContextWindowSource:           c.ContextWindowSourceLabel(),
 		ContextCompactTokens:          c.ContextCompactTokens,
 		ContextCompactKeep:            c.ContextCompactKeep,
 		ContextCompactMaxChars:        c.ContextCompactMaxChars,

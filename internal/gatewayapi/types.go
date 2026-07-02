@@ -153,6 +153,7 @@ type SessionContextResponse struct {
 	ImageSubmissions        int                  `json:"image_submissions,omitempty"`
 	EstimatedTokens         int64                `json:"estimated_tokens"`
 	ContextWindowTokens     int64                `json:"context_window_tokens"`
+	ContextWindowSource     string               `json:"context_window_source,omitempty"`
 	ContextCompactTokens    int64                `json:"context_compact_tokens"`
 	PercentUsed             float64              `json:"percent_used"`
 	CompactThresholdPercent float64              `json:"compact_threshold_percent"`

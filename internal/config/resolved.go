@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 )
 
 const (
@@ -480,6 +481,9 @@ func (s *resolveState) applyValue(key string, value any, source, sourcePath, sou
 		s.warn(fmt.Sprintf("invalid config %s from %s: %v", key, source, err))
 		return
 	}
+	if key == "context_window_tokens" {
+		s.cfg.contextWindowExplicitOverride = isExplicitContextWindowOverrideSource(source)
+	}
 	s.record(key, displayConfigValue(spec.get(s.cfg)), source, sourcePath, sourceKey, spec.Redacted, "", "")
 }
 
@@ -504,6 +508,8 @@ func (s *resolveState) finalizeDerivedValues() {
 	}
 	if s.cfg.ContextWindowTokens != beforeContextWindow {
 		s.record("context_window_tokens", s.cfg.ContextWindowTokens, SourceDerived, "", "model", false, "derived from model "+s.cfg.Model, "")
+	} else if s.cfg.ContextWindowExplicitOverride() {
+		s.recordContextWindowOverrideWarning()
 	}
 	if s.cfg.ContextCompactTokens != beforeCompactTokens {
 		s.record("context_compact_tokens", s.cfg.ContextCompactTokens, SourceDerived, "", "context_window_tokens", false, "clamped to context window for "+s.cfg.Model, "")
@@ -576,6 +582,28 @@ func isExplicitProviderSource(source string) bool {
 	default:
 		return false
 	}
+}
+
+func isExplicitContextWindowOverrideSource(source string) bool {
+	switch source {
+	case SourceHomeConfig, SourceProject, SourceDotenv, SourceEnvironment, SourceCLI, SourceGateway:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *resolveState) recordContextWindowOverrideWarning() {
+	current, ok := s.values["context_window_tokens"]
+	if !ok {
+		return
+	}
+	info := modelinfo.Lookup(s.cfg.Model)
+	if info.ContextWindowTokens <= 0 || info.ContextWindowTokens == s.cfg.ContextWindowTokens {
+		return
+	}
+	warning := fmt.Sprintf("explicit override; model %s default is %d", s.cfg.Model, info.ContextWindowTokens)
+	s.record(current.Key, current.Value, current.Source, current.SourcePath, current.SourceKey, current.Redacted, warning, current.Error)
 }
 
 func (s *resolveState) record(key string, value any, source, sourcePath, sourceKey string, redacted bool, warning, err string) {

@@ -121,6 +121,7 @@ func BuildContextResponseWithOptions(limits config.RuntimeLimits, id string, mes
 		ImageSubmissions:        protocol.MessageImageSubmissionCount(messages),
 		EstimatedTokens:         estimatedTokens,
 		ContextWindowTokens:     contextWindow,
+		ContextWindowSource:     limits.ContextWindowSource,
 		ContextCompactTokens:    compactAt,
 		PercentUsed:             percentUsed,
 		CompactThresholdPercent: thresholdPercent,

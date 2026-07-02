@@ -15,6 +15,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -264,6 +265,46 @@ func TestInlineStatusShowsModelAccessCacheCostAndSession(t *testing.T) {
 		if strings.Contains(status, bad) {
 			t.Fatalf("status should not contain raw provider counter %q: %q", bad, status)
 		}
+	}
+}
+
+func TestInlineStatusContextWindowFollowsModelInfo(t *testing.T) {
+	models := []string{
+		"gpt-5.5",
+		"gpt-5.4-mini",
+		"gpt-5.3-codex-spark",
+		"deepseek-v4-flash",
+		"deepseek-v4-pro",
+	}
+	for _, model := range models {
+		t.Run(model, func(t *testing.T) {
+			m := newTestModel(t)
+			m.width = 220
+			m.lastInputTok = 128
+			if !m.setModel(model) {
+				t.Fatalf("setModel(%q) failed: %s", model, m.status)
+			}
+			wantWindow := compactNumber(modelinfo.Lookup(model).ContextWindowTokens)
+			status := stripANSITest(m.inlineStatusView())
+			if !strings.Contains(status, "Context 128/"+wantWindow) {
+				t.Fatalf("inline status = %q, want context denominator %s", status, wantWindow)
+			}
+			if strings.Contains(status, "override") {
+				t.Fatalf("model-derived inline status should not be labeled override: %q", status)
+			}
+		})
+	}
+}
+
+func TestInlineStatusLabelsExplicitContextWindowOverride(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 220
+	m.lastInputTok = 128
+	m.runtime.ContextWindowTokens = 1_000_000
+	m.runtime.ContextWindowSource = "override"
+	status := stripANSITest(m.inlineStatusView())
+	if !strings.Contains(status, "Context 128/1.0m 0.0% override used") {
+		t.Fatalf("inline status should label explicit override: %q", status)
 	}
 }
 

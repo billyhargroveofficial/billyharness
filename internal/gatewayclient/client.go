@@ -462,7 +462,8 @@ func FormatSessionContext(resp gatewayapi.SessionContextResponse) string {
 		b.WriteByte('\n')
 	}
 	if resp.ContextWindowTokens > 0 {
-		fmt.Fprintf(&b, "active context: %s / %s (%.1f%%)\n", compactContextNumber(resp.EstimatedTokens), compactContextNumber(resp.ContextWindowTokens), resp.PercentUsed)
+		source := contextWindowSourceSuffix(resp.ContextWindowSource)
+		fmt.Fprintf(&b, "active context: %s / %s (%.1f%%%s)\n", compactContextNumber(resp.EstimatedTokens), compactContextNumber(resp.ContextWindowTokens), resp.PercentUsed, source)
 	} else {
 		fmt.Fprintf(&b, "active context: %s\n", compactContextNumber(resp.EstimatedTokens))
 	}
@@ -576,6 +577,17 @@ func FormatSessionContext(resp gatewayapi.SessionContextResponse) string {
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func contextWindowSourceSuffix(source string) string {
+	switch strings.TrimSpace(source) {
+	case "override":
+		return ", override"
+	case "fallback":
+		return ", fallback"
+	default:
+		return ""
+	}
 }
 
 func formatContextRuntime(runtime gatewayapi.ContextRuntime) string {

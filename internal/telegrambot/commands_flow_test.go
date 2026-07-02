@@ -14,6 +14,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -147,6 +148,40 @@ func TestTelegramModelCommandAndStatusShowInputCapability(t *testing.T) {
 	html = StatusHTML(ChatState{Model: "gpt-5.4-mini"}, Options{Model: "deepseek-v4-flash", ContextWindow: 1_000_000})
 	if !strings.Contains(html, "context window: <code>256.0k</code>") {
 		t.Fatalf("status html should use mini model context window: %q", html)
+	}
+}
+
+func TestStatusHTMLContextWindowFollowsModelInfo(t *testing.T) {
+	models := []string{
+		"gpt-5.5",
+		"gpt-5.4-mini",
+		"gpt-5.3-codex-spark",
+		"deepseek-v4-flash",
+		"deepseek-v4-pro",
+	}
+	for _, model := range models {
+		t.Run(model, func(t *testing.T) {
+			want := compactInt(modelinfo.Lookup(model).ContextWindowTokens)
+			html := StatusHTML(ChatState{Model: model}, Options{Model: "deepseek-v4-flash", ContextWindow: 1_000_000})
+			line := "context window: <code>" + want + "</code>"
+			if !strings.Contains(html, line) {
+				t.Fatalf("status html = %q, want %q", html, line)
+			}
+			if strings.Contains(html, "(override)") {
+				t.Fatalf("model-derived status should not be labeled override: %q", html)
+			}
+		})
+	}
+}
+
+func TestStatusHTMLLabelsExplicitContextWindowOverride(t *testing.T) {
+	html := StatusHTML(ChatState{Model: "gpt-5.5"}, Options{
+		Model:               "gpt-5.5",
+		ContextWindow:       1_000_000,
+		ContextWindowSource: "override",
+	})
+	if !strings.Contains(html, "context window: <code>1.00M</code> (override)") {
+		t.Fatalf("status html should label explicit override: %q", html)
 	}
 }
 

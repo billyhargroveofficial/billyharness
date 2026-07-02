@@ -23,6 +23,7 @@ type Config struct {
 	MaxParallelTools              int
 	ProviderMaxRetries            int
 	ContextWindowTokens           int64
+	contextWindowExplicitOverride bool
 	ContextCompactTokens          int
 	ContextCompactKeep            int
 	ContextCompactMaxChars        int

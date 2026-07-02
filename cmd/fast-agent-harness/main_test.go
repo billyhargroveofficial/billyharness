@@ -15,6 +15,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/commandregistry"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
@@ -189,6 +190,43 @@ func TestConfigInspectJSONDoesNotLeakDotenvSecrets(t *testing.T) {
 		!strings.Contains(out.String(), `"max_output_tokens"`) ||
 		!strings.Contains(out.String(), `"runtime_tool"`) {
 		t.Fatalf("config inspect missing diagnostics: %s", out.String())
+	}
+}
+
+func TestConfigInspectJSONContextWindowsFollowModelInfo(t *testing.T) {
+	models := []string{
+		"gpt-5.5",
+		"gpt-5.4-mini",
+		"gpt-5.3-codex-spark",
+		"deepseek-v4-flash",
+		"deepseek-v4-pro",
+	}
+	for _, model := range models {
+		t.Run(model, func(t *testing.T) {
+			t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+			t.Setenv("FAST_AGENT_ENV_FILE", "")
+			t.Setenv("FAST_AGENT_MODEL", model)
+			var out bytes.Buffer
+			if err := configCommand([]string{"inspect", "-json"}, &out); err != nil {
+				t.Fatal(err)
+			}
+			var payload struct {
+				Diagnostics config.DiagnosticSnapshot `json:"diagnostics"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			want := modelinfo.Lookup(model).ContextWindowTokens
+			if payload.Diagnostics.ProviderCapability.ContextWindowTokens != want ||
+				payload.Diagnostics.RuntimeTool.ContextWindowTokens != want {
+				t.Fatalf("diagnostics context = capability:%d runtime:%d, want %d\n%s",
+					payload.Diagnostics.ProviderCapability.ContextWindowTokens,
+					payload.Diagnostics.RuntimeTool.ContextWindowTokens,
+					want,
+					out.String(),
+				)
+			}
+		})
 	}
 }
 

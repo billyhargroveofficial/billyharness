@@ -33,6 +33,19 @@ func TestStatusErrorMatchesSessionNotFound(t *testing.T) {
 	}
 }
 
+func TestFormatSessionContextLabelsExplicitContextWindowOverride(t *testing.T) {
+	text := FormatSessionContext(gatewayapi.SessionContextResponse{
+		ID:                  "session-1",
+		EstimatedTokens:     128,
+		ContextWindowTokens: 1_000_000,
+		ContextWindowSource: "override",
+		PercentUsed:         0.0128,
+	})
+	if !strings.Contains(text, "active context: 128 / 1.00M (0.0%, override)") {
+		t.Fatalf("context report should label override:\n%s", text)
+	}
+}
+
 func TestCreateSessionWithOwnerSendsOwnerMetadata(t *testing.T) {
 	var got gatewayapi.CreateSessionRequest
 	server := testkit.NewRouteServer(t, testkit.Route{

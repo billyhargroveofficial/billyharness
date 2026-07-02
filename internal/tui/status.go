@@ -25,8 +25,8 @@ func (m Model) inlineStatusView() string {
 		{m.runStateText(), styles.statusState},
 		{m.currentModel(), styles.statusModel},
 		{"🧠 " + m.currentThinking().effortLabel(), styles.statusReasoning},
-		{access, styles.statusAccess},
 		{"Context " + m.contextText() + " used", styles.statusUsage},
+		{access, styles.statusAccess},
 		{m.costText(), styles.statusCost},
 	}
 	bottom := []statusSegment{}
@@ -103,6 +103,23 @@ func (m Model) spinner() string {
 }
 
 func (m Model) contextText() string {
+	used := m.contextTokens()
+	window := m.runtime.ContextWindowTokens
+	if window <= 0 {
+		return compactNumber(used)
+	}
+	percent := float64(used) / float64(window) * 100
+	text := fmt.Sprintf("%s/%s %.1f%%", compactNumber(used), compactNumber(window), percent)
+	if percent >= 10 {
+		text = fmt.Sprintf("%s/%s %.0f%%", compactNumber(used), compactNumber(window), percent)
+	}
+	if m.runtime.ContextWindowSource == "override" {
+		text += " override"
+	}
+	return text
+}
+
+func (m Model) contextPercentText() string {
 	used := m.contextTokens()
 	window := m.runtime.ContextWindowTokens
 	if window <= 0 {

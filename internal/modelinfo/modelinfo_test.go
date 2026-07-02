@@ -39,6 +39,12 @@ func TestIsSparkModelUsesAliases(t *testing.T) {
 	if IsSparkModel("gpt-5.4-mini") {
 		t.Fatalf("mini should not be detected as spark")
 	}
+	if !IsSparkAlias("spark") || !IsSparkAlias("codex spark") {
+		t.Fatalf("spark shorthand aliases were not detected")
+	}
+	if IsSparkAlias("gpt-5.3-codex-spark") {
+		t.Fatalf("full spark model id should not be treated as shorthand alias")
+	}
 }
 
 func TestLookupIncludesBillingHints(t *testing.T) {
