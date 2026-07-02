@@ -78,15 +78,27 @@ Tests:
 
 ### 2. Separate selected model from active session runtime model
 
-- [ ] Telegram `/status` currently uses chat state/options for the selected
+- [x] Telegram `/status` currently uses chat state/options for the selected
   model. `/context` uses gateway events for runtime model. Make the difference
   explicit:
   - `selected model`: what the next run will use.
   - `active runtime model`: what the current session/run actually used, if known.
-- [ ] TUI should expose the same distinction in `/config` or `/status` when a
+- [x] TUI should expose the same distinction in `/config` or `/status` when a
   gateway session is attached.
-- [ ] If the active runtime is unknown, show `unknown` rather than guessing from
+- [x] If the active runtime is unknown, show `unknown` rather than guessing from
   defaults.
+
+Evidence:
+
+- Telegram `/status` now renders `selected model` from chat state/options and
+  `active runtime model` from gateway `/v1/sessions/{id}/status` when a session
+  is attached; unavailable runtime state is shown as `unknown`.
+- TUI `/status` now renders `selected model` and `active runtime model`; the
+  runtime model is projected from `session.status` events, preserving JSONL as
+  source of truth.
+- Tests cover changed selected model after an existing runtime model in
+  Telegram and TUI, plus unknown runtime fallback.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/gateway ./internal/gatewayclient ./internal/telegrambot ./internal/tui`.
 
 Files to inspect/change:
 

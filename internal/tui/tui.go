@@ -89,6 +89,7 @@ type Model struct {
 	gatewayURL          string
 	sessionID           string
 	lastGatewayEventSeq int64
+	activeRuntimeModel  string
 	messages            []protocol.Message
 	attachments         []protocol.AttachmentRef
 	version             string

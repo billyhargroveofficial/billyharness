@@ -8,6 +8,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 )
 
 func HelpHTML() string {
@@ -57,6 +58,10 @@ func formatProviderStatusText(name string, status credentials.ProviderStatus) st
 }
 
 func StatusHTML(state ChatState, opts Options) string {
+	return StatusHTMLWithRuntime(state, opts, gatewayapi.SessionStatus{})
+}
+
+func StatusHTMLWithRuntime(state ChatState, opts Options, runtime gatewayapi.SessionStatus) string {
 	model := fallback(state.Model, opts.Model)
 	contextWindow := resolveContextWindowForModel(model, opts.ContextWindow, opts.ContextWindowSource)
 	var allowedChats []string
@@ -79,7 +84,8 @@ func StatusHTML(state ChatState, opts Options) string {
 	}
 	return "<b>Status</b>\n" +
 		"session: <code>" + esc(short(state.SessionID)) + "</code>\n" +
-		"model: <code>" + esc(modelWithCapability(model)) + "</code>\n" +
+		"selected model: <code>" + esc(modelWithCapability(model)) + "</code>\n" +
+		"active runtime model: <code>" + esc(runtimeModelLabel(runtime)) + "</code>\n" +
 		"profile: <code>" + esc(fallback(state.Profile, opts.Profile)) + "</code>\n" +
 		"access mode: <code>" + esc(config.NormalizeAccessMode(fallback(state.AccessMode, opts.AccessMode))) + "</code>\n" +
 		"reasoning: <code>" + esc(fallback(state.ReasoningEffort, opts.ReasoningEffort)) + "</code>\n" +
@@ -87,10 +93,18 @@ func StatusHTML(state ChatState, opts Options) string {
 		"tools: <code>" + esc(strconv.Itoa(state.ToolCalls)) + "</code>\n" +
 		"event cursor: <code>" + esc(strconv.FormatInt(state.LastEventSeq, 10)) + "</code>\n" +
 		"pending input: <code>" + esc(statusPendingInput(state)) + "</code>\n" +
-		"context window: <code>" + esc(compactInt(contextWindow.Tokens)) + "</code>" + esc(contextWindowStatusSuffix(contextWindow.Source)) + "\n" +
+		"selected context window: <code>" + esc(compactInt(contextWindow.Tokens)) + "</code>" + esc(contextWindowStatusSuffix(contextWindow.Source)) + "\n" +
 		"send: <code>" + esc(fmt.Sprint(opts.SendEnabled && !opts.DryRunDefault)) + "</code>\n" +
 		"allowed chats: <code>" + esc(strings.Join(allowedChats, ",")) + "</code>\n" +
 		"allowed users: <code>" + esc(strings.Join(allowedUsers, ",")) + "</code>"
+}
+
+func runtimeModelLabel(runtime gatewayapi.SessionStatus) string {
+	model := strings.TrimSpace(runtime.Model)
+	if model == "" {
+		return "unknown"
+	}
+	return modelWithCapability(model)
 }
 
 func contextWindowStatusSuffix(source string) string {

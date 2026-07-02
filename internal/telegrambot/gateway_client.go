@@ -31,6 +31,10 @@ type Harness interface {
 	ImportCodexAuth(context.Context) (credentials.ProviderStatus, error)
 }
 
+type sessionStatusReporter interface {
+	SessionStatus(context.Context, string) (gatewayapi.SessionStatus, error)
+}
+
 type GatewayClient struct {
 	BaseURL string
 	Client  *http.Client
@@ -65,6 +69,10 @@ func (c *GatewayClient) ListSessions(ctx context.Context) ([]gatewayapi.SessionS
 
 func (c *GatewayClient) GetSession(ctx context.Context, sessionID string) (gatewayapi.SessionResponse, error) {
 	return c.gatewayClient().GetSession(ctx, sessionID)
+}
+
+func (c *GatewayClient) SessionStatus(ctx context.Context, sessionID string) (gatewayapi.SessionStatus, error) {
+	return c.gatewayClient().SessionStatus(ctx, sessionID)
 }
 
 func (c *GatewayClient) RunSession(ctx context.Context, sessionID string, run gatewayapi.RunRequest, emit func(protocol.Event)) error {

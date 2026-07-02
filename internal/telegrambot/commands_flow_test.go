@@ -185,6 +185,80 @@ func TestStatusHTMLLabelsExplicitContextWindowOverride(t *testing.T) {
 	}
 }
 
+func TestStatusHTMLSeparatesSelectedAndRuntimeModel(t *testing.T) {
+	html := StatusHTMLWithRuntime(
+		ChatState{SessionID: "session-1", Model: "gpt-5.5"},
+		Options{Model: "deepseek-v4-flash"},
+		gatewayapi.SessionStatus{Model: "deepseek-v4-flash"},
+	)
+	for _, want := range []string{
+		"selected model: <code>gpt-5.5 (vision-capable)</code>",
+		"active runtime model: <code>deepseek-v4-flash (text-only)</code>",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("status html = %q, want %q", html, want)
+		}
+	}
+}
+
+func TestStatusHTMLShowsUnknownRuntimeModelWhenUnavailable(t *testing.T) {
+	html := StatusHTML(ChatState{SessionID: "session-1", Model: "gpt-5.5"}, Options{Model: "deepseek-v4-flash"})
+	if !strings.Contains(html, "active runtime model: <code>unknown</code>") {
+		t.Fatalf("status html should show unknown runtime model: %q", html)
+	}
+}
+
+type statusReportingHarness struct {
+	scriptedHarness
+	status    gatewayapi.SessionStatus
+	sessionID string
+}
+
+func (h *statusReportingHarness) SessionStatus(_ context.Context, sessionID string) (gatewayapi.SessionStatus, error) {
+	h.sessionID = sessionID
+	return h.status, nil
+}
+
+func TestTelegramStatusCommandFetchesRuntimeModel(t *testing.T) {
+	var sentText string
+	client := newTelegramAPIClient(t, "bottoken", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			sentText, _ = payload["text"].(string)
+			writeTelegramResult(w, SentMessage{MessageID: 12, Chat: Chat{ID: 123}})
+		},
+	})
+	harness := &statusReportingHarness{status: gatewayapi.SessionStatus{Model: "deepseek-v4-flash"}}
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      t.TempDir() + "/state.json",
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := bot.chatState(chatKey(123, 0))
+	state.SessionID = "session-1"
+	state.Model = "gpt-5.5"
+	bot.setChatState(chatKey(123, 0), state)
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/status"})
+	if harness.sessionID != "session-1" {
+		t.Fatalf("SessionStatus called with %q", harness.sessionID)
+	}
+	for _, want := range []string{
+		"selected model: <code>gpt-5.5 (vision-capable)</code>",
+		"active runtime model: <code>deepseek-v4-flash (text-only)</code>",
+	} {
+		if !strings.Contains(sentText, want) {
+			t.Fatalf("status command text = %q, want %q", sentText, want)
+		}
+	}
+}
+
 func TestTelegramContextCommandShowsSessionContext(t *testing.T) {
 	var sentText string
 	var parseMode string

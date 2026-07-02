@@ -279,6 +279,15 @@ func (c *Client) GetSession(ctx context.Context, sessionID string) (gatewayapi.S
 	return out, nil
 }
 
+func (c *Client) SessionStatus(ctx context.Context, sessionID string) (gatewayapi.SessionStatus, error) {
+	var out gatewayapi.SessionStatus
+	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/status"
+	if err := c.JSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return gatewayapi.SessionStatus{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) RunSession(ctx context.Context, sessionID string, run gatewayapi.RunRequest, emit func(protocol.Event)) error {
 	_, err := c.RunSessionResult(ctx, sessionID, run, emit)
 	return err

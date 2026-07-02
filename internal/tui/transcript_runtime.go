@@ -10,6 +10,7 @@ import (
 
 	uxprojector "github.com/billyhargroveofficial/billyharness/internal/clientux/projector"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/toolrender"
@@ -237,11 +238,12 @@ func (m Model) statusText() string {
 		follow = "on"
 	}
 	return fmt.Sprintf(
-		"mode: %s\nchat: %s\nprovider: %s\nmodel: %s\nprofile: %s\naccess mode: %s\nreasoning: %s / %s\nthinking blocks: %s\ntool blocks: %s\ntranscript: %s\ntheme: %s\ngateway: %s\ngateway session: %s\nlocal settings: %s\ntools: %s, max rounds %d\ncalls: model %d, tools %d\ntokens: input %d, output %d\ncontext: %s\ncost: %s\nfollow output: %s",
+		"mode: %s\nchat: %s\nprovider: %s\nselected model: %s\nactive runtime model: %s\nprofile: %s\naccess mode: %s\nreasoning: %s / %s\nthinking blocks: %s\ntool blocks: %s\ntranscript: %s\ntheme: %s\ngateway: %s\ngateway session: %s\nlocal settings: %s\ntools: %s, max rounds %d\ncalls: model %d, tools %d\ntokens: input %d, output %d\ncontext: %s\ncost: %s\nfollow output: %s",
 		mode,
 		m.localChatID,
 		m.currentProvider(),
 		m.currentModel(),
+		m.activeRuntimeModelText(),
 		m.currentProfile(),
 		m.currentAccessMode(),
 		m.currentThinking().kind,
@@ -263,6 +265,13 @@ func (m Model) statusText() string {
 		m.costText(),
 		follow,
 	)
+}
+
+func (m Model) activeRuntimeModelText() string {
+	if strings.TrimSpace(m.activeRuntimeModel) == "" {
+		return "unknown"
+	}
+	return strings.TrimSpace(m.activeRuntimeModel)
 }
 
 func (m Model) modelsText() string {
@@ -434,6 +443,8 @@ func (m *Model) applyEvent(event protocol.Event) {
 		m.applyProjectedTranscript(event)
 	}
 	switch event.Type {
+	case protocol.EventSessionStatus:
+		m.applySessionStatus(event.Data)
 	case protocol.EventRunStarted:
 		m.status = "run started"
 		if m.runStartedAt.IsZero() {
@@ -486,6 +497,17 @@ func (m *Model) applyEvent(event protocol.Event) {
 		m.upsertRunSummaryBlock(event.Type, "failed", fmt.Sprint(event.Data))
 		m.addEventBlock(event.Type, "ERROR", fmt.Sprint(event.Data))
 		m.status = "failed"
+	}
+}
+
+func (m *Model) applySessionStatus(value any) {
+	var status gatewayapi.SessionStatus
+	bytes, _ := json.Marshal(value)
+	if err := json.Unmarshal(bytes, &status); err != nil {
+		return
+	}
+	if model := strings.TrimSpace(status.Model); model != "" {
+		m.activeRuntimeModel = model
 	}
 }
 

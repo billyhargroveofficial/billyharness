@@ -79,6 +79,24 @@ func TestCreateSessionWithOwnerSendsOwnerMetadata(t *testing.T) {
 	}
 }
 
+func TestSessionStatusFetchesRuntimeModel(t *testing.T) {
+	server := testkit.NewRouteServer(t, testkit.Route{
+		Method: http.MethodGet,
+		Path:   "/v1/sessions/session-1/status",
+		Handler: func(w http.ResponseWriter, r *http.Request) {
+			testkit.WriteJSON(t, w, gatewayapi.SessionStatus{ID: "session-1", Model: "deepseek-v4-flash"})
+		},
+	})
+
+	status, err := New(server.URL).SessionStatus(context.Background(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Model != "deepseek-v4-flash" {
+		t.Fatalf("status model = %q", status.Model)
+	}
+}
+
 func TestReplaySessionEventsDropsStaleCursorEvents(t *testing.T) {
 	var sawAuth bool
 	server := testkit.NewRouteServer(t, testkit.Route{

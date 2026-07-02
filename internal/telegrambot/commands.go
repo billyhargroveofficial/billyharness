@@ -245,7 +245,23 @@ func (b *Bot) handleNewCommand(ctx context.Context, msg Message, scope ChatScope
 
 func (b *Bot) handleStatusCommand(ctx context.Context, msg Message, scope ChatScope, _ string) {
 	state := b.chatStateWithLegacy(scope.Key(), scope.LegacyKey())
-	_ = b.sendHTML(ctx, msg, StatusHTML(state, b.opts))
+	runtime := b.activeRuntimeStatus(ctx, state)
+	_ = b.sendHTML(ctx, msg, StatusHTMLWithRuntime(state, b.opts, runtime))
+}
+
+func (b *Bot) activeRuntimeStatus(ctx context.Context, state ChatState) gatewayapi.SessionStatus {
+	if strings.TrimSpace(state.SessionID) == "" {
+		return gatewayapi.SessionStatus{}
+	}
+	reporter, ok := b.harness.(sessionStatusReporter)
+	if !ok {
+		return gatewayapi.SessionStatus{}
+	}
+	status, err := reporter.SessionStatus(ctx, state.SessionID)
+	if err != nil {
+		return gatewayapi.SessionStatus{}
+	}
+	return status
 }
 
 func (b *Bot) handleModelCommand(ctx context.Context, msg Message, scope ChatScope, arg string) {

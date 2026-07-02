@@ -357,6 +357,34 @@ func TestStatusCommandShowsDetailedStatusBlock(t *testing.T) {
 	}
 }
 
+func TestStatusTextSeparatesSelectedAndRuntimeModel(t *testing.T) {
+	m := newTestModel(t)
+	m.applyEvent(protocol.Event{Type: protocol.EventSessionStatus, Data: gatewayapi.SessionStatus{
+		Model:    "deepseek-v4-flash",
+		Provider: "deepseek",
+	}})
+	if !m.setModel("gpt") {
+		t.Fatalf("setModel failed: %s", m.status)
+	}
+	text := m.statusText()
+	for _, want := range []string{
+		"selected model: gpt-5.5",
+		"active runtime model: deepseek-v4-flash",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("status text = %q, want %q", text, want)
+		}
+	}
+}
+
+func TestStatusTextShowsUnknownRuntimeModelWhenUnavailable(t *testing.T) {
+	m := newTestModel(t)
+	text := m.statusText()
+	if !strings.Contains(text, "active runtime model: unknown") {
+		t.Fatalf("status text should show unknown runtime model:\n%s", text)
+	}
+}
+
 func TestAccessModeSlashCommandUpdatesRunRequest(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 180

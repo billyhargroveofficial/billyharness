@@ -1287,8 +1287,9 @@ func (s *Server) sessionSnapshot(session *Session) sessionSnapshotProjection {
 }
 
 func normalizeSessionSnapshot(snapshot sessionSnapshotProjection) sessionSnapshotProjection {
-	model := modelinfo.NormalizeAlias(snapshot.Provider.Model.Model)
-	if snapshot.Provider.Model.DisableSpark && modelinfo.IsSparkModel(model) {
+	rawModel := snapshot.Provider.Model.Model
+	model := modelinfo.NormalizeAlias(rawModel)
+	if snapshot.Provider.Model.DisableSpark && modelinfo.IsSparkAlias(rawModel) {
 		model = "gpt-5.4-mini"
 	}
 	providerID := modelinfo.ProviderForModel(model, snapshot.Provider.Provider.Provider)
