@@ -955,8 +955,8 @@ func TestTelegramAuthCodexImportAndStatus(t *testing.T) {
 	var sentTexts []string
 	harness := &telegramAuthHarness{
 		scriptedHarness: scriptedHarness{authStatus: credentials.Status{
-			DeepSeek: credentials.ProviderStatus{Configured: true, Source: ".env", Path: "/root/billyharness/.env"},
-			Codex:    credentials.ProviderStatus{Configured: true, Source: "imported", Path: "/root/billyharness/auth/codex.json", Mode: "chatgpt", Refresh: "fresh"},
+			DeepSeek: credentials.ProviderStatus{Configured: true, Provider: "deepseek", AuthType: "api-key", Status: "configured", Credential: "redacted", Source: ".env", Path: "/root/billyharness/.env"},
+			Codex:    credentials.ProviderStatus{Configured: true, Provider: "codex", AuthType: "codex-oauth", Status: "configured", Credential: "redacted", Source: "imported", Path: "/root/billyharness/auth/codex.json", Mode: "chatgpt", Refresh: "fresh"},
 		}},
 	}
 	client := newTelegramAPIClient(t, "bottoken", map[string]telegramAPIHandler{
@@ -991,7 +991,11 @@ func TestTelegramAuthCodexImportAndStatus(t *testing.T) {
 	if len(sentTexts) != 2 {
 		t.Fatalf("sent %d auth messages, want 2: %#v", len(sentTexts), sentTexts)
 	}
-	if !strings.Contains(sentTexts[0], "<b>Auth</b>") || !strings.Contains(sentTexts[0], "refresh=fresh") {
+	if !strings.Contains(sentTexts[0], "<b>Auth</b>") ||
+		!strings.Contains(sentTexts[0], "auth=api-key") ||
+		!strings.Contains(sentTexts[0], "auth=codex-oauth") ||
+		!strings.Contains(sentTexts[0], "credential=redacted") ||
+		!strings.Contains(sentTexts[0], "refresh=fresh") {
 		t.Fatalf("auth status text = %q", sentTexts[0])
 	}
 	if !strings.Contains(sentTexts[1], "<b>Auth updated</b>") || !strings.Contains(sentTexts[1], "acct_123") {

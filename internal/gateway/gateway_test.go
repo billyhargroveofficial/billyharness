@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
@@ -362,6 +363,18 @@ func TestGatewayAuthEndpointsSaveDeepSeekAndImportCodex(t *testing.T) {
 	server.Handler().ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/v1/auth/status", nil))
 	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"configured":true`) {
 		t.Fatalf("status = %d body=%s", status.Code, status.Body.String())
+	}
+	var authStatus credentials.Status
+	if err := json.Unmarshal(status.Body.Bytes(), &authStatus); err != nil {
+		t.Fatal(err)
+	}
+	if authStatus.CostMode != "none" || authStatus.ActiveProvider != "mock" ||
+		authStatus.DeepSeek.AuthType != "api-key" || authStatus.DeepSeek.Credential != "redacted" ||
+		authStatus.Codex.AuthType != "codex-oauth" || authStatus.Codex.Credential != "redacted" {
+		t.Fatalf("auth status = %#v body=%s", authStatus, status.Body.String())
+	}
+	if strings.Contains(status.Body.String(), "sk-test-secret") || strings.Contains(status.Body.String(), "rt-test") {
+		t.Fatalf("auth status leaked secret: %s", status.Body.String())
 	}
 }
 

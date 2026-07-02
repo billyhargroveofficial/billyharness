@@ -893,6 +893,11 @@ func TestAuthCodexGatewayImport(t *testing.T) {
 	if !called || !strings.Contains(msg.text, "acct_123") {
 		t.Fatalf("called=%v text=%q", called, msg.text)
 	}
+	for _, want := range []string{"codex: configured", "credential=redacted"} {
+		if !strings.Contains(msg.text, want) {
+			t.Fatalf("auth import text missing %q: %q", want, msg.text)
+		}
+	}
 }
 
 func TestConfigCommandShowsSanitizedGatewaySummary(t *testing.T) {

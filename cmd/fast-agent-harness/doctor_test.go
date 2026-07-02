@@ -111,6 +111,13 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	if !report.Runtime.Auth.APIKeyEnvSet || !report.Runtime.Auth.CredentialFileExists || !report.Runtime.Auth.CodexAuthFileExists {
 		t.Fatalf("Runtime auth presence = %#v", report.Runtime.Auth)
 	}
+	if report.Runtime.Auth.CostMode != "metered" ||
+		report.Runtime.Auth.DeepSeek.AuthType != "api-key" ||
+		report.Runtime.Auth.DeepSeek.Credential != "redacted" ||
+		report.Runtime.Auth.Codex.AuthType != "codex-oauth" ||
+		report.Runtime.Auth.Codex.Credential != "missing" {
+		t.Fatalf("Runtime auth classification = %#v", report.Runtime.Auth)
+	}
 	if !report.Runtime.ServiceBinary.Exists || report.Runtime.ServiceBinary.SizeBytes == 0 || report.Runtime.ServiceBinary.AgeSeconds < 0 {
 		t.Fatalf("Runtime service binary = %#v", report.Runtime.ServiceBinary)
 	}
@@ -137,7 +144,7 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	var buf bytes.Buffer
 	printDoctorReport(&buf, report)
 	out := buf.String()
-	for _, want := range []string{"billyharness doctor", "model=deepseek-v4-pro", "settings:", "runtime:", "strict_hygiene=ok", "tool_output=", "auth:", "checks:"} {
+	for _, want := range []string{"billyharness doctor", "model=deepseek-v4-pro", "settings:", "runtime:", "strict_hygiene=ok", "tool_output=", "auth:", "cost_mode=metered", "auth status:", "credential=redacted", "checks:"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("formatted report missing %q:\n%s", want, out)
 		}

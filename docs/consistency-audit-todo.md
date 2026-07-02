@@ -596,11 +596,25 @@ Files:
 
 ### 17. Redact and classify auth/provider status consistently
 
-- [ ] DeepSeek API key status and Codex OAuth status should be redacted and
+- [x] DeepSeek API key status and Codex OAuth status should be redacted and
   classified the same way in `doctor`, Telegram `/auth`, TUI auth flows, and
   gateway `/v1/auth/status`.
-- [ ] Cost mode should derive from active provider/model, not from whichever
+- [x] Cost mode should derive from active provider/model, not from whichever
   auth method was most recently configured.
+
+Evidence:
+
+- `credentials.ProviderStatus` now carries shared provider/auth-type,
+  configured/missing status, and `credential=redacted|missing` classification;
+  shared formatters render the same auth status text for Telegram and TUI.
+- Gateway `/v1/auth/status`, local TUI auth status, and doctor runtime auth
+  diagnostics annotate auth status with active provider/model and a cost mode
+  derived from `modelinfo` for that runtime, independent of which credentials
+  are configured.
+- Doctor keeps file/env presence diagnostics while also printing the shared
+  redacted auth status block.
+- Tests: `/root/.local/go/bin/go test -run 'Test.*Auth.*|Test.*Credential.*|Test.*Codex.*Status.*|Test.*DeepSeek.*Status.*|Test.*Cost.*Mode.*|TestCollectDoctor.*Auth|TestCollectDoctorReportIncludesProjectHealth|TestCollectDoctorReportFromResolvedPrintsConfigProvenance' -count=1 ./internal/credentials ./internal/tui ./internal/telegrambot ./internal/gateway ./cmd/fast-agent-harness`.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/credentials ./internal/telegrambot ./internal/tui ./internal/gateway ./internal/config ./internal/modelinfo ./cmd/fast-agent-harness`.
 
 Files:
 

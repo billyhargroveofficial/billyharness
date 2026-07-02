@@ -58,6 +58,45 @@ func TestManagerResolveDeepSeekAPIKeyUsesConfiguredEnvName(t *testing.T) {
 	}
 }
 
+func TestAuthStatusClassifiesAndRedactsCredentials(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	t.Setenv("BILLYHARNESS_DOTENV_HOME_ONLY", "1")
+	t.Setenv("DEEPSEEK_API_KEY", "sk-classified-secret")
+	t.Setenv("CODEX_ACCESS_TOKEN", "at-codex-secret")
+
+	status := CurrentStatusForRuntime(config.AuthSettings{}, "deepseek", "gpt-5.5")
+	if status.ActiveProvider != "openai-codex" || status.ActiveModel != "gpt-5.5" || status.CostMode != "subscription" {
+		t.Fatalf("runtime status = %#v", status)
+	}
+	if status.DeepSeek.Provider != "deepseek" || status.DeepSeek.AuthType != "api-key" ||
+		status.DeepSeek.Status != "configured" || status.DeepSeek.Credential != "redacted" {
+		t.Fatalf("deepseek classified status = %#v", status.DeepSeek)
+	}
+	if status.Codex.Provider != "codex" || status.Codex.AuthType != "codex-oauth" ||
+		status.Codex.Status != "configured" || status.Codex.Credential != "redacted" ||
+		status.Codex.Mode != "personalAccessToken" {
+		t.Fatalf("codex classified status = %#v", status.Codex)
+	}
+	text := FormatStatusText(status)
+	for _, leak := range []string{"sk-classified-secret", "at-codex-secret"} {
+		if strings.Contains(text, leak) {
+			t.Fatalf("formatted status leaked %q:\n%s", leak, text)
+		}
+	}
+	for _, want := range []string{"runtime: provider=openai-codex model=gpt-5.5 cost_mode=subscription", "auth=api-key", "auth=codex-oauth", "credential=redacted"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("formatted status missing %q:\n%s", want, text)
+		}
+	}
+
+	deepseekRuntime := CurrentStatusForRuntime(config.AuthSettings{}, "openai-codex", "deepseek-v4-flash")
+	if deepseekRuntime.ActiveProvider != "deepseek" || deepseekRuntime.CostMode != "metered" {
+		t.Fatalf("deepseek runtime status = %#v", deepseekRuntime)
+	}
+}
+
 func TestNewManagerFromAuthSettingsUsesProjection(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", root)

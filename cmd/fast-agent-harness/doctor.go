@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 )
 
@@ -60,13 +61,17 @@ type doctorRuntimeStatus struct {
 }
 
 type doctorAuthPresence struct {
-	Provider             string `json:"provider"`
-	APIKeyEnv            string `json:"api_key_env,omitempty"`
-	APIKeyEnvSet         bool   `json:"api_key_env_set"`
-	CredentialFile       string `json:"credential_file,omitempty"`
-	CredentialFileExists bool   `json:"credential_file_exists"`
-	CodexAuthFile        string `json:"codex_auth_file,omitempty"`
-	CodexAuthFileExists  bool   `json:"codex_auth_file_exists"`
+	Provider             string                     `json:"provider"`
+	Model                string                     `json:"model,omitempty"`
+	CostMode             string                     `json:"cost_mode,omitempty"`
+	APIKeyEnv            string                     `json:"api_key_env,omitempty"`
+	APIKeyEnvSet         bool                       `json:"api_key_env_set"`
+	CredentialFile       string                     `json:"credential_file,omitempty"`
+	CredentialFileExists bool                       `json:"credential_file_exists"`
+	CodexAuthFile        string                     `json:"codex_auth_file,omitempty"`
+	CodexAuthFileExists  bool                       `json:"codex_auth_file_exists"`
+	DeepSeek             credentials.ProviderStatus `json:"deepseek"`
+	Codex                credentials.ProviderStatus `json:"codex"`
 }
 
 type doctorFileStatus struct {
@@ -218,14 +223,23 @@ func doctorAuthPresenceStatus(auth config.ProviderAuthSnapshot) doctorAuthPresen
 	if strings.TrimSpace(auth.APIKeyEnv) != "" {
 		_, apiKeySet = os.LookupEnv(auth.APIKeyEnv)
 	}
+	status := credentials.CurrentStatusForRuntime(config.AuthSettings{
+		APIKeyEnv:      auth.APIKeyEnv,
+		CredentialFile: auth.CredentialFile,
+		CodexAuthFile:  auth.CodexAuthFile,
+	}, auth.Provider, auth.Model)
 	return doctorAuthPresence{
 		Provider:             auth.Provider,
+		Model:                auth.Model,
+		CostMode:             status.CostMode,
 		APIKeyEnv:            auth.APIKeyEnv,
 		APIKeyEnvSet:         apiKeySet,
 		CredentialFile:       auth.CredentialFile,
 		CredentialFileExists: regularFileExists(auth.CredentialFile),
 		CodexAuthFile:        auth.CodexAuthFile,
 		CodexAuthFileExists:  regularFileExists(auth.CodexAuthFile),
+		DeepSeek:             status.DeepSeek,
+		Codex:                status.Codex,
 	}
 }
 
@@ -484,12 +498,21 @@ func printDoctorReport(w io.Writer, report doctorReport) {
 		doctorPathUsageSummary(report.Runtime.GatewaySessionStore),
 		doctorPathUsageSummary(report.Runtime.ToolOutputStore),
 	)
-	fmt.Fprintf(w, "auth: provider=%s api_key_env=%s credential_file=%s codex_auth=%s\n",
+	fmt.Fprintf(w, "auth: provider=%s model=%s cost_mode=%s api_key_env=%s credential_file=%s codex_auth=%s\n",
 		report.Runtime.Auth.Provider,
+		report.Runtime.Auth.Model,
+		report.Runtime.Auth.CostMode,
 		presenceSummary(report.Runtime.Auth.APIKeyEnv, report.Runtime.Auth.APIKeyEnvSet),
 		presenceSummary(report.Runtime.Auth.CredentialFile, report.Runtime.Auth.CredentialFileExists),
 		presenceSummary(report.Runtime.Auth.CodexAuthFile, report.Runtime.Auth.CodexAuthFileExists),
 	)
+	fmt.Fprintf(w, "auth status:\n%s\n", indentLines(credentials.FormatStatusText(credentials.Status{
+		DeepSeek:       report.Runtime.Auth.DeepSeek,
+		Codex:          report.Runtime.Auth.Codex,
+		ActiveProvider: report.Runtime.Auth.Provider,
+		ActiveModel:    report.Runtime.Auth.Model,
+		CostMode:       report.Runtime.Auth.CostMode,
+	}), "  "))
 	fmt.Fprintln(w, "checks:")
 	for _, check := range report.Checks {
 		detail := strings.TrimSpace(check.Detail)
@@ -499,6 +522,16 @@ func printDoctorReport(w io.Writer, report doctorReport) {
 			fmt.Fprintf(w, "  %-42s %-5s\n", check.Name, check.Status)
 		}
 	}
+}
+
+func indentLines(text, prefix string) string {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			lines[i] = prefix + line
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func doctorFileSummary(status doctorFileStatus) string {

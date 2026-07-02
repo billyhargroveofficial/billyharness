@@ -10,6 +10,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/codexauth"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 )
 
 const deepSeekKeyEnv = "DEEPSEEK_API_KEY"
@@ -21,6 +22,10 @@ const (
 
 type ProviderStatus struct {
 	Configured bool   `json:"configured"`
+	Provider   string `json:"provider,omitempty"`
+	AuthType   string `json:"auth_type,omitempty"`
+	Status     string `json:"status,omitempty"`
+	Credential string `json:"credential,omitempty"`
 	Source     string `json:"source,omitempty"`
 	Path       string `json:"path,omitempty"`
 	AccountID  string `json:"account_id,omitempty"`
@@ -30,8 +35,11 @@ type ProviderStatus struct {
 }
 
 type Status struct {
-	DeepSeek ProviderStatus `json:"deepseek"`
-	Codex    ProviderStatus `json:"codex"`
+	DeepSeek       ProviderStatus `json:"deepseek"`
+	Codex          ProviderStatus `json:"codex"`
+	ActiveProvider string         `json:"active_provider,omitempty"`
+	ActiveModel    string         `json:"active_model,omitempty"`
+	CostMode       string         `json:"cost_mode,omitempty"`
 }
 
 type SecretValue struct {
@@ -68,6 +76,19 @@ func CurrentStatusFromAuthSettings(auth config.AuthSettings) Status {
 	return NewManagerFromAuthSettings(auth).Status()
 }
 
+func CurrentStatusForRuntime(auth config.AuthSettings, provider, model string) Status {
+	return RuntimeStatus(NewManagerFromAuthSettings(auth).Status(), provider, model)
+}
+
+func RuntimeStatus(status Status, provider, model string) Status {
+	model = modelinfo.NormalizeAlias(model)
+	provider = modelinfo.ProviderForModel(model, provider)
+	status.ActiveProvider = provider
+	status.ActiveModel = model
+	status.CostMode = costModeForRuntime(provider, model)
+	return status
+}
+
 func (m Manager) Status() Status {
 	return Status{
 		DeepSeek: m.DeepSeekStatus(),
@@ -82,9 +103,9 @@ func DeepSeekStatus() ProviderStatus {
 func (m Manager) DeepSeekStatus() ProviderStatus {
 	secret, err := m.ResolveDeepSeekAPIKey()
 	if err != nil {
-		return ProviderStatus{Path: BillyDotenvPath()}
+		return classifyProviderStatus("deepseek", "api-key", ProviderStatus{Path: BillyDotenvPath()})
 	}
-	return ProviderStatus{Configured: true, Source: secret.Source, Path: secret.Path}
+	return classifyProviderStatus("deepseek", "api-key", ProviderStatus{Configured: true, Source: secret.Source, Path: secret.Path})
 }
 
 func (m Manager) ResolveDeepSeekAPIKey() (SecretValue, error) {
@@ -150,7 +171,7 @@ func (m Manager) SaveDeepSeekAPIKey(apiKey string) (ProviderStatus, error) {
 	if err := upsertDotenvValue(path, envKey, apiKey); err != nil {
 		return ProviderStatus{}, err
 	}
-	return ProviderStatus{Configured: true, Source: path, Path: path}, nil
+	return classifyProviderStatus("deepseek", "api-key", ProviderStatus{Configured: true, Source: path, Path: path}), nil
 }
 
 func CodexStatusFromAuthSettings(auth config.AuthSettings) ProviderStatus {
@@ -160,7 +181,7 @@ func CodexStatusFromAuthSettings(auth config.AuthSettings) ProviderStatus {
 func (m Manager) CodexStatus() ProviderStatus {
 	resolved := m.ResolveCodexAuth()
 	path := resolved.AuthFile
-	status := ProviderStatus{Path: path}
+	status := classifyProviderStatus("codex", "codex-oauth", ProviderStatus{Path: path})
 	if token := strings.TrimSpace(resolved.AccessToken.Value); token != "" {
 		return codexEnvStatus(token, strings.TrimSpace(resolved.AccountID.Value), resolved.AccessToken.Source, path)
 	}
@@ -171,6 +192,8 @@ func (m Manager) CodexStatus() ProviderStatus {
 	status.Mode = codexauth.StringField(payload, "auth_mode")
 	if token := codexauth.StringField(payload, "personal_access_token"); token != "" {
 		status.Configured = true
+		status.Status = "configured"
+		status.Credential = "redacted"
 		status.Source = path
 		status.Mode = "personalAccessToken"
 		status.AccountID = codexauth.StringField(payload, "chatgpt_account_id")
@@ -187,6 +210,8 @@ func (m Manager) CodexStatus() ProviderStatus {
 		return status
 	}
 	status.Configured = true
+	status.Status = "configured"
+	status.Credential = "redacted"
 	status.Source = path
 	if status.AccountID = codexauth.StringField(tokens, "account_id"); status.AccountID == "" {
 		status.AccountID = codexauth.AccountIDFromJWT(codexauth.StringField(tokens, "id_token"))
@@ -229,7 +254,7 @@ func (m Manager) lookupCredentialFileSecret(envKey, fileKey string) SecretValue 
 }
 
 func codexEnvStatus(token, accountID, source, path string) ProviderStatus {
-	status := ProviderStatus{Configured: true, Source: source, Path: path, AccountID: accountID}
+	status := classifyProviderStatus("codex", "codex-oauth", ProviderStatus{Configured: true, Source: source, Path: path, AccountID: accountID})
 	if strings.HasPrefix(strings.TrimSpace(token), "at-") {
 		status.Mode = "personalAccessToken"
 		status.Refresh = "not_required"
@@ -245,6 +270,107 @@ func codexEnvStatus(token, accountID, source, path string) ProviderStatus {
 		status.ExpiresAt = exp.UTC().Format(time.RFC3339)
 	}
 	return status
+}
+
+func classifyProviderStatus(provider, authType string, status ProviderStatus) ProviderStatus {
+	status.Provider = strings.TrimSpace(provider)
+	status.AuthType = strings.TrimSpace(authType)
+	if status.Configured {
+		status.Status = "configured"
+		status.Credential = "redacted"
+	} else {
+		status.Status = "missing"
+		status.Credential = "missing"
+	}
+	return status
+}
+
+func costModeForRuntime(provider, model string) string {
+	if mode := modelinfo.Lookup(model).CostMode; mode != "" {
+		return mode
+	}
+	switch modelinfo.NormalizeProvider(provider) {
+	case modelinfo.ProviderOpenAICodex:
+		return "subscription"
+	case modelinfo.ProviderMock:
+		return "none"
+	case modelinfo.ProviderDeepSeek:
+		return "metered"
+	default:
+		return "metered"
+	}
+}
+
+func FormatStatusText(status Status) string {
+	var parts []string
+	if strings.TrimSpace(status.ActiveProvider) != "" || strings.TrimSpace(status.ActiveModel) != "" || strings.TrimSpace(status.CostMode) != "" {
+		runtime := []string{}
+		if status.ActiveProvider != "" {
+			runtime = append(runtime, "provider="+status.ActiveProvider)
+		}
+		if status.ActiveModel != "" {
+			runtime = append(runtime, "model="+status.ActiveModel)
+		}
+		if status.CostMode != "" {
+			runtime = append(runtime, "cost_mode="+status.CostMode)
+		}
+		parts = append(parts, "runtime: "+strings.Join(runtime, " "))
+	}
+	parts = append(parts,
+		FormatProviderStatusText("deepseek", status.DeepSeek),
+		FormatProviderStatusText("codex", status.Codex),
+	)
+	return strings.Join(parts, "\n\n")
+}
+
+func FormatProviderStatusText(name string, status ProviderStatus) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = strings.TrimSpace(status.Provider)
+	}
+	if name == "" {
+		name = "provider"
+	}
+	state := strings.TrimSpace(status.Status)
+	if state == "" {
+		if status.Configured {
+			state = "configured"
+		} else {
+			state = "missing"
+		}
+	}
+	credential := strings.TrimSpace(status.Credential)
+	if credential == "" {
+		if status.Configured {
+			credential = "redacted"
+		} else {
+			credential = "missing"
+		}
+	}
+	parts := []string{name + ": " + state}
+	if status.AuthType != "" {
+		parts = append(parts, "auth="+status.AuthType)
+	}
+	parts = append(parts, "credential="+credential)
+	if status.Mode != "" {
+		parts = append(parts, "mode="+status.Mode)
+	}
+	if status.Refresh != "" {
+		parts = append(parts, "refresh="+status.Refresh)
+	}
+	if status.AccountID != "" {
+		parts = append(parts, "account="+status.AccountID)
+	}
+	if status.ExpiresAt != "" {
+		parts = append(parts, "expires="+status.ExpiresAt)
+	}
+	if status.Path != "" {
+		parts = append(parts, "path="+status.Path)
+	}
+	if status.Source != "" && status.Source != status.Path {
+		parts = append(parts, "source="+status.Source)
+	}
+	return strings.Join(parts, "\n  ")
 }
 
 func ImportCodexAuthFromAuthSettings(auth config.AuthSettings, sourcePath string) (ProviderStatus, error) {

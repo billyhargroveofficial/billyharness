@@ -113,7 +113,7 @@ func (m Model) importCodexCredential() (string, error) {
 
 func (m Model) loadAuthStatus() (authStatusResponse, error) {
 	if m.gatewayURL == "" {
-		return credentials.CurrentStatusFromAuthSettings(m.authSettings), nil
+		return credentials.CurrentStatusForRuntime(m.authSettings, m.currentProvider(), m.currentModel()), nil
 	}
 	var out authStatusResponse
 	if err := m.gatewayJSON(http.MethodGet, "/v1/auth/status", nil, &out); err != nil {
@@ -123,35 +123,9 @@ func (m Model) loadAuthStatus() (authStatusResponse, error) {
 }
 
 func formatAuthStatus(status credentials.Status) string {
-	return strings.Join([]string{
-		formatProviderStatus("deepseek", status.DeepSeek),
-		formatProviderStatus("codex", status.Codex),
-	}, "\n")
+	return credentials.FormatStatusText(status)
 }
 
 func formatProviderStatus(name string, status credentials.ProviderStatus) string {
-	state := "missing"
-	if status.Configured {
-		state = "configured"
-	}
-	parts := []string{name + ": " + state}
-	if status.Mode != "" {
-		parts = append(parts, "mode "+status.Mode)
-	}
-	if status.Refresh != "" {
-		parts = append(parts, "refresh "+status.Refresh)
-	}
-	if status.AccountID != "" {
-		parts = append(parts, "account "+status.AccountID)
-	}
-	if status.ExpiresAt != "" {
-		parts = append(parts, "expires "+status.ExpiresAt)
-	}
-	if status.Path != "" {
-		parts = append(parts, "path "+status.Path)
-	}
-	if status.Source != "" && status.Source != status.Path {
-		parts = append(parts, "source "+status.Source)
-	}
-	return strings.Join(parts, "\n  ")
+	return credentials.FormatProviderStatusText(name, status)
 }

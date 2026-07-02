@@ -23,38 +23,11 @@ func authUsageHTML() string {
 }
 
 func formatAuthStatusHTML(status credentials.Status) string {
-	return "<b>Auth</b>\n<pre>" + esc(strings.Join([]string{
-		formatProviderStatusText("deepseek", status.DeepSeek),
-		formatProviderStatusText("codex", status.Codex),
-	}, "\n\n")) + "</pre>"
+	return "<b>Auth</b>\n<pre>" + esc(credentials.FormatStatusText(status)) + "</pre>"
 }
 
 func formatProviderStatusText(name string, status credentials.ProviderStatus) string {
-	parts := []string{name}
-	if status.Configured {
-		parts = append(parts, "configured")
-	} else {
-		parts = append(parts, "not configured")
-	}
-	if status.Source != "" {
-		parts = append(parts, "source="+status.Source)
-	}
-	if status.Path != "" {
-		parts = append(parts, "path="+status.Path)
-	}
-	if status.Mode != "" {
-		parts = append(parts, "mode="+status.Mode)
-	}
-	if status.Refresh != "" {
-		parts = append(parts, "refresh="+status.Refresh)
-	}
-	if status.ExpiresAt != "" {
-		parts = append(parts, "expires="+status.ExpiresAt)
-	}
-	if status.AccountID != "" {
-		parts = append(parts, "account="+status.AccountID)
-	}
-	return strings.Join(parts, "\n  ")
+	return credentials.FormatProviderStatusText(name, status)
 }
 
 func StatusHTML(state ChatState, opts Options) string {
