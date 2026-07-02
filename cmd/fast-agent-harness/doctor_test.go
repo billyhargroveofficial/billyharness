@@ -206,6 +206,7 @@ func TestDoctorReportTracksFailuresForStrictMode(t *testing.T) {
 }
 
 func TestDoctorServiceStatusSkipsMissingSystemctl(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
 	runner := &fakeDoctorRunner{responses: map[string]fakeDoctorResponse{
 		doctorRunnerKey("", "systemctl", "is-active", "billyharness-gateway.service"): {
 			err: execNotFound("systemctl"),
@@ -215,27 +216,72 @@ func TestDoctorServiceStatusSkipsMissingSystemctl(t *testing.T) {
 		},
 	}}
 	checks := doctorServiceStatuses(context.Background(), doctorOptions{CheckServices: true, Timeout: time.Second}, runner)
-	if len(checks) != 2 {
-		t.Fatalf("checks len = %d", len(checks))
-	}
 	for _, check := range checks {
+		if !strings.HasPrefix(check.Name, "service ") {
+			continue
+		}
 		if check.Status != "skip" || !strings.Contains(check.Detail, "systemctl unavailable") {
 			t.Fatalf("check = %#v", check)
 		}
 	}
 }
 
+func TestDoctorServiceStatusDetectsDuplicateProcessesAndStalePIDFiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "gateway.pid"), []byte("999999999\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeDoctorRunner{responses: map[string]fakeDoctorResponse{
+		doctorRunnerKey("", "systemctl", "is-active", "billyharness-gateway.service"): {
+			out: "active\n",
+		},
+		doctorRunnerKey("", "systemctl", "is-active", "billyharness-telegram.service"): {
+			out: "active\n",
+		},
+		doctorRunnerKey("", "pgrep", "-af", "fast-agent-harness"): {
+			out: strings.Join([]string{
+				"111 /root/billyharness/bin/fast-agent-harness gateway",
+				"222 /root/billyharness/bin/fast-agent-harness (deleted) gateway -addr 127.0.0.1:8765",
+				"333 /root/billyharness/bin/fast-agent-harness telegram",
+			}, "\n"),
+		},
+	}}
+	checks := doctorServiceStatuses(context.Background(), doctorOptions{CheckServices: true, Timeout: time.Second}, runner)
+	assertDoctorCheckInList(t, checks, "process gateway duplicates", "fail")
+	assertDoctorCheckInList(t, checks, "process telegram duplicates", "ok")
+	gatewayPID := findDoctorCheck(t, checks, "pid file gateway.pid")
+	if gatewayPID.Status != "warn" || !strings.Contains(gatewayPID.Detail, "stale pid 999999999") {
+		t.Fatalf("gateway pid check = %#v", gatewayPID)
+	}
+	telegramPID := findDoctorCheck(t, checks, "pid file telegram.pid")
+	if telegramPID.Status != "ok" || telegramPID.Detail != "absent" {
+		t.Fatalf("telegram pid check = %#v", telegramPID)
+	}
+}
+
 func assertDoctorCheck(t *testing.T, report doctorReport, name, status string) {
 	t.Helper()
-	for _, check := range report.Checks {
+	assertDoctorCheckInList(t, report.Checks, name, status)
+}
+
+func assertDoctorCheckInList(t *testing.T, checks []doctorCheck, name, status string) {
+	t.Helper()
+	check := findDoctorCheck(t, checks, name)
+	if check.Status != status {
+		t.Fatalf("%s status = %q, want %q (detail %q)", name, check.Status, status, check.Detail)
+	}
+}
+
+func findDoctorCheck(t *testing.T, checks []doctorCheck, name string) doctorCheck {
+	t.Helper()
+	for _, check := range checks {
 		if check.Name == name {
-			if check.Status != status {
-				t.Fatalf("%s status = %q, want %q (detail %q)", name, check.Status, status, check.Detail)
-			}
-			return
+			return check
 		}
 	}
-	t.Fatalf("missing doctor check %q in %#v", name, report.Checks)
+	t.Fatalf("missing doctor check %q in %#v", name, checks)
+	return doctorCheck{}
 }
 
 func execNotFound(name string) error {

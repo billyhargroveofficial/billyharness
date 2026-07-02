@@ -18,7 +18,7 @@ go build -o ./bin/fast-agent-harness ./cmd/fast-agent-harness
 ./bin/fast-agent-harness telegram
 ```
 
-For the server deployment, use systemd:
+For the server deployment, use the same gateway/Telegram systemd pair:
 
 ```sh
 systemctl restart billyharness-gateway.service billyharness-telegram.service
@@ -27,6 +27,7 @@ journalctl -u billyharness-telegram.service -f
 ```
 
 The gateway must be reachable by the Telegram service. In the normal local setup the service uses the configured gateway URL or the default local gateway.
+`./bin/fast-agent-harness doctor -strict` checks service activity, duplicate gateway/Telegram processes, stale pid files, and gateway `/health`.
 
 ## Allowlist
 

@@ -664,11 +664,26 @@ Files:
 
 ### 19. Service lifecycle and duplicate process checks
 
-- [ ] `doctor` should detect duplicate gateway/Telegram processes or stale pid
+- [x] `doctor` should detect duplicate gateway/Telegram processes or stale pid
   files where possible.
-- [ ] Auto gateway discovery should use the same URL normalization everywhere.
-- [ ] Docs should give one canonical command for foreground TUI and systemd
+- [x] Auto gateway discovery should use the same URL normalization everywhere.
+- [x] Docs should give one canonical command for foreground TUI and systemd
   gateway/Telegram operation.
+
+Evidence:
+
+- `doctor` now adds service lifecycle checks for duplicate
+  `fast-agent-harness gateway` and `fast-agent-harness telegram` processes via
+  `pgrep -af` when available, plus stale or malformed
+  `$BILLYHARNESS_HOME/gateway.pid` and `telegram.pid` warnings.
+- `gatewayclient` now delegates gateway URL normalization, readiness, auth
+  header helpers, and unavailable hints to `internal/gateway`, keeping auto
+  discovery, TUI/Telegram gateway clients, and gateway runtime normalization on
+  one path.
+- Setup and Telegram docs now point to the canonical foreground TUI command and
+  the paired systemd gateway/Telegram restart/status commands.
+- Tests: `/root/.local/go/bin/go test -run 'TestDoctorServiceStatusSkipsMissingSystemctl|TestDoctorServiceStatusDetectsDuplicateProcessesAndStalePIDFiles|TestNormalizeGatewayURL|TestNormalizeBaseURL|TestCollectDoctorReportIncludesProjectHealth' -count=1 ./cmd/fast-agent-harness ./internal/gateway ./internal/gatewayclient`.
+- Tests: `/root/.local/go/bin/go test -count=1 ./cmd/fast-agent-harness ./internal/gateway ./internal/gatewayclient`.
 
 Files:
 

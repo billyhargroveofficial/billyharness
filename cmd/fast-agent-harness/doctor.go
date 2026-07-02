@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
@@ -104,6 +106,12 @@ type doctorCheck struct {
 	Status     string `json:"status"`
 	Detail     string `json:"detail,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
+}
+
+type doctorManagedService struct {
+	Service    string
+	Subcommand string
+	PIDFile    string
 }
 
 type doctorCommandRunner interface {
@@ -386,18 +394,18 @@ func doctorBuildStatus(ctx context.Context, repoDir string, opts doctorOptions, 
 }
 
 func doctorServiceStatuses(ctx context.Context, opts doctorOptions, runner doctorCommandRunner) []doctorCheck {
-	services := []string{"billyharness-gateway.service", "billyharness-telegram.service"}
-	out := make([]doctorCheck, 0, len(services))
+	services := doctorManagedServices()
+	out := make([]doctorCheck, 0, len(services)*3)
 	if !opts.CheckServices {
 		for _, service := range services {
-			out = append(out, doctorCheck{Name: "service " + service, Status: "skip", Detail: "disabled"})
+			out = append(out, doctorCheck{Name: "service " + service.Service, Status: "skip", Detail: "disabled"})
 		}
 		return out
 	}
 	for _, service := range services {
 		start := time.Now()
-		cmdOut, err := runDoctorCommand(ctx, runner, "", opts.Timeout, "systemctl", "is-active", service)
-		check := doctorCheck{Name: "service " + service, DurationMS: time.Since(start).Milliseconds()}
+		cmdOut, err := runDoctorCommand(ctx, runner, "", opts.Timeout, "systemctl", "is-active", service.Service)
+		check := doctorCheck{Name: "service " + service.Service, DurationMS: time.Since(start).Milliseconds()}
 		state := strings.TrimSpace(cmdOut)
 		switch {
 		case err == nil && state == "active":
@@ -415,7 +423,141 @@ func doctorServiceStatuses(ctx context.Context, opts doctorOptions, runner docto
 		}
 		out = append(out, check)
 	}
+	out = append(out, doctorProcessDuplicateChecks(ctx, opts, runner, services)...)
+	out = append(out, doctorPIDFileChecks(services)...)
 	return out
+}
+
+func doctorManagedServices() []doctorManagedService {
+	return []doctorManagedService{
+		{Service: "billyharness-gateway.service", Subcommand: "gateway", PIDFile: "gateway.pid"},
+		{Service: "billyharness-telegram.service", Subcommand: "telegram", PIDFile: "telegram.pid"},
+	}
+}
+
+func doctorProcessDuplicateChecks(ctx context.Context, opts doctorOptions, runner doctorCommandRunner, services []doctorManagedService) []doctorCheck {
+	start := time.Now()
+	cmdOut, err := runDoctorCommand(ctx, runner, "", opts.Timeout, "pgrep", "-af", "fast-agent-harness")
+	durationMS := time.Since(start).Milliseconds()
+	out := make([]doctorCheck, 0, len(services))
+	if isCommandMissing(err) {
+		for _, service := range services {
+			out = append(out, doctorCheck{Name: "process " + service.Subcommand + " duplicates", Status: "skip", Detail: "pgrep unavailable", DurationMS: durationMS})
+		}
+		return out
+	}
+	for _, service := range services {
+		check := doctorCheck{Name: "process " + service.Subcommand + " duplicates", DurationMS: durationMS}
+		matches := doctorMatchingProcessLines(cmdOut, service.Subcommand)
+		switch {
+		case len(matches) > 1:
+			check.Status = "fail"
+			check.Detail = fmt.Sprintf("%d live %s processes: %s", len(matches), service.Subcommand, strings.Join(firstStringItems(matches, 4), "; "))
+		case len(matches) == 1:
+			check.Status = "ok"
+			check.Detail = "1 live " + service.Subcommand + " process: " + matches[0]
+		default:
+			check.Status = "ok"
+			if err != nil {
+				check.Detail = "no live " + service.Subcommand + " process found"
+			} else {
+				check.Detail = "0 live " + service.Subcommand + " processes"
+			}
+		}
+		out = append(out, check)
+	}
+	return out
+}
+
+func doctorPIDFileChecks(services []doctorManagedService) []doctorCheck {
+	out := make([]doctorCheck, 0, len(services))
+	for _, service := range services {
+		path := filepath.Join(config.BillyHomeDir(), service.PIDFile)
+		check := doctorCheck{Name: "pid file " + service.PIDFile}
+		bytes, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			check.Status = "ok"
+			check.Detail = "absent"
+			out = append(out, check)
+			continue
+		}
+		if err != nil {
+			check.Status = "warn"
+			check.Detail = path + ": " + err.Error()
+			out = append(out, check)
+			continue
+		}
+		raw := strings.TrimSpace(string(bytes))
+		pid, err := strconv.Atoi(raw)
+		if err != nil || pid <= 0 {
+			check.Status = "warn"
+			check.Detail = fmt.Sprintf("malformed pid %q in %s", raw, path)
+			out = append(out, check)
+			continue
+		}
+		if !doctorProcessExists(pid) {
+			check.Status = "warn"
+			check.Detail = fmt.Sprintf("stale pid %d in %s; process is not running", pid, path)
+			out = append(out, check)
+			continue
+		}
+		check.Status = "ok"
+		check.Detail = fmt.Sprintf("pid %d alive", pid)
+		if cmdline := doctorProcessCmdline(pid); cmdline != "" {
+			check.Detail += ": " + cmdline
+		}
+		out = append(out, check)
+	}
+	return out
+}
+
+func doctorMatchingProcessLines(out string, subcommand string) []string {
+	var matches []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !doctorProcessLineMatchesSubcommand(line, subcommand) {
+			continue
+		}
+		matches = append(matches, line)
+	}
+	return matches
+}
+
+func doctorProcessLineMatchesSubcommand(line string, subcommand string) bool {
+	fields := strings.Fields(line)
+	for i := 1; i < len(fields); i++ {
+		if filepath.Base(strings.Trim(fields[i], `"'`)) != "fast-agent-harness" {
+			continue
+		}
+		next := i + 1
+		if next < len(fields) && fields[next] == "(deleted)" {
+			next++
+		}
+		if next < len(fields) && fields[next] == subcommand {
+			return true
+		}
+	}
+	return false
+}
+
+func doctorProcessExists(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+func doctorProcessCmdline(pid int) string {
+	bytes, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(string(bytes), "\x00"), "\x00")
+	for i, part := range parts {
+		parts[i] = strings.TrimSpace(part)
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
 func doctorGatewayStatus(ctx context.Context, cfg config.Config, opts doctorOptions) doctorCheck {
@@ -604,6 +746,15 @@ func firstLines(value string, max int) string {
 		return strings.Join(lines, "\n")
 	}
 	return strings.Join(lines[:max], "\n") + "\n..."
+}
+
+func firstStringItems(values []string, max int) []string {
+	if max <= 0 || len(values) <= max {
+		return values
+	}
+	out := append([]string{}, values[:max]...)
+	out = append(out, "...")
+	return out
 }
 
 func isCommandMissing(err error) bool {

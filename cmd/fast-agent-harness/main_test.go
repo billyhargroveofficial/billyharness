@@ -15,6 +15,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/commandregistry"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
@@ -163,6 +164,12 @@ func TestNormalizeGatewayURL(t *testing.T) {
 	for input, want := range tests {
 		if got := normalizeGatewayURL(input); got != want {
 			t.Fatalf("normalizeGatewayURL(%q) = %q, want %q", input, got, want)
+		}
+		if got := gateway.NormalizeBaseURL(input); got != want {
+			t.Fatalf("gateway.NormalizeBaseURL(%q) = %q, want %q", input, got, want)
+		}
+		if got := gatewayclient.NormalizeBaseURL(input); got != want {
+			t.Fatalf("gatewayclient.NormalizeBaseURL(%q) = %q, want %q", input, got, want)
 		}
 	}
 }

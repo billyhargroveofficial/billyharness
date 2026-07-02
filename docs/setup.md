@@ -18,6 +18,20 @@ cd /root/billyharness
 ./bin/fast-agent-harness gateway
 ```
 
+For normal interactive work, use the foreground TUI command:
+
+```sh
+cd /root/billyharness
+./bin/fast-agent-harness tui
+```
+
+For the deployed gateway and Telegram runtime, use systemd as one pair:
+
+```sh
+systemctl restart billyharness-gateway.service billyharness-telegram.service
+systemctl --no-pager --full status billyharness-gateway.service billyharness-telegram.service
+```
+
 The normal local address is `127.0.0.1:8765`. Check readiness with:
 
 ```sh
@@ -153,7 +167,7 @@ systemctl cat billyharness-gateway.service
 systemctl cat billyharness-telegram.service
 ```
 
-Start, stop, restart, and status:
+Start, stop, restart, and status use the same gateway/Telegram service pair:
 
 ```sh
 systemctl start billyharness-gateway.service billyharness-telegram.service
