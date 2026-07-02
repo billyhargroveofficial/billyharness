@@ -164,7 +164,7 @@ Goal: make `fast-agent-harness hygiene -strict` pass without changing behavior.
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
   - commit: `b6b344c5e322d4756ef8bd2ca62584e859f55061`.
 
-- [ ] PH-01.3 Split `internal/tui/tui.go`.
+- [x] PH-01.3 Split `internal/tui/tui.go`.
   - current issue: 1530 LOC, above the 1500 LOC source budget.
   - likely seams: layout sizing, input/key handling, mouse/selection handling,
     update loop helpers, status/footer rendering.
@@ -172,7 +172,17 @@ Goal: make `fast-agent-harness hygiene -strict` pass without changing behavior.
     slash popup, theme, statusline, or gateway/local mode.
   - verification:
     `go test -count=1 ./internal/tui ./internal/tui/selection ./internal/tui/render`
-  - status: open.
+  - status: completed 2026-07-02.
+  - evidence: split runtime config projection and model/profile/theme/access
+    mode/view selection helpers into `internal/tui/runtime_config.go`. The
+    split is package-local, keeps Bubble Tea state and gateway/local runtime
+    behavior in `internal/tui`, and does not add import edges or exported API.
+    `internal/tui/tui.go` is now 1150 LOC, below the 1500 LOC source budget.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/tui
+    ./internal/tui/selection ./internal/tui/render` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] PH-01.4 Split oversized focused test files.
   - current issues:
