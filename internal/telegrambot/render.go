@@ -224,10 +224,8 @@ func (r *Renderer) StatusText(model, reasoning string) string {
 func (r *Renderer) FinalChunks(model, reasoning string) []string {
 	elapsed := telegramElapsedSince(r.Started).Round(time.Second)
 	content := r.finalContent()
-	state := r.state()
-	header := "<b>" + esc(statusEmoji(state)+" Billyharness · "+titleState(state)) + "</b>\n" +
-		esc("🧬 "+model+" · 🧠 "+reasoning+" · ⏱ "+elapsed.String()) + "\n\n"
-	footer := "\n\n<i>" + esc(r.footerLine()) + "</i>"
+	header := ""
+	footer := "\n\n<i>" + esc(r.finalFooterLine(model, reasoning, elapsed)) + "</i>"
 	budget := telegramLimit - telegramUTF16Len(header) - telegramUTF16Len(footer) - 64
 	if budget < 1000 {
 		budget = 1000
@@ -291,14 +289,17 @@ func (r *Renderer) state() string {
 	return "running"
 }
 
-func (r *Renderer) richHeaderInline(model, reasoning string, elapsed time.Duration) string {
-	state := r.state()
-	return "**" + statusEmoji(state) + " Billyharness · " + markdownInlineEscape(titleState(state)) + "**\n" +
-		"_" + markdownInlineEscape("🧬 "+model+" · 🧠 "+reasoning+" · ⏱ "+elapsed.String()) + "_\n\n"
-}
-
 func (r *Renderer) footerLine() string {
 	return r.footerLineWithContext(true)
+}
+
+func (r *Renderer) finalFooterLine(model, reasoning string, elapsed time.Duration) string {
+	meta := "🧬 " + model + " · 🧠 " + reasoning + " · ⏱ " + elapsed.String()
+	footer := r.footerLine()
+	if footer == "" {
+		return meta
+	}
+	return meta + " · " + footer
 }
 
 func (r *Renderer) footerLineWithoutContext() string {
@@ -315,9 +316,6 @@ func (r *Renderer) footerLineWithContext(includeContext bool) string {
 	}
 	if context := r.contextLine(); includeContext && context != "" {
 		parts = append(parts, context)
-	}
-	if r.LastCacheHit+r.LastCacheMiss > 0 {
-		parts = append(parts, fmt.Sprintf("💾 cache hit %s miss %s", compactInt(r.LastCacheHit), compactInt(r.LastCacheMiss)))
 	}
 	if r.ToolSummaryIn+r.ToolSummaryOut > 0 {
 		parts = append(parts, fmt.Sprintf("🧩 websum %s→%s", compactInt(r.ToolSummaryIn), compactInt(r.ToolSummaryOut)))
@@ -656,26 +654,4 @@ func percentText(used, window int64) string {
 		return fmt.Sprintf("%.1f%%", percent)
 	}
 	return fmt.Sprintf("%.0f%%", percent)
-}
-
-func statusEmoji(state string) string {
-	switch state {
-	case "done":
-		return "✅"
-	case "failed":
-		return "⛔"
-	default:
-		return "⚡"
-	}
-}
-
-func titleState(state string) string {
-	switch state {
-	case "done":
-		return "Done"
-	case "failed":
-		return "Failed"
-	default:
-		return "Running"
-	}
 }

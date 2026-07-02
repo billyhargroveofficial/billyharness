@@ -398,15 +398,11 @@ func (b *Bot) startLiveRunView(ctx context.Context, msg Message, state ChatState
 func (v *telegramLiveRunView) progressText(force bool, pulse int) string {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if !v.answerDirty && !force && !v.heartbeatActiveLocked() {
+	if !v.answerDirty && !force {
 		return ""
 	}
 	v.answerDirty = false
 	return v.renderer.StreamPlainTextPulse(v.model, v.reasoning, v.tools, pulse)
-}
-
-func (v *telegramLiveRunView) heartbeatActiveLocked() bool {
-	return v.renderer != nil && !v.renderer.Done
 }
 
 func (v *telegramLiveRunView) Apply(event protocol.Event) {
@@ -415,17 +411,25 @@ func (v *telegramLiveRunView) Apply(event protocol.Event) {
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	beforeText := v.renderer.assistantText()
+	beforeError := v.renderer.LastError
+	dirty := false
 	for _, rendered := range v.renderer.Apply(event) {
 		switch rendered.Kind {
 		case "tool", "status":
 			if v.tools.Add(rendered) {
-				v.answerDirty = true
+				dirty = true
 			}
 		case "error":
-			v.answerDirty = true
+			dirty = true
 		}
 	}
-	v.answerDirty = true
+	if v.renderer.assistantText() != beforeText || v.renderer.LastError != beforeError {
+		dirty = true
+	}
+	if dirty {
+		v.answerDirty = true
+	}
 }
 
 func (v *telegramLiveRunView) Reset(state ChatState) {

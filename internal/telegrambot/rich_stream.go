@@ -56,8 +56,8 @@ func (s RichStream) markdownChunks(renderer *Renderer, model, reasoning string, 
 			return nil
 		}
 	}
-	header := renderer.richHeaderInline(model, reasoning, elapsed)
-	footer := "\n\n_" + markdownInlineEscape(renderer.footerLine()) + "_"
+	header := ""
+	footer := "\n\n_" + markdownInlineEscape(renderer.finalFooterLine(model, reasoning, elapsed)) + "_"
 	budget := limit - telegramUTF16Len(header) - telegramUTF16Len(footer) - 128
 	if budget < 1 {
 		budget = 1

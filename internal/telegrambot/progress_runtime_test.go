@@ -184,7 +184,7 @@ func TestProgressEditsSkipHeartbeatOnlyTicks(t *testing.T) {
 	}
 }
 
-func TestLiveRunViewHeartbeatEditsDuringToolOnlyWait(t *testing.T) {
+func TestLiveRunViewSkipsTimerOnlyEditsDuringToolOnlyWait(t *testing.T) {
 	fakeClock := newFakeClock()
 	tickers := &fakeTelegramTickerFactory{}
 	oldNow := telegramNow
@@ -248,27 +248,33 @@ func TestLiveRunViewHeartbeatEditsDuringToolOnlyWait(t *testing.T) {
 	waitForTestCondition(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		return len(edits) >= 2
+		return len(edits) == 1
 	})
+	mu.Lock()
+	editsAfterTick := append([]string(nil), edits...)
+	mu.Unlock()
 	close(stop)
 	<-done
 
 	mu.Lock()
 	first := edits[0]
-	second := edits[1]
+	final := edits[len(edits)-1]
 	mu.Unlock()
+	if len(editsAfterTick) != 1 {
+		t.Fatalf("timer-only tick should not edit progress, got %#v", editsAfterTick)
+	}
 	for _, want := range []string{"Tools running · 0s", "🌐 web_fetch example.com/forecast"} {
 		if !strings.Contains(first, want) {
 			t.Fatalf("initial progress missing %q:\n%s", want, first)
 		}
 	}
 	for _, want := range []string{"⏱ 5s", "Tools running · 5s", "🌐 web_fetch example.com/forecast"} {
-		if !strings.Contains(second, want) {
-			t.Fatalf("heartbeat progress missing %q:\n%s", want, second)
+		if !strings.Contains(final, want) {
+			t.Fatalf("final progress missing %q:\n%s", want, final)
 		}
 	}
-	if first == second {
-		t.Fatalf("heartbeat progress did not change:\n%s", second)
+	if first == final {
+		t.Fatalf("final progress did not refresh elapsed time:\n%s", final)
 	}
 }
 

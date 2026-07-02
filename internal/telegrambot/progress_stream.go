@@ -20,15 +20,19 @@ func (r *Renderer) StreamPlainTextPulse(model, reasoning string, tools *ToolProg
 	}
 	contentShown := telegramUTF16Len(content)
 	elapsed := telegramElapsedSince(r.Started).Round(time.Second)
-	meta := "🧬 " + model + " · 🧠 " + reasoning + " · ⏱ " + elapsed.String()
+	meta := spinnerFrame(pulse) + " running · 🧬 " + model + " · 🧠 " + reasoning + " · ⏱ " + elapsed.String()
+	footerParts := []string{meta}
 	if eventPulse := r.eventPulseText(); eventPulse != "" {
-		meta += " · " + eventPulse
+		footerParts = append(footerParts, eventPulse)
 	}
 	if context := r.contextLine(); context != "" {
-		meta += "\n" + context
+		footerParts = append(footerParts, context)
 	}
-	header := spinnerFrame(pulse) + " Billyharness · Running\n" + meta + "\n\n"
-	footer := r.footerLineWithoutContext()
+	if footer := r.footerLineWithoutContext(); footer != "" {
+		footerParts = append(footerParts, footer)
+	}
+	header := ""
+	footer := strings.Join(footerParts, "\n")
 	limit := telegramLiveProgressLimit
 	toolBudget := limit - telegramUTF16Len(header) - telegramUTF16Len(footer) - 760
 	if toolBudget < 360 {
@@ -46,7 +50,12 @@ func (r *Renderer) StreamPlainTextPulse(model, reasoning string, tools *ToolProg
 	}
 	preview := streamContentPreview(content, budget)
 	if contentShown > telegramUTF16Len(preview) && !strings.Contains(preview, "live tail") {
-		preview = "… live tail, full answer will be sent when done\n" + strings.TrimPrefix(preview, "…\n")
+		marker := "… live tail, full answer will be sent when done\n"
+		tailBudget := budget - telegramUTF16Len(marker)
+		if tailBudget < 0 {
+			tailBudget = 0
+		}
+		preview = marker + strings.TrimPrefix(trimToUTF16Tail(content, tailBudget), "…")
 	}
 	text := header + preview + suffix
 	return trimTelegramTailLimit(text, limit)

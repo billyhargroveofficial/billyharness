@@ -36,8 +36,11 @@ func TestRendererFinalChunksAreTelegramSizedAndEscaped(t *testing.T) {
 	if !strings.Contains(chunks[0], "<b>bold</b>") {
 		t.Fatalf("markdown bold was not rendered: %q", chunks[0][:120])
 	}
-	if !strings.Contains(chunks[len(chunks)-1], "💾 cache hit") {
-		t.Fatalf("last chunk missing footer: %q", chunks[len(chunks)-1])
+	if !strings.Contains(chunks[len(chunks)-1], "🧬 deepseek-v4-flash · 🧠 high") {
+		t.Fatalf("last chunk missing model footer: %q", chunks[len(chunks)-1])
+	}
+	if strings.Contains(chunks[len(chunks)-1], "💾 cache") {
+		t.Fatalf("footer should not show provider cache counters: %q", chunks[len(chunks)-1])
 	}
 }
 
@@ -83,10 +86,13 @@ func TestGoldenTraceRendersTelegram(t *testing.T) {
 		t.Fatal("final chunks empty")
 	}
 	finalText := strings.Join(chunks, "\n")
-	for _, want := range []string{"Final answer: web context", "agent turns 2", "tools 3", "💾 cache hit"} {
+	for _, want := range []string{"Final answer: web context", "🧬 deepseek-v4-flash · 🧠 high", "agent turns 2", "tools 3"} {
 		if !strings.Contains(finalText, want) {
 			t.Fatalf("final output missing %q in:\n%s", want, finalText)
 		}
+	}
+	if strings.Contains(finalText, "💾 cache") {
+		t.Fatalf("final output should not show provider cache counters:\n%s", finalText)
 	}
 }
 
@@ -278,13 +284,11 @@ func TestRendererContextShowsLastModelCallNotCumulativeSpend(t *testing.T) {
 	}})
 
 	footer := r.footerLine()
-	for _, want := range []string{"🪟 ctx 1.5k/10.0k 15%", "💾 cache hit 1.1k miss 200"} {
-		if !strings.Contains(footer, want) {
-			t.Fatalf("footer missing %q: %q", want, footer)
-		}
+	if !strings.Contains(footer, "🪟 ctx 1.5k/10.0k 15%") {
+		t.Fatalf("footer missing context usage: %q", footer)
 	}
-	if strings.Contains(footer, "hit 2.0k") || strings.Contains(footer, "miss 300") {
-		t.Fatalf("footer should not show cumulative cache totals: %q", footer)
+	if strings.Contains(footer, "cache") || strings.Contains(footer, "hit ") || strings.Contains(footer, "miss ") {
+		t.Fatalf("footer should not show provider cache counters: %q", footer)
 	}
 	if strings.Contains(footer, "📥") || strings.Contains(footer, "📤") {
 		t.Fatalf("footer should not show cumulative token spend: %q", footer)
@@ -329,7 +333,7 @@ func TestRendererToolCountUsesRequestedCalls(t *testing.T) {
 	}
 }
 
-func TestStreamPlainTextShowsContextAboveProgress(t *testing.T) {
+func TestStreamPlainTextShowsContextInBottomStatusArea(t *testing.T) {
 	renderer := NewRendererWithContextWindow(10_000)
 	renderer.Apply(protocol.Event{Type: protocol.EventRunStarted})
 	renderer.Apply(protocol.Event{Type: protocol.EventModelCallStarted})
@@ -343,18 +347,21 @@ func TestStreamPlainTextShowsContextAboveProgress(t *testing.T) {
 	_ = progress.Add(RenderEvent{Kind: "tool", Title: "Tool", Body: "🔨 mcp call read_history", Key: "read"})
 
 	text := renderer.StreamPlainText("deepseek-v4-pro", "max", progress)
-	for _, want := range []string{"🪟 ctx 6.0k/10.0k 60%", "Tools running", "💾 cache hit 5.0k miss 700"} {
+	for _, want := range []string{"🪟 ctx 6.0k/10.0k 60%", "Tools running"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("stream text missing %q:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "💾 cache") {
+		t.Fatalf("stream text should not show provider cache counters:\n%s", text)
 	}
 	if strings.Contains(text, "📥") || strings.Contains(text, "📤") {
 		t.Fatalf("stream text should not show cumulative token spend:\n%s", text)
 	}
 	ctxPos := strings.Index(text, "🪟 ctx")
 	toolsPos := strings.Index(text, "Tools running")
-	if ctxPos < 0 || toolsPos < 0 || ctxPos > toolsPos {
-		t.Fatalf("context should appear above tool progress:\n%s", text)
+	if ctxPos < 0 || toolsPos < 0 || ctxPos < toolsPos {
+		t.Fatalf("context should appear in the bottom status area after tool progress:\n%s", text)
 	}
 	if strings.Count(text, "🪟 ctx") != 1 {
 		t.Fatalf("running stream should show context once:\n%s", text)
@@ -377,7 +384,7 @@ func toolCountSemanticsEvents() []protocol.Event {
 	}
 }
 
-func TestRendererFooterLabelsCacheCountersWhenLargerThanContext(t *testing.T) {
+func TestRendererFooterOmitsCacheCountersWhenLargerThanContext(t *testing.T) {
 	r := NewRendererWithContextWindow(1_000)
 	r.Apply(protocol.Event{Type: protocol.EventRunStarted})
 	r.Apply(protocol.Event{Type: protocol.EventModelCallStarted})
@@ -389,13 +396,11 @@ func TestRendererFooterLabelsCacheCountersWhenLargerThanContext(t *testing.T) {
 	}})
 
 	footer := r.footerLine()
-	for _, want := range []string{"🪟 ctx 120/1.0k 12%", "💾 cache hit 900 miss 50"} {
-		if !strings.Contains(footer, want) {
-			t.Fatalf("footer missing %q: %q", want, footer)
-		}
+	if !strings.Contains(footer, "🪟 ctx 120/1.0k 12%") {
+		t.Fatalf("footer missing context usage: %q", footer)
 	}
-	if strings.Contains(footer, "cached context") || strings.Contains(footer, "💾 hit ") {
-		t.Fatalf("footer should not imply cache counters are context: %q", footer)
+	if strings.Contains(footer, "cache") || strings.Contains(footer, "hit ") || strings.Contains(footer, "miss ") {
+		t.Fatalf("footer should not show provider cache counters: %q", footer)
 	}
 }
 
@@ -503,10 +508,13 @@ func TestRendererFinalRichMarkdownPreservesRichMarkdown(t *testing.T) {
 		t.Fatalf("chunks = %d, want 1", len(chunks))
 	}
 	got := chunks[0]
-	for _, want := range []string{"**✅ Billyharness · Done**", "_🧬 deepseek-v4-flash · 🧠 high", "## Погода", "| Параметр | Значение |", "- Облачно", "$$\\frac{\\bar X - \\mu}{\\sigma/\\sqrt n} \\approx N(0,1)$$", "_⚡ streaming_"} {
+	for _, want := range []string{"## Погода", "| Параметр | Значение |", "- Облачно", "$$\\frac{\\bar X - \\mu}{\\sigma/\\sqrt n} \\approx N(0,1)$$", "_🧬 deepseek-v4-flash · 🧠 high"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rich markdown missing %q in:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "Billyharness · Done") {
+		t.Fatalf("rich markdown final should not include a Billyharness header:\n%s", got)
 	}
 	if strings.Contains(got, "| 🧬 Model |") || strings.Contains(got, "| 🤖 Calls |") {
 		t.Fatalf("metadata should stay inline, not render as tables:\n%s", got)
@@ -606,15 +614,17 @@ func TestRendererFinalChunksShowErrorWhenNoAssistantContent(t *testing.T) {
 	r.LastError = `invalid attachment att_missing: no such file or directory`
 
 	html := strings.Join(r.FinalChunks("gpt-5.5", "xhigh"), "\n")
-	if !strings.Contains(html, "Billyharness · Failed") ||
-		!strings.Contains(html, "Error: invalid attachment att_missing") ||
+	if !strings.Contains(html, "Error: invalid attachment att_missing") ||
+		!strings.Contains(html, "🧬 gpt-5.5 · 🧠 xhigh") ||
+		strings.Contains(html, "Billyharness · Failed") ||
 		strings.Contains(html, "\n\nWorking...\n\n") {
 		t.Fatalf("HTML final did not expose error cleanly:\n%s", html)
 	}
 
 	rich := strings.Join(r.FinalRichMarkdownChunks("gpt-5.5", "xhigh"), "\n")
-	if !strings.Contains(rich, "Billyharness · Failed") ||
-		!strings.Contains(rich, "Error: invalid attachment att_missing") ||
+	if !strings.Contains(rich, "Error: invalid attachment att_missing") ||
+		!strings.Contains(rich, "🧬 gpt-5.5 · 🧠 xhigh") ||
+		strings.Contains(rich, "Billyharness · Failed") ||
 		strings.Contains(rich, "\n\nWorking...\n\n") {
 		t.Fatalf("rich final did not expose error cleanly:\n%s", rich)
 	}
@@ -647,10 +657,13 @@ func TestStreamPlainTextEmbedsToolProgress(t *testing.T) {
 	}
 
 	text := renderer.StreamPlainText("deepseek-v4-flash", "high", progress)
-	for _, want := range []string{"Billyharness · Running", "Looking it up...", "Tools running", "• 🌐 web_search Moscow weather"} {
+	for _, want := range []string{"Looking it up...", "Tools running", "• 🌐 web_search Moscow weather", "🧬 deepseek-v4-flash · 🧠 high"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("stream text missing %q:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "Billyharness · Running") {
+		t.Fatalf("stream text should not include a Billyharness header:\n%s", text)
 	}
 	if strings.Contains(text, "<b>") || strings.Contains(text, "&lt;") {
 		t.Fatalf("stream text should stay plain, got:\n%s", text)
@@ -734,10 +747,13 @@ func TestStreamPlainTextShowsLastEventHeartbeat(t *testing.T) {
 	renderer.LastEventType = protocol.EventAssistantDelta
 
 	text := renderer.StreamPlainTextPulse("deepseek-v4-flash", "high", NewToolProgress(), 3)
-	for _, want := range []string{"Billyharness · Running", "tokens ", " ago", "Writing..."} {
+	for _, want := range []string{"tokens ", " ago", "Writing...", "🧬 deepseek-v4-flash · 🧠 high"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("stream text missing %q:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "Billyharness · Running") {
+		t.Fatalf("stream text should not include a Billyharness header:\n%s", text)
 	}
 }
 
