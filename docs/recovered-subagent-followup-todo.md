@@ -286,17 +286,64 @@ bounded fixes without derailing the main hardening roadmap.
 
 ## Milestone 3 - TUI/Terminal UX Regression Pass (P1)
 
-- [ ] RS-03.1 Audit existing TUI primitives before adding UI.
+- [x] RS-03.1 Audit existing TUI primitives before adding UI.
   - acceptance: document which existing primitives own tool views, copy,
     command registry, transcript export, selection, statusline, and markdown
     rendering, then avoid duplicate logic.
-  - status: open.
+  - audit, 2026-07-02:
+    - tool views and compact tool lines: `internal/toolrender` owns
+      cross-surface labels/summaries; `internal/tui/transcript` projects tool
+      events into cells; `internal/tui/actions.go` and `runtime_config.go`
+      own `/toolview` modes.
+    - copy and transcript export: `internal/tui/transcript/export.go` owns raw
+      vs rich export; `internal/tui/actions.go` owns `/copy`; selection copy
+      routes through `internal/tui/selection_runtime.go`.
+    - command registry and slash commands: shared metadata lives in
+      `internal/clientux/actions.go`; searchable command/prompt/profile/MCP
+      metadata lives in `internal/commandregistry`; TUI popup/filtering lives
+      in `internal/tui/commands.go`.
+    - selection and mouse support: `internal/tui/selection` owns ANSI-aware
+      ranges/highlighting; `internal/tui/selection_runtime.go` adapts mouse
+      coordinates and copy behavior to the TUI viewport.
+    - statusline and interaction state: `internal/tui/status.go`,
+      `usage.go`, and `interaction_status_test.go` cover status rendering,
+      token/accounting state, gateway context, and keyboard affordances.
+    - markdown rendering: `internal/tui/render/markdown.go` owns terminal
+      markdown, table/code holdback, and render cache integration; TUI blocks
+      call it through `internal/tui/markdown.go`/`transcript_render_test.go`.
+    - gateway input path: Enter/Alt+Enter/key actions are defined in
+      `internal/tui/actions.go`, submit through `Model.send`/`submitPrompt`,
+      and gateway requests are built in `internal/tui/gateway_session.go`.
+  - result: no duplicate TUI implementation was added; the regression below
+    uses the existing action registry, gateway submit path, transcript cells,
+    and presentation-policy tests.
+  - commit: pending.
+  - status: completed.
 
-- [ ] RS-03.2 Add regression tests for noisy tool events and SSH input.
+- [x] RS-03.2 Add regression tests for noisy tool events and SSH input.
   - acceptance: active runs do not dump raw tool event rows unless requested;
     keyboard input, mouse selection, slash command menus, and compact tool
     rendering behave in gateway mode.
-  - status: open.
+  - implementation, 2026-07-02:
+    - existing noisy-tool-event coverage was verified:
+      `TestToolLifecycleEventsUpdateStatusWithoutTranscriptNoise` and
+      `TestGoldenStatusEventPresentationPolicyMatchesTUITelegram` ensure
+      low-level tool started/progress/output-ref/permission events do not dump
+      raw transcript rows unless represented by compact lifecycle policy.
+    - added `TestGatewayEnterSubmitsPromptThroughKeyboardPath`, which simulates
+      an SSH/gateway terminal Enter keypress through Bubble Tea `Update`,
+      verifies the prompt is submitted through the shared gateway request path,
+      clears input, adds the user transcript block, and lets the fake gateway
+      run complete cleanly.
+    - existing focused tests cover Alt+Enter newline insertion, printable keys,
+      slash command popup/menus, mouse selection/copy, transcript export,
+      compact tool rendering, and markdown rendering.
+  - verification:
+    - `/root/.local/go/bin/go test -count=1 ./internal/tui`
+    - `/root/.local/go/bin/go test -count=1 ./internal/tui/transcript ./internal/tui/selection ./internal/tui/render`
+    - `/root/.local/go/bin/go test -count=1 ./internal/clientux ./internal/clientux/projector ./internal/commandregistry ./internal/toolrender`
+  - commit: pending.
+  - status: completed.
 
 ## Milestone 4 - Web/Search/Extract Quality And Failover (P1)
 
