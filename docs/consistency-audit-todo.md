@@ -746,9 +746,24 @@ Implemented package:
 
 ### 21. Add hardcoded-value hygiene tests
 
-- [ ] Add a test or script to flag ambiguous hardcoded model limits, stale
+- [x] Add a test or script to flag ambiguous hardcoded model limits, stale
   `context_limit`, and status labels that bypass shared formatters.
-- [ ] Allow fixture/test data only with local comments or whitelist.
+- [x] Allow fixture/test data only with local comments or whitelist.
+
+Evidence:
+
+- Extended `internal/config/hygiene_test.go` so runtime non-test Go files and
+  live user docs reject stale `context_limit` terminology.
+- Added a guard that numeric `ContextWindowTokens:` literals stay in
+  `internal/modelinfo/modelinfo.go` unless a line carries an explicit local
+  hygiene allow comment.
+- Added formatter-label guards for `/context`, Telegram, TUI, and doctor status
+  files so old `provider_api_calls`, `provider_cost`, `helper_api`, and
+  `cost subscription` user-facing labels cannot quietly return.
+- Fixtures, testdata, and `_test.go` files are excluded from the broad runtime
+  scan; non-fixture exceptions require a local `hygiene: allow ...` comment.
+- Tests: `/root/.local/go/bin/go test -run 'TestNoAmbiguousContextWindowRuntimeFallbacks|TestNoStaleContextLimitTerminologyInRuntimeAndLiveDocs|TestModelContextWindowLiteralsStayInModelInfo|TestStatusFormatterLabelsStayCanonical' -count=1 ./internal/config`.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/config`.
 
 Candidate files:
 
