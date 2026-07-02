@@ -228,14 +228,22 @@ Goal: make `fast-agent-harness hygiene -strict` pass without changing behavior.
 
 Goal: verify decomposition helped architecture instead of just moving lines.
 
-- [ ] PH-02.1 Re-run and review architecture guard after each split.
+- [x] PH-02.1 Re-run and review architecture guard after each split.
   - target files: `docs/architecture.md`, `internal/architecture/*`.
   - acceptance: new files follow existing package responsibilities; no runtime
     package imports presentation, and clients do not import gateway server or
     provider internals.
   - verification:
     `go test -count=1 ./internal/architecture`
-  - status: open.
+  - status: completed 2026-07-02.
+  - evidence: all decomposition files added during PH-01 were package-local
+    (`internal/gateway`, `internal/tui`, and focused package tests) and added
+    no new internal package import edges. The architecture map already covers
+    the affected package responsibilities, so no `docs/architecture.md`
+    boundary change or file-size exception is needed.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] PH-02.2 Review large packages by responsibility, not by file count.
   - target packages: `internal/telegrambot`, `internal/tools`,
