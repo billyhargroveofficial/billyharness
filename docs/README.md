@@ -20,3 +20,4 @@ Start here:
 - [Post-competitive hardening TODO](post-competitive-hardening-todo.md): active cleanup, decomposition, hygiene, regression, and smoke roadmap after the competitive pass.
 - [Solo harness competitive TODO](solo-harness-competitive-todo.md): completed competitive follow-up roadmap and evidence log for the SH pass.
 - [Solo harness next hardening TODO](solo-harness-next-hardening-todo.md): next reliability, compaction/cache, Telegram/TUI streaming, and recovery roadmap.
+- [Recovered subagent follow-up TODO](recovered-subagent-followup-todo.md): focused recovery plan for incomplete Codex subagent traces and their concrete fixes.
