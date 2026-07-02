@@ -676,10 +676,10 @@ Evidence:
   `fast-agent-harness gateway` and `fast-agent-harness telegram` processes via
   `pgrep -af` when available, plus stale or malformed
   `$BILLYHARNESS_HOME/gateway.pid` and `telegram.pid` warnings.
-- `gatewayclient` now delegates gateway URL normalization, readiness, auth
-  header helpers, and unavailable hints to `internal/gateway`, keeping auto
-  discovery, TUI/Telegram gateway clients, and gateway runtime normalization on
-  one path.
+- `gatewayclient` and `internal/gateway` now delegate gateway URL
+  normalization, readiness, auth header helpers, and unavailable hints to
+  `internal/gatewaybase`, keeping auto discovery, TUI/Telegram gateway clients,
+  and gateway runtime normalization on one path without import cycles.
 - Setup and Telegram docs now point to the canonical foreground TUI command and
   the paired systemd gateway/Telegram restart/status commands.
 - Tests: `/root/.local/go/bin/go test -run 'TestDoctorServiceStatusSkipsMissingSystemctl|TestDoctorServiceStatusDetectsDuplicateProcessesAndStalePIDFiles|TestNormalizeGatewayURL|TestNormalizeBaseURL|TestCollectDoctorReportIncludesProjectHealth' -count=1 ./cmd/fast-agent-harness ./internal/gateway ./internal/gatewayclient`.
@@ -689,6 +689,8 @@ Files:
 
 - `cmd/fast-agent-harness/service_cmd.go`
 - `cmd/fast-agent-harness/doctor.go`
+- `internal/gatewaybase/gatewaybase.go`
+- `internal/gateway/url.go`
 - `internal/gateway/ready.go`
 - `internal/gatewayclient/client.go`
 - `docs/setup.md`
@@ -698,7 +700,7 @@ Files:
 
 ### 20. Add cross-surface golden status tests
 
-- [ ] Build a small canonical event trace containing:
+- [x] Build a small canonical event trace containing:
   - run started;
   - assistant deltas before and after a tool call;
   - tool requested/started/finished;
@@ -706,18 +708,41 @@ Files:
   - helper usage;
   - context threshold;
   - run completed.
-- [ ] Replay it through:
+- [x] Replay it through:
   - `clientux/projector`;
   - Telegram renderer;
   - TUI transcript/status projection;
   - `/context` report builder.
-- [ ] Assert counts, context labels, cache labels, tool summaries, and final
+- [x] Assert counts, context labels, cache labels, tool summaries, and final
   text are compatible.
+
+Evidence:
+
+- Added `TestGoldenStatusTraceMatchesProjectorTelegramTUIAndContext`, which
+  replays one canonical trace through `clientux/projector`, Telegram renderer,
+  TUI status/transcript projection, and `/context` formatting.
+- The trace includes model usage, cache hit/miss, a web tool call,
+  out-of-band output ref, web summary/helper usage, context threshold, and
+  assistant text before and after the tool call.
+- Assertions cover compatible model/tool counts, context/cache labels,
+  `websum`, `sumapi`, helper API call/cost labels, output refs, and final
+  assistant text across the surfaces.
+- While running the wider surface package set, the P1-19 normalization
+  consolidation exposed an import cycle; shared gateway URL/readiness/auth
+  helpers were extracted to `internal/gatewaybase` and the package set now
+  passes.
+- Tests: `/root/.local/go/bin/go test -run TestGoldenStatusTraceMatchesProjectorTelegramTUIAndContext -count=1 ./internal/tui`.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/tui ./internal/clientux ./internal/clientux/projector ./internal/telegrambot ./internal/gateway ./internal/gatewayclient`.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/gatewaybase ./cmd/fast-agent-harness`.
 
 Candidate package:
 
 - `internal/clientux/consistency_test.go` or package-specific tests if imports
   would cycle.
+
+Implemented package:
+
+- `internal/tui/cross_surface_consistency_test.go`
 
 ### 21. Add hardcoded-value hygiene tests
 

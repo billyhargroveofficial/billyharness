@@ -14,14 +14,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewaybase"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
 const (
-	GatewayAuthTokenEnv       = gateway.GatewayAuthTokenEnv
-	LegacyGatewayAuthTokenEnv = gateway.LegacyGatewayAuthTokenEnv
+	GatewayAuthTokenEnv       = gatewaybase.GatewayAuthTokenEnv
+	LegacyGatewayAuthTokenEnv = gatewaybase.LegacyGatewayAuthTokenEnv
 )
 
 var ErrSessionNotFound = errors.New("gateway session not found")
@@ -120,19 +120,19 @@ func (e *UnavailableError) Unwrap() error {
 }
 
 func NormalizeBaseURL(value string) string {
-	return gateway.NormalizeBaseURL(value)
+	return gatewaybase.NormalizeBaseURL(value)
 }
 
 func AuthTokenFromEnv() string {
-	return gateway.AuthTokenFromEnv()
+	return gatewaybase.AuthTokenFromEnv()
 }
 
 func SetAuthHeader(req *http.Request, token string) {
-	gateway.SetAuthHeader(req, token)
+	gatewaybase.SetAuthHeader(req, token)
 }
 
 func SetAuthHeaderFromEnv(req *http.Request) {
-	gateway.SetAuthHeaderFromEnv(req)
+	gatewaybase.SetAuthHeaderFromEnv(req)
 }
 
 func DoWithReadyRetry(ctx context.Context, client *http.Client, baseURL string, makeRequest func() (*http.Request, error)) (*http.Response, error) {
@@ -161,11 +161,11 @@ func DoWithReadyRetry(ctx context.Context, client *http.Client, baseURL string, 
 }
 
 func WaitForReady(ctx context.Context, baseURL string, timeout time.Duration) bool {
-	return gateway.WaitForReady(ctx, baseURL, timeout)
+	return gatewaybase.WaitForReady(ctx, baseURL, timeout)
 }
 
 func UnavailableHint(baseURL string) string {
-	return gateway.UnavailableHint(baseURL)
+	return gatewaybase.UnavailableHint(baseURL)
 }
 
 func (c *Client) CreateSession(ctx context.Context, profile string) (string, error) {
