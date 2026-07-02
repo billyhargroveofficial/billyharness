@@ -57,6 +57,8 @@ func formatProviderStatusText(name string, status credentials.ProviderStatus) st
 }
 
 func StatusHTML(state ChatState, opts Options) string {
+	model := fallback(state.Model, opts.Model)
+	contextWindow := effectiveContextWindowForModel(model, opts.ContextWindow)
 	var allowedChats []string
 	for chat := range opts.AllowedChatIDs {
 		allowedChats = append(allowedChats, strconv.FormatInt(chat, 10))
@@ -77,7 +79,7 @@ func StatusHTML(state ChatState, opts Options) string {
 	}
 	return "<b>Status</b>\n" +
 		"session: <code>" + esc(short(state.SessionID)) + "</code>\n" +
-		"model: <code>" + esc(modelWithCapability(fallback(state.Model, opts.Model))) + "</code>\n" +
+		"model: <code>" + esc(modelWithCapability(model)) + "</code>\n" +
 		"profile: <code>" + esc(fallback(state.Profile, opts.Profile)) + "</code>\n" +
 		"access mode: <code>" + esc(config.NormalizeAccessMode(fallback(state.AccessMode, opts.AccessMode))) + "</code>\n" +
 		"reasoning: <code>" + esc(fallback(state.ReasoningEffort, opts.ReasoningEffort)) + "</code>\n" +
@@ -85,7 +87,7 @@ func StatusHTML(state ChatState, opts Options) string {
 		"tools: <code>" + esc(strconv.Itoa(state.ToolCalls)) + "</code>\n" +
 		"event cursor: <code>" + esc(strconv.FormatInt(state.LastEventSeq, 10)) + "</code>\n" +
 		"pending input: <code>" + esc(statusPendingInput(state)) + "</code>\n" +
-		"context window: <code>" + esc(compactInt(opts.ContextWindow)) + "</code>\n" +
+		"context window: <code>" + esc(compactInt(contextWindow)) + "</code>\n" +
 		"send: <code>" + esc(fmt.Sprint(opts.SendEnabled && !opts.DryRunDefault)) + "</code>\n" +
 		"allowed chats: <code>" + esc(strings.Join(allowedChats, ",")) + "</code>\n" +
 		"allowed users: <code>" + esc(strings.Join(allowedUsers, ",")) + "</code>"

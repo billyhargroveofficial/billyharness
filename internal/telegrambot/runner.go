@@ -371,13 +371,14 @@ func (b *Bot) startLiveRunView(ctx context.Context, msg Message, state ChatState
 	if err != nil {
 		return nil, err
 	}
+	contextWindow := effectiveContextWindowForModel(state.Model, b.opts.ContextWindow)
 	view := &telegramLiveRunView{
 		sent:          sent,
-		renderer:      NewRendererWithContextWindowAndTotals(b.opts.ContextWindow, state.AgentTurns, state.ToolCalls),
+		renderer:      NewRendererWithContextWindowAndTotals(contextWindow, state.AgentTurns, state.ToolCalls),
 		tools:         NewToolProgress(),
 		model:         state.Model,
 		reasoning:     state.ReasoningEffort,
-		contextWindow: b.opts.ContextWindow,
+		contextWindow: contextWindow,
 		answerDirty:   true,
 		stop:          make(chan struct{}),
 	}
@@ -421,6 +422,7 @@ func (v *telegramLiveRunView) Reset(state ChatState) {
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	v.contextWindow = effectiveContextWindowForModel(state.Model, v.contextWindow)
 	v.renderer = NewRendererWithContextWindowAndTotals(v.contextWindow, state.AgentTurns, state.ToolCalls)
 	v.tools = NewToolProgress()
 	v.model = state.Model
@@ -500,7 +502,7 @@ func (b *Bot) replayRunCatchup(ctx context.Context, msg Message, key string, sta
 	if state.LastEventSeq <= 0 {
 		return state, lastEventSeq, nil
 	}
-	catchup := NewRendererWithContextWindow(b.opts.ContextWindow)
+	catchup := NewRendererWithContextWindow(effectiveContextWindowForModel(state.Model, b.opts.ContextWindow))
 	catchupEvents := 0
 	catchupEmit := func(event protocol.Event) {
 		if event.Seq > 0 && event.Seq <= lastEventSeq {

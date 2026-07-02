@@ -140,6 +140,14 @@ func TestTelegramModelCommandAndStatusShowInputCapability(t *testing.T) {
 	if !strings.Contains(html, "model: <code>gpt-5.5 (vision-capable)</code>") {
 		t.Fatalf("status html = %q", html)
 	}
+	if !strings.Contains(html, "context window: <code>1.05M</code>") {
+		t.Fatalf("status html should use gpt-5.5 model context window: %q", html)
+	}
+
+	html = StatusHTML(ChatState{Model: "gpt-5.4-mini"}, Options{Model: "deepseek-v4-flash", ContextWindow: 1_000_000})
+	if !strings.Contains(html, "context window: <code>400.0k</code>") {
+		t.Fatalf("status html should use mini model context window: %q", html)
+	}
 }
 
 func TestTelegramContextCommandShowsSessionContext(t *testing.T) {
