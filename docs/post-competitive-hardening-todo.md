@@ -162,7 +162,7 @@ Goal: make `fast-agent-harness hygiene -strict` pass without changing behavior.
     ./internal/tui/transcript ./internal/tui/render ./internal/tui/selection`
     passed;
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `b6b344c5e322d4756ef8bd2ca62584e859f55061`.
 
 - [ ] PH-01.3 Split `internal/tui/tui.go`.
   - current issue: 1530 LOC, above the 1500 LOC source budget.
