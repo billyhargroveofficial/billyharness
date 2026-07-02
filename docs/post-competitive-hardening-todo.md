@@ -323,7 +323,7 @@ Goal: prove the cleaned code still behaves like the current deployed harness.
   - status: completed 2026-07-02.
   - evidence: the exact command above passed, including `internal/mcpstatus`
     with no test files.
-  - commit: pending.
+  - commit: `99b0e1f0959905ffe07b129165add528d934726f`.
 
 - [ ] PH-03.2 Run broad tests if focused suites are green.
   - verification:
