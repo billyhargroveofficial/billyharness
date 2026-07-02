@@ -884,10 +884,10 @@ func boundedToolOutputPreview(full string, limit int, ref string, reusedRef bool
 			return fmt.Sprintf("\n...[truncated %d bytes; failed to save full tool output: %v]", omitted, saveErr)
 		}
 		if reusedRef && ref != "" {
-			return fmt.Sprintf("\n...[truncated %d bytes to fit inline budget; existing output_ref remains %s. Use fs_read_file on output_ref if exact output is needed]", omitted, ref)
+			return fmt.Sprintf("\n...[truncated %d bytes to fit inline budget; existing output_ref remains %s. Use fs_read_file with offset/limit on output_ref if more output is needed]", omitted, ref)
 		}
 		if ref != "" {
-			return fmt.Sprintf("\n...[truncated %d bytes; full tool output saved as plaintext to %s with 0600 permissions. Use fs_read_file on output_ref if exact output is needed]", omitted, ref)
+			return fmt.Sprintf("\n...[truncated %d bytes; full tool output saved as plaintext to %s with 0600 permissions. Use fs_read_file with offset/limit on output_ref if more output is needed]", omitted, ref)
 		}
 		return fmt.Sprintf("\n...[truncated %d bytes]", omitted)
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/tooloutput"
 	"github.com/billyhargroveofficial/billyharness/internal/webtools"
 )
 
@@ -482,15 +483,14 @@ func TestReadToolRejectsPathOutsideWorkspace(t *testing.T) {
 	}
 }
 
-func TestReadToolReturnsFullContentForAgentManagedOutput(t *testing.T) {
+func TestReadToolDefaultPathUsesBoundedLineWindow(t *testing.T) {
 	root := t.TempDir()
-	content := strings.Repeat("full-content-", 200)
+	content := strings.Join([]string{"alpha", "beta", "gamma"}, "\n") + "\n"
 	if err := os.WriteFile(filepath.Join(root, "big.txt"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
 	cfg.WorkspaceRoots = []string{root}
-	cfg.MaxToolOutputBytes = 64
 	registry := NewRegistry(cfg)
 
 	result, err := registry.Call(context.Background(), protocol.ToolCall{
@@ -500,15 +500,26 @@ func TestReadToolReturnsFullContentForAgentManagedOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Content != content {
-		t.Fatalf("read content len=%d, want full len=%d", len(result.Content), len(content))
+	want := "1: alpha\n2: beta\n3: gamma"
+	if result.Content != want || result.Truncated {
+		t.Fatalf("read result=%#v want content %q", result, want)
+	}
+	if anyInt64(result.Metadata["offset"]) != 1 ||
+		anyInt64(result.Metadata["limit"]) != defaultFSReadLimit ||
+		anyInt64(result.Metadata["line_count"]) != 3 ||
+		anyInt64(result.Metadata["total_lines"]) != 3 ||
+		anyInt64(result.Metadata["next_offset"]) != 0 {
+		t.Fatalf("metadata = %#v", result.Metadata)
 	}
 }
 
-func TestFSReadLegacyPathReturnsFullContent(t *testing.T) {
+func TestFSReadDefaultPathTruncatesAtDefaultLimit(t *testing.T) {
 	root := t.TempDir()
-	content := "alpha\nbeta\ngamma\n"
-	if err := os.WriteFile(filepath.Join(root, "legacy.txt"), []byte(content), 0o644); err != nil {
+	var lines []string
+	for i := 1; i <= defaultFSReadLimit+2; i++ {
+		lines = append(lines, fmt.Sprintf("line-%03d", i))
+	}
+	if err := os.WriteFile(filepath.Join(root, "legacy.txt"), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
@@ -522,8 +533,61 @@ func TestFSReadLegacyPathReturnsFullContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Content != content || result.Truncated || result.Metadata != nil {
-		t.Fatalf("legacy read result=%#v", result)
+	if !result.Truncated ||
+		!strings.Contains(result.Content, "1: line-001") ||
+		!strings.Contains(result.Content, fmt.Sprintf("%d: line-%03d", defaultFSReadLimit, defaultFSReadLimit)) ||
+		strings.Contains(result.Content, fmt.Sprintf("%d: line-%03d", defaultFSReadLimit+1, defaultFSReadLimit+1)) ||
+		!strings.Contains(result.Content, fmt.Sprintf("...[truncated; next_offset=%d total_lines=%d]", defaultFSReadLimit+1, defaultFSReadLimit+2)) {
+		t.Fatalf("default read should be bounded, got %#v", result)
+	}
+	if anyInt64(result.Metadata["offset"]) != 1 ||
+		anyInt64(result.Metadata["limit"]) != defaultFSReadLimit ||
+		anyInt64(result.Metadata["line_count"]) != defaultFSReadLimit ||
+		anyInt64(result.Metadata["next_offset"]) != defaultFSReadLimit+1 ||
+		result.Metadata["lines_truncated"] != true {
+		t.Fatalf("metadata = %#v", result.Metadata)
+	}
+}
+
+func TestFSReadAllowsBillyToolOutputRefOutsideWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	root := t.TempDir()
+	ref, err := tooloutput.Store(tooloutput.StoreRequest{
+		Parts:   []string{"test", "output-ref"},
+		Content: "alpha\nbeta\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(ref.Path, filepath.Join(home, "tool-output")) {
+		t.Fatalf("output ref path = %q", ref.Path)
+	}
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	registry := NewRegistry(cfg)
+
+	result, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "fs_read_file",
+		Arguments: rawArgs(map[string]any{"path": ref.Path}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "1: alpha\n2: beta" {
+		t.Fatalf("content = %q", result.Content)
+	}
+
+	ordinaryHomeFile := filepath.Join(home, "ordinary.txt")
+	if err := os.WriteFile(ordinaryHomeFile, []byte("nope"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "fs_read_file",
+		Arguments: rawArgs(map[string]any{"path": ordinaryHomeFile}),
+	})
+	if err == nil || !strings.Contains(err.Error(), "outside workspace") {
+		t.Fatalf("expected ordinary home file to remain blocked, got %v", err)
 	}
 }
 
@@ -703,7 +767,7 @@ func TestRelativePathUsesWorkspaceRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Content != "from workspace" {
+	if result.Content != "1: from workspace" {
 		t.Fatalf("content = %q", result.Content)
 	}
 }

@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -30,7 +32,7 @@ func (r *Registry) addFSRead() {
 	r.add(Tool{
 		Spec: protocol.ToolSpec{
 			Name:        "fs_read_file",
-			Description: "Read a UTF-8 file from the allowed workspace. With offset/limit, return a bounded 1-indexed line window with line numbers and truncation metadata.",
+			Description: "Read a UTF-8 file from the allowed workspace or Billy tool-output refs as a bounded 1-indexed line window with line numbers and truncation metadata. Defaults to offset=1, limit=200.",
 			Parameters:  raw(`{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","description":"Optional 1-indexed starting line for a bounded window."},"limit":{"type":"integer","default":200,"description":"Optional number of lines to return for a bounded window; clamped to 1000."}},"required":["path"],"additionalProperties":false}`),
 			Risk:        protocol.RiskReadOnly,
 		},
@@ -43,18 +45,54 @@ func (r *Registry) handleFSRead(_ context.Context, args json.RawMessage) (Result
 	if err := json.Unmarshal(args, &in); err != nil {
 		return Result{}, err
 	}
-	path, err := r.safePath(in.Path)
+	path, err := r.safeReadPath(in.Path)
 	if err != nil {
 		return Result{}, err
 	}
-	if in.Offset == nil && in.Limit == nil {
-		bytes, err := os.ReadFile(path)
-		if err != nil {
-			return Result{}, err
-		}
-		return Result{Content: string(bytes)}, nil
-	}
 	return readFSLineWindow(path, in)
+}
+
+func (r *Registry) safeReadPath(input string) (string, error) {
+	path, err := r.safePath(input)
+	if err == nil {
+		return path, nil
+	}
+	if outputPath, ok, outputErr := safeToolOutputReadPath(input); ok {
+		return outputPath, outputErr
+	}
+	return "", err
+}
+
+func safeToolOutputReadPath(input string) (string, bool, error) {
+	input = strings.TrimSpace(input)
+	if input == "" || !filepath.IsAbs(input) {
+		return "", false, nil
+	}
+	path, err := filepath.Abs(input)
+	if err != nil {
+		return "", true, err
+	}
+	if sensitive(path) {
+		return "", true, fmt.Errorf("refusing sensitive path %s", path)
+	}
+	policyPath, err := resolvedPathForPolicy(path)
+	if err != nil {
+		return "", true, err
+	}
+	if sensitive(policyPath) {
+		return "", true, fmt.Errorf("refusing sensitive path %s", policyPath)
+	}
+	root := filepath.Join(config.BillyHomeDir(), "tool-output")
+	root, _ = filepath.Abs(root)
+	policyRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		policyRoot = root
+	}
+	policyRoot, _ = filepath.Abs(policyRoot)
+	if policyPath == policyRoot || strings.HasPrefix(policyPath, policyRoot+string(os.PathSeparator)) {
+		return path, true, nil
+	}
+	return "", false, nil
 }
 
 func readFSLineWindow(path string, in fsReadInput) (Result, error) {

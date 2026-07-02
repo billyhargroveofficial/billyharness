@@ -357,7 +357,7 @@ func boundedShellOutputPreview(full string, limit int, ref string, saveErr error
 			return fmt.Sprintf("\n...[truncated %d bytes; failed to save full shell output: %v]", omitted, saveErr)
 		}
 		if ref != "" {
-			return fmt.Sprintf("\n...[truncated %d bytes; full shell output saved as plaintext to %s with 0600 permissions. Use fs_read_file on output_ref if exact output is needed]", omitted, ref)
+			return fmt.Sprintf("\n...[truncated %d bytes; full shell output saved as plaintext to %s with 0600 permissions. Use fs_read_file with offset/limit on output_ref if more output is needed]", omitted, ref)
 		}
 		return fmt.Sprintf("\n...[truncated %d bytes]", omitted)
 	}
