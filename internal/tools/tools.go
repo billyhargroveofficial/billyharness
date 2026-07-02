@@ -97,6 +97,7 @@ type Registry struct {
 	webSummarizer   webtools.Summarizer
 	webSummarySlots chan struct{}
 	webSummarySeq   int64
+	nativeWebClient *webtools.Client
 	webBackendHTTP  *http.Client
 	webBackendSleep func(context.Context, time.Duration) error
 	tavilyBaseURL   string
@@ -142,6 +143,12 @@ func RegistrySettingsFromConfig(cfg config.Config) RegistrySettings {
 func WithWebSummarizer(summarizer webtools.Summarizer) RegistryOption {
 	return func(r *Registry) {
 		r.webSummarizer = summarizer
+	}
+}
+
+func WithNativeWebClient(client webtools.Client) RegistryOption {
+	return func(r *Registry) {
+		r.nativeWebClient = &client
 	}
 }
 

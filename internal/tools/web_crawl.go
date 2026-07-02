@@ -39,7 +39,7 @@ func normalizedCrawlMaxDepth(maxDepth int) int {
 func (r *Registry) crawl(ctx context.Context, rawURL string, maxPages, maxDepth int, sameHost bool, maxBytesPerPage int) ([]crawlPage, error) {
 	maxPages = normalizedCrawlMaxPages(maxPages)
 	maxDepth = normalizedCrawlMaxDepth(maxDepth)
-	start, err := validatePublicHTTPURL(ctx, rawURL)
+	start, err := r.validatePublicHTTPURL(ctx, rawURL)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +54,7 @@ func (r *Registry) crawl(ctx context.Context, rawURL string, maxPages, maxDepth 
 			continue
 		}
 		seen[item.URL] = true
-		page, err := fetchPage(ctx, item.URL, maxBytesPerPage)
+		page, err := r.fetchPage(ctx, item.URL, maxBytesPerPage)
 		out := crawlPage{URL: item.URL, Depth: item.Depth}
 		if err != nil {
 			out.Error = err.Error()

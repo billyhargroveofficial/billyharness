@@ -626,16 +626,37 @@ Files:
 
 ### 18. Keep web tool budgets hard and observable
 
-- [ ] Verify `web_fetch`, `web_extract`, and `web_crawl` never inject raw large
+- [x] Verify `web_fetch`, `web_extract`, and `web_crawl` never inject raw large
   pages into the main agent context when summarization/output refs should be
   used.
-- [ ] Surface per-run web summary metrics in `/context`, Telegram, and TUI.
-- [ ] Add tests where a large page produces a short tool result, an output ref,
+- [x] Surface per-run web summary metrics in `/context`, Telegram, and TUI.
+- [x] Add tests where a large page produces a short tool result, an output ref,
   and non-zero web summary metrics.
+
+Evidence:
+
+- Native web tools now use an injectable runtime web client while preserving
+  the default public URL validation/client path in production; fetch, extract,
+  crawl, and cache-key URL normalization share that runtime client.
+- Added `TestNativeWebToolsKeepLargePagesOutOfContextAndReportSummaryMetrics`,
+  which exercises `web_fetch`, `web_extract`, and `web_crawl` through the tool
+  registry with a large page. Each result is compact, omits the raw tail from
+  model-visible content, stores full source text in `output_ref`, and exposes
+  non-zero `tool_summary_*` metrics.
+- Existing `/context`, Telegram, and TUI projection tests verify the same
+  metadata renders as `websum`, `sumapi`, helper API calls, and helper API cost.
+- Tests: `/root/.local/go/bin/go test -run 'TestNativeWebToolsKeepLargePagesOutOfContextAndReportSummaryMetrics|TestModelWebSummarizerRunsOutsideMainLoopAndRecordsMetrics|TestCompactCrawlResultReturnsSingleOutputRef|TestContextReportV2IncludesEventsRuntimePromptAndHelperUsage|TestRendererFooterShowsToolSummaryTokens' -count=1 ./internal/tools ./internal/clientux ./internal/telegrambot`.
+- Tests: `/root/.local/go/bin/go test -run 'TestTUIAccountingMatchesClientUXProjector|TestInlineStatusShowsHelperAPICallsAndCost|TestContextCommandShowsGatewayContextReport' -count=1 ./internal/tui`.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/tools ./internal/clientux ./internal/telegrambot ./internal/tui ./internal/provider`.
 
 Files:
 
-- `internal/tools/web.go`
+- `internal/tools/web_fetch.go`
+- `internal/tools/web_core.go`
+- `internal/tools/web_crawl.go`
+- `internal/tools/web_backend.go`
+- `internal/tools/webcache.go`
+- `internal/tools/tools.go`
 - `internal/provider/web_summary.go`
 - `internal/clientux/context.go`
 - `internal/telegrambot/render.go`

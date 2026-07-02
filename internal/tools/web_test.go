@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -288,6 +290,66 @@ func TestWebCompactionStoresFullTextOutOfBand(t *testing.T) {
 	assertMode(t, filepath.Join(config.BillyHomeDir(), "tool-output"), 0o700)
 	assertMode(t, filepath.Dir(ref), 0o700)
 	assertMode(t, ref, 0o600)
+}
+
+func TestNativeWebToolsKeepLargePagesOutOfContextAndReportSummaryMetrics(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	rawTail := "RAW_TAIL_ONLY_IN_OUTPUT_REF"
+	rawText := strings.Repeat("Budget evidence sentence with enough detail for summarization. ", 900) + rawTail
+	pageHTML := "<!doctype html><html><head><title>Budget Page</title></head><body><h1>Budget Page</h1><p>" + rawText + "</p><a href=\"/next\">next</a></body></html>"
+	publicURL, client := newPublicWebTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(pageHTML))
+	}))
+	summaryCalls := 0
+	summarizer := scriptedSummarizer{
+		check: func(req webtools.SummaryRequest) {
+			summaryCalls++
+			if req.ToolName != "web_summary" || req.AllowTools {
+				t.Fatalf("summary request should be out-of-band and tool-free: %#v", req)
+			}
+			if !strings.Contains(req.Source.Text, rawTail) {
+				t.Fatalf("summary source should receive full text, got %#v", req.Source)
+			}
+		},
+		result: webtools.SummaryResult{
+			Text:         "Model summary keeps the useful facts while raw source text stays out of the main context.",
+			Provider:     "mock",
+			Model:        "mock-summarizer",
+			InputTokens:  1200,
+			OutputTokens: 75,
+			CacheHit:     400,
+			CacheMiss:    800,
+		},
+	}
+	cfg := config.Default()
+	cfg.WebSummaryMode = "model"
+	cfg.WebSummaryProvider = "mock"
+	cfg.WebSummaryModel = "mock-summarizer"
+	cfg.WebSummaryMaxInputTokens = 300
+	cfg.WebSummaryMaxOutputTokens = 80
+	registry := NewRegistry(cfg, WithNativeWebClient(client), WithWebSummarizer(summarizer))
+
+	tests := []struct {
+		name string
+		args map[string]any
+	}{
+		{name: "web_fetch", args: map[string]any{"url": publicURL + "/article", "query": "budget evidence"}},
+		{name: "web_extract", args: map[string]any{"url": publicURL + "/article", "query": "budget evidence"}},
+		{name: "web_crawl", args: map[string]any{"url": publicURL + "/article", "query": "budget evidence", "max_pages": 1, "max_depth": 0}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := registry.Call(context.Background(), protocol.ToolCall{Name: tt.name, Arguments: rawArgs(tt.args)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertLargeWebToolResultCompact(t, tt.name, result, rawTail, len(rawText))
+		})
+	}
+	if summaryCalls != len(tests) {
+		t.Fatalf("summary calls = %d, want %d", summaryCalls, len(tests))
+	}
 }
 
 func TestWebOutputMetadataReportsMissingArtifact(t *testing.T) {
@@ -934,5 +996,98 @@ func TestCompactCrawlResultReturnsSingleOutputRef(t *testing.T) {
 	}
 	if !strings.Contains(string(bytes), "=== page 2") || !strings.Contains(string(bytes), "B page sentence") {
 		t.Fatalf("crawl artifact missing page text:\n%s", string(bytes))
+	}
+}
+
+func newPublicWebTestServer(t *testing.T, handler http.Handler) (string, webtools.Client) {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	localAddr := server.Listener.Addr().String()
+	_, port, err := net.SplitHostPort(localAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const publicHost = "public-web-test.example"
+	publicIP := net.ParseIP("93.184.216.34")
+	if publicIP == nil {
+		t.Fatal("test public IP did not parse")
+	}
+	dialer := net.Dialer{}
+	client := webtools.Client{
+		Resolver: webtools.ResolverFunc(func(_ context.Context, host string) ([]net.IPAddr, error) {
+			if host != publicHost {
+				return nil, fmt.Errorf("unexpected host lookup %q", host)
+			}
+			return []net.IPAddr{{IP: publicIP}}, nil
+		}),
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			_, gotPort, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			if gotPort != port {
+				return nil, fmt.Errorf("unexpected dial target %s", address)
+			}
+			return dialer.DialContext(ctx, network, localAddr)
+		},
+	}
+	return "http://" + net.JoinHostPort(publicHost, port), client
+}
+
+func assertLargeWebToolResultCompact(t *testing.T, toolName string, result Result, rawTail string, rawLen int) {
+	t.Helper()
+	if result.OutputRef == "" || result.Metadata[tooloutput.MetadataOutputRef] != result.OutputRef {
+		t.Fatalf("%s output ref missing: result=%#v metadata=%#v", toolName, result, result.Metadata)
+	}
+	if strings.Contains(result.Content, rawTail) {
+		t.Fatalf("%s leaked raw tail into compact result:\n%s", toolName, result.Content)
+	}
+	if len(result.Content) >= rawLen/2 {
+		t.Fatalf("%s compact result too large: got %d bytes from %d raw bytes", toolName, len(result.Content), rawLen)
+	}
+	if !result.Truncated {
+		t.Fatalf("%s should mark omitted source text as truncated", toolName)
+	}
+	if result.Metadata["tool_summary_kind"] != "model" ||
+		result.Metadata["tool_summary_external_model_used"] != true ||
+		anyInt64(result.Metadata["tool_summary_input_tokens"]) <= 0 ||
+		anyInt64(result.Metadata["tool_summary_output_tokens"]) <= 0 ||
+		anyInt64(result.Metadata["tool_summary_api_total_tokens"]) <= 0 ||
+		anyInt64(result.Metadata["tool_summary_saved_tokens"]) <= 0 {
+		t.Fatalf("%s summary metadata missing model compression metrics: %#v", toolName, result.Metadata)
+	}
+	body, err := os.ReadFile(result.OutputRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), rawTail) {
+		t.Fatalf("%s output ref missing full raw text tail", toolName)
+	}
+	switch toolName {
+	case "web_fetch", "web_extract":
+		var page compactPage
+		if err := json.Unmarshal([]byte(result.Content), &page); err != nil {
+			t.Fatal(err)
+		}
+		if page.Text != "" || page.OutputRef != result.OutputRef ||
+			page.OutputClass != "model_summary" || page.SummaryMode != "model" ||
+			page.WebsumInputTokens <= 0 || page.WebsumOutputTokens <= 0 || page.EstimatedTokensSaved <= 0 {
+			t.Fatalf("%s compact page contract drifted: %#v", toolName, page)
+		}
+	case "web_crawl":
+		var crawl compactCrawlOutput
+		if err := json.Unmarshal([]byte(result.Content), &crawl); err != nil {
+			t.Fatal(err)
+		}
+		if crawl.OutputRef != result.OutputRef || crawl.OutputClass != "model_summary" ||
+			crawl.SummaryMode != "model" || crawl.WebsumInputTokens <= 0 ||
+			crawl.WebsumOutputTokens <= 0 || crawl.EstimatedTokensSaved <= 0 ||
+			len(crawl.Pages) != 1 || crawl.Pages[0].Text != "" ||
+			crawl.Pages[0].OutputRef != result.OutputRef {
+			t.Fatalf("%s compact crawl contract drifted: %#v", toolName, crawl)
+		}
+	default:
+		t.Fatalf("unexpected tool name %q", toolName)
 	}
 }

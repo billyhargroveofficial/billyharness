@@ -31,7 +31,7 @@ func (r *Registry) fetchCompactPageResult(ctx context.Context, toolName, rawURL 
 		}
 	}
 	fetchStart := time.Now()
-	page, err := fetchPage(ctx, rawURL, opts.MaxBytes)
+	page, err := r.fetchPage(ctx, rawURL, opts.MaxBytes)
 	if err != nil {
 		return Result{}, err
 	}

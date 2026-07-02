@@ -20,7 +20,15 @@ func searchDuckDuckGoLite(ctx context.Context, query string, limit int) ([]searc
 }
 
 func fetchPage(ctx context.Context, rawURL string, maxBytes int) (fetchedPage, error) {
-	body, finalURL, contentType, err := httpGet(ctx, rawURL, maxBytes+1)
+	return fetchPageWithClient(ctx, webtools.DefaultClient(), rawURL, maxBytes)
+}
+
+func (r *Registry) fetchPage(ctx context.Context, rawURL string, maxBytes int) (fetchedPage, error) {
+	return fetchPageWithClient(ctx, r.nativeWebHTTPClient(), rawURL, maxBytes)
+}
+
+func fetchPageWithClient(ctx context.Context, client webtools.Client, rawURL string, maxBytes int) (fetchedPage, error) {
+	body, finalURL, contentType, err := httpGetWithClient(ctx, client, rawURL, maxBytes+1)
 	if err != nil {
 		return fetchedPage{}, err
 	}
@@ -53,7 +61,11 @@ func fetchPage(ctx context.Context, rawURL string, maxBytes int) (fetchedPage, e
 }
 
 func httpGet(ctx context.Context, rawURL string, maxBytes int) ([]byte, string, string, error) {
-	resp, err := webtools.DefaultClient().Get(ctx, rawURL, maxBytes)
+	return httpGetWithClient(ctx, webtools.DefaultClient(), rawURL, maxBytes)
+}
+
+func httpGetWithClient(ctx context.Context, client webtools.Client, rawURL string, maxBytes int) ([]byte, string, string, error) {
+	resp, err := client.Get(ctx, rawURL, maxBytes)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -62,6 +74,18 @@ func httpGet(ctx context.Context, rawURL string, maxBytes int) ([]byte, string, 
 
 func validatePublicHTTPURL(ctx context.Context, rawURL string) (*url.URL, error) {
 	return webtools.ValidatePublicHTTPURL(ctx, rawURL, nil)
+}
+
+func (r *Registry) validatePublicHTTPURL(ctx context.Context, rawURL string) (*url.URL, error) {
+	client := r.nativeWebHTTPClient()
+	return webtools.ValidatePublicHTTPURL(ctx, rawURL, client.Resolver)
+}
+
+func (r *Registry) nativeWebHTTPClient() webtools.Client {
+	if r != nil && r.nativeWebClient != nil {
+		return *r.nativeWebClient
+	}
+	return webtools.DefaultClient()
 }
 
 func boundedBytes(n int) int {

@@ -128,7 +128,7 @@ func (r *Registry) webBackendExtract(ctx context.Context, backend string, rawURL
 func (r *Registry) fetchProviderExtractPageResult(ctx context.Context, backend, rawURL string, opts webFetchOptions) (Result, error) {
 	totalStart := time.Now()
 	opts.MaxBytes = boundedBytes(opts.MaxBytes)
-	u, err := validatePublicHTTPURL(ctx, rawURL)
+	u, err := r.validatePublicHTTPURL(ctx, rawURL)
 	if err != nil {
 		return Result{}, err
 	}
