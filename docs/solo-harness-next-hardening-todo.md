@@ -97,7 +97,7 @@ Goal: make sure the recovered Codex subagent rollout files are not lost, and
 that incomplete agents are either rerun, mapped to concrete work, or explicitly
 closed as no final report.
 
-- [ ] NH-00.1 Reconcile completed and incomplete subagent traces.
+- [x] NH-00.1 Reconcile completed and incomplete subagent traces.
   - target files: this document, optionally the relevant roadmap sections.
   - acceptance: completed reports are mapped to existing NH tasks; incomplete
     traces are inspected through their last `agent_message` and either rerun
@@ -120,9 +120,14 @@ closed as no final report.
       failover policy.
     - Carver produced no final report; last state said it was using the
       `openai-docs` skill for Codex-specific product/roadmap claims.
-  - verification: use `jq -s` extraction on each rollout file and record the
-    result in this TODO before marking this item complete.
-  - status: open.
+  - verification, 2026-07-02:
+    - incomplete trace extraction was completed with `jq -s` and recorded in
+      `docs/recovered-subagent-followup-todo.md` RS-00.1 through RS-00.3.
+    - accepted findings were mapped to RS-01 through RS-04; Carver was closed
+      with no additional action because no final product finding survived the
+      trace beyond the existing solo harness filter.
+  - commit: pending.
+  - status: completed.
 
 ## Milestone 1 - Durable Run Termination And Replay Recovery (P0)
 

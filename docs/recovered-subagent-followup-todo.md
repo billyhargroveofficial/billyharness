@@ -51,24 +51,108 @@ bounded fixes without derailing the main hardening roadmap.
 
 ## Milestone 0 - Recover Or Close Incomplete Research (P0)
 
-- [ ] RS-00.1 Extract all useful text from incomplete Codex rollout files.
+- [x] RS-00.1 Extract all useful text from incomplete Codex rollout files.
   - acceptance: for each incomplete file, extract the last meaningful
     `agent_message`, list any URLs/files it touched, and record whether it has
     enough evidence to become implementation work.
   - suggested command:
     `jq -s -r '[.[] | select(.type=="event_msg" and .payload.type=="agent_message") | .payload.message // empty] | last // ""' <rollout.jsonl>`
-  - status: open.
+  - recovery log, 2026-07-02:
+    - command used for each trace:
+      `jq -s -r '[.[] | select(.type=="event_msg" and .payload.type=="agent_message") | .payload.message // empty] | last // ""' <rollout.jsonl>`
+    - Averroes
+      `/root/.codex/sessions/2026/07/02/rollout-2026-07-02T18-46-35-019f23b9-9fb5-7ad1-9886-da7ae97942c2.jsonl`:
+      last meaningful message says web search output was sparse and the agent
+      was switching to direct `curl` reads of official docs and GitHub raw
+      files. Earlier useful messages identify concrete evidence and patterns:
+      local paths `/root/billyharness`, `/root/research/openai-codex`, local
+      tool/tool-output/transcript/access-mode packages; public queries for
+      Codex apply-patch/sandbox/docs, Claude Code tool permissions and tool
+      UI separation, OpenCode tool permissions/output storage/session
+      projector, Aider edit formats/repo map, Cline/Roo/Continue tool docs.
+      Recovered finding is actionable: Billyharness already has typed
+      lifecycle events, compact render metadata, output refs, and access modes,
+      so the bounded work is contract hardening rather than greenfield tool
+      redesign.
+    - Mill
+      `/root/.codex/sessions/2026/07/02/rollout-2026-07-02T18-52-23-019f23be-eff3-77c0-91c3-280095cf2be4.jsonl`:
+      last meaningful message says strict hygiene and architecture guard both
+      passed, but tracked Go files had grown from the older docs' 286 to 315.
+      Earlier messages identify pressure areas: `gateway`, `tui`, `tools`,
+      `telegrambot`, `agent`, `bench`, and `config`; the guard catches direct
+      import violations but broad allowed lists can still hide owner pressure.
+    - Erdos
+      `/root/.codex/sessions/2026/07/02/rollout-2026-07-02T18-52-35-019f23bf-1f0b-7a82-86dc-427f02045389.jsonl`:
+      last meaningful message says existing TUI primitives include Bubble
+      Tea/Lip Gloss, `/toolview`, `/copy`, transcript export, a client UX
+      action registry, and `internal/tui`; useful upstream query topics were
+      Claude Code terminal shortcuts/selection/copy/status/tool display and
+      OpenCode keybinds/TUI details. Actionable finding: TUI work should reuse
+      those shipped primitives and add regression coverage rather than
+      duplicate command, copy, transcript, or tool-view logic.
+    - Schrodinger
+      `/root/.codex/sessions/2026/07/02/rollout-2026-07-02T18-53-55-019f23c0-559b-7fe0-b873-4bd036c10d33.jsonl`:
+      last meaningful message says existing web-tool tests already cover DNS
+      rebinding, redirects to private hosts, provider auth mapping, retries,
+      compact outputs, output refs, model-summary accounting, and cache
+      invalidation. Earlier messages identify implementation shape: DuckDuckGo
+      Lite native search, local fetch, optional Tavily/Exa search/extract,
+      cache keys with summarizer settings, strong public-host validation, and
+      weaker product behavior around provider freshness/options,
+      citation/evidence metadata, markdown readability, and backend failover.
+    - Carver
+      `/root/.codex/sessions/2026/07/02/rollout-2026-07-02T18-54-42-019f23c1-0c0e-71f0-8d73-7db47599e1cc.jsonl`:
+      only useful text says it was gathering public docs and using the
+      `openai-docs` skill for Codex-specific product/roadmap claims. Search
+      queries covered Codex, Claude Code, OpenCode, Aider, Cline, Continue, and
+      Hermes product surfaces, but no final findings survived.
+    - rollout metadata: all five traces contain only `agent_message`,
+      `task_started`, `token_count`, `user_message`, and, for Averroes/Erdos/
+      Carver, `web_search_end` query metadata. No completed final reports or
+      direct edit/test outputs were present.
+  - mapped to: RS-01.1, RS-01.2, RS-02.1, RS-02.2, RS-03.1, RS-03.2,
+    RS-04.1, RS-04.2, and NH-00.1.
+  - commit: pending.
+  - status: completed.
 
-- [ ] RS-00.2 Decide whether to rerun missing agents.
+- [x] RS-00.2 Decide whether to rerun missing agents.
   - acceptance: if a trace only says "working" and has no actionable evidence,
     either rerun that research with a tight scope or mark it closed with no
     additional action.
-  - status: open.
+  - decision, 2026-07-02:
+    - do not rerun Averroes, Mill, Erdos, or Schrodinger broadly; their partial
+      traces contain enough scoped evidence to become the RS implementation
+      items below.
+    - do not rerun Carver; the trace contains no final product findings beyond
+      the already documented solo-harness filter, and rerunning broad
+      competitor/product research would risk platform/marketplace bloat outside
+      this follow-up's scope.
+  - commit: pending.
+  - status: completed.
 
-- [ ] RS-00.3 Map recovered findings into either this TODO or the main roadmap.
+- [x] RS-00.3 Map recovered findings into either this TODO or the main roadmap.
   - acceptance: every useful recovered finding points at a concrete RS or NH
     item; no "interesting research" remains floating only in chat history.
-  - status: open.
+  - mapping, 2026-07-02:
+    - Averroes accepted into RS-01.1/RS-01.2 for malformed tool-call recovery,
+      stable mutating-tool contracts, compact display metadata, bounded output
+      refs, and replay-safe results.
+    - Mill accepted into RS-02.1/RS-02.2 for fresh package/file/import
+      measurement before any decomposition, with splits allowed only for real
+      owner-boundary pressure.
+    - Erdos accepted into RS-03.1/RS-03.2 for a TUI primitive audit and
+      regression tests around noisy tool events, gateway/SSH input, selection,
+      slash commands, and compact tool rendering.
+    - Schrodinger accepted into RS-04.1/RS-04.2 for product-level web/search/
+      extract tests and a deterministic backend failover policy.
+    - Carver closed with no additional RS item; the surviving trace adds no
+      concrete finding beyond the main roadmap's solo harness filter and
+      platform-bloat rejection.
+    - NH-00.1 in the main hardening roadmap is updated as completed so the
+      reconciliation source of truth points back here instead of leaving the
+      evidence in Codex logs.
+  - commit: pending.
+  - status: completed.
 
 ## Milestone 1 - Tool Contracts, Edit, And Shell Recovery (P0)
 
