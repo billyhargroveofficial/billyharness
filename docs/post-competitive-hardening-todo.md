@@ -209,13 +209,20 @@ Goal: make `fast-agent-harness hygiene -strict` pass without changing behavior.
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
   - commit: `32e4ea7a6472a0d59b0bb9e51f90f831a33a6280`.
 
-- [ ] PH-01.5 Make strict hygiene pass.
+- [x] PH-01.5 Make strict hygiene pass.
   - acceptance: no handwritten `.go` file exceeds 1500 LOC and no `_test.go`
     file exceeds 1200 LOC unless `docs/architecture.md` records a temporary
     exception with owner and removal plan.
   - verification:
     `go run ./cmd/fast-agent-harness hygiene -strict`
-  - status: open.
+  - status: completed 2026-07-02.
+  - evidence: strict hygiene reported `tracked Go files: 286` and
+    `large source files: none`, so no file-size exception is needed in
+    `docs/architecture.md`.
+  - verification evidence:
+    `/root/.local/go/bin/go run ./cmd/fast-agent-harness hygiene -strict`
+    passed.
+  - commit: pending.
 
 ## Milestone 2 - Boundary And Complexity Audit (P0)
 
