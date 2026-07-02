@@ -1,6 +1,6 @@
 # Billyharness Consistency Audit TODO
 
-Status: planned.
+Status: completed.
 Created: 2026-07-02.
 
 This TODO tracks cross-surface mismatches where Billyharness can show one
@@ -853,6 +853,15 @@ Latest P0 verification evidence, all passed after P0-12:
 - `/root/.local/go/bin/go test -count=1 ./internal/modelinfo ./internal/config ./internal/gateway ./internal/gatewayclient ./internal/session ./internal/telegrambot ./internal/tui ./internal/clientux ./internal/clientux/projector ./internal/tools ./internal/toolrender ./internal/provider`
 - `/root/.local/go/bin/go test -run 'Test.*Context.*Window.*|Test.*Status.*Context.*|Test.*Selected.*Runtime.*|Test.*Cache.*Context.*|Test.*Tool.*Count.*|Test.*Helper.*Usage.*|Test.*Telegram.*Stale.*|Test.*Interrupt.*Late.*|Test.*Golden.*Status.*|Test.*Vision.*Capability.*' -count=1 ./internal/...`
 - `/root/.local/go/bin/go test -count=1 ./...`
+
+Latest full verification evidence, all passed after P1-23 and hygiene split:
+
+- `/root/.local/go/bin/go test -count=1 ./internal/modelinfo ./internal/config ./internal/gateway ./internal/gatewayclient ./internal/session ./internal/telegrambot ./internal/tui ./internal/clientux ./internal/clientux/projector ./internal/tools ./internal/toolrender ./internal/provider`
+- `/root/.local/go/bin/go test -run 'Test.*Context.*Window.*|Test.*Status.*Context.*|Test.*Selected.*Runtime.*|Test.*Cache.*Context.*|Test.*Tool.*Count.*|Test.*Helper.*Usage.*|Test.*Telegram.*Stale.*|Test.*Interrupt.*Late.*|Test.*Golden.*Status.*|Test.*Vision.*Capability.*' -count=1 ./internal/...`
+- `/root/.local/go/bin/go test -count=1 ./...`
+- `/root/.local/go/bin/go run ./cmd/fast-agent-harness hygiene -strict -repo /root/billyharness`
+- `./bin/fast-agent-harness config inspect -json`
+- `./bin/fast-agent-harness doctor -strict -services=false -gateway=false`
 
 Full verification before marking this TODO complete:
 
