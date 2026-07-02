@@ -17,4 +17,5 @@ Start here:
 - [Skills](skills.md): on-demand skill directories and bounded `skill_list`/`skill_read` usage.
 - [Web tools](web.md): compact web fetch/extract/crawl output, external summaries, and web cache.
 - [Context](context.md): active context accounting, source contributors, thresholds, and `/context`.
-- [Solo harness competitive TODO](solo-harness-competitive-todo.md): active competitive follow-up roadmap for the SH-00 through SH-03 P0 pass.
+- [Post-competitive hardening TODO](post-competitive-hardening-todo.md): active cleanup, decomposition, hygiene, regression, and smoke roadmap after the competitive pass.
+- [Solo harness competitive TODO](solo-harness-competitive-todo.md): completed competitive follow-up roadmap and evidence log for the SH pass.
