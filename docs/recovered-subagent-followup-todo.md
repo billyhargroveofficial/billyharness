@@ -218,18 +218,71 @@ bounded fixes without derailing the main hardening roadmap.
 
 ## Milestone 2 - Architecture And Decomposition Pressure (P0)
 
-- [ ] RS-02.1 Capture fresh package/file-size/import baseline.
+- [x] RS-02.1 Capture fresh package/file-size/import baseline.
   - acceptance: record current Go file count, largest files, largest packages,
     and architecture guard status after the recent work.
   - verification:
     `/root/.local/go/bin/go run ./cmd/fast-agent-harness hygiene -strict -repo /root/billyharness`
     and `/root/.local/go/bin/go test -count=1 ./internal/architecture`.
-  - status: open.
+  - baseline, 2026-07-02:
+    - tracked Go files: 315.
+    - largest tracked Go files:
+      - `internal/gateway/gateway.go`: 1497 LOC.
+      - `internal/tools/tools.go`: 1457 LOC.
+      - `internal/tui/transcript_runtime.go`: 1386 LOC.
+      - `internal/bench/bench.go`: 1295 LOC.
+      - `internal/trace/trace.go`: 1196 LOC.
+      - largest tests: `internal/gateway/session_store_test.go` 1193 LOC,
+        `internal/tui/interaction_status_test.go` 1168 LOC,
+        `internal/mcpclient/client_test.go` 1104 LOC.
+    - largest internal packages by tracked Go LOC:
+      - `internal/tools`: 11371.
+      - `internal/telegrambot`: 11311.
+      - `internal/tui`: 11269.
+      - `internal/gateway`: 9763.
+      - `internal/agent`: 7598.
+      - `internal/config`: 6181.
+      - `internal/provider`: 4425.
+    - largest internal packages by tracked Go file count:
+      - `internal/tui`: 52.
+      - `internal/telegrambot`: 35.
+      - `internal/tools`: 34.
+      - `internal/gateway`: 24.
+      - `internal/config`: 23.
+      - `internal/agent`: 21.
+    - highest direct internal import fan-in pressure from `go list`:
+      - `internal/tui`: 20 direct internal imports.
+      - `internal/gateway`: 18.
+      - `internal/telegrambot`: 15.
+      - `internal/agent`: 13.
+      - `internal/tools`: 10.
+  - verification:
+    - `/root/.local/go/bin/go test -count=1 ./internal/architecture`
+    - `/root/.local/go/bin/go run ./cmd/fast-agent-harness hygiene -strict -repo /root/billyharness`
+  - result: architecture guard passed; strict hygiene passed with no large
+    source-file exceptions. Runtime artifact sizes were reported but not part
+    of this source decomposition task.
+  - commit: pending.
+  - status: completed.
 
-- [ ] RS-02.2 Split only if a real owner boundary is found.
+- [x] RS-02.2 Split only if a real owner boundary is found.
   - acceptance: any split updates `docs/architecture.md` when package
     responsibility changes; line-count-only churn is rejected.
-  - status: open.
+  - decision, 2026-07-02:
+    - no decomposition was performed in this pass. The largest files are close
+      to existing budgets but still pass strict hygiene, and the architecture
+      guard still matches `docs/architecture.md`.
+    - current pressure is owner-review pressure, not a proven split boundary:
+      `gateway.go` and `tools.go` are near the 1500 LOC source budget, while
+      `internal/tui`, `internal/telegrambot`, and `internal/tools` are the
+      largest packages by total LOC.
+    - next action when code changes in these areas: split only around a real
+      responsibility owner such as gateway lifecycle vs HTTP DTOs, tool
+      registry core vs individual tool families, or TUI runtime vs transcript
+      rendering. Any such split must update `docs/architecture.md` in the same
+      commit.
+  - commit: pending.
+  - status: completed.
 
 ## Milestone 3 - TUI/Terminal UX Regression Pass (P1)
 
