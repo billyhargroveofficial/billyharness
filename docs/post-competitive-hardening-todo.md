@@ -536,10 +536,22 @@ an old binary.
 Goal: use the cleaner code to remove remaining daily annoyances, but only after
 P0 is green.
 
-- [ ] PH-05.1 Improve `/context` readability if helper/cache/prompt sections
+- [!] PH-05.1 Improve `/context` readability if helper/cache/prompt sections
   are too noisy in real Telegram/TUI output.
   - acceptance: same data, better grouping; no hidden accounting.
-  - status: open.
+  - status: blocked 2026-07-02.
+  - evidence: the TUI `/context` smoke from PH-04.3 rendered the shared report
+    with source buckets and top contributors, and the output was readable
+    enough that no TUI-specific formatter change is justified. Telegram
+    `/context` output was not reviewed because live Telegram slash-command
+    smoke is blocked without a safe chat/user/thread target.
+  - blocker: real Telegram `/context` readability cannot be assessed without
+    posting into a live Telegram chat or running the service against a
+    temporary dry-run/fake Bot API endpoint.
+  - next action: capture a real Telegram `/context` sample from a safe target
+    after PH-04.3's Telegram smoke blocker is cleared, then adjust only the
+    shared formatter if helper/cache/prompt sections are demonstrably noisy.
+  - commit: pending.
 
 - [x] PH-05.2 Add one command that summarizes current harness health.
   - idea: `fast-agent-harness doctor runtime` or extending existing `doctor`.
@@ -584,7 +596,19 @@ P0 is green.
     `/root/.local/go/bin/go test -count=1 ./cmd/fast-agent-harness`, and
     `/root/.local/go/bin/go build -o
     /tmp/fast-agent-harness-doctor-smoke-clean ./cmd/fast-agent-harness`.
-  - commit: pending.
+  - deployment evidence: after the PH-05.2 commit was pushed, rebuilt
+    `/root/billyharness/bin/fast-agent-harness` from a clean detached worktree
+    at `HEAD` `35caafce1d85149d7a96921831f83f448b0f6b39`, then restarted
+    `billyharness-gateway.service` and `billyharness-telegram.service`.
+    Gateway restarted as `MainPID=608453` at
+    `Thu 2026-07-02 10:36:09 CEST`; Telegram restarted as `MainPID=608563`
+    at `Thu 2026-07-02 10:36:13 CEST`. Both `/proc/*/exe` links resolved to
+    `/root/billyharness/bin/fast-agent-harness` without `(deleted)`, `/health`
+    returned `{"model":"gpt-5.5","ok":true,"provider":"openai-codex"}`, and
+    the deployed `./bin/fast-agent-harness doctor -json -build=false` reported
+    the new runtime block with service binary size `19774141` bytes and mtime
+    `2026-07-02T08:35:58Z`.
+  - commit: `35caafce1d85149d7a96921831f83f448b0f6b39`.
 
 - [ ] PH-05.3 Add benchmarks only for measured hot spots.
   - likely targets: web summary/context bloat, toolrender rendering, gateway
