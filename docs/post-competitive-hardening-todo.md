@@ -102,7 +102,7 @@ Goal: make the new active plan and git state clean before touching runtime code.
     docs/solo-harness-competitive-todo.md` returned no matches.
   - commit: `8835131b187953c066bada622bd53a9c4dc6025d`.
 
-- [ ] PH-00.3 Mark old harness-research roadmap as historical if it is no
+- [x] PH-00.3 Mark old harness-research roadmap as historical if it is no
   longer active.
   - target files: `docs/harness-research-execution-todo.md`,
     optional `docs/README.md`.
@@ -110,7 +110,14 @@ Goal: make the new active plan and git state clean before touching runtime code.
     instead add a short status note saying the active follow-up roadmap is this
     file, unless those old entries are still intended to be resolved.
   - verification: manual diff review.
-  - status: open.
+  - status: completed 2026-07-02.
+  - evidence: updated the header note in
+    `docs/harness-research-execution-todo.md` to point current follow-up work
+    at `docs/post-competitive-hardening-todo.md`, while preserving the old
+    checklist and its historical `commit: pending` entries unchanged.
+  - verification evidence: manual diff review confirmed only the historical
+    status note and this PH-00.3 TODO entry changed.
+  - commit: pending.
 
 ## Milestone 1 - Strict Hygiene And Decomposition (P0)
 
