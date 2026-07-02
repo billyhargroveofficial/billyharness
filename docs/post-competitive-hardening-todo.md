@@ -79,8 +79,10 @@ Goal: make the new active plan and git state clean before touching runtime code.
     the active `docs/post-competitive-hardening-todo.md` and
     `docs/post-competitive-hardening-goal.md` source-of-truth docs, and updated
     `docs/README.md` so the hardening TODO is the active cleanup roadmap while
-    the solo roadmap is described as completed evidence.
-  - commit: pending.
+    the solo roadmap is described as completed evidence. After push, `HEAD` and
+    upstream both resolved to `456d4d46db912297dd50e700d6099be7c82a8c1a`, and
+    `git status --short` was clean.
+  - commit: `456d4d46db912297dd50e700d6099be7c82a8c1a`.
 
 - [ ] PH-00.2 Resolve active TODO `commit: pending` leftovers.
   - target files: `docs/solo-harness-competitive-todo.md`.
