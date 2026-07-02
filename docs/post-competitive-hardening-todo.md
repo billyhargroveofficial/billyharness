@@ -207,7 +207,7 @@ Goal: make `fast-agent-harness hygiene -strict` pass without changing behavior.
     `/root/.local/go/bin/go test -count=1 ./internal/agent ./internal/tui
     ./internal/gateway` passed;
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `32e4ea7a6472a0d59b0bb9e51f90f831a33a6280`.
 
 - [ ] PH-01.5 Make strict hygiene pass.
   - acceptance: no handwritten `.go` file exceeds 1500 LOC and no `_test.go`
