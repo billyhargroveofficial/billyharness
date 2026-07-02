@@ -243,7 +243,7 @@ Goal: verify decomposition helped architecture instead of just moving lines.
     boundary change or file-size exception is needed.
   - verification evidence:
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `168eabc02d0a59de1323825a06f8495cdd0d7b0f`.
 
 - [ ] PH-02.2 Review large packages by responsibility, not by file count.
   - target packages: `internal/telegrambot`, `internal/tools`,
