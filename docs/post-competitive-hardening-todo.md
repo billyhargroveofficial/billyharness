@@ -245,13 +245,44 @@ Goal: verify decomposition helped architecture instead of just moving lines.
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
   - commit: `168eabc02d0a59de1323825a06f8495cdd0d7b0f`.
 
-- [ ] PH-02.2 Review large packages by responsibility, not by file count.
+- [x] PH-02.2 Review large packages by responsibility, not by file count.
   - target packages: `internal/telegrambot`, `internal/tools`,
     `internal/config`, `internal/tui`, `internal/agent`, `internal/gateway`.
   - acceptance: write a short note in this file for each package: keep as-is,
     split later with reason, or split now with a concrete owner boundary.
   - verification: manual import/ownership review plus architecture guard.
-  - status: open.
+  - status: completed 2026-07-02.
+  - evidence:
+    - `internal/telegrambot`: keep as-is. The package is an adapter boundary
+      with focused files for commands, rendering, progress, polling, admission
+      state, gateway client wrapping, and store/runtime state. It should not be
+      split by file count alone; the important guard remains "no gateway server
+      internals."
+    - `internal/tools`: keep as-is. Native tools are already split by domain
+      (`fs_*`, web, shell process, diagnostics, memory, MCP, policy/toolset),
+      while the central registry/policy package boundary is intentional.
+      `tools.go` is below the source budget at 1448 LOC; split later only if
+      registry/schema ownership separates cleanly.
+    - `internal/config`: keep as-is. The package is a leaf configuration
+      boundary with focused files for defaults, env, profiles, projections,
+      runtime diffs, MCP, hooks, diagnostics, summaries, and migrations.
+      `config_test.go` is below the test budget at 1172 LOC.
+    - `internal/tui`: keep as-is after PH-01 splits. Rendering, runtimeclient,
+      selection, and transcript subpackages already own their boundaries; the
+      top-level package now holds Bubble Tea state, commands, gateway session,
+      input, settings, and layout/runtime helpers under budget.
+    - `internal/agent`: keep as-is. Runtime loop, model call, tool attempt,
+      compaction, transcript pairing, liveness, and event building are split by
+      runtime responsibility and have no presentation imports. The
+      architecture map already notes a future runtime/toolexec shrink as P1.1.
+    - `internal/gateway`: keep as-is after PH-01.1. Server routes, session
+      store, replay/events, inspection, indexes, benchmark routes, responses,
+      and user-input endpoints are separated enough for this pass; `gateway.go`
+      is below budget at 1445 LOC and should split further only when route
+      ownership grows.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] PH-02.3 Remove accidental duplicate abstractions if found.
   - likely areas: context formatting, command metadata, tool display, output
