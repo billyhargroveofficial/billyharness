@@ -419,13 +419,53 @@ an old binary.
       current PH-04.2 checklist still says `/ready`, but current source and
       setup docs use `/health`; the running deleted-inode binary returns 404
       for both `/ready` and current-source `/v1/processes`.
-  - commit: pending.
+  - commit: `f8e1705605085062fe2e88eae10b6fa4dc0f38c1`.
 
-- [ ] PH-04.2 Restart deployed gateway/Telegram only after a current binary
+- [x] PH-04.2 Restart deployed gateway/Telegram only after a current binary
   exists and tests pass.
   - acceptance: restart command is documented in evidence; services come back;
     `/ready`, Telegram `/status`, and TUI gateway discovery work.
-  - status: open.
+  - status: completed 2026-07-02.
+  - evidence:
+    - Because the main worktree contained unrelated in-flight attachment/TUI
+      changes, created a detached clean worktree at pushed `HEAD`
+      `f8e1705605085062fe2e88eae10b6fa4dc0f38c1` under
+      `/tmp/billyharness-ph04-clean` and used that tree for the restart gate.
+    - `/root/.local/go/bin/go test -count=1 ./internal/architecture
+      ./internal/gateway ./internal/gatewayclient ./internal/telegrambot
+      ./internal/tui ./cmd/fast-agent-harness` passed from the clean worktree.
+    - `/root/.local/go/bin/go build -o
+      /root/billyharness/bin/fast-agent-harness ./cmd/fast-agent-harness`
+      passed from the clean worktree. The deployed binary then reported size
+      `19753555` bytes and mtime `2026-07-02 10:18:52.618030283 +0200`.
+    - Restarted deployed services with:
+      `systemctl restart billyharness-gateway.service` and
+      `systemctl restart billyharness-telegram.service`.
+    - After restart, `systemctl is-active` returned `active` for both
+      services. Gateway `MainPID=595938` started
+      `Thu 2026-07-02 10:19:07 CEST`; Telegram `MainPID=596168` started
+      `Thu 2026-07-02 10:19:21 CEST`.
+    - `readlink /proc/595938/exe` and `readlink /proc/596168/exe` both
+      returned `/root/billyharness/bin/fast-agent-harness`, with no
+      `(deleted)` suffix.
+    - `curl -fsS http://127.0.0.1:8765/health` returned
+      `{"model":"gpt-5.5","ok":true,"provider":"openai-codex"}`.
+      `curl -i -sS http://127.0.0.1:8765/v1/processes` returned `200 OK`
+      with `no managed shell processes`.
+    - The PH-04.2 acceptance still names `/ready`, but current source, doctor,
+      and setup docs use `/health`; `/ready` returned `404 page not found` on
+      the restarted current binary.
+    - TUI gateway discovery worked under a PTY:
+      `TERM=dumb timeout 4s ./bin/fast-agent-harness tui -plain -gateway
+      http://127.0.0.1:8765` exited with the expected timeout after showing
+      `gateway session f01a2358 · gpt-5.5`.
+    - Telegram process health was verified with `systemctl status` and
+      `telegram.log` showing
+      `billyharness telegram gateway polling; gateway=http://127.0.0.1:8765`.
+      A live Telegram `/status` message was not sent in this restart task
+      because no safe chat target was specified; carry the real slash-command
+      smoke into PH-04.3 or block it with an explicit chat-target requirement.
+  - commit: pending.
 
 - [ ] PH-04.3 Verify Telegram and TUI smoke flows after restart.
   - acceptance: `/context`, `/commands`, `/memory list`, `/mcp`, a simple
