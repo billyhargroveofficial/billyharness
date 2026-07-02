@@ -47,11 +47,12 @@ func configInspectCommand(args []string, stdout io.Writer) error {
 		}{
 			Config:      resolved.SanitizedConfig(),
 			Values:      resolved.SanitizedValues(),
-			Diagnostics: resolved.Config.DiagnosticSnapshot(),
+			Diagnostics: resolved.DiagnosticSnapshot(),
 			Warnings:    resolved.Warnings,
 		})
 	}
-	providerAuth := resolved.Config.ProviderAuthSnapshot()
+	diagnostics := resolved.DiagnosticSnapshot()
+	providerAuth := diagnostics.ProviderAuth
 	fmt.Fprintf(stdout, "billyharness config inspect\n")
 	fmt.Fprintf(stdout, "provider=%s model=%s profile=%s reasoning=%s/%s gateway=%s\n",
 		providerAuth.Provider,
@@ -61,7 +62,17 @@ func configInspectCommand(args []string, stdout io.Writer) error {
 		providerAuth.ReasoningEffort,
 		resolved.Config.GatewayAddr,
 	)
-	caps := resolved.Config.ProviderCapabilitySnapshot()
+	runtime := diagnostics.RuntimeTool
+	fmt.Fprintf(stdout, "provenance: provider=%s model=%s context_window=%s compact=%s helper_model=%s web_backend=%s/%s\n",
+		diagnosticSourceSummary(providerAuth.ProviderSource),
+		diagnosticSourceSummary(providerAuth.ModelSource),
+		diagnosticSourceSummary(runtime.ContextWindowTokensSource),
+		diagnosticSourceSummary(runtime.ContextCompactTokensSource),
+		diagnosticSourceSummary(runtime.WebSummaryModelSource),
+		diagnosticSourceSummary(runtime.WebSearchBackendSource),
+		diagnosticSourceSummary(runtime.WebExtractBackendSource),
+	)
+	caps := diagnostics.ProviderCapability
 	fmt.Fprintf(stdout, "capability: context=%d max_output=%d tools=%v parallel=%v streaming=%v reasoning=%v cost=%s websum=%s memory=%s\n",
 		caps.ContextWindowTokens,
 		caps.MaxOutputTokens,
@@ -100,6 +111,26 @@ func configInspectCommand(args []string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "warning: %s\n", warning)
 	}
 	return nil
+}
+
+func diagnosticSourceSummary(source *config.DiagnosticSource) string {
+	if source == nil || strings.TrimSpace(source.Source) == "" {
+		return "unknown"
+	}
+	label := strings.TrimSpace(source.Source)
+	if strings.TrimSpace(source.SourceKey) != "" {
+		label += ":" + strings.TrimSpace(source.SourceKey)
+	}
+	if strings.TrimSpace(source.SourcePath) != "" {
+		label += "@" + strings.TrimSpace(source.SourcePath)
+	}
+	if strings.TrimSpace(source.Warning) != "" {
+		label += " warning=" + strings.TrimSpace(source.Warning)
+	}
+	if strings.TrimSpace(source.Error) != "" {
+		label += " error=" + strings.TrimSpace(source.Error)
+	}
+	return label
 }
 
 func emptyConfigInspectValue(value string) string {

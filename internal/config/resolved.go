@@ -517,6 +517,8 @@ func (s *resolveState) finalizeDerivedValues() {
 		s.record("context_window_tokens", s.cfg.ContextWindowTokens, SourceDerived, "", "model", false, "derived from model "+s.cfg.Model, "")
 	} else if s.cfg.ContextWindowExplicitOverride() {
 		s.recordContextWindowOverrideWarning()
+	} else {
+		s.recordSavedContextWindowOverrideWarning()
 	}
 	if s.cfg.ContextCompactTokens != beforeCompactTokens {
 		s.record("context_compact_tokens", s.cfg.ContextCompactTokens, SourceDerived, "", "context_window_tokens", false, "clamped to context window for "+s.cfg.Model, "")
@@ -619,6 +621,20 @@ func (s *resolveState) recordContextWindowOverrideWarning() {
 		return
 	}
 	warning := fmt.Sprintf("explicit override; model %s default is %d", s.cfg.Model, info.ContextWindowTokens)
+	s.record(current.Key, current.Value, current.Source, current.SourcePath, current.SourceKey, current.Redacted, warning, current.Error)
+}
+
+func (s *resolveState) recordSavedContextWindowOverrideWarning() {
+	current, ok := s.values["context_window_tokens"]
+	if !ok || current.Source != SourceSettings {
+		return
+	}
+	info := modelinfo.Lookup(s.cfg.Model)
+	if info.ContextWindowTokens <= 0 || info.ContextWindowTokens == s.cfg.ContextWindowTokens {
+		return
+	}
+	warning := fmt.Sprintf("saved setting overrides model %s default %d without explicit config source", s.cfg.Model, info.ContextWindowTokens)
+	s.warn(warning)
 	s.record(current.Key, current.Value, current.Source, current.SourcePath, current.SourceKey, current.Redacted, warning, current.Error)
 }
 

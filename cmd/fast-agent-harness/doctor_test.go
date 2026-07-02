@@ -144,6 +144,46 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	}
 }
 
+func TestCollectDoctorReportFromResolvedPrintsConfigProvenance(t *testing.T) {
+	repo := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	t.Setenv("FAST_AGENT_MODEL", "gpt-5.5")
+	t.Setenv("FAST_AGENT_WEB_SEARCH_BACKEND", "exa")
+	t.Setenv("FAST_AGENT_WEB_EXTRACT_BACKEND", "tavily")
+
+	resolved, err := config.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := collectDoctorReportFromResolved(context.Background(), resolved, doctorOptions{
+		RepoDir:       repo,
+		CheckBuild:    false,
+		CheckServices: false,
+		CheckGateway:  false,
+		Timeout:       time.Second,
+	}, &fakeDoctorRunner{})
+	if report.Config.ModelSource == nil || report.Config.ModelSource.Source != config.SourceEnvironment {
+		t.Fatalf("doctor model source = %#v", report.Config.ModelSource)
+	}
+	if report.Config.WebSearchBackendSource == nil || report.Config.WebSearchBackendSource.SourceKey != "FAST_AGENT_WEB_SEARCH_BACKEND" {
+		t.Fatalf("doctor web backend source = %#v", report.Config.WebSearchBackendSource)
+	}
+
+	var buf bytes.Buffer
+	printDoctorReport(&buf, report)
+	out := buf.String()
+	for _, want := range []string{
+		"config provenance:",
+		"model=environment:FAST_AGENT_MODEL",
+		"web_backend=environment:FAST_AGENT_WEB_SEARCH_BACKEND/environment:FAST_AGENT_WEB_EXTRACT_BACKEND",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("doctor output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestDoctorReportTracksFailuresForStrictMode(t *testing.T) {
 	report := doctorReport{Checks: []doctorCheck{
 		{Name: "git status", Status: "ok"},

@@ -480,11 +480,25 @@ Tests:
 
 ### 13. Make config provenance visible in diagnostics
 
-- [ ] `config inspect` already records derived values; extend user-facing
+- [x] `config inspect` already records derived values; extend user-facing
   status/diagnostics so model, provider, context window, compact threshold,
   helper model, and web backend have visible source labels when requested.
-- [ ] Add a strict check that warns if a saved setting overrides model-derived
+- [x] Add a strict check that warns if a saved setting overrides model-derived
   context without an explicit source.
+
+Evidence:
+
+- Added resolved-config diagnostic source labels for provider, model, context
+  window, compact threshold, helper/web summary model, and web backends.
+- `config inspect` JSON now includes those source labels inside diagnostics,
+  and text output prints a compact provenance line for the same fields.
+- `doctor` uses resolved diagnostics on the command path and prints matching
+  config provenance.
+- Saved `settings.json` context-window values that diverge from the selected
+  model default now emit a warning unless they are promoted to an explicit
+  config/env/CLI/gateway override.
+- Tests: `/root/.local/go/bin/go test -run 'TestResolvedDiagnosticSnapshotCarriesRuntimeSources|TestResolveWarnsWhenSettingsContextWindowOverridesModelDefaultWithoutExplicitSource|TestConfigInspectSurfacesProvenanceLabels|TestCollectDoctorReportFromResolvedPrintsConfigProvenance|TestConfigInspectJSONDoesNotLeakDotenvSecrets|TestDiagnosticSnapshotUsesProviderBindingAndAuthProjection' -count=1 ./internal/config ./cmd/fast-agent-harness`.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/config ./cmd/fast-agent-harness`.
 
 Files:
 

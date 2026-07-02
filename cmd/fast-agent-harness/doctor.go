@@ -135,8 +135,8 @@ func doctorCmd(args []string) error {
 		CheckGateway:  *checkGateway,
 		Timeout:       time.Duration(*timeoutSec) * time.Second,
 	}
-	cfg := config.Default()
-	report := collectDoctorReport(context.Background(), cfg, opts, osDoctorRunner{})
+	resolved := config.MustResolve()
+	report := collectDoctorReportFromResolved(context.Background(), resolved, opts, osDoctorRunner{})
 	if opts.JSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -150,6 +150,14 @@ func doctorCmd(args []string) error {
 		return fmt.Errorf("doctor found failing checks")
 	}
 	return nil
+}
+
+func collectDoctorReportFromResolved(ctx context.Context, resolved config.ResolvedConfig, opts doctorOptions, runner doctorCommandRunner) doctorReport {
+	report := collectDoctorReport(ctx, resolved.Config, opts, runner)
+	diagnostics := resolved.DiagnosticSnapshot()
+	report.Config.ProviderAuthSnapshot = diagnostics.ProviderAuth
+	report.Config.RuntimeToolSnapshot = diagnostics.RuntimeTool
+	return report
 }
 
 func collectDoctorReport(ctx context.Context, cfg config.Config, opts doctorOptions, runner doctorCommandRunner) doctorReport {
@@ -456,6 +464,15 @@ func printDoctorReport(w io.Writer, report doctorReport) {
 		time.Duration(report.Config.WebCacheTTLMS)*time.Millisecond,
 		report.Config.WebCacheMaxBytes,
 		report.Config.GatewayAddr,
+	)
+	fmt.Fprintf(w, "config provenance: provider=%s model=%s context_window=%s compact=%s helper_model=%s web_backend=%s/%s\n",
+		diagnosticSourceSummary(report.Config.ProviderSource),
+		diagnosticSourceSummary(report.Config.ModelSource),
+		diagnosticSourceSummary(report.Config.ContextWindowTokensSource),
+		diagnosticSourceSummary(report.Config.ContextCompactTokensSource),
+		diagnosticSourceSummary(report.Config.WebSummaryModelSource),
+		diagnosticSourceSummary(report.Config.WebSearchBackendSource),
+		diagnosticSourceSummary(report.Config.WebExtractBackendSource),
 	)
 	fmt.Fprintf(w, "runtime: provider=%s model=%s gateway=%s strict_hygiene=%s service_binary=%s age=%s sessions=%s tool_output=%s\n",
 		report.Runtime.Provider,

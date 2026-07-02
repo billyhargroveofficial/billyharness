@@ -230,6 +230,48 @@ func TestConfigInspectJSONContextWindowsFollowModelInfo(t *testing.T) {
 	}
 }
 
+func TestConfigInspectSurfacesProvenanceLabels(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	t.Setenv("FAST_AGENT_MODEL", "gpt-5.5")
+	t.Setenv("FAST_AGENT_WEB_SUMMARY_MODEL", "gpt-5.4-mini")
+	t.Setenv("FAST_AGENT_WEB_SEARCH_BACKEND", "exa")
+	t.Setenv("FAST_AGENT_WEB_EXTRACT_BACKEND", "tavily")
+
+	var textOut bytes.Buffer
+	if err := configCommand([]string{"inspect"}, &textOut); err != nil {
+		t.Fatal(err)
+	}
+	text := textOut.String()
+	for _, want := range []string{
+		"provenance:",
+		"model=environment:FAST_AGENT_MODEL",
+		"helper_model=environment:FAST_AGENT_WEB_SUMMARY_MODEL",
+		"web_backend=environment:FAST_AGENT_WEB_SEARCH_BACKEND/environment:FAST_AGENT_WEB_EXTRACT_BACKEND",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("config inspect missing %q:\n%s", want, text)
+		}
+	}
+
+	var jsonOut bytes.Buffer
+	if err := configCommand([]string{"inspect", "-json"}, &jsonOut); err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Diagnostics config.DiagnosticSnapshot `json:"diagnostics"`
+	}
+	if err := json.Unmarshal(jsonOut.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Diagnostics.ProviderAuth.ModelSource == nil ||
+		payload.Diagnostics.ProviderAuth.ModelSource.Source != config.SourceEnvironment ||
+		payload.Diagnostics.RuntimeTool.WebSearchBackendSource == nil ||
+		payload.Diagnostics.RuntimeTool.WebSearchBackendSource.SourceKey != "FAST_AGENT_WEB_SEARCH_BACKEND" {
+		t.Fatalf("diagnostic sources missing from JSON:\n%s", jsonOut.String())
+	}
+}
+
 func TestConfigMCPMigrateCommandPrintsRedactedSuggestions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mcp.json")
 	if err := os.WriteFile(path, []byte(`{

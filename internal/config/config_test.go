@@ -428,6 +428,85 @@ func TestResolvePreservesExplicitContextWindowOverride(t *testing.T) {
 	}
 }
 
+func TestResolvedDiagnosticSnapshotCarriesRuntimeSources(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	t.Setenv("FAST_AGENT_MODEL", "gpt-5.5")
+	t.Setenv("FAST_AGENT_CONTEXT_WINDOW_TOKENS", "1000000")
+	t.Setenv("FAST_AGENT_CONTEXT_COMPACT_TOKENS", "200000")
+	t.Setenv("FAST_AGENT_WEB_SUMMARY_MODEL", "gpt-5.4-mini")
+	t.Setenv("FAST_AGENT_WEB_SEARCH_BACKEND", "exa")
+	t.Setenv("FAST_AGENT_WEB_EXTRACT_BACKEND", "tavily")
+
+	resolved, err := Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	diagnostics := resolved.DiagnosticSnapshot()
+	if diagnostics.ProviderAuth.ProviderSource == nil || diagnostics.ProviderAuth.ProviderSource.Source != SourceDerived {
+		t.Fatalf("provider source = %#v", diagnostics.ProviderAuth.ProviderSource)
+	}
+	if diagnostics.ProviderAuth.ModelSource == nil ||
+		diagnostics.ProviderAuth.ModelSource.Source != SourceEnvironment ||
+		diagnostics.ProviderAuth.ModelSource.SourceKey != "FAST_AGENT_MODEL" {
+		t.Fatalf("model source = %#v", diagnostics.ProviderAuth.ModelSource)
+	}
+	contextSource := diagnostics.RuntimeTool.ContextWindowTokensSource
+	if contextSource == nil ||
+		contextSource.Source != SourceEnvironment ||
+		!strings.Contains(contextSource.Warning, "explicit override") ||
+		!strings.Contains(contextSource.Warning, "256000") {
+		t.Fatalf("context source = %#v", contextSource)
+	}
+	if diagnostics.RuntimeTool.ContextCompactTokensSource == nil ||
+		diagnostics.RuntimeTool.ContextCompactTokensSource.Source != SourceEnvironment {
+		t.Fatalf("compact source = %#v", diagnostics.RuntimeTool.ContextCompactTokensSource)
+	}
+	if diagnostics.RuntimeTool.WebSummaryModelSource == nil ||
+		diagnostics.RuntimeTool.WebSummaryModelSource.SourceKey != "FAST_AGENT_WEB_SUMMARY_MODEL" {
+		t.Fatalf("web summary model source = %#v", diagnostics.RuntimeTool.WebSummaryModelSource)
+	}
+	if diagnostics.RuntimeTool.WebSearchBackendSource == nil ||
+		diagnostics.RuntimeTool.WebSearchBackendSource.SourceKey != "FAST_AGENT_WEB_SEARCH_BACKEND" ||
+		diagnostics.RuntimeTool.WebExtractBackendSource == nil ||
+		diagnostics.RuntimeTool.WebExtractBackendSource.SourceKey != "FAST_AGENT_WEB_EXTRACT_BACKEND" {
+		t.Fatalf("web backend sources = search:%#v extract:%#v",
+			diagnostics.RuntimeTool.WebSearchBackendSource,
+			diagnostics.RuntimeTool.WebExtractBackendSource,
+		)
+	}
+}
+
+func TestResolveWarnsWhenSettingsContextWindowOverridesModelDefaultWithoutExplicitSource(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	body := []byte(`{"last_selected_model":"deepseek-v4-pro","context_window_tokens":777000}`)
+	if err := os.WriteFile(filepath.Join(home, "settings.json"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolved.Config.ContextWindowTokens; got != 777_000 {
+		t.Fatalf("ContextWindowTokens = %d, want saved setting", got)
+	}
+	warning := "saved setting overrides model deepseek-v4-pro default 1000000 without explicit config source"
+	if !hasWarning(resolved.Warnings, warning) {
+		t.Fatalf("missing saved setting warning in %#v", resolved.Warnings)
+	}
+	value, ok := resolved.Value("context_window_tokens")
+	if !ok || value.Source != SourceSettings || !strings.Contains(value.Warning, warning) {
+		t.Fatalf("context value = %#v, warning %q", value, warning)
+	}
+	source := resolved.DiagnosticSnapshot().RuntimeTool.ContextWindowTokensSource
+	if source == nil || !strings.Contains(source.Warning, warning) {
+		t.Fatalf("diagnostic context source = %#v", source)
+	}
+}
+
 func TestResolveIgnoresStaleSettingsContextWindowForCodex(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", home)
