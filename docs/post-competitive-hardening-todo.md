@@ -316,11 +316,14 @@ Goal: verify decomposition helped architecture instead of just moving lines.
 
 Goal: prove the cleaned code still behaves like the current deployed harness.
 
-- [ ] PH-03.1 Run the post-roadmap package suite.
+- [x] PH-03.1 Run the post-roadmap package suite.
   - verification:
     `go test -count=1 ./internal/agent ./internal/provider ./internal/config ./internal/modelinfo ./internal/tools ./internal/toolrender ./internal/tooloutput ./internal/clientux ./internal/clientux/projector ./internal/gateway ./internal/gatewayclient ./internal/tui ./internal/telegrambot ./internal/trace ./internal/eventlog ./internal/memory ./internal/commandregistry ./internal/mcpclient ./internal/mcpstatus ./cmd/fast-agent-harness`
   - acceptance: pass or record exact failures and next actions.
-  - status: open.
+  - status: completed 2026-07-02.
+  - evidence: the exact command above passed, including `internal/mcpstatus`
+    with no test files.
+  - commit: pending.
 
 - [ ] PH-03.2 Run broad tests if focused suites are green.
   - verification:
