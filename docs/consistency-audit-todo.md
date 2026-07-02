@@ -265,12 +265,12 @@ Tests:
 Evidence:
 
 - `/context` now uses the same user-facing helper labels as the live clients:
-  `websum`, `sumapi`, `api calls`, and `api cost`; legacy
+  `websum`, `sumapi`, `helper API calls`, and `helper API cost`; legacy
   `provider_api_calls`, `provider_cost`, and `helper_api` labels are covered by
   a formatter regression test.
 - TUI now projects `HelperAPICalls` and `HelperCostUSD` from the shared
   `clientux/projector.Snapshot`, includes them in local `/context`, and renders
-  `api calls`/`api cost` in the inline status.
+  `helper API calls`/`helper API cost` in the inline status.
 - Telegram final footer already had the target labels; gateway context tests now
   assert the same helper summary wording through the shared formatter.
 - Tests: `/root/.local/go/bin/go test -count=1 ./internal/clientux ./internal/gatewayclient ./internal/telegrambot ./internal/tui`.
@@ -289,15 +289,31 @@ Tests:
 
 ### 8. Disambiguate cost modes
 
-- [ ] TUI `cost subscription` and Telegram `api cost` are different things.
+- [x] TUI `cost subscription` and Telegram `api cost` are different things.
   Make labels explicit:
   - `model cost`: metered main model estimate.
   - `subscription`: Codex/OAuth main model cost mode.
   - `helper API cost`: external backend/helper provider cost.
-- [ ] Verify Codex/OAuth with helper model calls does not display helper cost
+- [x] Verify Codex/OAuth with helper model calls does not display helper cost
   as the main model cost.
-- [ ] Verify DeepSeek metered mode includes cache-hit/cache-miss pricing only
+- [x] Verify DeepSeek metered mode includes cache-hit/cache-miss pricing only
   for provider-reported tokens.
+
+Evidence:
+
+- TUI main-model cost now renders as `model cost $...`, `model cost n/a`, or
+  `subscription`; helper backend cost renders separately as
+  `helper API cost`.
+- `/context`, Telegram footer, and TUI status now use `helper API calls` and
+  `helper API cost` so helper backend spend cannot be confused with main model
+  cost.
+- Provider tests verify Codex/OAuth helper summaries produce zero helper API
+  cost while DeepSeek helper summaries use provider cache-hit/cache-miss pricing
+  when those counters are reported, falling back to input pricing otherwise.
+- Bench comparison reports label cost mode as `model cost metered`,
+  `subscription`, or `model cost n/a` rather than `subscription cost`.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/tui ./internal/gatewayclient ./internal/clientux ./internal/provider ./internal/bench`.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/telegrambot`.
 
 Files:
 

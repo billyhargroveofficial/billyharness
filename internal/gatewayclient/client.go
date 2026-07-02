@@ -647,10 +647,10 @@ func formatContextUsage(usage gatewayapi.ContextUsage) string {
 			compactContextNumber(usage.HelperModelAPITokens),
 		)
 		if usage.HelperAPICalls > 0 {
-			fmt.Fprintf(&b, " api calls=%d", usage.HelperAPICalls)
+			fmt.Fprintf(&b, " helper API calls=%d", usage.HelperAPICalls)
 		}
 		if usage.HelperCostUSD > 0 {
-			fmt.Fprintf(&b, " api cost=$%.6f", usage.HelperCostUSD)
+			fmt.Fprintf(&b, " helper API cost=$%.6f", usage.HelperCostUSD)
 		}
 		if usage.HelperModelCacheHit > 0 || usage.HelperModelCacheMiss > 0 {
 			fmt.Fprintf(&b, " helper_cache_hit=%s helper_cache_miss=%s",

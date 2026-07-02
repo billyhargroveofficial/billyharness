@@ -473,12 +473,12 @@ func TestRendererFooterShowsWebBackendHelperUsage(t *testing.T) {
 	}})
 
 	footer := r.footerLine()
-	for _, want := range []string{"api calls 1", "api cost $0.0030"} {
+	for _, want := range []string{"helper API calls 1", "helper API cost $0.0030"} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("footer missing %q: %q", want, footer)
 		}
 	}
-	if strings.Contains(footer, "helper ") || strings.Contains(footer, "sumapi") {
+	if strings.Contains(footer, "helper 1.") || strings.Contains(footer, "sumapi") {
 		t.Fatalf("backend API usage counted as model helper usage: %q", footer)
 	}
 }

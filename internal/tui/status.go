@@ -54,10 +54,10 @@ func (m Model) inlineStatusView() string {
 		bottom = append(bottom, statusSegment{"sumapi " + compactNumber(m.helperModelAPITok), styles.statusDim})
 	}
 	if m.helperAPICalls > 0 {
-		bottom = append(bottom, statusSegment{"api calls " + strconv.Itoa(m.helperAPICalls), styles.statusDim})
+		bottom = append(bottom, statusSegment{"helper API calls " + strconv.Itoa(m.helperAPICalls), styles.statusDim})
 	}
 	if m.helperCostUSD > 0 {
-		bottom = append(bottom, statusSegment{fmt.Sprintf("api cost $%.4f", m.helperCostUSD), styles.statusDim})
+		bottom = append(bottom, statusSegment{fmt.Sprintf("helper API cost $%.4f", m.helperCostUSD), styles.statusDim})
 	}
 	bottom = append(bottom,
 		statusSegment{"agent turns " + strconv.Itoa(m.modelCalls), styles.statusDim},
@@ -169,11 +169,11 @@ func (m Model) contextPercentText() string {
 
 func (m Model) costText() string {
 	if modelinfo.Lookup(m.currentModel()).Subscription {
-		return "cost subscription"
+		return "subscription"
 	}
 	hitPrice, missPrice, outputPrice := m.prices()
 	if hitPrice <= 0 && missPrice <= 0 && outputPrice <= 0 {
-		return "cost n/a"
+		return "model cost n/a"
 	}
 	hit := m.cacheHitTok
 	miss := m.cacheMissTok
@@ -183,7 +183,7 @@ func (m Model) costText() string {
 	cost := (float64(hit)/1_000_000)*hitPrice +
 		(float64(miss)/1_000_000)*missPrice +
 		(float64(m.outputTok)/1_000_000)*outputPrice
-	return fmt.Sprintf("cost $%.6f", cost)
+	return fmt.Sprintf("model cost $%.6f", cost)
 }
 
 func (m Model) prices() (hit, miss, output float64) {

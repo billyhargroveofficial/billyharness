@@ -190,7 +190,7 @@ func TestContextReportV2IncludesEventsRuntimePromptAndHelperUsage(t *testing.T) 
 		t.Fatalf("output refs = %#v", resp.OutputRefs)
 	}
 	formatted := gatewayclient.FormatSessionContext(resp)
-	for _, want := range []string{"runtime:", "cache: hit=90", "helper usage: websum=200", "sumapi=100", "api calls=1", "api cost=$0.003000", "prompt sections:", "prompt cache: status=changed", "last compaction:", "output refs:"} {
+	for _, want := range []string{"runtime:", "cache: hit=90", "helper usage: websum=200", "sumapi=100", "helper API calls=1", "helper API cost=$0.003000", "prompt sections:", "prompt cache: status=changed", "last compaction:", "output refs:"} {
 		if !strings.Contains(formatted, want) {
 			t.Fatalf("formatted v2 context missing %q:\n%s", want, formatted)
 		}

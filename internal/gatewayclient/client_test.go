@@ -88,12 +88,12 @@ func TestFormatSessionContextLabelsHelperUsageLikeClientFooters(t *testing.T) {
 			HelperCostUSD:           0.0045,
 		},
 	})
-	for _, want := range []string{"helper usage: websum=20.0k→900", "helper=1.2k→80", "sumapi=1.3k", "api calls=2", "api cost=$0.004500"} {
+	for _, want := range []string{"helper usage: websum=20.0k→900", "helper=1.2k→80", "sumapi=1.3k", "helper API calls=2", "helper API cost=$0.004500"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("context report missing %q:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, "provider_api_calls") || strings.Contains(text, "provider_cost") || strings.Contains(text, "helper_api") {
+	if strings.Contains(text, "provider_api_calls") || strings.Contains(text, "provider_cost") || strings.Contains(text, "helper_api") || strings.Contains(text, " api cost=") {
 		t.Fatalf("context report used legacy helper labels:\n%s", text)
 	}
 }

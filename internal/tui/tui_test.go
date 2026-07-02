@@ -643,7 +643,7 @@ func TestTUISelectsCodexProviderForGPTModels(t *testing.T) {
 	if got := m.providerBinding.Provider.Provider; got != "openai-codex" {
 		t.Fatalf("providerBinding.Provider = %q", got)
 	}
-	if got := m.costText(); got != "cost subscription" {
+	if got := m.costText(); got != "subscription" {
 		t.Fatalf("costText = %q", got)
 	}
 

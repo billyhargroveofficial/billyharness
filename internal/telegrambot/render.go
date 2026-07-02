@@ -296,10 +296,10 @@ func (r *Renderer) footerLineWithContext(includeContext bool) string {
 		parts = append(parts, fmt.Sprintf("sumapi %s", compactInt(r.HelperModelAPI)))
 	}
 	if r.HelperAPICalls > 0 {
-		parts = append(parts, fmt.Sprintf("api calls %d", r.HelperAPICalls))
+		parts = append(parts, fmt.Sprintf("helper API calls %d", r.HelperAPICalls))
 	}
 	if r.HelperCostUSD > 0 {
-		parts = append(parts, fmt.Sprintf("api cost $%.4f", r.HelperCostUSD))
+		parts = append(parts, fmt.Sprintf("helper API cost $%.4f", r.HelperCostUSD))
 	}
 	if len(parts) == 0 {
 		return "⚡ streaming"

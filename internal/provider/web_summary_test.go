@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -84,6 +85,24 @@ func TestWebSummarizerRejectsUnsupportedHelperCapabilityBeforeProvider(t *testin
 	}
 	if called {
 		t.Fatalf("provider factory was called before capability validation")
+	}
+}
+
+func TestWebSummaryCostUsesSubscriptionAndCacheModes(t *testing.T) {
+	if got := webSummaryCostUSD("gpt-5.4-mini", 900, 40, 300, 600); got != 0 {
+		t.Fatalf("subscription helper cost = %.8f, want 0", got)
+	}
+
+	got := webSummaryCostUSD("deepseek-v4-flash", 900, 40, 300, 600)
+	want := (300*0.0028 + 600*0.14 + 40*0.28) / 1_000_000
+	if math.Abs(got-want) > 1e-12 {
+		t.Fatalf("deepseek cache-aware helper cost = %.12f, want %.12f", got, want)
+	}
+
+	got = webSummaryCostUSD("deepseek-v4-flash", 900, 40, 0, 0)
+	want = (900*0.14 + 40*0.28) / 1_000_000
+	if math.Abs(got-want) > 1e-12 {
+		t.Fatalf("deepseek fallback helper cost = %.12f, want %.12f", got, want)
 	}
 }
 

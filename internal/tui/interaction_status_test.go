@@ -243,7 +243,7 @@ func TestInlineStatusShowsModelAccessCacheCostAndSession(t *testing.T) {
 		"🧠 high",
 		"Full Access",
 		"Context",
-		"cost $",
+		"model cost $",
 		"cache hit",
 		"cache miss",
 		"websum",
@@ -587,10 +587,30 @@ func TestInlineStatusShowsHelperAPICallsAndCost(t *testing.T) {
 	m.helperCostUSD = 0.0045
 
 	status := stripANSITest(m.inlineStatusView())
-	for _, want := range []string{"api calls 2", "api cost $0.0045"} {
+	for _, want := range []string{"helper API calls 2", "helper API cost $0.0045"} {
 		if !strings.Contains(status, want) {
 			t.Fatalf("status missing %q: %q", want, status)
 		}
+	}
+}
+
+func TestInlineStatusSeparatesSubscriptionFromHelperAPICost(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 240
+	handled, _ := m.handleSlashCommand("/model gpt")
+	if !handled {
+		t.Fatal("/model gpt returned false")
+	}
+	m.helperCostUSD = 0.0045
+
+	status := stripANSITest(m.inlineStatusView())
+	for _, want := range []string{"subscription", "helper API cost $0.0045"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status missing %q: %q", want, status)
+		}
+	}
+	if strings.Contains(status, "model cost $0.0045") || m.costText() != "subscription" {
+		t.Fatalf("helper API cost should not become main model cost: costText=%q status=%q", m.costText(), status)
 	}
 }
 
@@ -952,7 +972,7 @@ func TestContextCommandShowsGatewayContextReport(t *testing.T) {
 	if msg.err != nil {
 		t.Fatal(msg.err)
 	}
-	for _, want := range []string{"active context: 580.0k / 1.00M", "compact threshold: 600.0k (60.0%, below)", "runtime: model=deepseek-v4-flash", "provider cache: hit=700", "helper usage: websum=20.0k", "sumapi=20.9k", "api calls=2", "api cost=$0.004500", "prompt cache: status=changed", "thresholds: ●50% ○70%", "web_summaries", "top contributors"} {
+	for _, want := range []string{"active context: 580.0k / 1.00M", "compact threshold: 600.0k (60.0%, below)", "runtime: model=deepseek-v4-flash", "provider cache: hit=700", "helper usage: websum=20.0k", "sumapi=20.9k", "helper API calls=2", "helper API cost=$0.004500", "prompt cache: status=changed", "thresholds: ●50% ○70%", "web_summaries", "top contributors"} {
 		if !strings.Contains(msg.text, want) {
 			t.Fatalf("context report missing %q:\n%s", want, msg.text)
 		}

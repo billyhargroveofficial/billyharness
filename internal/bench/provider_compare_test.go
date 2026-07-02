@@ -83,4 +83,20 @@ func TestCompareProvidersMockReport(t *testing.T) {
 			t.Fatalf("decision markdown missing %q: %s", want, string(decision))
 		}
 	}
+	if strings.Contains(string(decision), "subscription cost") || strings.Contains(string(decision), "none cost") {
+		t.Fatalf("decision markdown should label model cost modes explicitly: %s", string(decision))
+	}
+}
+
+func TestModelCostModeLabel(t *testing.T) {
+	tests := map[string]string{
+		"metered":      "model cost metered",
+		"subscription": "subscription",
+		"none":         "model cost n/a",
+	}
+	for input, want := range tests {
+		if got := modelCostModeLabel(input); got != want {
+			t.Fatalf("modelCostModeLabel(%q) = %q, want %q", input, got, want)
+		}
+	}
 }

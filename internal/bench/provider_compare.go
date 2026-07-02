@@ -379,7 +379,7 @@ func providerDecisionSummary(result ProviderComparisonResult) string {
 		parts = append(parts, fmt.Sprintf("%.1fs elapsed", float64(result.ElapsedMS)/1000))
 	}
 	if result.CostMarker != "" {
-		parts = append(parts, result.CostMarker+" cost")
+		parts = append(parts, modelCostModeLabel(result.CostMarker))
 	}
 	if result.ReplayVerified {
 		parts = append(parts, "replay verified")
@@ -388,6 +388,19 @@ func providerDecisionSummary(result ProviderComparisonResult) string {
 		parts = append(parts, fmt.Sprintf("%d failure modes", len(result.FailureModes)))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func modelCostModeLabel(marker string) string {
+	switch strings.TrimSpace(marker) {
+	case "metered":
+		return "model cost metered"
+	case "subscription":
+		return "subscription"
+	case "none":
+		return "model cost n/a"
+	default:
+		return strings.TrimSpace(marker)
+	}
 }
 
 func codingRecommendationReason(result ProviderComparisonResult) string {
@@ -447,7 +460,7 @@ func providerDecisionMarkdown(report ProviderComparisonReport) string {
 		}
 	}
 	b.WriteString("\n## Targets\n\n")
-	b.WriteString("| Model | Provider | Quality | Tools | Pass | Elapsed | Context | Cost | Coding | Chat | Replay | Notes |\n")
+	b.WriteString("| Model | Provider | Quality | Tools | Pass | Elapsed | Context | Cost Mode | Coding | Chat | Replay | Notes |\n")
 	b.WriteString("| --- | --- | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | --- | --- |\n")
 	for _, target := range report.Targets {
 		notes := target.DecisionSummary
@@ -463,7 +476,7 @@ func providerDecisionMarkdown(report ProviderComparisonReport) string {
 			target.PassRate*100,
 			float64(target.ElapsedMS)/1000,
 			formatTokenCount(target.ContextMaxTokens),
-			target.CostMarker,
+			modelCostModeLabel(target.CostMarker),
 			target.CodingScore,
 			target.ChatScore,
 			target.ReplayVerified,
