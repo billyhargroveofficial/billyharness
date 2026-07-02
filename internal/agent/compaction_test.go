@@ -361,6 +361,7 @@ func TestModelCompactionStrategyReplacesSummaryAndReportsModel(t *testing.T) {
 }
 
 func TestDefaultDeepSeekCompactionThresholdTriggersAtSixHundredK(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
 	cfg := config.Default()
 	cfg.ContextCompactKeep = 1
 	cfg.ContextCompactMaxChars = 2000

@@ -69,7 +69,7 @@ func TestLookupIncludesCapabilityMetadata(t *testing.T) {
 		t.Fatalf("flash capabilities = %#v", flash)
 	}
 	gpt := Lookup("gpt-5.5")
-	if gpt.ContextWindowTokens != 1_050_000 || !gpt.ToolCalls || !gpt.Streaming ||
+	if gpt.ContextWindowTokens != 256_000 || !gpt.ToolCalls || !gpt.Streaming ||
 		gpt.MaxOutputTokens != 8192 ||
 		!gpt.VisionInput ||
 		!hasString(gpt.InputModalities, "text") ||
@@ -81,11 +81,11 @@ func TestLookupIncludesCapabilityMetadata(t *testing.T) {
 		!hasString(gpt.CacheAccountingFields, "cache_miss_tokens") {
 		t.Fatalf("gpt capabilities = %#v", gpt)
 	}
-	if mini := Lookup("gpt-5.4-mini"); mini.ContextWindowTokens != 400_000 {
-		t.Fatalf("mini context window = %d, want 400000", mini.ContextWindowTokens)
+	if mini := Lookup("gpt-5.4-mini"); mini.ContextWindowTokens != 256_000 {
+		t.Fatalf("mini context window = %d, want 256000", mini.ContextWindowTokens)
 	}
-	if spark := Lookup("gpt-5.3-codex-spark"); spark.ContextWindowTokens != 400_000 {
-		t.Fatalf("spark context window = %d, want 400000", spark.ContextWindowTokens)
+	if spark := Lookup("gpt-5.3-codex-spark"); spark.ContextWindowTokens != 128_000 {
+		t.Fatalf("spark context window = %d, want 128000", spark.ContextWindowTokens)
 	}
 }
 

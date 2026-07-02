@@ -33,6 +33,7 @@ func (c *Config) ApplyModelProviderDefaults() {
 	}
 	c.Provider = modelinfo.ProviderForModel(c.Model, c.Provider)
 	c.applyModelContextWindowDefault()
+	c.applyContextCompactDefault()
 }
 
 func (c *Config) applyModelContextWindowDefault() {
@@ -42,6 +43,15 @@ func (c *Config) applyModelContextWindowDefault() {
 	}
 	if c.ContextWindowTokens <= 0 || c.ContextWindowTokens == 128_000 || (info.Provider == modelinfo.ProviderOpenAICodex && c.ContextWindowTokens == legacyDefaultContextWindowTokens) {
 		c.ContextWindowTokens = info.ContextWindowTokens
+	}
+}
+
+func (c *Config) applyContextCompactDefault() {
+	if c.ContextWindowTokens <= 0 {
+		return
+	}
+	if c.ContextCompactTokens <= 0 || int64(c.ContextCompactTokens) >= c.ContextWindowTokens {
+		c.ContextCompactTokens = int(c.ContextWindowTokens * 60 / 100)
 	}
 }
 

@@ -151,12 +151,14 @@ func codexInfo(model string, known bool) Info {
 
 func codexContextWindowTokens(model string) int64 {
 	switch NormalizeAlias(model) {
-	case "gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro":
-		return 1_050_000
-	case "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex-spark":
+	case "gpt-5.5-pro", "gpt-5.4-pro":
 		return 400_000
+	case "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano":
+		return 256_000
+	case "gpt-5.3-codex-spark":
+		return 128_000
 	default:
-		return 400_000
+		return 256_000
 	}
 }
 

@@ -153,7 +153,7 @@ func TestDiagnosticSnapshotUsesProviderBindingAndAuthProjection(t *testing.T) {
 	caps := diagnostics.ProviderCapability
 	if caps.Provider != "openai-codex" ||
 		caps.Model != "gpt-5.4-mini" ||
-		caps.ContextWindowTokens != 400_000 ||
+		caps.ContextWindowTokens != 256_000 ||
 		caps.MaxOutputTokens != 8192 ||
 		!caps.ToolCalls ||
 		!caps.ParallelToolCalls ||
