@@ -50,12 +50,11 @@ func (s RichStream) markdownChunks(renderer *Renderer, model, reasoning string, 
 		return nil
 	}
 	elapsed := time.Since(renderer.Started).Round(time.Second)
-	content := strings.TrimSpace(renderer.assistantText())
-	if content == "" {
+	content := renderer.finalContent()
+	if strings.TrimSpace(content) == "Working..." {
 		if !includeFallback {
 			return nil
 		}
-		content = "Working..."
 	}
 	header := renderer.richHeaderInline(model, reasoning, elapsed)
 	footer := "\n\n_" + markdownInlineEscape(renderer.footerLine()) + "_"
