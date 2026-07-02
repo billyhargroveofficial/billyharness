@@ -123,7 +123,7 @@ Goal: make the new active plan and git state clean before touching runtime code.
 
 Goal: make `fast-agent-harness hygiene -strict` pass without changing behavior.
 
-- [ ] PH-01.1 Split `internal/gateway/gateway.go`.
+- [x] PH-01.1 Split `internal/gateway/gateway.go`.
   - current issue: 1767 LOC, above the 1500 LOC source budget.
   - likely seams: server construction/config, session CRUD routes, run routes,
     context/config/auth routes, benchmark/trace routes, small response helpers.
@@ -131,7 +131,17 @@ Goal: make `fast-agent-harness hygiene -strict` pass without changing behavior.
     unless necessary; `internal/gateway` tests still pass.
   - verification:
     `go test -count=1 ./internal/gateway ./internal/gatewayclient ./internal/eventlog`
-  - status: open.
+  - status: completed 2026-07-02.
+  - evidence: split benchmark route/artifact helpers into
+    `internal/gateway/benchmark_routes.go` and stream/JSON response helpers
+    into `internal/gateway/response.go`. The split is package-local and does
+    not add exported API surface or import edges. `internal/gateway/gateway.go`
+    is now 1445 LOC, below the 1500 LOC source budget.
+  - verification evidence:
+    `/root/.local/go/bin/go test -count=1 ./internal/gateway
+    ./internal/gatewayclient ./internal/eventlog` passed;
+    `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
+  - commit: pending.
 
 - [ ] PH-01.2 Split `internal/tui/transcript_runtime.go`.
   - current issue: 1559 LOC, above the 1500 LOC source budget.

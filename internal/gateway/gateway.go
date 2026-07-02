@@ -2,9 +2,7 @@ package gateway
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,13 +10,11 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/agent"
@@ -31,10 +27,8 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/runstate"
-	"github.com/billyhargroveofficial/billyharness/internal/secrets"
 	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
-	"github.com/billyhargroveofficial/billyharness/internal/trace"
 )
 
 type Server struct {
@@ -347,25 +341,6 @@ func (s *Server) handleConfigStatus(w http.ResponseWriter, _ *http.Request) {
 		Values:      resolved.SanitizedValues(),
 		Diagnostics: resolved.Config.DiagnosticSnapshot(),
 		Warnings:    resolved.Warnings,
-	})
-}
-
-func (s *Server) handleBenchmarks(w http.ResponseWriter, r *http.Request) {
-	dir := strings.TrimSpace(r.URL.Query().Get("dir"))
-	if dir == "" {
-		dir = defaultBenchmarkRunsDir()
-	}
-	if !filepath.IsAbs(dir) {
-		dir = filepath.Join(config.BillyHomeDir(), dir)
-	}
-	runs, err := listBenchmarkRuns(dir, 100)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, BenchmarkListResponse{
-		Dir:  filepath.Clean(dir),
-		Runs: runs,
 	})
 }
 
@@ -1174,135 +1149,6 @@ func (s *Server) sessionContextResponse(session *Session) SessionContextResponse
 	})
 }
 
-func defaultBenchmarkRunsDir() string {
-	return filepath.Join(config.BillyHomeDir(), "bench-runs")
-}
-
-func listBenchmarkRuns(root string, limit int) ([]BenchmarkRunSummary, error) {
-	root = filepath.Clean(root)
-	if _, err := os.Stat(root); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var runs []BenchmarkRunSummary
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return nil
-		}
-		if entry.IsDir() {
-			if path == root {
-				return nil
-			}
-			rel, err := filepath.Rel(root, path)
-			if err == nil && strings.Count(rel, string(os.PathSeparator)) >= 3 {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(entry.Name(), "-manifest.json") {
-			return nil
-		}
-		run, err := readBenchmarkRunSummary(path)
-		if err == nil && run.RunID != "" {
-			runs = append(runs, run)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(runs, func(i, j int) bool {
-		if runs[i].CreatedAt.Equal(runs[j].CreatedAt) {
-			return runs[i].RunID > runs[j].RunID
-		}
-		return runs[i].CreatedAt.After(runs[j].CreatedAt)
-	})
-	if limit > 0 && len(runs) > limit {
-		runs = runs[:limit]
-	}
-	return runs, nil
-}
-
-func readBenchmarkRunSummary(manifestPath string) (BenchmarkRunSummary, error) {
-	bytes, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return BenchmarkRunSummary{}, err
-	}
-	var manifest trace.Manifest
-	if err := json.Unmarshal(bytes, &manifest); err != nil {
-		return BenchmarkRunSummary{}, err
-	}
-	manifestDir := filepath.Dir(manifestPath)
-	resultsPath := resolveBenchmarkArtifactPath(manifestDir, manifest.ResultsJSONL)
-	eventsPath := resolveBenchmarkArtifactPath(manifestDir, manifest.EventsJSONL)
-	payloadsDir := resolveBenchmarkArtifactPath(manifestDir, manifest.PayloadsDir)
-	return BenchmarkRunSummary{
-		RunID:           manifest.RunID,
-		CreatedAt:       manifest.CreatedAt,
-		Harness:         manifest.Harness,
-		ProfileHash:     manifest.ProfileHash,
-		TasksPath:       manifest.TasksPath,
-		TaskCount:       manifest.TaskCount,
-		ManifestJSON:    filepath.Clean(manifestPath),
-		ResultsJSONL:    resultsPath,
-		EventsJSONL:     eventsPath,
-		PayloadsDir:     payloadsDir,
-		ResultsPresent:  fileExists(resultsPath),
-		EventsPresent:   fileExists(eventsPath),
-		PayloadsPresent: dirExists(payloadsDir),
-	}, nil
-}
-
-func resolveBenchmarkArtifactPath(manifestDir, path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return ""
-	}
-	if filepath.IsAbs(path) {
-		return filepath.Clean(path)
-	}
-	candidates := []string{
-		filepath.Clean(path),
-		filepath.Join(manifestDir, filepath.Base(path)),
-		filepath.Join(manifestDir, path),
-	}
-	for _, candidate := range candidates {
-		if fileExists(candidate) || dirExists(candidate) {
-			return absBenchmarkPath(candidate)
-		}
-	}
-	return filepath.Join(manifestDir, filepath.Base(path))
-}
-
-func absBenchmarkPath(path string) string {
-	if path == "" {
-		return ""
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return filepath.Clean(path)
-	}
-	return filepath.Clean(abs)
-}
-
-func fileExists(path string) bool {
-	if path == "" {
-		return false
-	}
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
-}
-
-func dirExists(path string) bool {
-	if path == "" {
-		return false
-	}
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
-}
-
 func (s *Server) saveSession(session *Session) error {
 	if s.store == nil {
 		return nil
@@ -1596,172 +1442,4 @@ func runOverrideSettingsFromRequest(req RunRequest) config.RunOverrideSettings {
 		MaxToolRounds:   req.MaxToolRounds,
 		AccessMode:      req.AccessMode,
 	}
-}
-
-const liveRunStreamBuffer = 256
-
-func streamEvents(w http.ResponseWriter, run func(func(protocol.Event)) error) {
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	flusher, _ := w.(http.Flusher)
-	events := make(chan protocol.Event, liveRunStreamBuffer)
-	writerDone := make(chan struct{})
-	go func() {
-		defer close(writerDone)
-		for event := range events {
-			if !writeNDJSONEvent(w, flusher, event) {
-				return
-			}
-		}
-	}()
-
-	var terminalEmitted atomic.Bool
-	var droppedEvents atomic.Int64
-	var lastQueuedSeq atomic.Int64
-	queue := func(event protocol.Event) bool {
-		select {
-		case <-writerDone:
-			return false
-		default:
-		}
-		select {
-		case events <- event:
-			if event.Seq > 0 {
-				lastQueuedSeq.Store(event.Seq)
-			}
-			return true
-		case <-writerDone:
-			return false
-		default:
-			return false
-		}
-	}
-	emitGap := func(block bool) {
-		dropped := droppedEvents.Swap(0)
-		if dropped <= 0 {
-			return
-		}
-		event := gatewayStreamGapEvent(dropped, lastQueuedSeq.Load())
-		if block {
-			select {
-			case events <- event:
-			case <-writerDone:
-			}
-			return
-		}
-		if !queue(event) {
-			droppedEvents.Add(dropped)
-		}
-	}
-	emit := func(event protocol.Event) {
-		if isTerminalRunEvent(event.Type) {
-			terminalEmitted.Store(true)
-		}
-		if droppedEvents.Load() > 0 {
-			emitGap(false)
-		}
-		if !queue(event) {
-			droppedEvents.Add(1)
-		}
-	}
-	if err := run(emit); err != nil && !terminalEmitted.Load() {
-		emit(protocol.Event{Type: protocol.EventRunFailed, Data: err.Error()})
-	}
-	if droppedEvents.Load() > 0 {
-		emitGap(true)
-	}
-	close(events)
-	<-writerDone
-}
-
-func gatewayStreamGapEvent(dropped, replayAfterSeq int64) protocol.Event {
-	return protocol.Event{
-		Type:   protocol.EventGatewayStreamGap,
-		Source: protocol.EventSourceGateway,
-		TS:     time.Now().UTC().Format(time.RFC3339Nano),
-		Data: protocol.GatewayStreamGapEvent{
-			DroppedEvents:  dropped,
-			ReplayAfterSeq: replayAfterSeq,
-			Message:        "live stream dropped events; replay /v1/sessions/{id}/events after the last durable seq",
-		},
-	}
-}
-
-func isTerminalRunEvent(eventType protocol.EventType) bool {
-	return eventType == protocol.EventRunCompleted || eventType == protocol.EventRunFailed
-}
-
-func writeNDJSONEvent(w http.ResponseWriter, flusher http.Flusher, event protocol.Event) bool {
-	body, err := marshalRedactedJSON(event)
-	if err != nil {
-		return false
-	}
-	body = append(body, '\n')
-	if _, err := w.Write(body); err != nil {
-		return false
-	}
-	if flusher != nil {
-		flusher.Flush()
-	}
-	return true
-}
-
-func writeJSON(w http.ResponseWriter, status int, value any) {
-	body, err := marshalRedactedJSON(value)
-	if err != nil {
-		http.Error(w, `{"error":"failed to encode JSON"}`, http.StatusInternalServerError)
-		return
-	}
-	body = append(body, '\n')
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write(body)
-}
-
-func marshalRedactedJSON(value any) ([]byte, error) {
-	body, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	var decoded any
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		return nil, err
-	}
-	redactJSONStrings(decoded)
-	return json.Marshal(decoded)
-}
-
-func redactJSONStrings(value any) {
-	switch v := value.(type) {
-	case map[string]any:
-		for key, item := range v {
-			if text, ok := item.(string); ok {
-				v[key] = secrets.Redact(text)
-				continue
-			}
-			redactJSONStrings(item)
-		}
-	case []any:
-		for i, item := range v {
-			if text, ok := item.(string); ok {
-				v[i] = secrets.Redact(text)
-				continue
-			}
-			redactJSONStrings(item)
-		}
-	}
-}
-
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"error": message})
-}
-
-func newID() string {
-	var bytes [16]byte
-	if _, err := rand.Read(bytes[:]); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(bytes[:])
 }
