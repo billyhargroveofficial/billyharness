@@ -182,7 +182,7 @@ Goal: make `fast-agent-harness hygiene -strict` pass without changing behavior.
     `/root/.local/go/bin/go test -count=1 ./internal/tui
     ./internal/tui/selection ./internal/tui/render` passed;
     `/root/.local/go/bin/go test -count=1 ./internal/architecture` passed.
-  - commit: pending.
+  - commit: `1c101defee44404d409e3467bf87df31b35e32a4`.
 
 - [ ] PH-01.4 Split oversized focused test files.
   - current issues:
