@@ -350,7 +350,7 @@ Goal: prove the cleaned code still behaves like the current deployed harness.
   - evidence:
     `/root/.local/go/bin/go build -o bin/fast-agent-harness
     ./cmd/fast-agent-harness` passed.
-  - commit: pending.
+  - commit: `093e2f878f55a929cca9a8965b84c9321fc7e1c9`.
 
 - [ ] PH-03.4 Run CLI smoke checks.
   - suggested verification:
