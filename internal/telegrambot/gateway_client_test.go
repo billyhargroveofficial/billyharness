@@ -62,15 +62,16 @@ func TestGatewayClientContextStatusUsesSharedFormatter(t *testing.T) {
 		Path:   "/v1/sessions/session-1/context",
 		Handler: func(w http.ResponseWriter, _ *http.Request) {
 			testkit.WriteJSON(t, w, gatewayapi.SessionContextResponse{
-				ID:                   "session-1",
-				MessageCount:         3,
-				EstimatedTokens:      580000,
-				ContextWindowTokens:  1000000,
-				ContextCompactTokens: 600000,
-				PercentUsed:          58,
-				Runtime:              gatewayapi.ContextRuntime{Model: "deepseek-v4-flash", ReasoningMode: "high"},
-				Usage:                gatewayapi.ContextUsage{CacheHitTokens: 700, CacheMissTokens: 300, WebSummaryInputTokens: 20000, WebSummaryOutputTokens: 900, HelperModelAPITokens: 20900},
-				Prompt:               gatewayapi.ContextPrompt{SectionCount: 2, ApproxTokens: 1200, TotalBytes: 4800, CacheStatus: "changed", CacheReason: "tool_schema_changed"},
+				ID:                      "session-1",
+				MessageCount:            3,
+				EstimatedTokens:         580000,
+				ContextWindowTokens:     1000000,
+				ContextCompactTokens:    600000,
+				PercentUsed:             58,
+				CompactThresholdPercent: 60,
+				Runtime:                 gatewayapi.ContextRuntime{Model: "deepseek-v4-flash", ReasoningMode: "high"},
+				Usage:                   gatewayapi.ContextUsage{CacheHitTokens: 700, CacheMissTokens: 300, WebSummaryInputTokens: 20000, WebSummaryOutputTokens: 900, HelperModelAPITokens: 20900},
+				Prompt:                  gatewayapi.ContextPrompt{SectionCount: 2, ApproxTokens: 1200, TotalBytes: 4800, CacheStatus: "changed", CacheReason: "tool_schema_changed"},
 				Sources: []gatewayapi.ContextSource{{
 					Source:          "web_summaries",
 					MessageCount:    1,
@@ -89,7 +90,7 @@ func TestGatewayClientContextStatusUsesSharedFormatter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"active context: 580.0k / 1.00M", "runtime: model=deepseek-v4-flash", "cache: hit=700", "helper usage: websum=20.0k", "prompt cache: status=changed", "thresholds: ●50% ○70%", "web_summaries"} {
+	for _, want := range []string{"active context: 580.0k / 1.00M", "compact threshold: 600.0k (60.0%, below)", "runtime: model=deepseek-v4-flash", "cache: hit=700", "helper usage: websum=20.0k", "prompt cache: status=changed", "thresholds: ●50% ○70%", "web_summaries"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("context status missing %q: %q", want, text)
 		}

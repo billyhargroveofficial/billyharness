@@ -116,6 +116,26 @@ func TestContextCompactionEnvOverridesPolicyControls(t *testing.T) {
 		cfg.ContextCompactMaxChars != 54321 {
 		t.Fatalf("context compaction policy = tokens:%d keep:%d max_chars:%d", cfg.ContextCompactTokens, cfg.ContextCompactKeep, cfg.ContextCompactMaxChars)
 	}
+	if !cfg.ContextCompactExplicitOverride() || cfg.ContextCompactSourceLabel() != "override" {
+		t.Fatalf("context compact override provenance not preserved")
+	}
+}
+
+func TestContextCompactionOverrideAboveWindowIsClampedToDerived(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	t.Setenv("FAST_AGENT_MODEL", "gpt-5.5")
+	t.Setenv("FAST_AGENT_CONTEXT_COMPACT_TOKENS", "600000")
+	resolved, err := Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolved.Config.ContextCompactTokens; got != 153_600 {
+		t.Fatalf("ContextCompactTokens = %d, want model-derived 153600", got)
+	}
+	if resolved.Config.ContextCompactExplicitOverride() || resolved.Config.ContextCompactSourceLabel() != "derived" {
+		t.Fatalf("clamped compact threshold should be derived, got source %q", resolved.Config.ContextCompactSourceLabel())
+	}
 }
 
 func TestProjectContextMaxBytesEnvOverride(t *testing.T) {
@@ -412,7 +432,7 @@ func TestResolveIgnoresStaleSettingsContextWindowForCodex(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", home)
 	t.Setenv("FAST_AGENT_ENV_FILE", "")
-	body := []byte(`{"last_selected_model":"gpt-5.5","context_window_tokens":1000000}`)
+	body := []byte(`{"last_selected_model":"gpt-5.5","context_window_tokens":1000000,"context_compact_tokens":600000}`)
 	if err := os.WriteFile(filepath.Join(home, "settings.json"), body, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -424,9 +444,19 @@ func TestResolveIgnoresStaleSettingsContextWindowForCodex(t *testing.T) {
 	if got := resolved.Config.ContextWindowTokens; got != 256_000 {
 		t.Fatalf("ContextWindowTokens = %d, want model-derived 256000", got)
 	}
+	if got := resolved.Config.ContextCompactTokens; got != 153_600 {
+		t.Fatalf("ContextCompactTokens = %d, want model-derived 153600", got)
+	}
+	if resolved.Config.ContextCompactExplicitOverride() || resolved.Config.ContextCompactSourceLabel() != "derived" {
+		t.Fatalf("stale settings compact threshold should be derived, got source %q", resolved.Config.ContextCompactSourceLabel())
+	}
 	value, ok := resolved.Value("context_window_tokens")
 	if !ok || value.Source != SourceDerived {
 		t.Fatalf("context_window_tokens value = %#v, want derived", value)
+	}
+	value, ok = resolved.Value("context_compact_tokens")
+	if !ok || value.Source != SourceDerived {
+		t.Fatalf("context_compact_tokens value = %#v, want derived", value)
 	}
 }
 

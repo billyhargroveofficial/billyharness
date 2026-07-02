@@ -329,11 +329,12 @@ func (s *resolveState) applyBillySettings() {
 		return
 	}
 	var settings struct {
-		LastSelectedModel   string `json:"last_selected_model"`
-		LastReasoningKind   string `json:"last_reasoning_kind"`
-		LastReasoningEffort string `json:"last_reasoning_effort"`
-		LastProfile         string `json:"last_profile"`
-		ContextWindowTokens int64  `json:"context_window_tokens"`
+		LastSelectedModel    string `json:"last_selected_model"`
+		LastReasoningKind    string `json:"last_reasoning_kind"`
+		LastReasoningEffort  string `json:"last_reasoning_effort"`
+		LastProfile          string `json:"last_profile"`
+		ContextWindowTokens  int64  `json:"context_window_tokens"`
+		ContextCompactTokens int    `json:"context_compact_tokens"`
 	}
 	if err := json.Unmarshal(body, &settings); err != nil {
 		s.warn(fmt.Sprintf("load %s: %v", path, err))
@@ -341,6 +342,9 @@ func (s *resolveState) applyBillySettings() {
 	}
 	if settings.ContextWindowTokens > 0 {
 		s.applyValue("context_window_tokens", settings.ContextWindowTokens, SourceSettings, path, "context_window_tokens")
+	}
+	if settings.ContextCompactTokens > 0 {
+		s.applyValue("context_compact_tokens", settings.ContextCompactTokens, SourceSettings, path, "context_compact_tokens")
 	}
 	if strings.TrimSpace(settings.LastSelectedModel) != "" {
 		s.applyValue("model", settings.LastSelectedModel, SourceSettings, path, "last_selected_model")
@@ -484,6 +488,9 @@ func (s *resolveState) applyValue(key string, value any, source, sourcePath, sou
 	if key == "context_window_tokens" {
 		s.cfg.contextWindowExplicitOverride = isExplicitContextWindowOverrideSource(source)
 	}
+	if key == "context_compact_tokens" {
+		s.cfg.contextCompactExplicitOverride = isExplicitContextCompactOverrideSource(source)
+	}
 	s.record(key, displayConfigValue(spec.get(s.cfg)), source, sourcePath, sourceKey, spec.Redacted, "", "")
 }
 
@@ -587,6 +594,15 @@ func isExplicitProviderSource(source string) bool {
 func isExplicitContextWindowOverrideSource(source string) bool {
 	switch source {
 	case SourceHomeConfig, SourceProject, SourceDotenv, SourceEnvironment, SourceCLI, SourceGateway:
+		return true
+	default:
+		return false
+	}
+}
+
+func isExplicitContextCompactOverrideSource(source string) bool {
+	switch source {
+	case SourceHomeConfig, SourceProject, SourceDotenv, SourceEnvironment, SourceCLI, SourceGateway, SourceProfile:
 		return true
 	default:
 		return false

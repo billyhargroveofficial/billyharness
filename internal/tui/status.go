@@ -26,9 +26,14 @@ func (m Model) inlineStatusView() string {
 		{m.currentModel(), styles.statusModel},
 		{"🧠 " + m.currentThinking().effortLabel(), styles.statusReasoning},
 		{"Context " + m.contextText() + " used", styles.statusUsage},
-		{access, styles.statusAccess},
-		{m.costText(), styles.statusCost},
 	}
+	if compactText := m.contextCompactText(); compactText != "" {
+		top = append(top, statusSegment{"Compact " + compactText, styles.statusUsage})
+	}
+	top = append(top,
+		statusSegment{access, styles.statusAccess},
+		statusSegment{m.costText(), styles.statusCost},
+	)
 	bottom := []statusSegment{}
 	if m.lastCacheHitTok+m.lastCacheMissTok > 0 {
 		bottom = append(bottom,
@@ -114,6 +119,30 @@ func (m Model) contextText() string {
 		text = fmt.Sprintf("%s/%s %.0f%%", compactNumber(used), compactNumber(window), percent)
 	}
 	if m.runtime.ContextWindowSource == "override" {
+		text += " override"
+	}
+	return text
+}
+
+func (m Model) contextCompactText() string {
+	threshold := int64(m.runtime.ContextCompactTokens)
+	if threshold <= 0 {
+		return ""
+	}
+	window := m.runtime.ContextWindowTokens
+	if window <= 0 {
+		return compactNumber(threshold)
+	}
+	percent := float64(threshold) / float64(window) * 100
+	if percent < 10 {
+		text := fmt.Sprintf("%s %.1f%%", compactNumber(threshold), percent)
+		if m.runtime.ContextCompactSource == "override" {
+			text += " override"
+		}
+		return text
+	}
+	text := fmt.Sprintf("%s %.0f%%", compactNumber(threshold), percent)
+	if m.runtime.ContextCompactSource == "override" {
 		text += " override"
 	}
 	return text

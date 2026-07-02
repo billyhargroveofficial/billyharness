@@ -144,10 +144,16 @@ func TestTelegramModelCommandAndStatusShowInputCapability(t *testing.T) {
 	if !strings.Contains(html, "context window: <code>256.0k</code>") {
 		t.Fatalf("status html should use gpt-5.5 model context window: %q", html)
 	}
+	if !strings.Contains(html, "compact threshold: <code>153.6k</code> (60%)") {
+		t.Fatalf("status html should use gpt-5.5 compact threshold: %q", html)
+	}
 
 	html = StatusHTML(ChatState{Model: "gpt-5.4-mini"}, Options{Model: "deepseek-v4-flash", ContextWindow: 1_000_000})
 	if !strings.Contains(html, "context window: <code>256.0k</code>") {
 		t.Fatalf("status html should use mini model context window: %q", html)
+	}
+	if !strings.Contains(html, "compact threshold: <code>153.6k</code> (60%)") {
+		t.Fatalf("status html should use mini model compact threshold: %q", html)
 	}
 }
 
@@ -167,6 +173,11 @@ func TestStatusHTMLContextWindowFollowsModelInfo(t *testing.T) {
 			if !strings.Contains(html, line) {
 				t.Fatalf("status html = %q, want %q", html, line)
 			}
+			threshold := modelinfo.Lookup(model).ContextWindowTokens * 60 / 100
+			thresholdLine := "compact threshold: <code>" + compactInt(threshold) + "</code> (60%)"
+			if !strings.Contains(html, thresholdLine) {
+				t.Fatalf("status html = %q, want %q", html, thresholdLine)
+			}
 			if strings.Contains(html, "(override)") {
 				t.Fatalf("model-derived status should not be labeled override: %q", html)
 			}
@@ -179,9 +190,13 @@ func TestStatusHTMLLabelsExplicitContextWindowOverride(t *testing.T) {
 		Model:               "gpt-5.5",
 		ContextWindow:       1_000_000,
 		ContextWindowSource: "override",
+		ContextCompact:      600_000,
 	})
 	if !strings.Contains(html, "context window: <code>1.00M</code> (override)") {
 		t.Fatalf("status html should label explicit override: %q", html)
+	}
+	if !strings.Contains(html, "compact threshold: <code>600.0k</code> (60%)") {
+		t.Fatalf("status html should show compact threshold for override: %q", html)
 	}
 }
 

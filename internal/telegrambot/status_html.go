@@ -64,6 +64,7 @@ func StatusHTML(state ChatState, opts Options) string {
 func StatusHTMLWithRuntime(state ChatState, opts Options, runtime gatewayapi.SessionStatus) string {
 	model := fallback(state.Model, opts.Model)
 	contextWindow := resolveContextWindowForModel(model, opts.ContextWindow, opts.ContextWindowSource)
+	compactThreshold := resolveCompactThreshold(contextWindow.Tokens, opts.ContextCompact, opts.ContextCompactSource)
 	var allowedChats []string
 	for chat := range opts.AllowedChatIDs {
 		allowedChats = append(allowedChats, strconv.FormatInt(chat, 10))
@@ -94,9 +95,60 @@ func StatusHTMLWithRuntime(state ChatState, opts Options, runtime gatewayapi.Ses
 		"event cursor: <code>" + esc(strconv.FormatInt(state.LastEventSeq, 10)) + "</code>\n" +
 		"pending input: <code>" + esc(statusPendingInput(state)) + "</code>\n" +
 		"selected context window: <code>" + esc(compactInt(contextWindow.Tokens)) + "</code>" + esc(contextWindowStatusSuffix(contextWindow.Source)) + "\n" +
+		"selected compact threshold: <code>" + esc(compactInt(compactThreshold.Tokens)) + "</code> (" + esc(formatThresholdPercent(compactThreshold.Percent)) + ")" + esc(contextCompactStatusSuffix(compactThreshold.Source)) + "\n" +
 		"send: <code>" + esc(fmt.Sprint(opts.SendEnabled && !opts.DryRunDefault)) + "</code>\n" +
 		"allowed chats: <code>" + esc(strings.Join(allowedChats, ",")) + "</code>\n" +
 		"allowed users: <code>" + esc(strings.Join(allowedUsers, ",")) + "</code>"
+}
+
+type compactThresholdResolution struct {
+	Tokens  int64
+	Percent float64
+	Source  string
+}
+
+func resolveCompactThreshold(contextWindow int64, configured int, source string) compactThresholdResolution {
+	source = strings.TrimSpace(source)
+	if source == "override" && configured > 0 {
+		out := compactThresholdResolution{Tokens: int64(configured), Source: "override"}
+		if contextWindow > 0 {
+			out.Percent = float64(out.Tokens) / float64(contextWindow) * 100
+		}
+		return out
+	}
+	if contextWindow <= 0 {
+		if configured > 0 {
+			return compactThresholdResolution{Tokens: int64(configured), Source: "fallback"}
+		}
+		return compactThresholdResolution{}
+	}
+	tokens := contextWindow * 60 / 100
+	return compactThresholdResolution{
+		Tokens:  tokens,
+		Percent: float64(tokens) / float64(contextWindow) * 100,
+		Source:  "derived",
+	}
+}
+
+func formatThresholdPercent(percent float64) string {
+	if percent <= 0 {
+		return "unknown"
+	}
+	if percent < 10 {
+		return fmt.Sprintf("%.1f%%", percent)
+	}
+	return fmt.Sprintf("%.0f%%", percent)
+}
+
+func contextCompactStatusSuffix(source string) string {
+	switch strings.TrimSpace(source) {
+	case "override":
+		return " override"
+	case "fallback":
+		return " fallback"
+	default:
+		return ""
+	}
 }
 
 func runtimeModelLabel(runtime gatewayapi.SessionStatus) string {

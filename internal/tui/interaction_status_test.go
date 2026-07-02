@@ -289,6 +289,10 @@ func TestInlineStatusContextWindowFollowsModelInfo(t *testing.T) {
 			if !strings.Contains(status, "Context 128/"+wantWindow) {
 				t.Fatalf("inline status = %q, want context denominator %s", status, wantWindow)
 			}
+			wantCompact := compactNumber(modelinfo.Lookup(model).ContextWindowTokens * 60 / 100)
+			if !strings.Contains(status, "Compact "+wantCompact+" 60%") {
+				t.Fatalf("inline status = %q, want compact threshold %s", status, wantCompact)
+			}
 			if strings.Contains(status, "override") {
 				t.Fatalf("model-derived inline status should not be labeled override: %q", status)
 			}
@@ -302,9 +306,13 @@ func TestInlineStatusLabelsExplicitContextWindowOverride(t *testing.T) {
 	m.lastInputTok = 128
 	m.runtime.ContextWindowTokens = 1_000_000
 	m.runtime.ContextWindowSource = "override"
+	m.runtime.ContextCompactTokens = 600_000
 	status := stripANSITest(m.inlineStatusView())
 	if !strings.Contains(status, "Context 128/1.0m 0.0% override used") {
 		t.Fatalf("inline status should label explicit override: %q", status)
+	}
+	if !strings.Contains(status, "Compact 600k 60%") {
+		t.Fatalf("inline status should show compact threshold: %q", status)
 	}
 }
 
@@ -823,16 +831,17 @@ func TestContextCommandShowsGatewayContextReport(t *testing.T) {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
 		_ = json.NewEncoder(w).Encode(gatewayapi.SessionContextResponse{
-			ID:                   "session-1",
-			MessageCount:         4,
-			EstimatedTokens:      580000,
-			ContextWindowTokens:  1000000,
-			ContextCompactTokens: 600000,
-			PercentUsed:          58,
-			Estimator:            "chars_div_4",
-			Runtime:              gatewayapi.ContextRuntime{Model: "deepseek-v4-flash", ReasoningMode: "high", AccessMode: "build"},
-			Usage:                gatewayapi.ContextUsage{CacheHitTokens: 700, CacheMissTokens: 300, WebSummaryInputTokens: 20000, WebSummaryOutputTokens: 900, HelperModelAPITokens: 20900},
-			Prompt:               gatewayapi.ContextPrompt{SectionCount: 2, ApproxTokens: 1200, TotalBytes: 4800, CacheStatus: "changed", CacheReason: "tool_schema_changed"},
+			ID:                      "session-1",
+			MessageCount:            4,
+			EstimatedTokens:         580000,
+			ContextWindowTokens:     1000000,
+			ContextCompactTokens:    600000,
+			PercentUsed:             58,
+			CompactThresholdPercent: 60,
+			Estimator:               "chars_div_4",
+			Runtime:                 gatewayapi.ContextRuntime{Model: "deepseek-v4-flash", ReasoningMode: "high", AccessMode: "build"},
+			Usage:                   gatewayapi.ContextUsage{CacheHitTokens: 700, CacheMissTokens: 300, WebSummaryInputTokens: 20000, WebSummaryOutputTokens: 900, HelperModelAPITokens: 20900},
+			Prompt:                  gatewayapi.ContextPrompt{SectionCount: 2, ApproxTokens: 1200, TotalBytes: 4800, CacheStatus: "changed", CacheReason: "tool_schema_changed"},
 			Sources: []gatewayapi.ContextSource{
 				{Source: "web_summaries", MessageCount: 2, EstimatedTokens: 320000, Percent: 55.2},
 				{Source: "user_messages", MessageCount: 1, EstimatedTokens: 1000, Percent: 0.2},
@@ -859,7 +868,7 @@ func TestContextCommandShowsGatewayContextReport(t *testing.T) {
 	if msg.err != nil {
 		t.Fatal(msg.err)
 	}
-	for _, want := range []string{"active context: 580.0k / 1.00M", "runtime: model=deepseek-v4-flash", "cache: hit=700", "helper usage: websum=20.0k", "prompt cache: status=changed", "thresholds: ●50% ○70%", "web_summaries", "top contributors"} {
+	for _, want := range []string{"active context: 580.0k / 1.00M", "compact threshold: 600.0k (60.0%, below)", "runtime: model=deepseek-v4-flash", "cache: hit=700", "helper usage: websum=20.0k", "prompt cache: status=changed", "thresholds: ●50% ○70%", "web_summaries", "top contributors"} {
 		if !strings.Contains(msg.text, want) {
 			t.Fatalf("context report missing %q:\n%s", want, msg.text)
 		}

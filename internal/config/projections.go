@@ -42,6 +42,7 @@ type RuntimeLimits struct {
 	ContextWindowTokens           int64
 	ContextWindowSource           string
 	ContextCompactTokens          int
+	ContextCompactSource          string
 	ContextCompactKeep            int
 	ContextCompactMaxChars        int
 	ContextCompactStrategy        string
@@ -166,6 +167,7 @@ func (c Config) RuntimeLimits() RuntimeLimits {
 		ContextWindowTokens:           c.ContextWindowTokens,
 		ContextWindowSource:           c.ContextWindowSourceLabel(),
 		ContextCompactTokens:          c.ContextCompactTokens,
+		ContextCompactSource:          c.ContextCompactSourceLabel(),
 		ContextCompactKeep:            c.ContextCompactKeep,
 		ContextCompactMaxChars:        c.ContextCompactMaxChars,
 		ContextCompactStrategy:        c.ContextCompactStrategy,

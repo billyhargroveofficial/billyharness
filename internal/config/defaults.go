@@ -74,9 +74,30 @@ func (c *Config) applyContextCompactDefault() {
 	if c.ContextWindowTokens <= 0 {
 		return
 	}
+	if c.contextCompactExplicitOverride && c.ContextCompactTokens > 0 && int64(c.ContextCompactTokens) < c.ContextWindowTokens {
+		return
+	}
 	if c.ContextCompactTokens <= 0 || int64(c.ContextCompactTokens) >= c.ContextWindowTokens {
 		c.ContextCompactTokens = int(c.ContextWindowTokens * 60 / 100)
+		c.contextCompactExplicitOverride = false
 	}
+}
+
+func (c Config) ContextCompactExplicitOverride() bool {
+	return c.contextCompactExplicitOverride && c.ContextCompactTokens > 0
+}
+
+func (c Config) ContextCompactSourceLabel() string {
+	if c.ContextCompactExplicitOverride() {
+		return "override"
+	}
+	if c.ContextWindowTokens > 0 && c.ContextCompactTokens == int(c.ContextWindowTokens*60/100) {
+		return "derived"
+	}
+	if c.ContextCompactTokens > 0 {
+		return "fallback"
+	}
+	return ""
 }
 
 func (c *Config) ApplyWebSummaryDefaults() {
@@ -163,17 +184,21 @@ func (c *Config) ApplyBillySettingsDefaults() {
 		return
 	}
 	var settings struct {
-		LastSelectedModel   string `json:"last_selected_model"`
-		LastReasoningKind   string `json:"last_reasoning_kind"`
-		LastReasoningEffort string `json:"last_reasoning_effort"`
-		LastProfile         string `json:"last_profile"`
-		ContextWindowTokens int64  `json:"context_window_tokens"`
+		LastSelectedModel    string `json:"last_selected_model"`
+		LastReasoningKind    string `json:"last_reasoning_kind"`
+		LastReasoningEffort  string `json:"last_reasoning_effort"`
+		LastProfile          string `json:"last_profile"`
+		ContextWindowTokens  int64  `json:"context_window_tokens"`
+		ContextCompactTokens int    `json:"context_compact_tokens"`
 	}
 	if err := json.Unmarshal(body, &settings); err != nil {
 		return
 	}
 	if os.Getenv("FAST_AGENT_CONTEXT_WINDOW_TOKENS") == "" && settings.ContextWindowTokens > 0 {
 		c.ContextWindowTokens = settings.ContextWindowTokens
+	}
+	if os.Getenv("FAST_AGENT_CONTEXT_COMPACT_TOKENS") == "" && settings.ContextCompactTokens > 0 {
+		c.ContextCompactTokens = settings.ContextCompactTokens
 	}
 	if os.Getenv("FAST_AGENT_MODEL") == "" && strings.TrimSpace(settings.LastSelectedModel) != "" {
 		c.Model = strings.TrimSpace(settings.LastSelectedModel)

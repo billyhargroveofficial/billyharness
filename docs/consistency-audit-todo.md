@@ -156,13 +156,23 @@ Tests:
 
 ### 4. Make context compact thresholds derived and visible everywhere
 
-- [ ] Verify `ContextCompactTokens` is always re-derived or clamped after a
+- [x] Verify `ContextCompactTokens` is always re-derived or clamped after a
   model switch unless explicitly overridden.
-- [ ] Show compact threshold in `/status` or `/context` with both tokens and
+- [x] Show compact threshold in `/status` or `/context` with both tokens and
   percent, so a Codex 153.6k threshold cannot be confused with DeepSeek 600k.
-- [ ] Add a regression test for switching from DeepSeek 1M to Codex 256k with
+- [x] Add a regression test for switching from DeepSeek 1M to Codex 256k with
   stale settings containing `context_window_tokens=1000000` and
   `context_compact_tokens=600000`.
+
+Evidence:
+
+- Added compact-threshold provenance so stale settings are derived while real
+  compact overrides stay labelled as overrides.
+- Telegram `/status`, TUI inline status, and shared `/context` formatting now
+  show compact threshold tokens plus percent.
+- Regression coverage asserts stale settings for `gpt-5.5` derive
+  `context_window_tokens=256000` and `context_compact_tokens=153600`.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/config ./internal/clientux ./internal/gatewayclient ./internal/telegrambot ./internal/tui ./cmd/fast-agent-harness`.
 
 Files:
 
