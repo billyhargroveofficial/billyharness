@@ -23,6 +23,7 @@ const (
 	maxManagedShellBuffer    = 1024 * 1024
 	maxManagedShellList      = 50
 	maxManagedShellPreview   = 240
+	defaultShellInlineOutput = 64 * 1024
 	shellTerminateGrace      = 200 * time.Millisecond
 )
 
@@ -239,7 +240,9 @@ func parseShellExecInput(args json.RawMessage) (shellExecInput, bool, error) {
 		in.TimeoutSec = 20
 	}
 	explicitMaxOutput := in.MaxOutputBytes > 0
-	if in.MaxOutputBytes <= 0 || in.MaxOutputBytes > maxExecOutput {
+	if in.MaxOutputBytes <= 0 {
+		in.MaxOutputBytes = defaultShellInlineOutput
+	} else if in.MaxOutputBytes > maxExecOutput {
 		in.MaxOutputBytes = maxExecOutput
 	}
 	return in, explicitMaxOutput, nil
@@ -296,25 +299,97 @@ func runForegroundShell(ctx context.Context, in shellExecInput, cwd string, expl
 	rawText := string(output)
 	text := rawText
 	truncated := false
-	if explicitMaxOutput && len(rawText) > in.MaxOutputBytes {
-		text = truncate(rawText, in.MaxOutputBytes)
+	var ref tooloutput.Ref
+	var refErr error
+	if len(rawText) > in.MaxOutputBytes {
+		ref, refErr = storeForegroundShellOutput(in, rawText)
+		text = boundedShellOutputPreview(rawText, in.MaxOutputBytes, ref.Path, refErr)
 		truncated = true
 	}
 	metadata := shellExecMetadata(in, cwd)
+	metadata["explicit_max_output_bytes"] = explicitMaxOutput
 	metadata["output_bytes"] = len(rawText)
 	metadata["returned_output_bytes"] = len(text)
 	metadata["truncated"] = truncated
+	if truncated {
+		metadata["inline_budget_bytes"] = in.MaxOutputBytes
+		metadata["inline_budget_enforced"] = true
+	}
+	if ref.Path != "" {
+		ref.AddMetadata(metadata)
+		metadata["output_ref_scope"] = "full_shell_output"
+	} else if refErr != nil {
+		metadata["output_ref_error"] = refErr.Error()
+	}
 	if cmdCtx.Err() != nil {
-		return Result{Content: text, Metadata: metadata, Truncated: truncated}, cmdCtx.Err()
+		return Result{Content: text, Metadata: metadata, Truncated: truncated, OutputRef: ref.Path}, cmdCtx.Err()
 	}
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			metadata["exit_code"] = exitErr.ExitCode()
 		}
-		return Result{Content: text, Metadata: metadata, Truncated: truncated}, fmt.Errorf("command failed: %w", err)
+		return Result{Content: text, Metadata: metadata, Truncated: truncated, OutputRef: ref.Path}, fmt.Errorf("command failed: %w", err)
 	}
 	metadata["exit_code"] = 0
-	return Result{Content: text, Metadata: metadata, Truncated: truncated}, nil
+	return Result{Content: text, Metadata: metadata, Truncated: truncated, OutputRef: ref.Path}, nil
+}
+
+func storeForegroundShellOutput(in shellExecInput, content string) (tooloutput.Ref, error) {
+	if content == "" {
+		return tooloutput.Ref{}, nil
+	}
+	parts := []string{"shell_exec"}
+	if len(in.Argv) > 0 {
+		parts = append(parts, filepath.Base(in.Argv[0]))
+	}
+	return tooloutput.Store(tooloutput.StoreRequest{
+		Parts:   parts,
+		Content: content,
+	})
+}
+
+func boundedShellOutputPreview(full string, limit int, ref string, saveErr error) string {
+	if limit <= 0 {
+		return ""
+	}
+	noteFor := func(omitted int) string {
+		if saveErr != nil {
+			return fmt.Sprintf("\n...[truncated %d bytes; failed to save full shell output: %v]", omitted, saveErr)
+		}
+		if ref != "" {
+			return fmt.Sprintf("\n...[truncated %d bytes; full shell output saved as plaintext to %s with 0600 permissions. Use fs_read_file on output_ref if exact output is needed]", omitted, ref)
+		}
+		return fmt.Sprintf("\n...[truncated %d bytes]", omitted)
+	}
+	note := noteFor(len(full))
+	if len(note) >= limit {
+		return note[:limit]
+	}
+	for {
+		previewLimit := limit - len(note)
+		preview := full
+		if len(preview) > previewLimit {
+			preview = preview[:previewLimit]
+		}
+		omitted := len(full) - len(preview)
+		nextNote := noteFor(omitted)
+		if len(preview)+len(nextNote) <= limit {
+			if preview == "" {
+				return nextNote
+			}
+			return preview + nextNote
+		}
+		if nextNote == note {
+			if len(preview)+len(nextNote) > limit {
+				return (preview + nextNote)[:limit]
+			}
+			return preview + nextNote
+		}
+		note = nextNote
+		if len(note) >= limit {
+			return note[:limit]
+		}
+	}
 }
 
 func (r *Registry) startManagedShell(in shellExecInput, cwd string) (Result, error) {

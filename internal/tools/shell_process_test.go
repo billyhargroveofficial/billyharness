@@ -10,7 +10,60 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/tooloutput"
 )
+
+func TestShellExecForegroundStoresLargeOutputRefByDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	registry := NewRegistry(cfg)
+	defer registry.Close()
+
+	result, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "shell_exec",
+		Arguments: rawArgs(map[string]any{
+			"argv": []string{"sh", "-c", "dd if=/dev/zero bs=70000 count=1 2>/dev/null | tr '\\000' x"},
+			"cwd":  ".",
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Truncated || result.OutputRef == "" {
+		t.Fatalf("result should be truncated with output ref: %#v", result)
+	}
+	if len(result.Content) > defaultShellInlineOutput {
+		t.Fatalf("foreground shell inline output = %d, want <= %d", len(result.Content), defaultShellInlineOutput)
+	}
+	if !strings.Contains(result.Content, "full shell output saved as plaintext") {
+		t.Fatalf("missing saved-output note: %q", result.Content)
+	}
+	if !strings.HasPrefix(result.OutputRef, filepath.Join(home, "tool-output")) {
+		t.Fatalf("output ref = %q, want under %q", result.OutputRef, home)
+	}
+	full, err := os.ReadFile(result.OutputRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full) != 70000 || strings.Trim(string(full), "x") != "" {
+		t.Fatalf("stored output mismatch: len=%d", len(full))
+	}
+	if anyInt64(result.Metadata["output_bytes"]) != int64(len(full)) ||
+		anyInt64(result.Metadata["returned_output_bytes"]) != int64(len(result.Content)) ||
+		anyInt64(result.Metadata["inline_budget_bytes"]) != defaultShellInlineOutput ||
+		result.Metadata["inline_budget_enforced"] != true ||
+		result.Metadata[tooloutput.MetadataOutputRef] != result.OutputRef ||
+		result.Metadata[tooloutput.MetadataOutputRefPermissions] != "0600" ||
+		result.Metadata[tooloutput.MetadataOutputRefPlaintext] != true {
+		t.Fatalf("metadata = %#v", result.Metadata)
+	}
+	assertMode(t, filepath.Join(home, "tool-output"), 0o700)
+	assertMode(t, filepath.Dir(result.OutputRef), 0o700)
+	assertMode(t, result.OutputRef, 0o600)
+}
 
 func TestShellExecBackgroundOutputCursorAndKill(t *testing.T) {
 	home := t.TempDir()
