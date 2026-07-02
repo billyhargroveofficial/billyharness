@@ -424,7 +424,7 @@ bounded fixes without derailing the main hardening roadmap.
     - the remaining main-roadmap items stay the existing bounded solo-harness
       hardening work around interruption/replay, context/compaction, and
       Telegram/TUI projection correctness.
-  - commit: closeout commit pending.
+  - commit: 5f9e9fa.
   - status: completed.
 
 - [x] RS-05.2 Close this follow-up.
@@ -439,7 +439,7 @@ bounded fixes without derailing the main hardening roadmap.
       surviving product finding passed the solo harness filter.
     - final verification passed after splitting the recently added TUI and web
       tests into focused files to satisfy strict file-size hygiene.
-  - commit: closeout commit pending.
+  - commit: 5f9e9fa.
   - status: completed.
 
 ## Verification Gate

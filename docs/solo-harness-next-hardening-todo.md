@@ -143,7 +143,7 @@ closed as no final report.
       `docs/recovered-subagent-followup-todo.md`.
     - no platform, marketplace, team, cloud, or broad framework features were
       accepted from the recovered traces.
-  - commit: closeout commit pending.
+  - commit: 5f9e9fa.
   - status: completed.
 
 ## Milestone 1 - Durable Run Termination And Replay Recovery (P0)
