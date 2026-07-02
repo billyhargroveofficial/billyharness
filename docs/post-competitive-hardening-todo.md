@@ -100,7 +100,7 @@ Goal: make the new active plan and git state clean before touching runtime code.
     verification evidence.
   - verification evidence: `rg -n "commit: pending"
     docs/solo-harness-competitive-todo.md` returned no matches.
-  - commit: pending.
+  - commit: `8835131b187953c066bada622bd53a9c4dc6025d`.
 
 - [ ] PH-00.3 Mark old harness-research roadmap as historical if it is no
   longer active.
