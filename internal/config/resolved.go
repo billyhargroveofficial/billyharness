@@ -486,7 +486,8 @@ func (s *resolveState) applyValue(key string, value any, source, sourcePath, sou
 		return
 	}
 	if key == "context_window_tokens" {
-		s.cfg.contextWindowExplicitOverride = isExplicitContextWindowOverrideSource(source)
+		s.cfg.contextWindowExplicitOverride = isExplicitContextWindowOverrideSource(source) ||
+			isExplicitProfileContextWindowOverride(source, s.cfg.ContextWindowTokens)
 	}
 	if key == "context_compact_tokens" {
 		s.cfg.contextCompactExplicitOverride = isExplicitContextCompactOverrideSource(source)
@@ -600,6 +601,10 @@ func isExplicitContextWindowOverrideSource(source string) bool {
 	default:
 		return false
 	}
+}
+
+func isExplicitProfileContextWindowOverride(source string, tokens int64) bool {
+	return source == SourceProfile && tokens > 0 && tokens != legacySettingsContextWindowTokens
 }
 
 func isExplicitContextCompactOverrideSource(source string) bool {

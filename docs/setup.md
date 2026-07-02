@@ -130,6 +130,11 @@ Audit status is visible through:
 ./bin/fast-agent-harness doctor
 ```
 
+Both commands print config provenance for model, provider, context window,
+compact threshold, helper model, and web backend. Profile context overrides use
+`context_window_tokens`; omit that key unless the profile deliberately overrides
+the selected model's metadata.
+
 Dangerous local operations still emit tool permission/audit events into the replayable JSONL event stream.
 
 ## Systemd

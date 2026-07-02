@@ -162,6 +162,7 @@ func (c *Config) ApplyProfileMetadata() error {
 	}
 	if meta.ContextWindowTokens > 0 {
 		c.ContextWindowTokens = meta.ContextWindowTokens
+		c.contextWindowExplicitOverride = isExplicitProfileContextWindowOverride(SourceProfile, meta.ContextWindowTokens)
 	}
 	if strings.TrimSpace(meta.WebSummaryMode) != "" {
 		c.WebSummaryMode = strings.TrimSpace(meta.WebSummaryMode)

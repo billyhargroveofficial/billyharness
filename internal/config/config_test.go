@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -306,6 +307,9 @@ cost_budget_hints = ["prefer flash summaries"]
 		len(cfg.MCPAllowedServers) != 1 || cfg.MCPAllowedServers[0] != "context7" {
 		t.Fatalf("profile metadata config = %#v", cfg)
 	}
+	if !cfg.ContextWindowExplicitOverride() {
+		t.Fatalf("profile context window should be explicit override")
+	}
 
 	resolved, err := Resolve(ResolveOverride{Key: "profile", Value: "teacher", Source: SourceCLI, SourceKey: "-profile"})
 	if err != nil {
@@ -313,8 +317,103 @@ cost_budget_hints = ["prefer flash summaries"]
 	}
 	assertResolvedSource(t, resolved, "model", SourceProfile, "model")
 	assertResolvedSource(t, resolved, "web_summary_mode", SourceProfile, "web_summary_mode")
+	contextValue, ok := resolved.Value("context_window_tokens")
+	if !ok || contextValue.Source != SourceProfile || !strings.Contains(contextValue.Warning, "explicit override") {
+		t.Fatalf("profile context window value = %#v", contextValue)
+	}
 	if value, ok := resolved.Value("profile_tool_policy"); !ok || value.Value != "solo-full-access" {
 		t.Fatalf("missing profile tool policy: %#v", resolved.Values)
+	}
+}
+
+func TestProfileContextWindowOverridesAreExplicitUnlessLegacyCodex(t *testing.T) {
+	tests := []struct {
+		name         string
+		model        string
+		context      int64
+		wantWindow   int64
+		wantOverride bool
+		wantSource   string
+		wantWarning  string
+	}{
+		{
+			name:       "codex no context uses model metadata",
+			model:      "gpt-5.5",
+			wantWindow: 256_000,
+			wantSource: SourceDerived,
+		},
+		{
+			name:         "codex profile override is loud",
+			model:        "gpt-5.5",
+			context:      700_000,
+			wantWindow:   700_000,
+			wantOverride: true,
+			wantSource:   SourceProfile,
+			wantWarning:  "explicit override; model gpt-5.5 default is 256000",
+		},
+		{
+			name:       "codex legacy million still derives",
+			model:      "gpt-5.5",
+			context:    1_000_000,
+			wantWindow: 256_000,
+			wantSource: SourceDerived,
+		},
+		{
+			name:       "deepseek no context uses model metadata",
+			model:      "deepseek-v4-pro",
+			wantWindow: 1_000_000,
+			wantSource: SourceBuiltIn,
+		},
+		{
+			name:         "deepseek profile override is loud",
+			model:        "deepseek-v4-pro",
+			context:      700_000,
+			wantWindow:   700_000,
+			wantOverride: true,
+			wantSource:   SourceProfile,
+			wantWarning:  "explicit override; model deepseek-v4-pro default is 1000000",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("BILLYHARNESS_HOME", home)
+			t.Setenv("FAST_AGENT_ENV_FILE", "")
+			profileDir := filepath.Join(home, "profiles", "switcher")
+			if err := os.MkdirAll(profileDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			var body strings.Builder
+			body.WriteString("name = \"switcher\"\n")
+			body.WriteString("model = \"" + tt.model + "\"\n")
+			if tt.context > 0 {
+				body.WriteString(fmt.Sprintf("context_window_tokens = %d\n", tt.context))
+			}
+			if err := os.WriteFile(filepath.Join(profileDir, "profile.toml"), []byte(body.String()), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			resolved, err := Resolve(ResolveOverride{Key: "profile", Value: "switcher", Source: SourceCLI, SourceKey: "-profile"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := resolved.Config.ContextWindowTokens; got != tt.wantWindow {
+				t.Fatalf("ContextWindowTokens = %d, want %d", got, tt.wantWindow)
+			}
+			if got := resolved.Config.ContextWindowExplicitOverride(); got != tt.wantOverride {
+				t.Fatalf("ContextWindowExplicitOverride = %v, want %v", got, tt.wantOverride)
+			}
+			value, ok := resolved.Value("context_window_tokens")
+			if !ok || value.Source != tt.wantSource {
+				t.Fatalf("context_window_tokens value = %#v, want source %s", value, tt.wantSource)
+			}
+			if tt.wantWarning != "" && !strings.Contains(value.Warning, tt.wantWarning) {
+				t.Fatalf("context warning = %q, want %q", value.Warning, tt.wantWarning)
+			}
+			if tt.wantWarning == "" && strings.Contains(value.Warning, "explicit override") {
+				t.Fatalf("unexpected explicit override warning: %#v", value)
+			}
+		})
 	}
 }
 

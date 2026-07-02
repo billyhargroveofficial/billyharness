@@ -510,12 +510,25 @@ Files:
 
 ### 14. Normalize profile metadata and docs
 
-- [ ] Profile metadata currently can set `context_window_tokens`. Decide if
+- [x] Profile metadata currently can set `context_window_tokens`. Decide if
   profiles should be allowed to override model limits; if yes, label it loudly.
-- [ ] Update built-in profile examples and docs to use `context_window_tokens`
+- [x] Update built-in profile examples and docs to use `context_window_tokens`
   rather than stale `context_limit` wording.
-- [ ] Add tests for profile model switch to Codex and DeepSeek with and without
+- [x] Add tests for profile model switch to Codex and DeepSeek with and without
   explicit context override.
+
+Evidence:
+
+- Profile `context_window_tokens` values are allowed as explicit profile
+  overrides when they are non-legacy values, and `config inspect` labels them
+  with an explicit override warning that includes the model-derived default.
+- Legacy profile `context_window_tokens = 1000000` on Codex/OAuth models still
+  re-derives from `modelinfo`, preserving the P0 stale-profile quarantine.
+- `docs/profiles.md` and `docs/setup.md` now document
+  `context_window_tokens`, provenance output, and when to omit profile context
+  overrides.
+- Tests: `/root/.local/go/bin/go test -run 'TestProfileMetadataAppliesRuntimeDefaults|TestProfileContextWindowOverridesAreExplicitUnlessLegacyCodex|TestResolveModelContextWindowsFollowModelInfo|TestResolvePreservesExplicitContextWindowOverride|TestResolveIgnoresStaleSettingsContextWindowForCodex' -count=1 ./internal/config`.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/config`.
 
 Files:
 

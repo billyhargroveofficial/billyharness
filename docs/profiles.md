@@ -24,7 +24,7 @@ name = "billy"
 provider = "deepseek"
 model = "deepseek-v4-flash"
 reasoning_effort = "high"
-# Optional: set context_window_tokens only for a deliberate override.
+# Optional: set context_window_tokens only for a deliberate, visible override.
 # Omit it to use the selected model's metadata.
 web_summary_mode = "extractive"
 tool_policy = "solo-full-access"
@@ -57,6 +57,17 @@ CLI/gateway startup:
 
 Profile switches update provider/model/reasoning/instructions consistently for the next run. Sessions record the profile hash so traces can explain which instruction set was active.
 
+## Context Window Overrides
+
+Profiles may set `context_window_tokens` when a profile intentionally needs a
+context budget different from the selected model metadata. Billyharness labels
+that value as an explicit profile override in `config inspect` and `doctor`,
+including the model-derived default beside it.
+
+Omit `context_window_tokens` for normal profiles. Legacy profile values of
+`1000000` on Codex/OAuth models are treated as stale compatibility data and
+re-derived from `modelinfo` rather than silently expanding the runtime window.
+
 At run start, Billyharness assembles the prompt prefix in this order: built-in
 system prompt, selected profile `SOUL.md`, bounded project context, then
 AGENTS/project instructions. The project context is metadata only: roots,
@@ -70,4 +81,7 @@ and `.env*` variable names without values.
 ./bin/fast-agent-harness config inspect -json
 ```
 
-The inspect command shows whether values came from the selected profile, home config, project config, environment variables, or runtime overrides.
+The inspect command shows whether values came from the selected profile, home
+config, project config, environment variables, or runtime overrides. It also
+prints a provenance line for provider, model, `context_window_tokens`, compact
+threshold, helper model, and web backend.
