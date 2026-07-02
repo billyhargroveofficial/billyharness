@@ -308,6 +308,7 @@ func (m *Model) resetProjectedAccounting() {
 	m.runStartHelperHit = m.helperModelCacheHit
 	m.runStartHelperMiss = m.helperModelCacheMiss
 	m.runStartHelperAPI = m.helperModelAPITok
+	m.runStartHelperModelCalls = m.helperModelCalls
 	m.runStartHelperCalls = m.helperAPICalls
 	m.runStartHelperCost = m.helperCostUSD
 }
@@ -336,6 +337,7 @@ func (m *Model) applyProjectedAccounting(event protocol.Event) uxprojector.Snaps
 	m.helperModelCacheHit = m.runStartHelperHit + snapshot.HelperModelCacheHitTokens
 	m.helperModelCacheMiss = m.runStartHelperMiss + snapshot.HelperModelCacheMissTokens
 	m.helperModelAPITok = m.runStartHelperAPI + snapshot.HelperModelAPITokens
+	m.helperModelCalls = m.runStartHelperModelCalls + snapshot.HelperModelCalls
 	m.helperAPICalls = m.runStartHelperCalls + snapshot.HelperAPICalls
 	m.helperCostUSD = m.runStartHelperCost + snapshot.HelperCostUSD
 	return snapshot

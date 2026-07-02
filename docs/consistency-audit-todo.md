@@ -804,11 +804,29 @@ Files:
 
 ### 23. Persist or replay full projected usage for restored TUI sessions
 
-- [ ] Saved TUI sessions currently preserve some counters but can lose helper
+- [x] Saved TUI sessions currently preserve some counters but can lose helper
   metrics and last context details.
-- [ ] Either persist the full projected usage snapshot or rebuild it from
+- [x] Either persist the full projected usage snapshot or rebuild it from
   replayed events on resume.
-- [ ] Reopened TUI status should match gateway `/context` for the same session.
+- [x] Reopened TUI status should match gateway `/context` for the same session.
+
+Evidence:
+
+- TUI session JSON now persists a nested projected usage snapshot based on the
+  shared `gatewayapi.ContextUsage` shape, plus the TUI-specific
+  `tool_summary_api_tokens` counter needed by inline status.
+- TUI restore applies the saved projected snapshot after legacy flat counters,
+  preserving last context tokens, last cache hit/miss, web summary tokens,
+  helper model tokens/calls, helper API calls, and helper API cost.
+- Local TUI `/context` now uses the same `contextUsageSnapshot()` builder as
+  session persistence, so restored sessions and context reports share one
+  mapping.
+- Added `TestResumeChatRestoresProjectedUsageSnapshot` for save/resume with
+  provider usage, web summary metadata, helper model usage, helper API calls,
+  inline status, and local `/context`; fresh-chat reset tests now cover helper
+  model/API counters too.
+- Tests: `/root/.local/go/bin/go test -run 'TestResumeChatRestoresProjectedUsageSnapshot|TestResumeChatDoesNotTreatLifetimeTokensAsContextUsage|TestProviderUsageUpdateDeduplicatesCumulativeSnapshots|TestTUIAccountingMatchesClientUXProjector|TestProfileSlashCommandStartsNewProfileChat|TestModelCommandStartsNewChat|TestNewChatStartsFreshRuntimeState' -count=1 ./internal/tui`.
+- Tests: `/root/.local/go/bin/go test -count=1 ./internal/tui`.
 
 Files:
 

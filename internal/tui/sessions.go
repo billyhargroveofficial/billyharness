@@ -14,34 +14,41 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	tuiruntime "github.com/billyhargroveofficial/billyharness/internal/tui/runtimeclient"
 	"github.com/billyhargroveofficial/billyharness/internal/tui/transcript"
 )
 
 type chatSession struct {
-	ID               string             `json:"id"`
-	Title            string             `json:"title"`
-	CreatedAt        time.Time          `json:"created_at"`
-	UpdatedAt        time.Time          `json:"updated_at"`
-	Model            string             `json:"model"`
-	Profile          string             `json:"profile,omitempty"`
-	ReasoningKind    string             `json:"reasoning_kind"`
-	ReasoningEffort  string             `json:"reasoning_effort"`
-	GatewaySessionID string             `json:"gateway_session_id,omitempty"`
-	GatewayEventSeq  int64              `json:"gateway_event_seq,omitempty"`
-	Messages         []protocol.Message `json:"messages,omitempty"`
-	Blocks           []savedBlock       `json:"blocks,omitempty"`
-	InputTokens      int64              `json:"input_tokens"`
-	OutputTokens     int64              `json:"output_tokens"`
-	CacheHitTokens   int64              `json:"cache_hit_tokens"`
-	CacheMissTokens  int64              `json:"cache_miss_tokens"`
-	ReasoningTokens  int64              `json:"reasoning_tokens"`
-	ToolCalls        int                `json:"tool_calls"`
-	ModelCalls       int                `json:"model_calls"`
+	ID               string               `json:"id"`
+	Title            string               `json:"title"`
+	CreatedAt        time.Time            `json:"created_at"`
+	UpdatedAt        time.Time            `json:"updated_at"`
+	Model            string               `json:"model"`
+	Profile          string               `json:"profile,omitempty"`
+	ReasoningKind    string               `json:"reasoning_kind"`
+	ReasoningEffort  string               `json:"reasoning_effort"`
+	GatewaySessionID string               `json:"gateway_session_id,omitempty"`
+	GatewayEventSeq  int64                `json:"gateway_event_seq,omitempty"`
+	Messages         []protocol.Message   `json:"messages,omitempty"`
+	Blocks           []savedBlock         `json:"blocks,omitempty"`
+	InputTokens      int64                `json:"input_tokens"`
+	OutputTokens     int64                `json:"output_tokens"`
+	CacheHitTokens   int64                `json:"cache_hit_tokens"`
+	CacheMissTokens  int64                `json:"cache_miss_tokens"`
+	ReasoningTokens  int64                `json:"reasoning_tokens"`
+	ToolCalls        int                  `json:"tool_calls"`
+	ModelCalls       int                  `json:"model_calls"`
+	ProjectedUsage   *savedProjectedUsage `json:"projected_usage,omitempty"`
 }
 
 type savedBlock = transcript.PersistedCell
+
+type savedProjectedUsage struct {
+	gatewayapi.ContextUsage
+	ToolSummaryAPITokens int64 `json:"tool_summary_api_tokens,omitempty"`
+}
 
 func newChatID() string {
 	var bytes [6]byte
@@ -157,6 +164,9 @@ func (m *Model) resetFreshChatState(title string) {
 	m.helperModelCacheHit = 0
 	m.helperModelCacheMiss = 0
 	m.helperModelAPITok = 0
+	m.helperModelCalls = 0
+	m.helperAPICalls = 0
+	m.helperCostUSD = 0
 	m.resetProjectedAccounting()
 	m.sessionID = ""
 	m.lastGatewayEventSeq = 0
@@ -287,8 +297,14 @@ func (m *Model) applyChatSession(session chatSession) {
 	m.helperModelCacheHit = 0
 	m.helperModelCacheMiss = 0
 	m.helperModelAPITok = 0
+	m.helperModelCalls = 0
+	m.helperAPICalls = 0
+	m.helperCostUSD = 0
 	m.toolCalls = session.ToolCalls
 	m.modelCalls = session.ModelCalls
+	if session.ProjectedUsage != nil {
+		m.applySavedProjectedUsage(*session.ProjectedUsage)
+	}
 	m.resetProjectedAccounting()
 	m.sessionID = session.GatewaySessionID
 	m.lastGatewayEventSeq = session.GatewayEventSeq
@@ -355,6 +371,11 @@ func (m *Model) saveCurrentSession() error {
 	if title == "" {
 		title = "untitled"
 	}
+	usage := m.savedProjectedUsage()
+	var projected *savedProjectedUsage
+	if usage != (savedProjectedUsage{}) {
+		projected = &usage
+	}
 	return saveChatSession(m.sessionsDir, chatSession{
 		ID:               m.localChatID,
 		Title:            title,
@@ -375,5 +396,64 @@ func (m *Model) saveCurrentSession() error {
 		ReasoningTokens:  m.reasoningTok,
 		ToolCalls:        m.toolCalls,
 		ModelCalls:       m.modelCalls,
+		ProjectedUsage:   projected,
 	})
+}
+
+func (m Model) savedProjectedUsage() savedProjectedUsage {
+	return savedProjectedUsage{
+		ContextUsage:         m.contextUsageSnapshot(),
+		ToolSummaryAPITokens: m.toolSummaryAPITok,
+	}
+}
+
+func (m Model) contextUsageSnapshot() gatewayapi.ContextUsage {
+	return gatewayapi.ContextUsage{
+		ModelCalls:              m.modelCalls,
+		ToolCalls:               m.toolCalls,
+		InputTokens:             m.inputTok,
+		OutputTokens:            m.outputTok,
+		CacheHitTokens:          m.cacheHitTok,
+		CacheMissTokens:         m.cacheMissTok,
+		ReasoningTokens:         m.reasoningTok,
+		LastInputTokens:         m.lastInputTok,
+		LastOutputTokens:        m.lastOutputTok,
+		LastCacheHitTokens:      m.lastCacheHitTok,
+		LastCacheMissTokens:     m.lastCacheMissTok,
+		WebSummaryInputTokens:   m.toolSummaryInTok,
+		WebSummaryOutputTokens:  m.toolSummaryOutTok,
+		HelperModelCalls:        m.helperModelCalls,
+		HelperModelInputTokens:  m.helperModelInTok,
+		HelperModelOutputTokens: m.helperModelOutTok,
+		HelperModelCacheHit:     m.helperModelCacheHit,
+		HelperModelCacheMiss:    m.helperModelCacheMiss,
+		HelperModelAPITokens:    m.helperModelAPITok,
+		HelperAPICalls:          m.helperAPICalls,
+		HelperCostUSD:           m.helperCostUSD,
+	}
+}
+
+func (m *Model) applySavedProjectedUsage(usage savedProjectedUsage) {
+	m.modelCalls = usage.ModelCalls
+	m.toolCalls = usage.ToolCalls
+	m.inputTok = usage.InputTokens
+	m.outputTok = usage.OutputTokens
+	m.cacheHitTok = usage.CacheHitTokens
+	m.cacheMissTok = usage.CacheMissTokens
+	m.reasoningTok = usage.ReasoningTokens
+	m.lastInputTok = usage.LastInputTokens
+	m.lastOutputTok = usage.LastOutputTokens
+	m.lastCacheHitTok = usage.LastCacheHitTokens
+	m.lastCacheMissTok = usage.LastCacheMissTokens
+	m.toolSummaryInTok = usage.WebSummaryInputTokens
+	m.toolSummaryOutTok = usage.WebSummaryOutputTokens
+	m.toolSummaryAPITok = usage.ToolSummaryAPITokens
+	m.helperModelCalls = usage.HelperModelCalls
+	m.helperModelInTok = usage.HelperModelInputTokens
+	m.helperModelOutTok = usage.HelperModelOutputTokens
+	m.helperModelCacheHit = usage.HelperModelCacheHit
+	m.helperModelCacheMiss = usage.HelperModelCacheMiss
+	m.helperModelAPITok = usage.HelperModelAPITokens
+	m.helperAPICalls = usage.HelperAPICalls
+	m.helperCostUSD = usage.HelperCostUSD
 }

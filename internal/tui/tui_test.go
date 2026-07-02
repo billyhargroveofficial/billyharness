@@ -1068,6 +1068,14 @@ func seedStaleChatRuntimeState(m *Model) {
 	m.toolSummaryInTok = 14
 	m.toolSummaryOutTok = 15
 	m.toolSummaryAPITok = 16
+	m.helperModelInTok = 17
+	m.helperModelOutTok = 18
+	m.helperModelCacheHit = 19
+	m.helperModelCacheMiss = 20
+	m.helperModelAPITok = 21
+	m.helperModelCalls = 22
+	m.helperAPICalls = 23
+	m.helperCostUSD = 0.024
 	m.followOutput = false
 	m.messages = append(m.messages, protocol.Message{Role: protocol.RoleUser, Content: "stale prompt"})
 	m.addBlock("assistant", "ASSISTANT", "stale answer")
@@ -1101,6 +1109,13 @@ func assertFreshChatRuntimeState(t testing.TB, m Model) {
 	if m.toolSummaryInTok != 0 || m.toolSummaryOutTok != 0 || m.toolSummaryAPITok != 0 {
 		t.Fatalf("tool summary tokens = in %d out %d api %d, want all 0",
 			m.toolSummaryInTok, m.toolSummaryOutTok, m.toolSummaryAPITok)
+	}
+	if m.helperModelInTok != 0 || m.helperModelOutTok != 0 || m.helperModelCacheHit != 0 ||
+		m.helperModelCacheMiss != 0 || m.helperModelAPITok != 0 || m.helperModelCalls != 0 ||
+		m.helperAPICalls != 0 || m.helperCostUSD != 0 {
+		t.Fatalf("helper usage = in %d out %d hit %d miss %d api %d model calls %d api calls %d cost %.6f, want all 0",
+			m.helperModelInTok, m.helperModelOutTok, m.helperModelCacheHit, m.helperModelCacheMiss,
+			m.helperModelAPITok, m.helperModelCalls, m.helperAPICalls, m.helperCostUSD)
 	}
 	if m.uxProjector == nil {
 		t.Fatalf("uxProjector is nil")
