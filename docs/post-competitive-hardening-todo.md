@@ -378,7 +378,7 @@ Goal: prove the cleaned code still behaves like the current deployed harness.
       current list/index flow.
     - `./bin/fast-agent-harness hygiene -strict` passed with
       `tracked Go files: 286` and `large source files: none`.
-  - commit: pending.
+  - commit: `1559c3a559d81fb292d350f17304548f28d2f838`.
 
 ## Milestone 4 - Deployed Service Reality Check (P1)
 
