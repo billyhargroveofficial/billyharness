@@ -15,7 +15,7 @@ import (
 )
 
 func TestImportLocalImageStoresMetadataAndPrivateFile(t *testing.T) {
-	root := t.TempDir()
+	root := realAttachmentTestTempDir(t)
 	store := NewStore(filepath.Join(root, "attachments"))
 	source := filepath.Join(root, "screen.png")
 	writePNG(t, source, 2, 3)
@@ -66,7 +66,7 @@ func TestStoreImageBytesUsesStableAttachmentID(t *testing.T) {
 }
 
 func TestImportLocalImageRejectsSymlink(t *testing.T) {
-	root := t.TempDir()
+	root := realAttachmentTestTempDir(t)
 	source := filepath.Join(root, "screen.png")
 	writePNG(t, source, 1, 1)
 	link := filepath.Join(root, "linked.png")
@@ -77,6 +77,16 @@ func TestImportLocalImageRejectsSymlink(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("symlink error = %v", err)
 	}
+}
+
+func realAttachmentTestTempDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return dir
+	}
+	return realDir
 }
 
 func TestStoreRejectsUnsupportedImageMIME(t *testing.T) {

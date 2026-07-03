@@ -149,6 +149,7 @@ func TestSystemPromptDocumentsTerminalSafeMarkdown(t *testing.T) {
 func TestInitialMessagesInjectProfileAsSystemContext(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex-empty"))
 	messages := InitialMessages(config.Config{
 		Profile:            "billy",
 		ProjectDocMaxBytes: 0,
@@ -902,26 +903,44 @@ func firstEventData(events []protocol.Event, typ protocol.EventType) (map[string
 }
 
 func firstTurnChange(events []protocol.Event) (protocol.TurnChangeEvent, bool) {
+	event, ok := firstTurnChangeEvent(events)
+	if !ok {
+		return protocol.TurnChangeEvent{}, false
+	}
+	switch data := event.Data.(type) {
+	case protocol.TurnChangeEvent:
+		return data, true
+	case *protocol.TurnChangeEvent:
+		if data != nil {
+			return *data, true
+		}
+	default:
+		bytes, _ := json.Marshal(event.Data)
+		var change protocol.TurnChangeEvent
+		if err := json.Unmarshal(bytes, &change); err == nil && change.ChangeID != "" {
+			return change, true
+		}
+	}
+	return protocol.TurnChangeEvent{}, false
+}
+
+func turnChangeIncludesFile(change protocol.TurnChangeEvent, relPath, status string) bool {
+	for _, file := range change.Files {
+		if file.RelPath == relPath && file.Change == status {
+			return true
+		}
+	}
+	return false
+}
+
+func firstTurnChangeEvent(events []protocol.Event) (protocol.Event, bool) {
 	for _, event := range events {
 		if event.Type != protocol.EventTurnChangeRecorded {
 			continue
 		}
-		switch data := event.Data.(type) {
-		case protocol.TurnChangeEvent:
-			return data, true
-		case *protocol.TurnChangeEvent:
-			if data != nil {
-				return *data, true
-			}
-		default:
-			bytes, _ := json.Marshal(event.Data)
-			var change protocol.TurnChangeEvent
-			if err := json.Unmarshal(bytes, &change); err == nil && change.ChangeID != "" {
-				return change, true
-			}
-		}
+		return event, true
 	}
-	return protocol.TurnChangeEvent{}, false
+	return protocol.Event{}, false
 }
 
 func eventDataMap(event protocol.Event) map[string]any {
@@ -933,13 +952,31 @@ func eventDataMap(event protocol.Event) map[string]any {
 
 func firstToolResult(events []protocol.Event) (protocol.ToolResult, bool) {
 	for _, event := range events {
-		if event.Type != protocol.EventToolCallFinished {
+		if !isToolTerminalEvent(event.Type) {
 			continue
 		}
 		result, ok := event.Data.(protocol.ToolResult)
 		return result, ok
 	}
 	return protocol.ToolResult{}, false
+}
+
+func sawToolTerminalEvent(events []protocol.Event, typ protocol.EventType, callID string) bool {
+	for _, event := range events {
+		if event.Type != typ {
+			continue
+		}
+		if callID == "" || protocol.EnrichEvent(event, protocol.EventEnvelope{}).CallID == callID {
+			return true
+		}
+	}
+	return false
+}
+
+func isToolTerminalEvent(typ protocol.EventType) bool {
+	return typ == protocol.EventToolCallFinished ||
+		typ == protocol.EventToolCallFailed ||
+		typ == protocol.EventToolCallAborted
 }
 
 func hasToolSpec(specs []protocol.ToolSpec, name string) bool {

@@ -264,7 +264,7 @@ func (o *toolOrchestrator) Execute(ctx context.Context, runID, turnID string, in
 		if err != nil {
 			out.Metadata["turn_change_error"] = err.Error()
 		} else if changed {
-			o.recordTurnChange(&out, record)
+			o.recordTurnChange(runID, &out, record)
 		}
 	}
 	progressStatus := toolResultProgressStatus(out)
@@ -415,6 +415,16 @@ func (o *toolOrchestrator) EmitAttemptFinished(result toolExecutionResult) {
 			AttemptID: result.AttemptID,
 			Data:      result.Result,
 		})
+		o.EmitProgress(result.Call, result.AttemptID, toolPhaseRetryDecision, toolProgressStatusSkipped, map[string]any{
+			"reason": "retries_not_configured",
+		})
+		o.EmitProgress(result.Call, result.AttemptID, toolPhaseFinalize, progressStatus, map[string]any{
+			"duration_ms": result.DurationMS,
+			"error_code":  result.Result.ErrorCode,
+			"truncated":   result.Result.Truncated,
+			"output_ref":  result.Result.OutputRef,
+		})
+		return
 	}
 	o.EmitProgress(result.Call, result.AttemptID, toolPhaseRetryDecision, toolProgressStatusSkipped, map[string]any{
 		"reason": "retries_not_configured",
@@ -632,7 +642,7 @@ func toolOutputRefEvent(result toolExecutionResult) protocol.ToolOutputRefEvent 
 	}
 }
 
-func (o *toolOrchestrator) recordTurnChange(out *protocol.ToolResult, record checkpoint.PatchRecord) {
+func (o *toolOrchestrator) recordTurnChange(runID string, out *protocol.ToolResult, record checkpoint.PatchRecord) {
 	if o == nil || out == nil {
 		return
 	}
@@ -660,15 +670,16 @@ func (o *toolOrchestrator) recordTurnChange(out *protocol.ToolResult, record che
 	out.Metadata["turn_change_reversible"] = recordReversible(record)
 	out.Metadata["turn_change_output_ref"] = ref.Path
 	out.Metadata["turn_change_output_ref_id"] = ref.ID
-	data := turnChangeEvent(record, ref)
+	data := turnChangeEvent(runID, record, ref)
 	if o.emit != nil {
 		o.emit(protocol.Event{Type: protocol.EventTurnChangeRecorded, Data: data})
 	}
 }
 
-func turnChangeEvent(record checkpoint.PatchRecord, ref tooloutput.Ref) protocol.TurnChangeEvent {
+func turnChangeEvent(runID string, record checkpoint.PatchRecord, ref tooloutput.Ref) protocol.TurnChangeEvent {
 	event := protocol.TurnChangeEvent{
 		ChangeID:                  record.ChangeID,
+		RunID:                     strings.TrimSpace(runID),
 		TurnID:                    record.TurnID,
 		StepID:                    record.StepID,
 		CallID:                    record.CallID,

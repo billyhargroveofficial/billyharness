@@ -91,6 +91,61 @@ func TestExportTerminalBenchDatasetWritesTaskDirectoryAndEvaluatorBridge(t *test
 	}
 }
 
+func TestExportTerminalBenchDatasetRejectsWorkspaceSymlink(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(workspace, "leak")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	tasksPath := filepath.Join(root, "tasks.jsonl")
+	taskLine := `{"id":"tb-symlink","workspace_template":` + quote(workspace) + `,"prompt":"noop","evaluator":["true"]}` + "\n"
+	if err := os.WriteFile(tasksPath, []byte(taskLine), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ExportTerminalBenchDataset(TerminalBenchExportOptions{
+		TasksPath: tasksPath,
+		OutDir:    filepath.Join(root, "tb-dataset"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "refusing symlink") {
+		t.Fatalf("export error = %v, want symlink refusal", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "tb-dataset", "tb-symlink", "workspace", "leak", "secret.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("symlink target was copied, stat err=%v", statErr)
+	}
+}
+
+func TestPrepareTerminalBenchOutDirRejectsParentTraversal(t *testing.T) {
+	root := t.TempDir()
+	victim := filepath.Join(root, "victim")
+	if err := os.MkdirAll(victim, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(victim, "keep.txt")
+	if err := os.WriteFile(marker, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	unsafe := filepath.Join(root, "safe") + string(filepath.Separator) + ".." + string(filepath.Separator) + "victim"
+
+	err := prepareTerminalBenchOutDir(unsafe, true)
+	if err == nil || !strings.Contains(err.Error(), "unsafe Terminal-Bench output directory") {
+		t.Fatalf("prepare error = %v, want unsafe path refusal", err)
+	}
+	if _, statErr := os.Stat(marker); statErr != nil {
+		t.Fatalf("marker was removed: %v", statErr)
+	}
+}
+
 func TestImportTerminalBenchDatasetRoundTripsExportedTask(t *testing.T) {
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")

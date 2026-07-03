@@ -159,6 +159,90 @@ func TestProjectorTracksToolCompactDisplay(t *testing.T) {
 	}
 }
 
+func TestProjectorOutputRefAfterTerminalDoesNotDowngradeToolStatus(t *testing.T) {
+	p := New()
+	p.Apply(protocol.Event{Seq: 1, Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{ID: "call_1", Name: "shell_exec"}})
+	p.Apply(protocol.Event{Seq: 2, Type: protocol.EventToolCallFinished, CallID: "call_1", AttemptID: "attempt_1", Data: protocol.ToolResult{
+		CallID:    "call_1",
+		Name:      "shell_exec",
+		Content:   "done",
+		OutputRef: "/tmp/out.txt",
+		Compact: &protocol.ToolCompact{
+			CallID:    "call_1",
+			Name:      "shell_exec",
+			Lifecycle: "result",
+			Status:    protocol.StepStatusCompleted,
+		},
+	}})
+	snap := p.Apply(protocol.Event{Seq: 3, Type: protocol.EventToolOutputRefCreated, Data: protocol.ToolOutputRefEvent{
+		CallID:      "call_1",
+		Name:        "shell_exec",
+		AttemptID:   "attempt_1",
+		OutputRef:   "/tmp/out.txt",
+		OutputRefID: "out.txt",
+		Compact: &protocol.ToolCompact{
+			CallID:    "call_1",
+			Name:      "shell_exec",
+			Lifecycle: "output_ref",
+			Status:    "output_ref",
+			OutputRef: "/tmp/out.txt",
+		},
+	}})
+	item := snap.ToolsByCallID["call_1"]
+	if item.Status != "finished" || item.Compact == nil || item.Compact.Status != protocol.StepStatusCompleted || item.Compact.OutputRef != "/tmp/out.txt" {
+		t.Fatalf("tool item after output ref = %#v", item)
+	}
+
+	p = New()
+	p.Apply(protocol.Event{Seq: 1, Type: protocol.EventToolCallFinished, CallID: "call_2", Data: protocol.ToolResult{
+		CallID:  "call_2",
+		Name:    "shell_exec",
+		Content: "done",
+	}})
+	snap = p.Apply(protocol.Event{Seq: 2, Type: protocol.EventToolOutputRefCreated, Data: protocol.ToolOutputRefEvent{
+		CallID:    "call_2",
+		Name:      "shell_exec",
+		OutputRef: "/tmp/late-ref.txt",
+		Compact: &protocol.ToolCompact{
+			CallID:    "call_2",
+			Name:      "shell_exec",
+			Lifecycle: "output_ref",
+			Status:    "output_ref",
+			OutputRef: "/tmp/late-ref.txt",
+		},
+	}})
+	item = snap.ToolsByCallID["call_2"]
+	if item.Status != "finished" || item.Compact == nil || item.Compact.Status != protocol.StepStatusCompleted || item.Compact.OutputRef != "/tmp/late-ref.txt" {
+		t.Fatalf("tool item without prior compact after output ref = %#v", item)
+	}
+
+	p = New()
+	p.Apply(protocol.Event{Seq: 1, Type: protocol.EventToolCallFinished, CallID: "call_3", AttemptID: "attempt_3", Data: protocol.ToolResult{
+		CallID:  "call_3",
+		Name:    "shell_exec",
+		Content: "done",
+	}})
+	snap = p.Apply(protocol.Event{Seq: 2, Type: protocol.EventToolOutputRefCreated, Data: protocol.ToolOutputRefEvent{
+		CallID:         "call_3",
+		Name:           "shell_exec",
+		AttemptID:      "attempt_3",
+		OutputRef:      "/tmp/no-compact-ref.txt",
+		OutputRefID:    "no-compact-ref.txt",
+		OutputRefBytes: 123,
+		Truncated:      true,
+	}})
+	item = snap.ToolsByCallID["call_3"]
+	if item.Status != "finished" || item.Compact == nil ||
+		item.Compact.Status != protocol.StepStatusCompleted ||
+		item.Compact.OutputRef != "/tmp/no-compact-ref.txt" ||
+		item.Compact.OutputRefID != "no-compact-ref.txt" ||
+		item.Compact.OriginalBytes != 123 ||
+		!item.Compact.Truncated ||
+		!containsString(item.Compact.Hints, "output_ref") {
+		t.Fatalf("tool item without any compact after output ref = %#v", item)
+	}
+}
+
 func TestProjectorTracksHelperUsageWithoutDoubleCountingToolMetadata(t *testing.T) {
 	p := New()
 	p.Apply(protocol.Event{Seq: 1, Type: protocol.EventProviderHelperUsage, Data: protocol.ProviderHelperUsageEvent{
@@ -471,4 +555,13 @@ func TestProjectorTracksTurnDiffDisplayState(t *testing.T) {
 		snap.LatestTurnChange == nil || snap.LatestTurnChange.LastEvent != protocol.EventTurnChangeReverted {
 		t.Fatalf("reverted snapshot = %#v latest=%#v", snap.TurnChanges, snap.LatestTurnChange)
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

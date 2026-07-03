@@ -127,6 +127,7 @@ func TestTelegramPromptAdmissionAdvancesOffsetAfterGatewayAdmission(t *testing.T
 	if run.Metadata["update_id"] != "42" || run.Metadata["message_id"] == "" || run.Metadata["user_id"] != "1001" {
 		t.Fatalf("run metadata = %#v", run.Metadata)
 	}
+	waitForNoActiveRun(t, bot, userChatKey(123, 0, 1001))
 	waitForState(t, statePath, func(state State) bool {
 		chat := state.Chats[userChatKey(123, 0, 1001)]
 		return state.Offset == 43 && chat.PendingInputID == "" && chat.LastEventSeq == 2
@@ -222,6 +223,7 @@ func TestTelegramPhotoCaptionAdmissionDownloadsAttachment(t *testing.T) {
 	if run.ClientType != "telegram" || run.Metadata["attachment_count"] != "1" || run.Metadata["vision_input"] != "true" || run.Metadata["thread_id"] != "8" {
 		t.Fatalf("run metadata = type %q metadata %#v", run.ClientType, run.Metadata)
 	}
+	waitForNoActiveRun(t, bot, userChatKey(123, 8, 1001))
 	waitForState(t, statePath, func(state State) bool {
 		chat := state.Chats[userChatKey(123, 8, 1001)]
 		return state.Offset == 51 && chat.PendingInputID == "" && chat.LastEventSeq == 2
@@ -269,6 +271,7 @@ func TestTelegramDocumentImageAdmissionDownloadsAttachment(t *testing.T) {
 	if len(run.Attachments) != 1 || run.Attachments[0].ID != ref.ID {
 		t.Fatalf("run = %#v", run)
 	}
+	waitForNoActiveRun(t, bot, userChatKey(123, 0, 1001))
 	waitForState(t, statePath, func(state State) bool {
 		chat := state.Chats[userChatKey(123, 0, 1001)]
 		return state.Offset == 52 && chat.PendingInputID == "" && chat.LastEventSeq == 2
@@ -298,6 +301,7 @@ func TestTelegramImageOnlyPhotoAdmittedForVisionModel(t *testing.T) {
 	if run.Prompt != "" || len(run.Attachments) != 1 {
 		t.Fatalf("run = %#v", run)
 	}
+	waitForNoActiveRun(t, bot, userChatKey(123, 0, 1001))
 	waitForState(t, statePath, func(state State) bool {
 		chat := state.Chats[userChatKey(123, 0, 1001)]
 		return state.Offset == 53 && chat.PendingInputID == "" && chat.LastEventSeq == 2
@@ -397,6 +401,7 @@ func TestTelegramConcurrentPhotoChatsRemainIsolated(t *testing.T) {
 	}
 	_ = receive(t, harness.ran, "first concurrent run")
 	_ = receive(t, harness.ran, "second concurrent run")
+	waitForNoActiveRun(t, bot, userChatKey(123, 0, 1001), userChatKey(456, 0, 2002))
 	waitForState(t, statePath, func(state State) bool {
 		a := state.Chats[userChatKey(123, 0, 1001)]
 		b := state.Chats[userChatKey(456, 0, 2002)]
@@ -453,6 +458,15 @@ func TestTelegramPollerInterruptsActiveRunBeforeAdmission(t *testing.T) {
 	if admitted.Prompt != "replacement" || admitted.InterruptPolicy != gatewayapi.InterruptPolicyInterrupt {
 		t.Fatalf("admission = %#v", admitted)
 	}
+	run := receive(t, harness.ran, "run")
+	if run.InputID != "telegram-update-46" || run.Prompt != "replacement" {
+		t.Fatalf("run = %#v", run)
+	}
+	waitForNoActiveRun(t, bot, userChatKey(123, 0, 1001))
+	waitForState(t, statePath, func(state State) bool {
+		chat := state.Chats[userChatKey(123, 0, 1001)]
+		return state.Offset == 47 && chat.PendingInputID == "" && chat.LastEventSeq == 2
+	})
 }
 
 func TestTelegramDuplicateCompletedAdmissionAcksWithoutRun(t *testing.T) {
@@ -694,6 +708,27 @@ func waitForState(t *testing.T, statePath string, ok func(State) bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("state did not satisfy condition: %#v", loadTelegramState(t, statePath))
+}
+
+func waitForNoActiveRun(t *testing.T, bot *Bot, keys ...string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		bot.mu.Lock()
+		active := false
+		for _, key := range keys {
+			if bot.cancel[key] != nil || bot.runDone[key] != nil {
+				active = true
+				break
+			}
+		}
+		bot.mu.Unlock()
+		if !active {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("active run did not finish for keys %v", keys)
 }
 
 func loadTelegramState(t *testing.T, statePath string) State {

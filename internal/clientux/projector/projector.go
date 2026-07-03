@@ -441,11 +441,34 @@ func (p *Projector) upsertToolOutputRef(event protocol.Event) {
 	item.CallID = callID
 	item.Name = firstNonEmpty(item.Name, ref.Name)
 	item.AttemptID = firstNonEmpty(strings.TrimSpace(ref.AttemptID), strings.TrimSpace(event.AttemptID), item.AttemptID)
-	item.Status = "output_ref"
+	if !isTerminalToolStatus(item.Status) {
+		item.Status = "output_ref"
+	}
 	item.LastEvent = event.Type
+	var refCompact protocol.ToolCompact
 	if ref.Compact != nil {
-		compact := cloneToolCompact(*ref.Compact)
-		item.Compact = &compact
+		refCompact = cloneToolCompact(*ref.Compact)
+	}
+	if isTerminalToolStatus(item.Status) {
+		merged := refCompact
+		if item.Compact != nil {
+			merged = cloneToolCompact(*item.Compact)
+		} else if terminalStatus := terminalToolCompactStatus(item.Status); terminalStatus != "" {
+			merged.Status = terminalStatus
+		}
+		merged.CallID = firstNonEmpty(merged.CallID, refCompact.CallID, callID)
+		merged.AttemptID = firstNonEmpty(merged.AttemptID, refCompact.AttemptID, ref.AttemptID, event.AttemptID)
+		merged.Name = firstNonEmpty(merged.Name, refCompact.Name, ref.Name, item.Name)
+		merged.OutputRef = firstNonEmpty(merged.OutputRef, refCompact.OutputRef, ref.OutputRef)
+		merged.OutputRefID = firstNonEmpty(merged.OutputRefID, refCompact.OutputRefID, ref.OutputRefID)
+		merged.OriginalBytes = firstNonZeroInt64(merged.OriginalBytes, refCompact.OriginalBytes, ref.OutputRefBytes)
+		merged.Truncated = merged.Truncated || refCompact.Truncated || ref.Truncated
+		if merged.OutputRef != "" {
+			merged.Hints = appendMissingHint(merged.Hints, "output_ref")
+		}
+		item.Compact = &merged
+	} else if ref.Compact != nil {
+		item.Compact = &refCompact
 	}
 	p.snapshot.ToolsByCallID[callID] = item
 }
@@ -557,6 +580,28 @@ func eventCallID(event protocol.Event) string {
 	return strings.TrimSpace(event.CallID)
 }
 
+func isTerminalToolStatus(status string) bool {
+	switch status {
+	case "finished", "failed", "aborted":
+		return true
+	default:
+		return false
+	}
+}
+
+func terminalToolCompactStatus(status string) string {
+	switch status {
+	case "finished":
+		return protocol.StepStatusCompleted
+	case "failed":
+		return protocol.StepStatusFailed
+	case "aborted":
+		return "aborted"
+	default:
+		return ""
+	}
+}
+
 func decodeData[T any](data any) (T, bool) {
 	var out T
 	switch value := data.(type) {
@@ -625,6 +670,24 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstNonZeroInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func appendMissingHint(hints []string, hint string) []string {
+	for _, existing := range hints {
+		if existing == hint {
+			return hints
+		}
+	}
+	return append(hints, hint)
 }
 
 type tokenUsage struct {

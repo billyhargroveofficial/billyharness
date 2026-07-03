@@ -133,6 +133,18 @@ func TestGoldenBundleTelegramParitySnapshotDropsStalePreviousRunTools(t *testing
 	}
 }
 
+func TestRendererShowsGatewayStreamGapAsReplayStatus(t *testing.T) {
+	r := NewRenderer()
+	events := r.Apply(protocol.Event{Type: protocol.EventGatewayStreamGap, Data: protocol.GatewayStreamGapEvent{
+		DroppedEvents:  3,
+		ReplayAfterSeq: 12,
+	}})
+	if len(events) != 1 || events[0].Kind != "status" || events[0].Title != "Replay" ||
+		!strings.Contains(events[0].Body, "replaying after seq 12") {
+		t.Fatalf("stream gap render events = %#v", events)
+	}
+}
+
 func TestMarkdownToTelegramHTMLSupportsTelegramSubset(t *testing.T) {
 	html := markdownToTelegramHTML(`# Заголовок
 

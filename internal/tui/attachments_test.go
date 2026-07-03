@@ -102,7 +102,11 @@ func TestSubmitWithAttachmentRendersTranscriptChip(t *testing.T) {
 
 func writeTUITestPNG(t *testing.T, name string, width, height int) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), name)
+	dir := t.TempDir()
+	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = realDir
+	}
+	path := filepath.Join(dir, name)
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {

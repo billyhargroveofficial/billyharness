@@ -132,6 +132,11 @@ func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
 			return nil
 		}
 		return []RenderEvent{{Kind: "status", Title: "Still Running", Body: telegramStillRunningText(event.Data), Key: "stream.still_running"}}
+	case protocol.EventGatewayStreamGap:
+		if !presentation.CompactProgress {
+			return nil
+		}
+		return []RenderEvent{{Kind: "status", Title: "Replay", Body: telegramGatewayStreamGapText(event.Data), Key: "gateway.stream_gap"}}
 	case protocol.EventTurnChangeRecorded:
 		if !presentation.CompactProgress {
 			return nil
@@ -183,6 +188,38 @@ func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
 		}
 	}
 	return nil
+}
+
+func telegramGatewayStreamGapText(value any) string {
+	gap := gatewayStreamGapData(value)
+	if gap.DroppedEvents > 0 && gap.ReplayAfterSeq > 0 {
+		return fmt.Sprintf("stream gap: replaying after seq %d (%d dropped)", gap.ReplayAfterSeq, gap.DroppedEvents)
+	}
+	if gap.DroppedEvents > 0 {
+		return fmt.Sprintf("stream gap: replaying durable events (%d dropped)", gap.DroppedEvents)
+	}
+	if gap.ReplayAfterSeq > 0 {
+		return fmt.Sprintf("stream gap: replaying after seq %d", gap.ReplayAfterSeq)
+	}
+	return "stream gap: replaying durable events"
+}
+
+func gatewayStreamGapData(value any) protocol.GatewayStreamGapEvent {
+	switch gap := value.(type) {
+	case protocol.GatewayStreamGapEvent:
+		return gap
+	case *protocol.GatewayStreamGapEvent:
+		if gap != nil {
+			return *gap
+		}
+	}
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return protocol.GatewayStreamGapEvent{}
+	}
+	var gap protocol.GatewayStreamGapEvent
+	_ = json.Unmarshal(bytes, &gap)
+	return gap
 }
 
 func (r *Renderer) applySnapshot(snapshot projector.Snapshot) {

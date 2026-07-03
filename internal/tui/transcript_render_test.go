@@ -129,14 +129,19 @@ func TestToolBlocksRenderCodexActivityStyle(t *testing.T) {
 	m.applyEvent(protocol.Event{
 		Type: protocol.EventToolCallRequested,
 		Data: protocol.ToolCall{
+			ID:        "call-rg",
 			Name:      "shell_exec",
 			Arguments: json.RawMessage(`{"argv":["rg","-n","selection","internal/tui"],"cwd":"/root/billyharness","timeout_sec":20}`),
 		},
 	})
-	m.applyEvent(protocol.Event{Type: protocol.EventToolCallFinished, Data: "internal/tui/tui.go:2422: selection\n"})
+	m.applyEvent(protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
+		CallID:  "call-rg",
+		Name:    "shell_exec",
+		Content: "internal/tui/tui.go:2422: selection\n",
+	}})
 
 	rendered := stripANSITest(m.renderBlock(0, m.blocks[0]))
-	for _, want := range []string{"• Ran rg -n selection internal/tui", "└ cwd: /root/billyharness", "│ internal/tui/tui.go:2422: selection"} {
+	for _, want := range []string{"• Done Ran rg -n selection internal/tui", "└ cwd: /root/billyharness", "│ internal/tui/tui.go:2422: selection"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("tool activity block missing %q: %q", want, rendered)
 		}
@@ -152,17 +157,22 @@ func TestToolBlocksAreOneLineByDefault(t *testing.T) {
 	m.applyEvent(protocol.Event{
 		Type: protocol.EventToolCallRequested,
 		Data: protocol.ToolCall{
+			ID:        "call-search",
 			Name:      "web_search",
 			Arguments: json.RawMessage(`{"query":"agent loop benchmark","limit":5}`),
 		},
 	})
-	m.applyEvent(protocol.Event{Type: protocol.EventToolCallFinished, Data: strings.Repeat("result line\n", 20)})
+	m.applyEvent(protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
+		CallID:  "call-search",
+		Name:    "web_search",
+		Content: strings.Repeat("result line\n", 20),
+	}})
 
 	rendered := stripANSITest(m.renderBlock(0, m.blocks[0]))
 	if got := strings.Count(strings.TrimSpace(rendered), "\n"); got != 0 {
 		t.Fatalf("collapsed tool block should be one line, got %d newlines: %q", got, rendered)
 	}
-	if !strings.Contains(rendered, "• Searched web agent loop benchmark") {
+	if !strings.Contains(rendered, "• Done Searched web agent loop benchmark") {
 		t.Fatalf("collapsed tool block should show query in title: %q", rendered)
 	}
 	if strings.Contains(rendered, "result line") || strings.Contains(rendered, `"query"`) {
@@ -1037,7 +1047,7 @@ func TestToolAuditRendersCompactBlock(t *testing.T) {
 		t.Fatalf("expected audit block, got %#v", m.blocks)
 	}
 	rendered := stripANSITest(m.renderBlock(0, m.blocks[0]))
-	for _, want := range []string{"Tool audit", "execute shell_exec auto-approved"} {
+	for _, want := range []string{"Unmatched audit", "execute shell_exec auto-approved"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("audit render missing %q: %q", want, rendered)
 		}
@@ -1049,15 +1059,18 @@ func TestToolAuditDoesNotSplitToolResult(t *testing.T) {
 	m.width = 100
 	m.toolView = "expanded"
 	m.applyEvent(protocol.Event{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{
+		ID:        "call-pwd",
 		Name:      "shell_exec",
 		Arguments: json.RawMessage(`{"argv":["pwd"],"cwd":"/root/billyharness"}`),
 	}})
 	m.applyEvent(protocol.Event{Type: protocol.EventToolAudit, Data: map[string]any{
+		"call_id":       "call-pwd",
 		"name":          "shell_exec",
 		"risk":          string(protocol.RiskExecute),
 		"auto_approved": true,
 	}})
 	m.applyEvent(protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
+		CallID:  "call-pwd",
 		Name:    "shell_exec",
 		Content: "/root/billyharness\n",
 	}})

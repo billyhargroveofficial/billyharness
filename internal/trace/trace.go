@@ -249,6 +249,8 @@ type ReplaySummary struct {
 	ToolCallsStarted       int                          `json:"tool_calls_started,omitempty"`
 	ToolCallProgress       int                          `json:"tool_call_progress,omitempty"`
 	ToolCallsFinished      int                          `json:"tool_calls_finished,omitempty"`
+	ToolCallsFailed        int                          `json:"tool_calls_failed,omitempty"`
+	ToolCallsAborted       int                          `json:"tool_calls_aborted,omitempty"`
 	ContextThresholds      int                          `json:"context_thresholds,omitempty"`
 	ContextCompactions     int                          `json:"context_compactions,omitempty"`
 	OutputRefs             int                          `json:"output_refs,omitempty"`
@@ -515,6 +517,10 @@ func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEve
 		s.ToolCallProgress++
 	case protocol.EventToolCallFinished:
 		s.ToolCallsFinished++
+	case protocol.EventToolCallFailed:
+		s.ToolCallsFailed++
+	case protocol.EventToolCallAborted:
+		s.ToolCallsAborted++
 	case protocol.EventToolOutputRefCreated:
 		s.observeOutputRef(event)
 	case protocol.EventContextThreshold:

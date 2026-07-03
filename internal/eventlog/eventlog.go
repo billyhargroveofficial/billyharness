@@ -128,12 +128,15 @@ func (v *RecordValidator) validateScope(scopeID string) error {
 }
 
 type LifecycleValidator struct {
-	runs        map[string]struct{}
-	terminalRun map[string]protocol.EventType
-	turns       map[string]struct{}
-	steps       map[string]stepState
-	calls       map[string]struct{}
-	attempts    map[string]struct{}
+	runs             map[string]struct{}
+	terminalRun      map[string]protocol.EventType
+	turns            map[string]struct{}
+	terminalTurn     map[string]protocol.EventType
+	steps            map[string]stepState
+	terminalStep     map[string]protocol.EventType
+	calls            map[string]struct{}
+	attempts         map[string]struct{}
+	terminalAttempts map[string]protocol.EventType
 }
 
 type stepState struct {
@@ -191,11 +194,17 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 			v.turns[turnKey(runID, turnID)] = struct{}{}
 		}
 	case protocol.EventTurnCompleted:
-		if runID != "" && turnID != "" {
-			if _, ok := v.turns[turnKey(runID, turnID)]; !ok {
-				return fmt.Errorf("%s without started turn %q", event.Type, turnID)
-			}
+		if turnID == "" {
+			return fmt.Errorf("%s missing turn_id", event.Type)
 		}
+		key := turnKey(runID, turnID)
+		if _, ok := v.turns[key]; !ok {
+			return fmt.Errorf("%s without started turn %q", event.Type, turnID)
+		}
+		if previous, ok := v.terminalTurn[key]; ok {
+			return fmt.Errorf("duplicate terminal turn event for %q: got %s after %s", turnID, event.Type, previous)
+		}
+		v.terminalTurn[key] = event.Type
 	case protocol.EventStepStarted:
 		if stepID == "" {
 			return nil
@@ -213,6 +222,11 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 		if _, ok := v.steps[stepKey(runID, turnID, stepID)]; !ok {
 			return fmt.Errorf("orphan step completion %q", stepID)
 		}
+		key := stepKey(runID, turnID, stepID)
+		if previous, ok := v.terminalStep[key]; ok {
+			return fmt.Errorf("duplicate terminal step event for %q: got %s after %s", stepID, event.Type, previous)
+		}
+		v.terminalStep[key] = event.Type
 	case protocol.EventToolCallRequested:
 		if callID == "" {
 			return fmt.Errorf("%s missing call_id", event.Type)
@@ -242,6 +256,11 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 		if _, ok := v.attempts[attemptKey(runID, attemptID)]; !ok {
 			return fmt.Errorf("%s without matching attempt_id %q", event.Type, attemptID)
 		}
+		key := attemptKey(runID, attemptID)
+		if previous, ok := v.terminalAttempts[key]; ok {
+			return fmt.Errorf("duplicate terminal tool attempt event for %q: got %s after %s", attemptID, event.Type, previous)
+		}
+		v.terminalAttempts[key] = event.Type
 	}
 	return nil
 }
@@ -256,14 +275,23 @@ func (v *LifecycleValidator) ensure() {
 	if v.turns == nil {
 		v.turns = map[string]struct{}{}
 	}
+	if v.terminalTurn == nil {
+		v.terminalTurn = map[string]protocol.EventType{}
+	}
 	if v.steps == nil {
 		v.steps = map[string]stepState{}
+	}
+	if v.terminalStep == nil {
+		v.terminalStep = map[string]protocol.EventType{}
 	}
 	if v.calls == nil {
 		v.calls = map[string]struct{}{}
 	}
 	if v.attempts == nil {
 		v.attempts = map[string]struct{}{}
+	}
+	if v.terminalAttempts == nil {
+		v.terminalAttempts = map[string]protocol.EventType{}
 	}
 }
 

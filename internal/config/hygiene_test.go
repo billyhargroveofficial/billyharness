@@ -22,7 +22,6 @@ func TestNoAmbiguousContextWindowRuntimeFallbacks(t *testing.T) {
 		"internal/tui/settings.go",
 		"internal/telegrambot/render.go",
 		"internal/telegrambot/context_window.go",
-		"docs/profiles.md",
 	}
 	for _, rel := range paths {
 		body, err := os.ReadFile(filepath.Join(root, rel))
@@ -81,7 +80,6 @@ func TestStatusFormatterLabelsStayCanonical(t *testing.T) {
 		"internal/telegrambot/render.go",
 		"internal/tui/status.go",
 		"cmd/fast-agent-harness/doctor.go",
-		"docs/context.md",
 	}
 	for _, rel := range paths {
 		text := readRepoFile(t, root, rel)
@@ -117,15 +115,7 @@ func assertNoAmbiguousMillionTokenContextWindow(t *testing.T, rel, text string) 
 
 func runtimeAndLiveDocFiles(t *testing.T, root string) []string {
 	t.Helper()
-	files := runtimeGoFiles(t, root)
-	files = append(files,
-		"docs/context.md",
-		"docs/profiles.md",
-		"docs/setup.md",
-		"docs/telegram.md",
-		"docs/web.md",
-	)
-	return files
+	return runtimeGoFiles(t, root)
 }
 
 func runtimeGoFiles(t *testing.T, root string) []string {

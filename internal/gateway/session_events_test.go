@@ -1010,6 +1010,91 @@ func TestGatewaySessionEventsSubscribeReceivesRunEvents(t *testing.T) {
 	}
 }
 
+func TestGatewaySessionEventsFollowUsesLiveHubOnlyAsStoreWake(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+	sessionID := createGatewaySessionForTest(t, server)
+	session, ok := server.session(sessionID)
+	if !ok {
+		t.Fatal("created session missing")
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, httpServer.URL+"/v1/sessions/"+sessionID+"/events?after_seq=0&follow=true", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("events status = %d body=%s", resp.StatusCode, body)
+	}
+	if got := resp.Header.Get("X-Accel-Buffering"); got != "no" {
+		t.Fatalf("X-Accel-Buffering = %q, want no", got)
+	}
+	events := decodeProtocolEvents(resp.Body)
+
+	stored, err := server.store.AppendEvent(session, protocol.Event{Type: protocol.EventAssistantDelta, Data: "durable recovered"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.events.Publish(protocol.Event{Seq: 999, Type: protocol.EventAssistantDelta, Data: "live wake only"})
+
+	got := waitProtocolEvent(t, events)
+	if got.Seq != stored.Seq || got.Data != "durable recovered" {
+		t.Fatalf("follow emitted %#v, want durable stored event %#v", got, stored)
+	}
+}
+
+func TestGatewaySessionEventsFollowEmitsNonDurableLiveEvent(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+	sessionID := createGatewaySessionForTest(t, server)
+	session, ok := server.session(sessionID)
+	if !ok {
+		t.Fatal("created session missing")
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, httpServer.URL+"/v1/sessions/"+sessionID+"/events?after_seq=0&follow=true", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("events status = %d body=%s", resp.StatusCode, body)
+	}
+	events := decodeProtocolEvents(resp.Body)
+
+	session.events.Publish(protocol.Event{Type: protocol.EventRunFailed, Data: "append failed after publish"})
+
+	got := waitProtocolEvent(t, events)
+	if got.Seq != 0 || got.Type != protocol.EventRunFailed || got.Data != "append failed after publish" {
+		t.Fatalf("follow emitted %#v, want non-durable live run.failed", got)
+	}
+}
+
 func TestGatewaySessionEventsReportSlowSubscriberDrops(t *testing.T) {
 	session := newGatewaySession("slow-subscriber", time.Now().UTC(), []protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
 	events, unsubscribe := session.Subscribe()

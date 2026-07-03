@@ -202,6 +202,38 @@ func TestLifecycleValidatorRejectsOrderingViolations(t *testing.T) {
 			},
 			want: "duplicate terminal run event",
 		},
+		{
+			name: "duplicate terminal turn event",
+			events: []protocol.Event{
+				{Type: protocol.EventRunStarted, RunID: "run-1"},
+				{Type: protocol.EventTurnStarted, RunID: "run-1", TurnID: "turn-1"},
+				{Type: protocol.EventTurnCompleted, RunID: "run-1", TurnID: "turn-1"},
+				{Type: protocol.EventTurnCompleted, RunID: "run-1", TurnID: "turn-1"},
+			},
+			want: "duplicate terminal turn event",
+		},
+		{
+			name: "duplicate terminal step event",
+			events: []protocol.Event{
+				{Type: protocol.EventRunStarted, RunID: "run-1"},
+				{Type: protocol.EventTurnStarted, RunID: "run-1", TurnID: "turn-1"},
+				{Type: protocol.EventStepStarted, RunID: "run-1", TurnID: "turn-1", StepID: "step-1"},
+				{Type: protocol.EventStepCompleted, RunID: "run-1", TurnID: "turn-1", StepID: "step-1"},
+				{Type: protocol.EventStepCompleted, RunID: "run-1", TurnID: "turn-1", StepID: "step-1"},
+			},
+			want: "duplicate terminal step event",
+		},
+		{
+			name: "duplicate terminal tool attempt event",
+			events: []protocol.Event{
+				{Type: protocol.EventRunStarted, RunID: "run-1"},
+				{Type: protocol.EventToolCallRequested, RunID: "run-1", CallID: "call-1"},
+				{Type: protocol.EventToolCallStarted, RunID: "run-1", CallID: "call-1", AttemptID: "attempt-1"},
+				{Type: protocol.EventToolCallFailed, RunID: "run-1", CallID: "call-1", AttemptID: "attempt-1"},
+				{Type: protocol.EventToolCallFinished, RunID: "run-1", CallID: "call-1", AttemptID: "attempt-1"},
+			},
+			want: "duplicate terminal tool attempt event",
+		},
 	}
 
 	for _, tt := range tests {

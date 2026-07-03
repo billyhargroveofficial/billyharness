@@ -119,12 +119,8 @@ func (p *Projector) appendToolText(event protocol.Event, title, text string) {
 	idx := BuildIndex(p.cells)
 	i, ok := idx.ToolCall(callID)
 	if !ok {
-		if len(p.cells) == 0 || p.cells[len(p.cells)-1].Kind != "tool" {
-			p.addProtocolCell(event, "tool", CellTypeToolCall, title, text)
-			return
-		}
-		i = len(p.cells) - 1
-		ApplyEventIdentity(&p.cells[i], event)
+		p.addProtocolCell(event, "tool", CellTypeToolCall, unmatchedToolTitle(title, callID), text)
+		return
 	}
 	if strings.TrimSpace(title) != "" {
 		p.cells[i].Title = title
@@ -141,12 +137,8 @@ func (p *Projector) appendToolAudit(event protocol.Event, text string) {
 	idx := BuildIndex(p.cells)
 	i, ok := idx.ToolCall(callID)
 	if !ok {
-		if len(p.cells) == 0 || p.cells[len(p.cells)-1].Kind != "tool" {
-			p.addProtocolCell(event, "audit", CellTypeAuditSecurity, "AUDIT", text)
-			return
-		}
-		i = len(p.cells) - 1
-		ApplyEventIdentity(&p.cells[i], event)
+		p.addProtocolCell(event, "audit", CellTypeAuditSecurity, unmatchedToolTitle("AUDIT", callID), text)
+		return
 	}
 	if strings.TrimSpace(p.cells[i].Content) == "" {
 		p.cells[i].Content = "audit: " + text
@@ -167,12 +159,8 @@ func (p *Projector) appendToolResult(event protocol.Event) {
 	idx := BuildIndex(p.cells)
 	i, ok := idx.ToolCall(callID)
 	if !ok {
-		if len(p.cells) == 0 || p.cells[len(p.cells)-1].Kind != "tool" {
-			p.addProtocolCell(event, "tool", CellTypeToolCall, toolResultTitle(event.Data, fallbackToolResultTitle(event)), text)
-			return
-		}
-		i = len(p.cells) - 1
-		ApplyEventIdentity(&p.cells[i], event)
+		p.addProtocolCell(event, "tool", CellTypeToolCall, unmatchedToolTitle(toolResultTitle(event.Data, fallbackToolResultTitle(event)), callID), text)
+		return
 	}
 	p.cells[i].Title = toolResultTitle(event.Data, p.cells[i].Title)
 	applyToolCompactDefaults(&p.cells[i], event)
@@ -385,6 +373,18 @@ func fallbackToolResultTitle(event protocol.Event) string {
 		return "Called " + strings.TrimSpace(result.Name)
 	}
 	return "Called tool"
+}
+
+func unmatchedToolTitle(base, callID string) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		base = "Tool event"
+	}
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return "Unmatched " + base
+	}
+	return "Unmatched " + base + " (" + callID + ")"
 }
 
 func toolResultTitle(value any, base string) string {

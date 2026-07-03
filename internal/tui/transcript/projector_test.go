@@ -297,7 +297,7 @@ func TestProjectorApplyUsesCompactToolAuditText(t *testing.T) {
 	if len(cells) != 1 {
 		t.Fatalf("cells = %d, want 1", len(cells))
 	}
-	if got := cells[0]; got.Kind != "audit" || got.CellType != CellTypeAuditSecurity || got.Title != "AUDIT" || got.Content != "execute shell_exec auto-approved" {
+	if got := cells[0]; got.Kind != "audit" || got.CellType != CellTypeAuditSecurity || got.Title != "Unmatched AUDIT" || got.Content != "execute shell_exec auto-approved" {
 		t.Fatalf("audit cell = %#v", got)
 	}
 
@@ -308,12 +308,47 @@ func TestProjectorApplyUsesCompactToolAuditText(t *testing.T) {
 		Arguments: json.RawMessage(`{"argv":["pwd"],"cwd":"/root/billyharness"}`),
 	}})
 	cells = p.Apply(protocol.Event{Type: protocol.EventToolAudit, Data: map[string]any{
+		"call_id":       "call-shell",
 		"name":          "shell_exec",
 		"risk":          string(protocol.RiskExecute),
 		"auto_approved": true,
 	}})
 	if len(cells) != 1 || cells[0].Kind != "tool" || !strings.Contains(cells[0].Content, "audit: execute shell_exec auto-approved") {
 		t.Fatalf("tool audit cell = %#v", cells)
+	}
+}
+
+func TestProjectorDoesNotAttachUnmatchedToolEventsToPreviousTool(t *testing.T) {
+	p := NewProjector()
+	p.Apply(protocol.Event{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{
+		ID:        "call-a",
+		Name:      "fs_read_file",
+		Arguments: json.RawMessage(`{"path":"a.txt"}`),
+	}})
+	p.Apply(protocol.Event{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{
+		ID:        "call-b",
+		Name:      "fs_read_file",
+		Arguments: json.RawMessage(`{"path":"b.txt"}`),
+	}})
+	cells := p.Apply(protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
+		CallID:  "call-missing",
+		Name:    "fs_read_file",
+		Content: "ghost output",
+	}})
+	if len(cells) != 3 {
+		t.Fatalf("cells = %#v", cells)
+	}
+	if strings.Contains(cells[1].Content, "ghost output") || cells[2].CallID != "call-missing" || !strings.Contains(cells[2].Title, "Unmatched") {
+		t.Fatalf("unmatched result corrupted cells: %#v", cells)
+	}
+
+	cells = p.Apply(protocol.Event{Type: protocol.EventToolAudit, Data: map[string]any{
+		"name":          "shell_exec",
+		"risk":          string(protocol.RiskExecute),
+		"auto_approved": true,
+	}})
+	if len(cells) != 4 || cells[3].Kind != "audit" || strings.Contains(cells[1].Content, "shell_exec") || strings.Contains(cells[2].Content, "shell_exec") {
+		t.Fatalf("missing-call audit corrupted tool cells: %#v", cells)
 	}
 }
 

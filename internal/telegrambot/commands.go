@@ -553,7 +553,7 @@ func formatTurnChangeApplyText(label string, out gatewayapi.SessionUndoResponse)
 
 func (b *Bot) handleCancelCommand(ctx context.Context, msg Message, scope ChatScope, _ string) {
 	key := scope.Key()
-	state := b.chatStateWithLegacy(key, scope.LegacyKey())
+	state := b.chatState(key)
 	localCancelled := b.cancelChat(key)
 	if state.SessionID != "" {
 		b.cancelGatewaySession(state.SessionID)

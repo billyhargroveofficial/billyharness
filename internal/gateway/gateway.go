@@ -513,27 +513,37 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.WriteHeader(http.StatusOK)
+	w.Header().Set("X-Accel-Buffering", "no")
 	flusher, _ := w.(http.Flusher)
+	w.WriteHeader(http.StatusOK)
+	if flusher != nil {
+		flusher.Flush()
+	}
 	emit := func(event protocol.Event) bool {
 		return writeNDJSONEvent(w, flusher, event)
 	}
 	events, unsubscribe := session.Subscribe()
 	defer unsubscribe()
 	cursor := afterSeq
-	if hasAfterSeq && s.store != nil {
+	flushReplay := func() bool {
 		replayed, err := s.store.ReplayEventsAfter(session.ID, afterSeq)
 		if err != nil {
 			_ = emit(protocol.Event{Type: protocol.EventRunFailed, Data: "event replay failed: " + err.Error()})
-			return
+			return false
 		}
 		for _, event := range replayed {
 			if event.Seq > cursor {
 				cursor = event.Seq
 			}
 			if !emit(event) {
-				return
+				return false
 			}
+		}
+		return true
+	}
+	if hasAfterSeq && s.store != nil {
+		if !flushReplay() {
+			return
 		}
 	} else if !hasAfterSeq {
 		if !emit(protocol.Event{Type: protocol.EventSessionStatus, Data: session.Status()}) {
@@ -543,29 +553,40 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
 	if !follow {
 		return
 	}
-	if hasAfterSeq {
+	if hasAfterSeq && s.store != nil {
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
 		for {
 			select {
-			case event := <-events:
-				if event.Seq == 0 || event.Seq > cursor {
-					if event.Seq > cursor {
-						cursor = event.Seq
-					}
-					if !emit(event) {
-						return
-					}
+			case <-r.Context().Done():
+				return
+			case event, ok := <-events:
+				if !ok {
+					return
 				}
-			default:
-				goto live
+				afterSeq = cursor
+				if !flushReplay() {
+					return
+				}
+				if event.Seq == 0 && !emit(event) {
+					return
+				}
+			case <-ticker.C:
+				afterSeq = cursor
+				if !flushReplay() {
+					return
+				}
 			}
 		}
 	}
-live:
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case event := <-events:
+		case event, ok := <-events:
+			if !ok {
+				return
+			}
 			if hasAfterSeq {
 				if event.Seq != 0 && event.Seq <= cursor {
 					continue
@@ -937,7 +958,19 @@ func (s *Server) handleSessionCancel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, CancelSessionResponse{Cancelled: session.Thread.Cancel()})
+	waitCtx, cancel := context.WithTimeout(r.Context(), gatewayInterruptWaitTimeout)
+	defer cancel()
+	cancelled, err := session.interruptActiveRunAndWait(waitCtx, "cancelled by session cancel endpoint")
+	if cancelled {
+		if saveErr := s.saveSession(session); saveErr != nil {
+			log.Printf("gateway session save failed id=%s after cancel: %v", session.ID, saveErr)
+		}
+	}
+	if err != nil {
+		writeError(w, http.StatusGatewayTimeout, "cancel active session run: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, CancelSessionResponse{Cancelled: cancelled})
 }
 
 func (s *Server) handleSessionUndo(w http.ResponseWriter, r *http.Request) {

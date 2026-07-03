@@ -47,6 +47,8 @@ func EventPresentationPolicy(eventType protocol.EventType) EventPresentation {
 		return EventPresentation{Transcript: true, CompactProgress: true, StatusLine: true, ContextReport: true}
 	case protocol.EventStreamStillRunning:
 		return EventPresentation{CompactProgress: true, StatusLine: true, FlushImmediate: true}
+	case protocol.EventGatewayStreamGap:
+		return EventPresentation{CompactProgress: true, StatusLine: true, FlushImmediate: true}
 	case protocol.EventTurnChangeRecorded, protocol.EventTurnChangeReverted:
 		return EventPresentation{Transcript: true, CompactProgress: true, StatusLine: true, FlushImmediate: true}
 	case protocol.EventProviderUsageUpdate, protocol.EventProviderHelperUsage:

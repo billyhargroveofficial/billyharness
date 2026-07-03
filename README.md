@@ -4,25 +4,23 @@ Fast Go agent harness with a gateway API, TUI chat, native tools, MCP server, an
 
 ## Docs
 
-- [Master implementation TODO](docs/master-implementation-todo.md) is the live execution plan.
-- [Codex research roadmap](docs/codex-research-roadmap.md) records the architecture research and rationale.
-- [Setup](docs/setup.md) covers build, gateway, TUI, Telegram, systemd, logs, and failure checks.
-- [Auth](docs/auth.md) covers DeepSeek keys, Codex OAuth import, config inspect, and redaction.
-- [TUI](docs/tui.md) covers commands, themes, model/reasoning, tool/thinking views, copy, and sessions.
-- [Telegram](docs/telegram.md) covers bot setup, allowlist, commands, per-user sessions, throttling, and tool view.
-- [MCP](docs/mcp.md) covers billyharness-owned MCP config, built-ins, discovery, and troubleshooting.
-- [Profiles](docs/profiles.md) covers `profile.toml`, `SOUL.md`, switching, and inspection.
-- [Benchmarks](docs/benchmarks.md) covers local loops, Terminal-Bench adapter, replay verification, and provider comparisons.
+- [Architecture map](docs/architecture.md) is the current package-boundary and
+  import-rule source of truth.
+- [Codex research roadmap](docs/codex-research-roadmap.md) records the original
+  architecture research and comparison shape.
+- [Competitive architecture analysis](docs/competitive-architecture-analysis.md)
+  captures clean-room competitor patterns worth taking or rejecting.
 
 Work protocol for runtime changes:
 
-1. Map the change to a checkbox in the master TODO.
+1. Use `loop-develop/current-todo/NNN-todo.md` for active implementation plans.
 2. Add or update focused tests.
 3. Run the relevant package tests, then `/root/.local/go/bin/go test -count=1 ./...` for broad runtime changes.
 4. Run `GO_BIN=/root/.local/go/bin/go ./scripts/verify-deps.sh` when `go.mod` or `go.sum` changes.
 5. Rebuild with `/root/.local/go/bin/go build -buildvcs=false -o ./bin/fast-agent-harness ./cmd/fast-agent-harness` when CLI, gateway, agent, provider, tool, TUI, or Telegram code changes.
 6. Restart `billyharness-gateway.service` and `billyharness-telegram.service` when deployed runtime behavior changes.
-7. Commit and push coherent verified slices.
+7. After verification, move completed TODOs to `loop-develop/history` preserving
+   their number.
 
 Project health:
 
@@ -39,6 +37,9 @@ For a non-failing local snapshot while editing, disable active checks:
 ```bash
 ./bin/fast-agent-harness doctor -build=false -services=false -gateway=false
 ```
+
+Production runs on `root@82.23.163.16` under `/root/billyharness`. Competitor
+research checkouts for clean-room comparison live under `/root/agent-research`.
 
 ## Quick start
 
@@ -141,7 +142,6 @@ responses include `model_visible_tools.kind=static_gateway_tools` and
 
 Local command hooks can be configured in `$BILLYHARNESS_HOME/hooks.config.toml`.
 They are no-op by default and emit replayable `hook.started`, `hook.finished`, and `hook.failed` events.
-See [docs/hooks.md](docs/hooks.md) for the config format and supported events.
 
 ## Skills
 
@@ -152,7 +152,6 @@ They are loaded on demand with `skill_list` and `skill_read`; `.claude/skills` c
 
 `web_fetch`, `web_extract`, and `web_crawl` return compact summaries by default and store full extracted text in output refs.
 Compact web outputs are cached under `$BILLYHARNESS_HOME/web-cache`; inspect or clear them with `web_cache_status` and `web_cache_clear`.
-See [docs/web.md](docs/web.md).
 
 ## Codex / GPT subscription mode
 

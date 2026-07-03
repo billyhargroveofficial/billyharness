@@ -145,12 +145,17 @@ func (b *Bot) ackOffset(updateID int) {
 	}
 }
 
-func (b *Bot) setCancel(key string, cancel context.CancelFunc) {
-	b.setCancelWithDone(key, cancel, nil)
+func (b *Bot) setCancel(key string, cancel context.CancelFunc) uint64 {
+	return b.setCancelWithDone(key, cancel, nil)
 }
 
-func (b *Bot) setCancelWithDone(key string, cancel context.CancelFunc, done <-chan struct{}) {
+func (b *Bot) setCancelWithDone(key string, cancel context.CancelFunc, done <-chan struct{}) uint64 {
 	b.mu.Lock()
+	if b.runToken == nil {
+		b.runToken = map[string]uint64{}
+	}
+	b.runToken[key]++
+	token := b.runToken[key]
 	b.cancel[key] = cancel
 	if done != nil {
 		b.runDone[key] = done
@@ -158,12 +163,22 @@ func (b *Bot) setCancelWithDone(key string, cancel context.CancelFunc, done <-ch
 		delete(b.runDone, key)
 	}
 	b.mu.Unlock()
+	return token
 }
 
 func (b *Bot) clearCancel(key string) {
+	b.clearCancelIfCurrent(key, 0)
+}
+
+func (b *Bot) clearCancelIfCurrent(key string, token uint64) {
 	b.mu.Lock()
+	if token != 0 && b.runToken[key] != token {
+		b.mu.Unlock()
+		return
+	}
 	delete(b.cancel, key)
 	delete(b.runDone, key)
+	delete(b.runToken, key)
 	b.mu.Unlock()
 }
 

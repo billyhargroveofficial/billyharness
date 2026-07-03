@@ -80,6 +80,73 @@ func TestCancelCommandBypassesActiveRunLock(t *testing.T) {
 	}
 }
 
+func TestTelegramRunCleanupDoesNotClearNewerRunCancel(t *testing.T) {
+	bot := &Bot{
+		cancel:   map[string]context.CancelFunc{},
+		runDone:  map[string]<-chan struct{}{},
+		runToken: map[string]uint64{},
+	}
+	key := userChatKey(123, 0, 1001)
+	oldCancelled := make(chan struct{})
+	oldDone := make(chan struct{})
+	oldToken := bot.setCancelWithDone(key, func() { close(oldCancelled) }, oldDone)
+
+	newCancelled := make(chan struct{})
+	newDone := make(chan struct{})
+	newToken := bot.setCancelWithDone(key, func() { close(newCancelled) }, newDone)
+	bot.clearCancelIfCurrent(key, oldToken)
+
+	done, cancelled := bot.cancelChatWithDone(key)
+	if !cancelled {
+		t.Fatal("newer run cancel was cleared by old cleanup")
+	}
+	if done != newDone {
+		t.Fatal("newer run done channel was not preserved")
+	}
+	select {
+	case <-newCancelled:
+	case <-time.After(time.Second):
+		t.Fatal("newer run cancel was not invoked")
+	}
+	select {
+	case <-oldCancelled:
+		t.Fatal("old cancel was invoked after newer run replaced it")
+	default:
+	}
+
+	bot.clearCancelIfCurrent(key, newToken)
+	if bot.cancelChat(key) {
+		t.Fatal("current run cancel survived current cleanup")
+	}
+}
+
+func TestTelegramCancelDoesNotCancelLegacyOnlySession(t *testing.T) {
+	harness := newBlockingHarness()
+	bot, err := New(Options{
+		BotToken:        "token",
+		StatePath:       t.TempDir() + "/state.json",
+		Model:           "deepseek-v4-flash",
+		Profile:         "billy",
+		ReasoningEffort: "high",
+		EditInterval:    time.Millisecond,
+		AllowedChatIDs:  map[int64]bool{123: true},
+		SendEnabled:     false,
+		DryRunDefault:   true,
+	}, nil, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bot.setChatState(chatKey(123, 0), ChatState{SessionID: "legacy-session", UpdatedAt: time.Now().UTC()})
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, From: &User{ID: 1001}, Text: "/cancel"})
+
+	select {
+	case <-harness.gatewayCancelCalled:
+		t.Fatal("legacy-only session was cancelled for scoped /cancel")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestNewTelegramMessageInterruptsActiveRunAndRunsLatestPrompt(t *testing.T) {
 	harness := newInterruptHarness()
 	bot, err := New(Options{
@@ -670,6 +737,106 @@ func TestTelegramReplayCatchupDoesNotLeakOldRunIntoNewProgress(t *testing.T) {
 	}
 	if chat.AgentTurns != 2 || chat.ToolCalls != 2 {
 		t.Fatalf("chat totals should include silent catch-up plus live run, got turns=%d tools=%d", chat.AgentTurns, chat.ToolCalls)
+	}
+}
+
+func TestTelegramStreamGapReplaysBeforeFinalDelivery(t *testing.T) {
+	statePath := t.TempDir() + "/state.json"
+	if err := (Store{Path: statePath}).Save(State{Chats: map[string]ChatState{
+		"123": {
+			SessionID:       "session-1",
+			Model:           "deepseek-v4-flash",
+			Profile:         "billy",
+			ReasoningEffort: "high",
+			UpdatedAt:       time.Now().UTC(),
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	var renderedTexts []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		switch r.URL.Path {
+		case "/botbottoken/sendMessage":
+			writeTelegramResult(w, SentMessage{MessageID: 21, Chat: Chat{ID: 123}})
+		case "/botbottoken/sendChatAction":
+			writeTelegramResult(w, true)
+		case "/botbottoken/editMessageText":
+			mu.Lock()
+			if text, ok := payload["text"].(string); ok {
+				renderedTexts = append(renderedTexts, text)
+			}
+			if rich, ok := payload["rich_message"].(map[string]any); ok {
+				if markdown, ok := rich["markdown"].(string); ok {
+					renderedTexts = append(renderedTexts, markdown)
+				}
+			}
+			mu.Unlock()
+			writeTelegramResult(w, true)
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	harness := &replayScriptedHarness{
+		scriptedHarness: scriptedHarness{
+			events: []protocol.Event{
+				{Seq: 1, Type: protocol.EventRunStarted},
+				{Seq: 2, Type: protocol.EventAssistantDelta, Data: "first "},
+				{Type: protocol.EventGatewayStreamGap, Data: protocol.GatewayStreamGapEvent{DroppedEvents: 1, ReplayAfterSeq: 2}},
+			},
+		},
+		replayFrom: []protocol.Event{
+			{Seq: 3, Type: protocol.EventAssistantDelta, Data: "missed"},
+			{Seq: 4, Type: protocol.EventRunCompleted},
+		},
+	}
+	client := NewClient(ClientOptions{BaseURL: server.URL, Token: "bottoken", MinInterval: time.Nanosecond})
+	bot, err := New(Options{
+		BotToken:        "bottoken",
+		StatePath:       statePath,
+		Model:           "deepseek-v4-flash",
+		Profile:         "billy",
+		ReasoningEffort: "high",
+		EditInterval:    time.Millisecond,
+		AllowedChatIDs:  map[int64]bool{123: true},
+		SendEnabled:     true,
+		DryRunDefault:   false,
+	}, client, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "recover stream"})
+
+	harness.mu.Lock()
+	replaySeq := harness.replaySeq
+	replayed := harness.replayed
+	harness.mu.Unlock()
+	if replayed != 1 || replaySeq != 2 {
+		t.Fatalf("replay called %d times from seq %d, want once from 2", replayed, replaySeq)
+	}
+	mu.Lock()
+	joined := strings.Join(renderedTexts, "\n---\n")
+	mu.Unlock()
+	if !strings.Contains(joined, "first missed") {
+		t.Fatalf("final telegram text did not include replayed delta:\n%s", joined)
+	}
+	state, err := (Store{Path: statePath}).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.Chats["123"].LastEventSeq; got != 4 {
+		t.Fatalf("LastEventSeq = %d, want 4", got)
 	}
 }
 

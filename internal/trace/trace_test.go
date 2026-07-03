@@ -601,6 +601,47 @@ func TestReplayEventsRejectsLifecycleViolation(t *testing.T) {
 	}
 }
 
+func TestReplayEventsRejectsDuplicateTerminalToolAttempt(t *testing.T) {
+	var out bytes.Buffer
+	writer := NewEventWriter("run-1", &out)
+	attemptID := "turn-001:tool-call-001:attempt-001"
+	events := []protocol.Event{
+		{Type: protocol.EventRunStarted},
+		{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{ID: "call-1", Name: "time_now"}},
+		{Type: protocol.EventToolCallStarted, CallID: "call-1", AttemptID: attemptID, Data: "time_now"},
+		{Type: protocol.EventToolCallFailed, CallID: "call-1", AttemptID: attemptID, Data: protocol.ToolResult{
+			CallID:  "call-1",
+			Name:    "time_now",
+			Content: "boom",
+			IsError: true,
+			Metadata: map[string]any{
+				"attempt_id": attemptID,
+			},
+		}},
+		{Type: protocol.EventToolCallFinished, CallID: "call-1", AttemptID: attemptID, Data: protocol.ToolResult{
+			CallID: "call-1",
+			Name:   "time_now",
+			Metadata: map[string]any{
+				"attempt_id": attemptID,
+			},
+		}},
+	}
+	for _, event := range events {
+		if _, err := writer.Record("task-1", event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ReplayEvents(path)
+	if err == nil || !strings.Contains(err.Error(), "duplicate terminal tool attempt event") {
+		t.Fatalf("expected duplicate terminal attempt error, got %v", err)
+	}
+}
+
 func TestReplayEventsRejectsSequenceGap(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "events.jsonl")
 	data := strings.Join([]string{

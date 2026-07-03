@@ -244,6 +244,9 @@ func TestRunMessagesRecordsAbortWhenActiveToolIsCanceled(t *testing.T) {
 	if !sawAborted || aborted.CallID != "call_cancel" || aborted.ErrorCode != "tool_aborted" || aborted.Metadata["attempt_id"] == "" {
 		t.Fatalf("aborted result = %#v saw=%v events=%#v", aborted, sawAborted, events)
 	}
+	if sawToolTerminalEvent(events, protocol.EventToolCallFinished, "call_cancel") {
+		t.Fatalf("aborted tool emitted tool.call_finished after abort: %#v", events)
+	}
 	var sawCancelProgress bool
 	for _, progress := range toolProgressEvents(events, "call_cancel") {
 		if progress.Phase == toolPhaseCancelAbort && progress.Status == toolProgressStatusAborted {

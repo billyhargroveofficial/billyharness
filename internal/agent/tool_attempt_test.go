@@ -170,6 +170,10 @@ func TestRunMessagesMutatingToolEmitsTurnChangeRecorded(t *testing.T) {
 	if change.ChangeID == "" || change.ToolName != "fs_write_file" || change.FileCount != 1 || change.Added != 1 || change.PatchOutputRef == "" {
 		t.Fatalf("turn change = %#v", change)
 	}
+	changeEvent, ok := firstTurnChangeEvent(events)
+	if !ok || change.RunID == "" || change.RunID != changeEvent.RunID {
+		t.Fatalf("turn change payload run_id = %q, envelope run_id = %q event=%#v", change.RunID, changeEvent.RunID, changeEvent)
+	}
 	if !strings.HasPrefix(change.PatchOutputRef, filepath.Join(home, "tool-output")) {
 		t.Fatalf("patch output ref = %q, want under %q", change.PatchOutputRef, home)
 	}
@@ -265,7 +269,10 @@ func TestRunMessagesShellExecEmitsTurnChangeRecorded(t *testing.T) {
 	if !ok {
 		t.Fatalf("turn change event missing: %#v", events)
 	}
-	if change.ToolName != "shell_exec" || change.FileCount != 1 || change.Added != 1 || change.PatchOutputRef == "" {
+	if change.ToolName != "shell_exec" || change.Added != 1 || change.Directories != 1 || change.PatchOutputRef == "" {
+		t.Fatalf("turn change = %#v", change)
+	}
+	if !turnChangeIncludesFile(change, "shell.txt", "added") {
 		t.Fatalf("turn change = %#v", change)
 	}
 }
@@ -510,6 +517,9 @@ func TestRunMessagesToolOrchestratorDeniesDangerousToolBeforeExecution(t *testin
 	}
 	if !sawEvent(events, protocol.EventToolCallFailed) {
 		t.Fatalf("tool.call_failed missing: %#v", events)
+	}
+	if sawToolTerminalEvent(events, protocol.EventToolCallFinished, "call_write") {
+		t.Fatalf("denied tool emitted tool.call_finished after failure: %#v", events)
 	}
 	progress := toolProgressEvents(events, "call_write")
 	if len(progress) == 0 || progress[len(progress)-1].Phase != toolPhaseFinalize || progress[len(progress)-1].Status != protocol.StepStatusFailed {

@@ -342,7 +342,7 @@ func verifyReplayAgainstResults(replay trace.ReplaySummary, results []Result) er
 		{"steps_failed", replay.StepsFailed, expected.StepErrors},
 		{"parallel_batches", replay.ParallelBatches, expected.ParallelBatches},
 		{"tool_calls_started", replay.ToolCallsStarted, expected.ToolCalls},
-		{"tool_calls_finished", replay.ToolCallsFinished, expected.ToolCalls},
+		{"tool_calls_terminal", replay.ToolCallsFinished + replay.ToolCallsFailed + replay.ToolCallsAborted, expected.ToolCalls},
 		{"context_compactions", replay.ContextCompactions, expected.ContextCompactions},
 	}
 	for _, check := range intChecks {
@@ -676,7 +676,7 @@ func runTask(parent context.Context, cfg config.Config, rc RunConfig, runID stri
 
 func shouldWritePayloadRef(event protocol.Event) bool {
 	switch event.Type {
-	case protocol.EventToolCallRequested, protocol.EventToolCallFinished, protocol.EventContextCompacted, protocol.EventRunFailed:
+	case protocol.EventToolCallRequested, protocol.EventToolCallFinished, protocol.EventToolCallFailed, protocol.EventToolCallAborted, protocol.EventContextCompacted, protocol.EventRunFailed:
 		return true
 	default:
 		return false
@@ -723,7 +723,7 @@ func observe(result *Result, event protocol.Event) {
 		if name != "" {
 			result.ToolCallsByName[name]++
 		}
-	case protocol.EventToolCallFinished:
+	case protocol.EventToolCallFinished, protocol.EventToolCallFailed, protocol.EventToolCallAborted:
 		toolResult, ok := decodeToolResult(event.Data)
 		if ok && toolResult.Truncated {
 			result.ToolOutputTruncations++
@@ -734,7 +734,7 @@ func observe(result *Result, event protocol.Event) {
 		if ok {
 			observeWebSummaryMetadata(result, toolResult.Metadata)
 		}
-		if toolResultIsError(event.Data) {
+		if event.Type == protocol.EventToolCallFailed || event.Type == protocol.EventToolCallAborted || toolResultIsError(event.Data) {
 			result.ToolErrors++
 		}
 	case protocol.EventProviderUsageUpdate:
@@ -1069,12 +1069,9 @@ func copyDir(src, dst string) error {
 	for _, entry := range entries {
 		from := filepath.Join(src, entry.Name())
 		to := filepath.Join(dst, entry.Name())
-		entryInfo, err := entry.Info()
+		entryInfo, err := safeCopyEntryInfo(from, "workspace template")
 		if err != nil {
 			return err
-		}
-		if entryInfo.Mode()&os.ModeType != 0 && !entryInfo.IsDir() {
-			return fmt.Errorf("refusing special file in workspace template: %s", from)
 		}
 		if entryInfo.IsDir() {
 			if err := copyDir(from, to); err != nil {
@@ -1091,6 +1088,20 @@ func copyDir(src, dst string) error {
 		}
 	}
 	return nil
+}
+
+func safeCopyEntryInfo(path, label string) (os.FileInfo, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("refusing symlink in %s: %s", label, path)
+	}
+	if info.Mode()&os.ModeType != 0 && !info.IsDir() {
+		return nil, fmt.Errorf("refusing special file in %s: %s", label, path)
+	}
+	return info, nil
 }
 
 func ensurePrivateDir(path string) error {

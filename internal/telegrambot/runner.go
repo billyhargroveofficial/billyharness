@@ -84,9 +84,9 @@ func (b *Bot) handleMessageWithAdmission(parent context.Context, msg Message, ad
 	}
 	runCtx, cancel := context.WithCancel(parent)
 	runDone := make(chan struct{})
-	b.setCancelWithDone(key, cancel, runDone)
+	runToken := b.setCancelWithDone(key, cancel, runDone)
 	defer func() {
-		b.clearCancel(key)
+		b.clearCancelIfCurrent(key, runToken)
 		cancel()
 		close(runDone)
 	}()
@@ -124,6 +124,8 @@ func (b *Bot) handleMessageWithAdmission(parent context.Context, msg Message, ad
 	firstDelta := time.Time{}
 	contentChars := 0
 	eventCount := 0
+	streamGapSeen := false
+	streamGapDropped := int64(0)
 	lastEventSeq := state.LastEventSeq
 	var catchupErr error
 	state, lastEventSeq, catchupErr = b.replayRunCatchup(runCtx, msg, key, state, lastEventSeq)
@@ -147,6 +149,13 @@ func (b *Bot) handleMessageWithAdmission(parent context.Context, msg Message, ad
 		if b.inputSuperseded(key, inputSeq) {
 			return
 		}
+		if event.Type == protocol.EventGatewayStreamGap {
+			streamGapSeen = true
+			streamGapDropped += gatewayStreamGapData(event.Data).DroppedEvents
+			eventCount++
+			live.Apply(event)
+			return
+		}
 		if event.Seq > 0 && event.Seq <= lastEventSeq {
 			return
 		}
@@ -166,12 +175,28 @@ func (b *Bot) handleMessageWithAdmission(parent context.Context, msg Message, ad
 	state, err = b.runGatewaySessionWithRetry(runCtx, msg, key, state, runReq, emitEvent, func(retryState ChatState) {
 		state = retryState
 		lastEventSeq = 0
+		streamGapSeen = false
+		streamGapDropped = 0
 		live.Reset(state)
 		runStarted = time.Now()
 		firstDelta = time.Time{}
 		contentChars = 0
 		eventCount = 0
 	})
+	var seqGap *gatewayclient.EventSeqGapError
+	if runCtx.Err() == nil && !b.inputSuperseded(key, inputSeq) && (streamGapSeen || errors.As(err, &seqGap)) {
+		if replayErr := b.harness.ReplaySessionEvents(runCtx, state.SessionID, lastEventSeq, emitEvent); replayErr != nil {
+			log.Printf("telegram stream-gap replay failed chat=%d session=%s after_seq=%d dropped=%d: %v", msg.Chat.ID, short(state.SessionID), lastEventSeq, streamGapDropped, replayErr)
+			if err == nil {
+				err = replayErr
+			}
+		} else {
+			log.Printf("telegram stream-gap replay recovered chat=%d session=%s after_seq=%d dropped=%d", msg.Chat.ID, short(state.SessionID), lastEventSeq, streamGapDropped)
+			if seqGap != nil {
+				err = nil
+			}
+		}
+	}
 	if b.inputSuperseded(key, inputSeq) {
 		live.Stop()
 		if state.LastEventSeq != lastEventSeq {

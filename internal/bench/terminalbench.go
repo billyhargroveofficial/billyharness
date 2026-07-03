@@ -198,6 +198,9 @@ func validateTerminalBenchDifficulty(difficulty string) error {
 }
 
 func prepareTerminalBenchOutDir(path string, force bool) error {
+	if hasParentPathSegment(path) {
+		return fmt.Errorf("refusing to use unsafe Terminal-Bench output directory %q", path)
+	}
 	clean := filepath.Clean(path)
 	if clean == "." || clean == string(filepath.Separator) {
 		return fmt.Errorf("refusing to use unsafe Terminal-Bench output directory %q", path)
@@ -334,12 +337,9 @@ func copyPublicDir(src, dst string) error {
 	for _, entry := range entries {
 		from := filepath.Join(src, entry.Name())
 		to := filepath.Join(dst, entry.Name())
-		entryInfo, err := entry.Info()
+		entryInfo, err := safeCopyEntryInfo(from, "workspace")
 		if err != nil {
 			return err
-		}
-		if entryInfo.Mode()&os.ModeType != 0 && !entryInfo.IsDir() {
-			return fmt.Errorf("refusing special file in workspace: %s", from)
 		}
 		if entryInfo.IsDir() {
 			if err := copyPublicDir(from, to); err != nil {
@@ -363,6 +363,17 @@ func copyPublicDir(src, dst string) error {
 		}
 	}
 	return nil
+}
+
+func hasParentPathSegment(path string) bool {
+	for _, part := range strings.FieldsFunc(path, func(r rune) bool {
+		return r == '/' || r == '\\'
+	}) {
+		if part == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 func terminalBenchTaskYAML(opts TerminalBenchExportOptions, task Task) string {

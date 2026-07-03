@@ -597,7 +597,7 @@ func TestObserveCountsUsageToolErrorsAndNames(t *testing.T) {
 	observe(&result, protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{TurnID: "turn-001", StepID: "turn-001:tool-batch-001", Kind: protocol.StepKindToolBatch, Status: protocol.StepStatusFailed, DurationMS: 8}})
 	observe(&result, protocol.Event{Type: protocol.EventModelCallStarted})
 	observe(&result, protocol.Event{Type: protocol.EventToolCallStarted, Data: "fs_read_file"})
-	observe(&result, protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
+	observe(&result, protocol.Event{Type: protocol.EventToolCallFailed, Data: protocol.ToolResult{
 		Name:      "fs_read_file",
 		Content:   "nope",
 		IsError:   true,
@@ -702,8 +702,34 @@ func TestVerifyReplayAgainstResultsRejectsCounterMismatch(t *testing.T) {
 
 	replay.ToolCallsFinished = 0
 	err := verifyReplayAgainstResults(replay, results)
-	if err == nil || !strings.Contains(err.Error(), "tool_calls_finished") {
-		t.Fatalf("expected tool_calls_finished mismatch, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "tool_calls_terminal") {
+		t.Fatalf("expected tool_calls_terminal mismatch, got %v", err)
+	}
+}
+
+func TestCopyDirRejectsWorkspaceTemplateSymlink(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "template")
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(src, "leak")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	err := copyDir(src, filepath.Join(root, "dst"))
+	if err == nil || !strings.Contains(err.Error(), "refusing symlink") {
+		t.Fatalf("copyDir error = %v, want symlink refusal", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "dst", "leak", "secret.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("symlink target was copied, stat err=%v", statErr)
 	}
 }
 

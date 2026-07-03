@@ -1,6 +1,9 @@
 # Codex Research Roadmap
 
-This document records the Codex architecture research pass and turns it into a billyharness implementation plan. The live execution checklist is `docs/master-implementation-todo.md`.
+This document records the Codex architecture research pass and turns it into a
+billyharness implementation plan. Active execution checklists now live under
+`loop-develop/current-todo`, and completed loop records live under
+`loop-develop/history`.
 
 ## Target Shape
 
@@ -40,7 +43,15 @@ Do not pull in the full enterprise platform:
 
 ## Claude Code / Codex / OpenCode Comparison
 
-This pass looked at `/root/claude-code`, `/root/research/openai-codex`, and `/root/agent-research/opencode-current` at the architecture level only. Do not copy or quote proprietary/leaked implementation details; use the findings as design pressure.
+Current clean-room comparison checkouts on production live outside the
+Billyharness repo in `/root/agent-research`:
+
+- Codex CLI: `/root/agent-research/codex`
+- OpenCode: `/root/agent-research/opencode-current`
+- Claude Code: `/root/agent-research/claude-code`
+
+Use these at the architecture and capability level only. Do not copy competitor
+source code; use the findings as design pressure.
 
 Claude Code appears strongest in terminal UX depth: rich renderer-level components, compact tool presentation, command/action surfaces, settings layers, tasks, hooks, and a broad tool contract. Its risk is product accretion: very large cross-cutting UI/runtime files, many hooks/utilities, and a huge tool/config surface that would make billyharness slower to evolve if copied directly.
 
