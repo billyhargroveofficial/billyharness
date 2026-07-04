@@ -259,6 +259,15 @@ func (c *Client) SessionStatus(ctx context.Context, sessionID string) (gatewayap
 	return out, nil
 }
 
+func (c *Client) SessionInspectRaw(ctx context.Context, sessionID string) (json.RawMessage, error) {
+	var out json.RawMessage
+	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/inspect"
+	if err := c.JSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *Client) RunSession(ctx context.Context, sessionID string, run gatewayapi.RunRequest, emit func(protocol.Event)) error {
 	_, err := c.RunSessionResult(ctx, sessionID, run, emit)
 	return err

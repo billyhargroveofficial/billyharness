@@ -508,6 +508,56 @@ func TestGatewaySessionContextStatusEndpoint(t *testing.T) {
 	}
 }
 
+func TestGatewaySessionInspectEndpointReturnsDurableDiagnostics(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+
+	owner := gatewayapi.SessionOwner{ClientType: "telegram", TelegramChatID: 1001, TelegramUserID: 2002}
+	body, _ := json.Marshal(CreateSessionRequest{Owner: owner})
+	create := httptest.NewRecorder()
+	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(body)))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var created SessionResponse
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	run := httptest.NewRecorder()
+	server.Handler().ServeHTTP(run, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/run", strings.NewReader(`{"input_id":"inspect-input","prompt":"inspect live"}`)))
+	if run.Code != http.StatusOK {
+		t.Fatalf("run status = %d body=%s", run.Code, run.Body.String())
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID+"/inspect", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inspect status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var inspection StoredSessionInspection
+	if err := json.Unmarshal(rec.Body.Bytes(), &inspection); err != nil {
+		t.Fatal(err)
+	}
+	if inspection.SessionID != created.ID || inspection.Owner.TelegramChatID != owner.TelegramChatID || inspection.Owner.TelegramUserID != owner.TelegramUserID {
+		t.Fatalf("inspection identity/owner = %#v", inspection)
+	}
+	if !inspection.MessageSnapshotReady || !inspection.EventReplayReady || !inspection.OfflineReplayReady {
+		t.Fatalf("inspection readiness = %#v", inspection)
+	}
+	if inspection.Events.Lifecycle.RunsStarted != 1 || inspection.Events.Lifecycle.RunsClosed != 1 || inspection.Events.Lifecycle.RunsOpen != 0 {
+		t.Fatalf("lifecycle = %#v", inspection.Events.Lifecycle)
+	}
+	if !inspection.Events.Projector.ParityOK || inspection.Events.Projector.SeqRange == "" {
+		t.Fatalf("projector = %#v", inspection.Events.Projector)
+	}
+	if !inspection.Inputs.Exists || !inspection.Inputs.ValidationValid || inspection.Inputs.Completed != 1 || inspection.Inputs.Records != 3 {
+		t.Fatalf("inputs = %#v", inspection.Inputs)
+	}
+}
+
 func TestGatewaySessionContextReportsMemoryDriftWithoutCurrentContents(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", home)

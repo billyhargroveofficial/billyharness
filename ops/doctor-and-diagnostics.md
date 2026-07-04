@@ -148,13 +148,18 @@ Inspect a specific session:
 ```sh
 ./bin/fast-agent-harness sessions inspect SESSION_ID
 ./bin/fast-agent-harness sessions inspect -json SESSION_ID
+./bin/fast-agent-harness sessions debug -gateway http://127.0.0.1:8765 SESSION_ID
+./bin/fast-agent-harness sessions debug -gateway http://127.0.0.1:8765 -json SESSION_ID
 ./bin/fast-agent-harness sessions context SESSION_ID
 ```
 
-`sessions inspect` reports separate readiness states. `message_snapshot_ready`
-means a message/history snapshot can be loaded; `event_replay_ready` means the
-event JSONL is present, valid, and closed enough for incident-grade replay. The
-legacy `offline_replay_ready` field follows event replay readiness.
+`sessions inspect` reads the local store directly. `sessions debug` asks the
+live gateway for `GET /v1/sessions/{id}/inspect`, so it applies gateway auth and
+session-owner read policy. Both report separate readiness states:
+`message_snapshot_ready` means a message/history snapshot can be loaded;
+`event_replay_ready` means the event JSONL is present, valid, and closed enough
+for incident-grade replay. The legacy `offline_replay_ready` field follows
+event replay readiness.
 
 Export transcript text:
 

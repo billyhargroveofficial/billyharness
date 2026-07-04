@@ -47,10 +47,12 @@ type StoredSessionInspection struct {
 	SessionID            string                         `json:"session_id"`
 	SessionDir           string                         `json:"session_dir,omitempty"`
 	Legacy               bool                           `json:"legacy,omitempty"`
+	Owner                gatewayapi.SessionOwner        `json:"owner,omitempty"`
 	Manifest             StoredSessionManifest          `json:"manifest,omitempty"`
 	Files                []StoredSessionFile            `json:"files,omitempty"`
 	History              StoredSessionHistoryInspection `json:"history,omitempty"`
 	Events               StoredSessionEventsInspection  `json:"events,omitempty"`
+	Inputs               StoredSessionInputsInspection  `json:"inputs,omitempty"`
 	MessageCount         int                            `json:"message_count,omitempty"`
 	Readiness            []string                       `json:"readiness,omitempty"`
 	MessageSnapshotReady bool                           `json:"message_snapshot_ready"`
@@ -66,6 +68,7 @@ type StoredSessionManifest struct {
 	UpdatedAt                 time.Time               `json:"updated_at,omitempty"`
 	HistoryJSONL              string                  `json:"history_jsonl,omitempty"`
 	EventsJSONL               string                  `json:"events_jsonl,omitempty"`
+	InputsJSONL               string                  `json:"inputs_jsonl,omitempty"`
 	SnapshotJSON              string                  `json:"snapshot_json,omitempty"`
 	ConfigSnapshotJSON        string                  `json:"config_snapshot_json,omitempty"`
 	ModelProviderSnapshotJSON string                  `json:"model_provider_snapshot_json,omitempty"`
@@ -101,6 +104,7 @@ type StoredSessionEventsInspection struct {
 	LastSeq               int64                               `json:"last_seq,omitempty"`
 	LastEvent             string                              `json:"last_event,omitempty"`
 	Validation            StoredSessionEventValidation        `json:"validation"`
+	Lifecycle             StoredSessionLifecycleInspection    `json:"lifecycle"`
 	Terminal              StoredSessionTerminalInspection     `json:"terminal"`
 	Projector             StoredSessionProjectorInspection    `json:"projector"`
 	OutputRefs            int                                 `json:"output_refs,omitempty"`
@@ -113,6 +117,20 @@ type StoredSessionEventsInspection struct {
 	TurnChanges           []StoredSessionTurnChangeInspection `json:"turn_changes,omitempty"`
 	RedoAvailable         bool                                `json:"redo_available,omitempty"`
 	RedoChangeID          string                              `json:"redo_change_id,omitempty"`
+}
+
+type StoredSessionInputsInspection struct {
+	Path            string         `json:"path,omitempty"`
+	Exists          bool           `json:"exists"`
+	Records         int64          `json:"records,omitempty"`
+	LastSeq         int64          `json:"last_seq,omitempty"`
+	ValidationValid bool           `json:"validation_valid"`
+	StateCounts     map[string]int `json:"state_counts,omitempty"`
+	Pending         int            `json:"pending,omitempty"`
+	Promoted        int            `json:"promoted,omitempty"`
+	Completed       int            `json:"completed,omitempty"`
+	Ambiguous       int            `json:"ambiguous,omitempty"`
+	Error           string         `json:"error,omitempty"`
 }
 
 type StoredSessionEventValidation struct {
@@ -131,6 +149,21 @@ type StoredSessionEventValidation struct {
 	Line                 int    `json:"line,omitempty"`
 	RecordNo             int64  `json:"record_no,omitempty"`
 	Error                string `json:"error,omitempty"`
+}
+
+type StoredSessionLifecycleInspection struct {
+	RunsStarted         int `json:"runs_started,omitempty"`
+	RunsClosed          int `json:"runs_closed,omitempty"`
+	RunsOpen            int `json:"runs_open,omitempty"`
+	TurnsStarted        int `json:"turns_started,omitempty"`
+	TurnsClosed         int `json:"turns_closed,omitempty"`
+	TurnsOpen           int `json:"turns_open,omitempty"`
+	StepsStarted        int `json:"steps_started,omitempty"`
+	StepsClosed         int `json:"steps_closed,omitempty"`
+	StepsOpen           int `json:"steps_open,omitempty"`
+	ToolAttemptsStarted int `json:"tool_attempts_started,omitempty"`
+	ToolAttemptsClosed  int `json:"tool_attempts_closed,omitempty"`
+	ToolAttemptsOpen    int `json:"tool_attempts_open,omitempty"`
 }
 
 type StoredSessionTerminalInspection struct {
@@ -287,10 +320,12 @@ func InspectStoredSession(dir, id string) (StoredSessionInspection, error) {
 		return out, err
 	}
 	out.Manifest = storedSessionManifest(manifest)
+	out.Owner = manifest.Owner
 	out.Files = append(out.Files,
 		inspectStoredSessionFile("manifest", manifestPath),
 		inspectStoredSessionFile("history", filepath.Join(sessionDir, sessionFileName(manifest.HistoryJSONL, sessionHistoryJSONLName))),
 		inspectStoredSessionFile("events", filepath.Join(sessionDir, sessionFileName(manifest.EventsJSONL, sessionEventsJSONLName))),
+		inspectStoredSessionFile("inputs", filepath.Join(sessionDir, sessionFileName(manifest.InputsJSONL, sessionInputsJSONLName))),
 		inspectStoredSessionFile("legacy_snapshot", filepath.Join(dir, sessionFileName(manifest.SnapshotJSON, cleanID+".json"))),
 		inspectStoredSessionFile("config_snapshot", filepath.Join(sessionDir, sessionFileName(manifest.ConfigSnapshotJSON, sessionConfigSnapshotName))),
 		inspectStoredSessionFile("model_provider_snapshot", filepath.Join(sessionDir, sessionFileName(manifest.ModelProviderSnapshotJSON, sessionModelSnapshotName))),
@@ -326,6 +361,11 @@ func InspectStoredSession(dir, id string) (StoredSessionInspection, error) {
 			out.Warnings = append(out.Warnings, formatStoredOutputRefWarning(warning))
 		}
 	}
+	inputsPath := filepath.Join(sessionDir, sessionFileName(manifest.InputsJSONL, sessionInputsJSONLName))
+	out.Inputs = inspectSessionInputs(dir, inputsPath, cleanID)
+	if out.Inputs.Error != "" {
+		out.Warnings = append(out.Warnings, "input ledger invalid: "+out.Inputs.Error)
+	}
 	out.MessageCount = len(history.messages)
 	applyStoredSessionReadiness(&out)
 	if !hasExistingFile(out.Files, "config_snapshot") {
@@ -338,6 +378,40 @@ func InspectStoredSession(dir, id string) (StoredSessionInspection, error) {
 		out.Warnings = append(out.Warnings, "MCP snapshot missing")
 	}
 	return out, nil
+}
+
+func (s *Server) inspectSession(session *Session) (StoredSessionInspection, error) {
+	if session == nil {
+		return StoredSessionInspection{}, fmt.Errorf("session is nil")
+	}
+	if s != nil && s.store != nil && strings.TrimSpace(s.store.dir) != "" {
+		inspection, err := InspectStoredSession(s.store.dir, session.ID)
+		if err == nil {
+			if inspection.Owner == (gatewayapi.SessionOwner{}) {
+				inspection.Owner = session.Owner
+			}
+			return inspection, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return inspection, err
+		}
+	}
+	return liveSessionInspection(session), nil
+}
+
+func liveSessionInspection(session *Session) StoredSessionInspection {
+	messageCount := len(session.messages())
+	out := StoredSessionInspection{
+		SessionID:    session.ID,
+		Owner:        session.Owner,
+		MessageCount: messageCount,
+		History:      StoredSessionHistoryInspection{MessageCount: messageCount},
+		Events:       inspectSessionEvents(session.ID, "", nil),
+		Inputs:       StoredSessionInputsInspection{ValidationValid: true},
+		Warnings:     []string{"session store unavailable; live inspection has no durable replay"},
+	}
+	applyStoredSessionReadiness(&out)
+	return out
 }
 
 func StoredSessionContext(dir, id string, limits config.RuntimeLimits) (gatewayapi.SessionContextResponse, error) {
@@ -445,6 +519,7 @@ func inspectLegacyStoredSession(dir, id string) (StoredSessionInspection, error)
 		Dir:          dir,
 		SessionID:    id,
 		Legacy:       true,
+		Owner:        record.Owner,
 		Files:        []StoredSessionFile{file},
 		MessageCount: len(record.Messages),
 		Warnings:     []string{"legacy snapshot only; JSONL manifest/history/events missing"},
@@ -464,6 +539,7 @@ func inspectLegacyStoredSession(dir, id string) (StoredSessionInspection, error)
 		UpdatedAt:    record.Updated,
 		MessageCount: len(record.Messages),
 		SnapshotJSON: filepath.Base(path),
+		Owner:        record.Owner,
 	}
 	applyStoredSessionReadiness(&out)
 	return out, nil
@@ -515,6 +591,49 @@ func inspectStoredSessionFile(name, path string) StoredSessionFile {
 	return file
 }
 
+func inspectSessionInputs(storeDir, path, sessionID string) StoredSessionInputsInspection {
+	out := StoredSessionInputsInspection{
+		Path:            filepath.Clean(path),
+		Exists:          fileExists(path),
+		ValidationValid: true,
+		StateCounts:     map[string]int{},
+	}
+	if strings.TrimSpace(path) == "" || !out.Exists {
+		out.StateCounts = nil
+		return out
+	}
+	replayed, err := replaySessionInputs(path, sessionID)
+	if err != nil {
+		out.ValidationValid = false
+		out.Error = sanitizeSessionStoreLoadError(storeDir, err.Error())
+		out.StateCounts = nil
+		return out
+	}
+	out.Records = replayed.lastSeq
+	out.LastSeq = replayed.lastSeq
+	for _, state := range replayed.inputs {
+		stateName := strings.TrimSpace(state.State)
+		if stateName == "" {
+			stateName = "unknown"
+		}
+		out.StateCounts[stateName]++
+		switch stateName {
+		case sessionInputAdmitted:
+			out.Pending++
+		case sessionInputPromoted:
+			out.Promoted++
+		case sessionInputCompleted:
+			out.Completed++
+		case sessionInputAmbiguous:
+			out.Ambiguous++
+		}
+	}
+	if len(out.StateCounts) == 0 {
+		out.StateCounts = nil
+	}
+	return out
+}
+
 func inspectSessionEvents(sessionID, path string, events []protocol.Event) StoredSessionEventsInspection {
 	out := StoredSessionEventsInspection{
 		Path:       path,
@@ -530,6 +649,12 @@ func inspectSessionEvents(sessionID, path string, events []protocol.Event) Store
 	requestedCalls := map[string]struct{}{}
 	startedAttempts := map[string]struct{}{}
 	terminalAttempts := map[string]struct{}{}
+	startedRuns := map[string]struct{}{}
+	closedRuns := map[string]struct{}{}
+	startedTurns := map[string]struct{}{}
+	closedTurns := map[string]struct{}{}
+	startedSteps := map[string]struct{}{}
+	closedSteps := map[string]struct{}{}
 	for _, event := range events {
 		if event.Seq > 0 {
 			if _, ok := seenSeq[event.Seq]; ok {
@@ -556,11 +681,36 @@ func inspectSessionEvents(sessionID, path string, events []protocol.Event) Store
 		}
 		switch event.Type {
 		case protocol.EventRunStarted:
+			if event.RunID != "" {
+				startedRuns[event.RunID] = struct{}{}
+			}
 			out.Terminal = StoredSessionTerminalInspection{State: storedSessionRunStateRunning, Event: string(event.Type), RunID: event.RunID, Seq: event.Seq}
 		case protocol.EventRunCompleted:
+			if event.RunID != "" {
+				closedRuns[event.RunID] = struct{}{}
+			}
 			out.Terminal = StoredSessionTerminalInspection{State: storedSessionRunStateCompleted, Event: string(event.Type), RunID: event.RunID, Seq: event.Seq}
 		case protocol.EventRunFailed:
+			if event.RunID != "" {
+				closedRuns[event.RunID] = struct{}{}
+			}
 			out.Terminal = StoredSessionTerminalInspection{State: storedSessionRunStateFailed, Event: string(event.Type), RunID: event.RunID, Seq: event.Seq, LastError: fmt.Sprint(event.Data)}
+		case protocol.EventTurnStarted:
+			if key := inspectLifecycleTurnKey(event); key != "" {
+				startedTurns[key] = struct{}{}
+			}
+		case protocol.EventTurnCompleted:
+			if key := inspectLifecycleTurnKey(event); key != "" {
+				closedTurns[key] = struct{}{}
+			}
+		case protocol.EventStepStarted:
+			if key := inspectLifecycleStepKey(event); key != "" {
+				startedSteps[key] = struct{}{}
+			}
+		case protocol.EventStepCompleted:
+			if key := inspectLifecycleStepKey(event); key != "" {
+				closedSteps[key] = struct{}{}
+			}
 		}
 		inspectSessionLifecycleReferences(&out, event, requestedCalls, startedAttempts, terminalAttempts)
 		if event.Type == protocol.EventToolOutputRefCreated {
@@ -606,6 +756,20 @@ func inspectSessionEvents(sessionID, path string, events []protocol.Event) Store
 	if err := eventlog.ValidateClosedLifecycle(events); err != nil {
 		out.Validation.ClosedLifecycleValid = false
 		out.Validation.ClosedLifecycleError = err.Error()
+	}
+	out.Lifecycle = StoredSessionLifecycleInspection{
+		RunsStarted:         len(startedRuns),
+		RunsClosed:          len(closedRuns),
+		RunsOpen:            openLifecycleCount(startedRuns, closedRuns),
+		TurnsStarted:        len(startedTurns),
+		TurnsClosed:         len(closedTurns),
+		TurnsOpen:           openLifecycleCount(startedTurns, closedTurns),
+		StepsStarted:        len(startedSteps),
+		StepsClosed:         len(closedSteps),
+		StepsOpen:           openLifecycleCount(startedSteps, closedSteps),
+		ToolAttemptsStarted: len(startedAttempts),
+		ToolAttemptsClosed:  len(terminalAttempts),
+		ToolAttemptsOpen:    openLifecycleCount(startedAttempts, terminalAttempts),
 	}
 	out.Projector = inspectSessionProjector(sessionID, events, out.LastSeq)
 	out.OutputRefsVerified = out.OutputRefs > 0 && out.MissingOutputRefs == 0 && out.OutputRefHashMismatch == 0
@@ -688,6 +852,38 @@ func inspectSessionLifecycleReferences(out *StoredSessionEventsInspection, event
 			out.Validation.UnmatchedProgress++
 		}
 	}
+}
+
+func inspectLifecycleTurnKey(event protocol.Event) string {
+	turnID := strings.TrimSpace(event.TurnID)
+	if turnID == "" {
+		turnID = inspectEventDataString(event, "turn_id")
+	}
+	if turnID == "" {
+		return ""
+	}
+	return strings.TrimSpace(event.RunID) + "\x00" + turnID
+}
+
+func inspectLifecycleStepKey(event protocol.Event) string {
+	stepID := strings.TrimSpace(event.StepID)
+	if stepID == "" {
+		stepID = inspectEventDataString(event, "step_id")
+	}
+	if stepID == "" {
+		return ""
+	}
+	return inspectLifecycleTurnKey(event) + "\x00" + stepID
+}
+
+func openLifecycleCount(started, closed map[string]struct{}) int {
+	open := 0
+	for key := range started {
+		if _, ok := closed[key]; !ok {
+			open++
+		}
+	}
+	return open
 }
 
 func inspectKnownCallOrAttempt(callID, attemptID string, requestedCalls, startedAttempts map[string]struct{}) bool {
@@ -1031,6 +1227,7 @@ func storedSessionManifest(manifest sessionManifest) StoredSessionManifest {
 		UpdatedAt:                 manifest.UpdatedAt,
 		HistoryJSONL:              manifest.HistoryJSONL,
 		EventsJSONL:               manifest.EventsJSONL,
+		InputsJSONL:               manifest.InputsJSONL,
 		SnapshotJSON:              manifest.SnapshotJSON,
 		ConfigSnapshotJSON:        manifest.ConfigSnapshotJSON,
 		ModelProviderSnapshotJSON: manifest.ModelProviderSnapshotJSON,

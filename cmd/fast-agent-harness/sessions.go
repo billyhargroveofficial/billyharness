@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
 	"github.com/billyhargroveofficial/billyharness/internal/secrets"
 	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
@@ -27,10 +29,15 @@ func sessionsCommand(args []string, out io.Writer) error {
 		return sessionsListCommand(nil, out)
 	}
 	switch strings.ToLower(strings.TrimSpace(args[0])) {
+	case "help", "-h", "--help":
+		printSessionsUsage(out)
+		return nil
 	case "list", "ls":
 		return sessionsListCommand(args[1:], out)
 	case "inspect", "show":
 		return sessionsInspectCommand(args[1:], out)
+	case "debug":
+		return sessionsDebugCommand(args[1:], out)
 	case "context", "ctx":
 		return sessionsContextCommand(args[1:], out)
 	case "export":
@@ -52,6 +59,17 @@ func sessionsCommand(args []string, out io.Writer) error {
 	default:
 		return fmt.Errorf("unknown sessions command %q", args[0])
 	}
+}
+
+func printSessionsUsage(out io.Writer) {
+	fmt.Fprintln(out, "Usage: fast-agent-harness sessions <command> [args]")
+	fmt.Fprintln(out, "  sessions list [-dir DIR] [-json]")
+	fmt.Fprintln(out, "  sessions inspect [-dir DIR] [-json] SESSION_ID")
+	fmt.Fprintln(out, "  sessions debug [-gateway URL] [-json] SESSION_ID")
+	fmt.Fprintln(out, "  sessions context [-dir DIR] [-json] SESSION_ID")
+	fmt.Fprintln(out, "  sessions export [-dir DIR] [-mode raw|rich] [-json] SESSION_ID")
+	fmt.Fprintln(out, "  sessions index rebuild|show|delete [-dir DIR] [-json]")
+	fmt.Fprintln(out, "  sessions search|tools|errors|runs|usage ...")
 }
 
 func sessionsListCommand(args []string, out io.Writer) error {
@@ -95,6 +113,45 @@ func sessionsListCommand(args []string, out io.Writer) error {
 	for _, warning := range list.Warnings {
 		fmt.Fprintf(out, "warning: %s\n", warning)
 	}
+	return nil
+}
+
+func sessionsDebugCommand(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("sessions debug", flag.ExitOnError)
+	gatewayURL := fs.String("gateway", "", "gateway base URL")
+	jsonOut := fs.Bool("json", false, "print JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: sessions debug [-gateway URL] [-json] SESSION_ID")
+	}
+	baseURL := normalizeGatewayURL(*gatewayURL)
+	if baseURL == "" {
+		cfg, err := resolveRuntimeConfig()
+		if err != nil {
+			return err
+		}
+		discovered, ok := discoverGatewayURL(context.Background(), cfg)
+		if !ok {
+			return fmt.Errorf("gateway unavailable: %s", gatewayclient.UnavailableHint(normalizeGatewayURL(cfg.GatewayAddr)))
+		}
+		baseURL = discovered
+	}
+	raw, err := gatewayclient.New(baseURL).SessionInspectRaw(context.Background(), fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	var inspection gateway.StoredSessionInspection
+	if err := json.Unmarshal(raw, &inspection); err != nil {
+		return err
+	}
+	if *jsonOut {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(inspection)
+	}
+	printSessionInspection(out, inspection)
 	return nil
 }
 
@@ -745,6 +802,9 @@ func printSessionInspection(out io.Writer, inspection gateway.StoredSessionInspe
 		fmt.Fprintf(out, "session dir: %s\n", inspection.SessionDir)
 	}
 	fmt.Fprintf(out, "mode: %s\n", sessionMode(inspection.Legacy))
+	if owner := sessionOwnerText(inspection.Owner); owner != "" {
+		fmt.Fprintf(out, "owner: %s\n", owner)
+	}
 	fmt.Fprintf(out, "messages: %d\n", inspection.MessageCount)
 	if len(inspection.Readiness) > 0 {
 		fmt.Fprintf(out, "readiness: %s\n", strings.Join(inspection.Readiness, ","))
@@ -777,6 +837,21 @@ func printSessionInspection(out io.Writer, inspection gateway.StoredSessionInspe
 		inspection.Events.MissingOutputRefs,
 		inspection.Events.OutputRefHashMismatch,
 	)
+	lifecycle := inspection.Events.Lifecycle
+	fmt.Fprintf(out, "lifecycle: runs=%d/%d open=%d turns=%d/%d open=%d steps=%d/%d open=%d tool_attempts=%d/%d open=%d\n",
+		lifecycle.RunsClosed,
+		lifecycle.RunsStarted,
+		lifecycle.RunsOpen,
+		lifecycle.TurnsClosed,
+		lifecycle.TurnsStarted,
+		lifecycle.TurnsOpen,
+		lifecycle.StepsClosed,
+		lifecycle.StepsStarted,
+		lifecycle.StepsOpen,
+		lifecycle.ToolAttemptsClosed,
+		lifecycle.ToolAttemptsStarted,
+		lifecycle.ToolAttemptsOpen,
+	)
 	validation := inspection.Events.Validation
 	fmt.Fprintf(out, "validation: valid=%t envelope=%t sequence=%t lifecycle=%t gaps=%d duplicates=%d unmatched_progress=%d unmatched_output_refs=%d unmatched_permissions=%d\n",
 		validation.Valid,
@@ -802,6 +877,19 @@ func printSessionInspection(out io.Writer, inspection gateway.StoredSessionInspe
 			validation.RecordNo,
 			validation.Error,
 		)
+	}
+	inputs := inspection.Inputs
+	fmt.Fprintf(out, "inputs: exists=%t records=%d pending=%d promoted=%d completed=%d ambiguous=%d valid=%t\n",
+		inputs.Exists,
+		inputs.Records,
+		inputs.Pending,
+		inputs.Promoted,
+		inputs.Completed,
+		inputs.Ambiguous,
+		inputs.ValidationValid,
+	)
+	if inputs.Error != "" {
+		fmt.Fprintf(out, "inputs error: %s\n", inputs.Error)
 	}
 	terminal := inspection.Events.Terminal
 	fmt.Fprintf(out, "terminal: state=%s event=%s run=%s seq=%d\n",
@@ -835,6 +923,32 @@ func printSessionInspection(out io.Writer, inspection gateway.StoredSessionInspe
 	for _, warning := range inspection.Warnings {
 		fmt.Fprintf(out, "warning: %s\n", warning)
 	}
+}
+
+func sessionOwnerText(owner gatewayapi.SessionOwner) string {
+	var parts []string
+	if owner.ClientType != "" {
+		parts = append(parts, "client_type="+owner.ClientType)
+	}
+	if owner.TelegramChatID != 0 {
+		parts = append(parts, fmt.Sprintf("telegram_chat=%d", owner.TelegramChatID))
+	}
+	if owner.TelegramThreadID != 0 {
+		parts = append(parts, fmt.Sprintf("telegram_thread=%d", owner.TelegramThreadID))
+	}
+	if owner.TelegramUserID != 0 {
+		parts = append(parts, fmt.Sprintf("telegram_user=%d", owner.TelegramUserID))
+	}
+	if owner.TUIChatID != "" {
+		parts = append(parts, "tui_chat="+owner.TUIChatID)
+	}
+	if owner.Profile != "" {
+		parts = append(parts, "profile="+owner.Profile)
+	}
+	if owner.Model != "" {
+		parts = append(parts, "model="+owner.Model)
+	}
+	return strings.Join(parts, " ")
 }
 
 func sessionMode(legacy bool) string {

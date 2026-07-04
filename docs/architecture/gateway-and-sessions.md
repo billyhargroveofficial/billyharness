@@ -75,6 +75,7 @@ Future agents should update this section from that route table, not from memory.
 | `GET /v1/sessions/{id}` | fetch session metadata and messages |
 | `GET /v1/sessions/{id}/status` | fetch current session status |
 | `GET /v1/sessions/{id}/context` | project context, runtime, usage, prompt, and replay-derived metrics |
+| `GET /v1/sessions/{id}/inspect` | return redacted live/durable session inspection and replay readiness |
 | `GET /v1/sessions/{id}/events` | NDJSON replay/follow stream for session events |
 | `POST /v1/sessions/{id}/inputs` | admit an idempotent pending input without running it |
 | `POST /v1/sessions/{id}/inputs/{input_id}/complete` | terminally complete an admitted input with optional failure evidence |
@@ -221,6 +222,13 @@ or JSONL history snapshot can be `message_snapshot_ready` while
 partial/open lifecycle. The compatibility `offline_replay_ready` field follows
 `event_replay_ready`; it does not mean "messages can be loaded."
 
+`GET /v1/sessions/{id}/inspect` exposes the same redacted inspection for a live
+gateway session, subject to the normal session read authority boundary. It
+prefers durable store inspection and reports owner scope, lifecycle open/closed
+counts, projector parity, output-ref checks, input-ledger state counts, and
+replay readiness. If a session exists only in memory, it returns a warning
+instead of claiming durable replay truth.
+
 Undo/redo restore is fail-closed at the gateway boundary. The gateway loads the
 checkpoint patch artifact through the `patch_output_ref` recorded on the
 `turn.change_recorded` event and verifies the recorded
@@ -325,8 +333,10 @@ CLI helpers, and future client surfaces. It:
 - injects bearer auth from `BILLYHARNESS_GATEWAY_AUTH_TOKEN` or legacy
   `FAST_AGENT_GATEWAY_AUTH_TOKEN`;
 - retries once around readiness on connection refused;
-- exposes typed helpers for create/list/get/status/context/run/follow/replay/
-  input/cancel/user-input/undo/redo;
+- exposes helpers for create/list/get/status/context/inspect/run/follow/replay/
+  input/cancel/user-input/undo/redo. Most are typed; inspect currently returns
+  raw JSON so CLI/debug surfaces can reuse the gateway inspection shape without
+  moving store-only DTOs into the client package;
 - injects owner scope headers from `WithSessionOwner(ctx, owner)`;
 - decodes NDJSON protocol events and reports sequence gaps or run failures as
   typed errors.

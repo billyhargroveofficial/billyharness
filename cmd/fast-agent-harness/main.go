@@ -77,6 +77,7 @@ func usage() {
 	fmt.Println("  config mcp-migrate [-file FILE] [-json]")
 	fmt.Println("  sessions list [-dir DIR] [-json]")
 	fmt.Println("  sessions inspect [-dir DIR] [-json] SESSION_ID")
+	fmt.Println("  sessions debug [-gateway http://127.0.0.1:8765] [-json] SESSION_ID")
 	fmt.Println("  inspect-session [-dir DIR] [-json] SESSION_ID")
 	fmt.Println("  sessions context [-dir DIR] [-json] SESSION_ID")
 	fmt.Println("  sessions export [-dir DIR] [-mode raw|rich] [-json] SESSION_ID")

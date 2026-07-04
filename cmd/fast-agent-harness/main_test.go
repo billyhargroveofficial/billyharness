@@ -518,6 +518,36 @@ func TestSessionsCommandListsAndInspectsStore(t *testing.T) {
 		t.Fatalf("inspection debug reducer = terminal:%#v projector:%#v", inspection.Events.Terminal, inspection.Events.Projector)
 	}
 
+	liveGateway := httptest.NewServer(server.Handler())
+	defer liveGateway.Close()
+	var debugOut bytes.Buffer
+	if err := sessionsCommand([]string{"debug", "-gateway", liveGateway.URL, created.ID}, &debugOut); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"event replay: true", "lifecycle: runs=1/1 open=0", "inputs: exists=true records=3"} {
+		if !strings.Contains(debugOut.String(), want) {
+			t.Fatalf("debug output missing %q:\n%s", want, debugOut.String())
+		}
+	}
+	var debugJSON bytes.Buffer
+	if err := sessionsCommand([]string{"debug", "-gateway", liveGateway.URL, "-json", created.ID}, &debugJSON); err != nil {
+		t.Fatal(err)
+	}
+	var liveInspection gateway.StoredSessionInspection
+	if err := json.Unmarshal(debugJSON.Bytes(), &liveInspection); err != nil {
+		t.Fatal(err)
+	}
+	if liveInspection.SessionID != created.ID || !liveInspection.EventReplayReady || liveInspection.Inputs.Completed != 1 {
+		t.Fatalf("live inspection = %#v", liveInspection)
+	}
+	var helpOut bytes.Buffer
+	if err := sessionsCommand([]string{"--help"}, &helpOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(helpOut.String(), "sessions debug") {
+		t.Fatalf("help output missing sessions debug:\n%s", helpOut.String())
+	}
+
 	var contextOut bytes.Buffer
 	if err := sessionsCommand([]string{"context", "-dir", storeDir, created.ID}, &contextOut); err != nil {
 		t.Fatal(err)

@@ -2,6 +2,7 @@ package gatewayclient
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -215,6 +216,34 @@ func TestSessionStatusFetchesRuntimeModel(t *testing.T) {
 	}
 	if status.Model != "deepseek-v4-flash" {
 		t.Fatalf("status model = %q", status.Model)
+	}
+}
+
+func TestSessionInspectRawFetchesLiveInspectEndpoint(t *testing.T) {
+	server := testkit.NewRouteServer(t, testkit.Route{
+		Method: http.MethodGet,
+		Path:   "/v1/sessions/session-1/inspect",
+		Handler: func(w http.ResponseWriter, r *http.Request) {
+			testkit.WriteJSON(t, w, map[string]any{
+				"session_id":         "session-1",
+				"event_replay_ready": true,
+			})
+		},
+	})
+
+	raw, err := New(server.URL).SessionInspectRaw(context.Background(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		SessionID        string `json:"session_id"`
+		EventReplayReady bool   `json:"event_replay_ready"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.SessionID != "session-1" || !got.EventReplayReady {
+		t.Fatalf("inspect raw = %s parsed=%#v", raw, got)
 	}
 }
 

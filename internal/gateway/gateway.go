@@ -303,6 +303,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/sessions/{id}", s.handleGetSession)
 	s.mux.HandleFunc("GET /v1/sessions/{id}/status", s.handleSessionStatus)
 	s.mux.HandleFunc("GET /v1/sessions/{id}/context", s.handleSessionContextStatus)
+	s.mux.HandleFunc("GET /v1/sessions/{id}/inspect", s.handleSessionInspect)
 	s.mux.HandleFunc("GET /v1/sessions/{id}/events", s.handleSessionEvents)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/inputs", s.handleSessionInput)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/inputs/{input_id}/complete", s.handleSessionInputComplete)
@@ -512,6 +513,19 @@ func (s *Server) handleSessionContextStatus(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, s.sessionContextResponse(session))
+}
+
+func (s *Server) handleSessionInspect(w http.ResponseWriter, r *http.Request) {
+	session, ok := s.sessionForRequest(w, r, sessionAccessRead)
+	if !ok {
+		return
+	}
+	inspection, err := s.inspectSession(session)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "session inspect failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, inspection)
 }
 
 func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
