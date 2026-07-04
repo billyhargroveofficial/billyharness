@@ -1667,6 +1667,46 @@ Billy asks for final verification.
   historical session-store corpus was exercised; proof is local focused/race/
   full-suite verification, restart/admission tests, docs check, and rebuild.
 
+### 2026-07-04 - P0.12 split snapshot readiness from event replay readiness
+
+- Completed P0.12 slice. Stored-session inspection and summaries now expose
+  explicit readiness states: `message_snapshot_ready`,
+  `event_replay_ready`, `event_replay_missing`, `event_replay_invalid`, and
+  `event_replay_incomplete`. The compatibility `offline_replay_ready` field now
+  follows event replay readiness instead of merely proving that a message
+  snapshot can be loaded.
+- `InspectStoredSession` now validates closed event lifecycle separately from
+  ordinary replay validation. Partial/open event streams can still report
+  schema/lifecycle-valid replay material while remaining
+  `event_replay_incomplete` until the run lifecycle is closed. Legacy snapshots
+  remain `message_snapshot_ready` but no longer claim event replay readiness.
+- CLI/operator output now prints `snapshot`, `event_replay`, readiness states,
+  and closed-lifecycle diagnostics for `sessions list`, `sessions index show`,
+  and `sessions inspect`.
+- Added focused coverage for legacy snapshots, completed event streams, partial
+  event streams, list/index summaries, and CLI text/JSON output.
+- Updated durable docs because stored-session inspection JSON/text output and
+  replay-readiness semantics changed: `docs/architecture/gateway-and-sessions.md`
+  and `ops/doctor-and-diagnostics.md`. Checked
+  `agent-index/docs-manifest.json`; no manifest edit was needed because both
+  affected docs already had `2026-07-04` review metadata and routing did not
+  change.
+- Verification passed before commit:
+  `go test -count=1 ./internal/gateway ./cmd/fast-agent-harness`;
+  `go test -race -count=1 ./internal/gateway`;
+  `jq . agent-index/docs-manifest.json >/dev/null`;
+  `go test -count=1 ./internal/architecture`;
+  `git diff --check`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `b6c0d06 Split stored session replay readiness`
+  (`b6c0d066b5847dc374cd984ef71410062b91c0eb`).
+- Push: `origin/main` updated from `9abb58e` to `b6c0d06`.
+- Blockers/residual risk: no production store, historical session corpus, or
+  incident-bundle replay was exercised; proof is local focused/race/full-suite
+  verification, synthetic legacy/partial/complete replay tests, docs check, and
+  rebuild.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
