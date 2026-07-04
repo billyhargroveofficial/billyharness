@@ -1880,6 +1880,43 @@ Billy asks for final verification.
   copied. The inventory is a dated snapshot and must be refreshed after deploys
   or service changes.
 
+### 2026-07-04 - P0.17 liveness/readiness split and deeper doctor checks
+
+- Completed P0.17 slice. `/health` is now a cheap unauthenticated liveness
+  response with provider/model only. New `GET /ready` returns bounded
+  readiness for effective provider/model, visible native tool count, MCP catalog
+  summary, and startup session-store diagnostics; corrupt startup session-store
+  evidence moves from `/health` to `/ready` and returns `503` when readiness
+  fails.
+- Hardened `doctor` into a richer automation/operator surface: text and JSON
+  reports now include `mode` (`auto`, `local`, or `production`), effective
+  config checks, active-provider auth checks, gateway bind classification,
+  native tool catalog checks, session-store read/write checks, separate
+  `gateway /health` and `gateway /ready` probes, and production-only systemd
+  unit metadata plus recent journal crash/error signal summaries.
+- Updated durable docs because gateway health/readiness and doctor semantics
+  changed: `README.md`, `ops/doctor-and-diagnostics.md`,
+  `ops/production-services.md`, `docs/architecture/gateway-and-sessions.md`,
+  `docs/architecture/security-model.md`,
+  `docs/adr/0007-local-gateway-mutating-routes-require-explicit-trust.md`,
+  `docs/adr/0008-gateway-state-reads-require-bearer-when-token-configured.md`,
+  and `agent-index/docs-manifest.json`.
+- Verification passed before commit:
+  `go test -count=1 ./internal/gateway ./cmd/fast-agent-harness`;
+  `go test -count=1 ./internal/gateway ./cmd/fast-agent-harness ./internal/architecture`;
+  `jq . agent-index/docs-manifest.json >/dev/null`;
+  `git diff --check`;
+  `go run ./cmd/fast-agent-harness doctor --help`;
+  `go test -race -count=1 ./internal/gateway ./cmd/fast-agent-harness`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `c4e9ece Split gateway liveness and readiness checks`
+  (`c4e9ece54ec6ec8aa8105248111af7ecbc2983b8`).
+- Push: `origin/main` updated from `ef4689d` to `c4e9ece`.
+- Blockers/residual risk: `/ready` is intentionally unauthenticated but bounded
+  to redacted counts/status and startup diagnostics; no production deploy,
+  restart, or live post-deploy `/ready` probe was run for this slice.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
