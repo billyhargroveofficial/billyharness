@@ -1264,6 +1264,30 @@ short but concrete: command, result, commit hash, push state, and unresolved
 blockers. Do not move this TODO to history; the main chat will do that after
 Billy asks for final verification.
 
+### 2026-07-04 - P0.1 gateway read-route auth and browser authority hardening
+
+- Completed P0.1 slice. `/health` remains unauthenticated; configured bearer
+  auth now protects `/v1/` state reads, including loopback `GET`/`HEAD`/`OPTIONS`
+  callers. `/v1/` requests now share browser Host/Origin/Referer checks, and
+  the explicit development loopback bypass remains mutation-only.
+- Updated durable docs because gateway auth/security behavior changed:
+  `docs/architecture/gateway-and-sessions.md`,
+  `docs/architecture/security-model.md`, `docs/README.md`,
+  `docs/adr/README.md`, `agent-index/docs-manifest.json`, and new ADR
+  `docs/adr/0008-gateway-state-reads-require-bearer-when-token-configured.md`.
+- Verification passed:
+  `go test -count=1 ./internal/gateway -run 'TestGateway(AuthMiddlewareProtectsConfiguredV1Reads|MutationAuthProtectsLoopbackBrowserRoutes|MutationAuthExplicitDevLoopbackBypass|RunRequestPrivilegeClamps)$'`;
+  `go test -count=1 ./internal/architecture`;
+  `git diff --check`;
+  `go test -count=1 ./internal/gateway`;
+  `go test -race -count=1 ./internal/gateway`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `2ce3dc7 Harden gateway read route auth`.
+- Push: `origin/main` updated from `bfb110f` to `2ce3dc7`.
+- Blockers/residual risk: no production runtime probe was run for this slice;
+  current proof is unit/race/full-suite/rebuild plus code/docs review.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
