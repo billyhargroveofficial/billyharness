@@ -412,7 +412,7 @@
       "owner": "billy",
       "source_of_truth": true,
       "generated": false,
-      "last_reviewed": "2026-07-03",
+      "last_reviewed": "2026-07-04",
       "trust_level": "hand_curated_and_tested",
       "read_when": [
         "changing Telegram adapter behavior",
@@ -429,12 +429,14 @@
         "internal/toolrender",
         "internal/clientux",
         "cmd/fast-agent-harness/service_cmd.go",
-        "cmd/fast-agent-harness/doctor.go"
+        "cmd/fast-agent-harness/doctor.go",
+        "internal/telegrambot/command_policy.go"
       ],
       "required_tests": [
         "go test -count=1 ./internal/architecture",
         "go test -count=1 ./internal/telegrambot ./internal/gatewayclient",
-        "go test -count=1 ./internal/gateway -run 'TestGatewaySessionOwner(MetadataPersistsAndLists|ScopeFiltersAndDeniesCrossOwner)$'"
+        "go test -count=1 ./internal/gateway -run 'TestGatewaySessionOwner(MetadataPersistsAndLists|ScopeFiltersAndDeniesCrossOwner)$'",
+        "go test -count=1 ./internal/telegrambot -run TestTelegramOperatorCommand"
       ]
     },
     {

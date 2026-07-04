@@ -42,6 +42,7 @@ type telegramCommandSpec struct {
 	aliases       []string
 	usage         string
 	summary       string
+	class         telegramCommandClass
 	bypassRunLock bool
 	handler       telegramCommandHandler
 }
@@ -49,13 +50,13 @@ type telegramCommandSpec struct {
 type authCommandSafetyPolicy struct {
 	SecretBearing                bool
 	RequireDeletionBeforePersist bool
-	AllowGroupAfterDeletion      bool
+	RequirePrivateOwnerChat      bool
 }
 
 var authCommandSafetyPolicies = map[string]authCommandSafetyPolicy{
-	"deepseek": {SecretBearing: true, RequireDeletionBeforePersist: true, AllowGroupAfterDeletion: true},
-	"api":      {SecretBearing: true, RequireDeletionBeforePersist: true, AllowGroupAfterDeletion: true},
-	"key":      {SecretBearing: true, RequireDeletionBeforePersist: true, AllowGroupAfterDeletion: true},
+	"deepseek": {SecretBearing: true, RequireDeletionBeforePersist: true, RequirePrivateOwnerChat: true},
+	"api":      {SecretBearing: true, RequireDeletionBeforePersist: true, RequirePrivateOwnerChat: true},
+	"key":      {SecretBearing: true, RequireDeletionBeforePersist: true, RequirePrivateOwnerChat: true},
 }
 
 func telegramCommands() []telegramCommandSpec {
@@ -69,12 +70,15 @@ func telegramCommands() []telegramCommandSpec {
 			handler:       (*Bot).handleCommandsCommand,
 		}),
 		telegramActionCommand("chat.new", telegramCommandSpec{
+			class:   telegramCommandSessionScoped,
 			handler: (*Bot).handleNewCommand,
 		}),
 		telegramActionCommand("chat.resume", telegramCommandSpec{
+			class:   telegramCommandSessionScoped,
 			handler: (*Bot).handleResumeCommand,
 		}),
 		telegramActionCommand("chat.fork", telegramCommandSpec{
+			class:   telegramCommandSessionScoped,
 			handler: (*Bot).handleForkCommand,
 		}),
 		telegramActionCommand("status.show", telegramCommandSpec{
@@ -82,57 +86,72 @@ func telegramCommands() []telegramCommandSpec {
 			handler:       (*Bot).handleStatusCommand,
 		}),
 		telegramActionCommand("model.set", telegramCommandSpec{
+			class:   telegramCommandSessionScoped,
 			handler: (*Bot).handleModelCommand,
 		}),
 		telegramActionCommand("profile.set", telegramCommandSpec{
+			class:   telegramCommandSessionScoped,
 			handler: (*Bot).handleProfileCommand,
 		}),
 		telegramActionCommand("reasoning.set", telegramCommandSpec{
+			class:   telegramCommandSessionScoped,
 			handler: (*Bot).handleReasoningCommand,
 		}),
 		telegramActionCommand("access.mode", telegramCommandSpec{
+			class:   telegramCommandSessionScoped,
 			handler: (*Bot).handleModeCommand,
 		}),
 		telegramActionCommand("mcp.show", telegramCommandSpec{
+			class:   telegramCommandOperatorOnly,
 			handler: (*Bot).handleMCPCommand,
 		}),
 		telegramActionCommand("processes.show", telegramCommandSpec{
+			class:         telegramCommandOperatorOnly,
 			bypassRunLock: true,
 			handler:       (*Bot).handleProcessesCommand,
 		}),
 		telegramActionCommand("tool.view", telegramCommandSpec{
+			class:         telegramCommandSessionScoped,
 			bypassRunLock: true,
 			handler:       (*Bot).handleToolViewCommand,
 		}),
 		telegramActionCommand("config.show", telegramCommandSpec{
+			class:         telegramCommandOperatorOnly,
 			bypassRunLock: true,
 			handler:       (*Bot).handleConfigCommand,
 		}),
 		telegramActionCommand("context.show", telegramCommandSpec{
+			class:         telegramCommandSessionScoped,
 			bypassRunLock: true,
 			handler:       (*Bot).handleContextCommand,
 		}),
 		telegramActionCommand("memory.manage", telegramCommandSpec{
+			class:         telegramCommandOperatorOnly,
 			bypassRunLock: true,
 			handler:       (*Bot).handleMemoryCommand,
 		}),
 		telegramActionCommand("diff.preview", telegramCommandSpec{
+			class:         telegramCommandSessionScoped,
 			bypassRunLock: true,
 			handler:       (*Bot).handleDiffCommand,
 		}),
 		telegramActionCommand("undo.apply", telegramCommandSpec{
+			class:         telegramCommandOperatorOnly,
 			bypassRunLock: true,
 			handler:       (*Bot).handleUndoCommand,
 		}),
 		telegramActionCommand("redo.apply", telegramCommandSpec{
+			class:         telegramCommandOperatorOnly,
 			bypassRunLock: true,
 			handler:       (*Bot).handleRedoCommand,
 		}),
 		telegramActionCommand("auth.configure", telegramCommandSpec{
+			class:         telegramCommandOwnerOnly,
 			bypassRunLock: true,
 			handler:       (*Bot).handleAuthCommand,
 		}),
 		telegramActionCommand("run.cancel", telegramCommandSpec{
+			class:         telegramCommandSessionScoped,
 			bypassRunLock: true,
 			handler:       (*Bot).handleCancelCommand,
 		}),
@@ -159,6 +178,10 @@ func (b *Bot) handleCommand(ctx context.Context, msg Message, text string) {
 	spec, ok := telegramCommandFor(cmd)
 	if !ok {
 		_ = b.sendPlain(ctx, msg, "Unknown command. Use /help.")
+		return
+	}
+	if err := b.authorizeCommand(msg, spec); err != nil {
+		_ = b.sendPlain(ctx, msg, err.Error())
 		return
 	}
 	spec.handler(b, ctx, msg, scope, arg)
@@ -815,17 +838,19 @@ func (b *Bot) prepareSecretAuthCommand(ctx context.Context, msg Message, policy 
 	if !policy.SecretBearing {
 		return true
 	}
+	if policy.RequirePrivateOwnerChat && !telegramPrivateChat(msg) {
+		_ = b.sendPlain(ctx, msg, "Secret-bearing auth commands are only accepted in private owner chat.")
+		return false
+	}
 	if msg.MessageID == 0 {
 		_ = b.sendPlain(ctx, msg, "Secret-bearing auth command was not saved because Telegram did not provide a deletable message id. Send it in a private chat and try again.")
 		return false
 	}
-	if err := b.delete(ctx, msg.Chat.ID, msg.MessageID); err != nil {
-		_ = b.sendPlain(ctx, msg, "Secret-bearing auth command was not saved because Telegram could not delete the original message. Send it in a private chat and try again.")
-		return false
-	}
-	if !telegramChatIsPrivate(msg.Chat) && !policy.AllowGroupAfterDeletion {
-		_ = b.sendPlain(ctx, msg, "Secret-bearing auth commands are only accepted in private chat.")
-		return false
+	if policy.RequireDeletionBeforePersist {
+		if err := b.delete(ctx, msg.Chat.ID, msg.MessageID); err != nil {
+			_ = b.sendPlain(ctx, msg, "Secret-bearing auth command was not saved because Telegram could not delete the original message. Send it in a private chat and try again.")
+			return false
+		}
 	}
 	return true
 }

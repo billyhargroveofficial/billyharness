@@ -11,28 +11,29 @@ import (
 )
 
 type Options struct {
-	BotToken             string
-	BotAPIBaseURL        string
-	GatewayURL           string
-	StatePath            string
-	Model                string
-	Profile              string
-	ReasoningEffort      string
-	AccessMode           string
-	MaxToolRounds        int
-	ContextWindow        int64
-	ContextWindowSource  string
-	ContextCompact       int
-	ContextCompactSource string
-	PollTimeoutSec       int
-	EditInterval         time.Duration
-	AllowedChatIDs       map[int64]bool
-	AllowedUserIDs       map[int64]bool
-	AllowUserInGroups    bool
-	AllowAllChats        bool
-	SendEnabled          bool
-	DryRunDefault        bool
-	RequireAllowlist     bool
+	BotToken               string
+	BotAPIBaseURL          string
+	GatewayURL             string
+	StatePath              string
+	Model                  string
+	Profile                string
+	ReasoningEffort        string
+	AccessMode             string
+	MaxToolRounds          int
+	ContextWindow          int64
+	ContextWindowSource    string
+	ContextCompact         int
+	ContextCompactSource   string
+	PollTimeoutSec         int
+	EditInterval           time.Duration
+	AllowedChatIDs         map[int64]bool
+	AllowedUserIDs         map[int64]bool
+	AllowedOperatorUserIDs map[int64]bool
+	AllowUserInGroups      bool
+	AllowAllChats          bool
+	SendEnabled            bool
+	DryRunDefault          bool
+	RequireAllowlist       bool
 }
 
 type Bot struct {

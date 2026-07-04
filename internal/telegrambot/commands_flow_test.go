@@ -50,19 +50,20 @@ func TestTelegramConfigCommandSendsSanitizedSummary(t *testing.T) {
 		},
 	})
 	bot, err := New(Options{
-		BotToken:       "bottoken",
-		StatePath:      t.TempDir() + "/state.json",
-		Model:          "deepseek-v4-flash",
-		Profile:        "billy",
-		AllowedChatIDs: map[int64]bool{123: true},
-		SendEnabled:    true,
-		DryRunDefault:  false,
+		BotToken:               "bottoken",
+		StatePath:              t.TempDir() + "/state.json",
+		Model:                  "deepseek-v4-flash",
+		Profile:                "billy",
+		AllowedChatIDs:         map[int64]bool{123: true},
+		AllowedOperatorUserIDs: map[int64]bool{1001: true},
+		SendEnabled:            true,
+		DryRunDefault:          false,
 	}, client, scriptedHarness{configStatus: "billyharness config\nprovider: deepseek\napi_key: [redacted]"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/config"})
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, From: &User{ID: 1001}, Text: "/config"})
 	if parseMode != "HTML" || !strings.Contains(sentText, "<b>Config</b>") || !strings.Contains(sentText, "provider: deepseek") {
 		t.Fatalf("config message parse=%q text=%q", parseMode, sentText)
 	}
@@ -86,19 +87,20 @@ func TestTelegramCommandErrorsAreRedactedBeforeSend(t *testing.T) {
 		`provider sk-telegramsecret123456789`,
 	}, "\n")
 	bot, err := New(Options{
-		BotToken:       "bottoken",
-		StatePath:      t.TempDir() + "/state.json",
-		Model:          "deepseek-v4-flash",
-		Profile:        "billy",
-		AllowedChatIDs: map[int64]bool{123: true},
-		SendEnabled:    true,
-		DryRunDefault:  false,
+		BotToken:               "bottoken",
+		StatePath:              t.TempDir() + "/state.json",
+		Model:                  "deepseek-v4-flash",
+		Profile:                "billy",
+		AllowedChatIDs:         map[int64]bool{123: true},
+		AllowedOperatorUserIDs: map[int64]bool{1001: true},
+		SendEnabled:            true,
+		DryRunDefault:          false,
 	}, client, failingMCPStatusHarness{err: errors.New(errText)})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/mcp"})
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, From: &User{ID: 1001}, Text: "/mcp"})
 	if !strings.Contains(sentText, "MCP status failed") || !strings.Contains(sentText, "[redacted]") {
 		t.Fatalf("redacted command error missing expected shape: %q", sentText)
 	}
@@ -292,13 +294,14 @@ func TestTelegramStatusCommandFetchesRuntimeModel(t *testing.T) {
 	})
 	harness := &statusReportingHarness{status: gatewayapi.SessionStatus{Model: "deepseek-v4-flash"}}
 	bot, err := New(Options{
-		BotToken:       "bottoken",
-		StatePath:      t.TempDir() + "/state.json",
-		Model:          "deepseek-v4-flash",
-		Profile:        "billy",
-		AllowedChatIDs: map[int64]bool{123: true},
-		SendEnabled:    true,
-		DryRunDefault:  false,
+		BotToken:               "bottoken",
+		StatePath:              t.TempDir() + "/state.json",
+		Model:                  "deepseek-v4-flash",
+		Profile:                "billy",
+		AllowedChatIDs:         map[int64]bool{123: true},
+		AllowedOperatorUserIDs: map[int64]bool{1001: true},
+		SendEnabled:            true,
+		DryRunDefault:          false,
 	}, client, harness)
 	if err != nil {
 		t.Fatal(err)
@@ -374,19 +377,20 @@ func TestTelegramProcessesCommandShowsManagedProcessDashboard(t *testing.T) {
 		},
 	})
 	bot, err := New(Options{
-		BotToken:       "bottoken",
-		StatePath:      t.TempDir() + "/state.json",
-		Model:          "deepseek-v4-flash",
-		Profile:        "billy",
-		AllowedChatIDs: map[int64]bool{123: true},
-		SendEnabled:    true,
-		DryRunDefault:  false,
+		BotToken:               "bottoken",
+		StatePath:              t.TempDir() + "/state.json",
+		Model:                  "deepseek-v4-flash",
+		Profile:                "billy",
+		AllowedChatIDs:         map[int64]bool{123: true},
+		AllowedOperatorUserIDs: map[int64]bool{1001: true},
+		SendEnabled:            true,
+		DryRunDefault:          false,
 	}, client, processStatusHarness{status: "managed shell processes: 1 running, 0 exited\n- shell-1 running ports=5173 output_ref=/tmp/tool-output/shell.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/processes"})
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, From: &User{ID: 1001}, Text: "/processes"})
 	if parseMode != "HTML" || !strings.Contains(sentText, "<b>Processes</b>") || !strings.Contains(sentText, "shell-1") || !strings.Contains(sentText, "ports=5173") {
 		t.Fatalf("process message parse=%q text=%q", parseMode, sentText)
 	}
@@ -407,20 +411,21 @@ func TestTelegramMemoryCommandManagesLocalMemory(t *testing.T) {
 		},
 	})
 	bot, err := New(Options{
-		BotToken:       "bottoken",
-		StatePath:      t.TempDir() + "/state.json",
-		Model:          "deepseek-v4-flash",
-		Profile:        "billy",
-		AllowedChatIDs: map[int64]bool{123: true},
-		SendEnabled:    true,
-		DryRunDefault:  false,
+		BotToken:               "bottoken",
+		StatePath:              t.TempDir() + "/state.json",
+		Model:                  "deepseek-v4-flash",
+		Profile:                "billy",
+		AllowedChatIDs:         map[int64]bool{123: true},
+		AllowedOperatorUserIDs: map[int64]bool{1001: true},
+		SendEnabled:            true,
+		DryRunDefault:          false,
 	}, client, scriptedHarness{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: `/memory add type=user topic=style summary="Prefers concise evidence" path=topics/style.md body="Concise evidence only" confirm=true`})
-	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/memory list"})
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, From: &User{ID: 1001}, Text: `/memory add type=user topic=style summary="Prefers concise evidence" path=topics/style.md body="Concise evidence only" confirm=true`})
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, From: &User{ID: 1001}, Text: "/memory list"})
 	if len(sentTexts) != 2 {
 		t.Fatalf("sent texts = %#v", sentTexts)
 	}
@@ -512,13 +517,14 @@ func TestTelegramToolViewShowsCompactLastRunTools(t *testing.T) {
 		},
 	})
 	bot, err := New(Options{
-		BotToken:       "bottoken",
-		StatePath:      t.TempDir() + "/state.json",
-		Model:          "deepseek-v4-flash",
-		Profile:        "billy",
-		AllowedChatIDs: map[int64]bool{123: true},
-		SendEnabled:    true,
-		DryRunDefault:  false,
+		BotToken:               "bottoken",
+		StatePath:              t.TempDir() + "/state.json",
+		Model:                  "deepseek-v4-flash",
+		Profile:                "billy",
+		AllowedChatIDs:         map[int64]bool{123: true},
+		AllowedOperatorUserIDs: map[int64]bool{1001: true},
+		SendEnabled:            true,
+		DryRunDefault:          false,
 	}, client, harness)
 	if err != nil {
 		t.Fatal(err)
@@ -579,13 +585,14 @@ func TestTelegramDiffCommandPreviewsTurnDiff(t *testing.T) {
 		},
 	})
 	bot, err := New(Options{
-		BotToken:       "bottoken",
-		StatePath:      t.TempDir() + "/state.json",
-		Model:          "deepseek-v4-flash",
-		Profile:        "billy",
-		AllowedChatIDs: map[int64]bool{123: true},
-		SendEnabled:    true,
-		DryRunDefault:  false,
+		BotToken:               "bottoken",
+		StatePath:              t.TempDir() + "/state.json",
+		Model:                  "deepseek-v4-flash",
+		Profile:                "billy",
+		AllowedChatIDs:         map[int64]bool{123: true},
+		AllowedOperatorUserIDs: map[int64]bool{1001: true},
+		SendEnabled:            true,
+		DryRunDefault:          false,
 	}, client, harness)
 	if err != nil {
 		t.Fatal(err)
@@ -649,13 +656,14 @@ func TestTelegramUndoRedoCommandsApplyTurnChanges(t *testing.T) {
 		},
 	})
 	bot, err := New(Options{
-		BotToken:       "bottoken",
-		StatePath:      t.TempDir() + "/state.json",
-		Model:          "deepseek-v4-flash",
-		Profile:        "billy",
-		AllowedChatIDs: map[int64]bool{123: true},
-		SendEnabled:    true,
-		DryRunDefault:  false,
+		BotToken:               "bottoken",
+		StatePath:              t.TempDir() + "/state.json",
+		Model:                  "deepseek-v4-flash",
+		Profile:                "billy",
+		AllowedChatIDs:         map[int64]bool{123: true},
+		AllowedOperatorUserIDs: map[int64]bool{1001: true},
+		SendEnabled:            true,
+		DryRunDefault:          false,
 	}, client, harness)
 	if err != nil {
 		t.Fatal(err)
@@ -936,7 +944,65 @@ func TestTelegramForkRejectsOtherUserOwnedSession(t *testing.T) {
 	}
 }
 
-func TestTelegramAuthDeepSeekDeletesSecretMessageAndDoesNotRenderKey(t *testing.T) {
+func TestTelegramAuthDeepSeekRejectsSecretBearingGroupCommand(t *testing.T) {
+	var (
+		mu          sync.Mutex
+		sentText    string
+		deleteCalls int
+	)
+	client := newTelegramAPIClient(t, "bottoken", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			mu.Lock()
+			sentText, _ = payload["text"].(string)
+			mu.Unlock()
+			writeTelegramResult(w, SentMessage{MessageID: 11, Chat: Chat{ID: 123}})
+		},
+		"deleteMessage": func(w http.ResponseWriter, _ *http.Request, _ map[string]any) {
+			mu.Lock()
+			deleteCalls++
+			mu.Unlock()
+			writeTelegramResult(w, true)
+		},
+	})
+
+	harness := &telegramAuthHarness{}
+	bot, err := New(Options{
+		BotToken:               "bottoken",
+		StatePath:              t.TempDir() + "/state.json",
+		Model:                  "deepseek-v4-flash",
+		Profile:                "billy",
+		AllowedChatIDs:         map[int64]bool{123: true},
+		AllowedOperatorUserIDs: map[int64]bool{1001: true},
+		SendEnabled:            true,
+		DryRunDefault:          false,
+	}, client, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const secret = "sk-test-telegram-secret"
+	bot.handleMessage(context.Background(), Message{MessageID: 77, Chat: Chat{ID: 123, Type: "supergroup"}, From: &User{ID: 1001}, Text: "/auth deepseek " + secret})
+
+	harness.mu.Lock()
+	saved := harness.savedDeepSeekKey
+	harness.mu.Unlock()
+	if saved != "" {
+		t.Fatalf("saved DeepSeek key from group command = %q", saved)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if deleteCalls != 0 {
+		t.Fatalf("delete calls = %d, want 0 for banned group secret command", deleteCalls)
+	}
+	if !strings.Contains(sentText, "private owner chat") {
+		t.Fatalf("group auth rejection = %q", sentText)
+	}
+	if strings.Contains(sentText, secret) || strings.Contains(sentText, "sk-test") {
+		t.Fatalf("group auth rejection leaked secret: %q", sentText)
+	}
+}
+
+func TestTelegramAuthDeepSeekPrivateOwnerDeletesBeforePersist(t *testing.T) {
 	var (
 		mu             sync.Mutex
 		sentText       string
@@ -951,7 +1017,7 @@ func TestTelegramAuthDeepSeekDeletesSecretMessageAndDoesNotRenderKey(t *testing.
 			sentText, _ = payload["text"].(string)
 			parseMode, _ = payload["parse_mode"].(string)
 			mu.Unlock()
-			writeTelegramResult(w, SentMessage{MessageID: 11, Chat: Chat{ID: 123}})
+			writeTelegramResult(w, SentMessage{MessageID: 11, Chat: Chat{ID: 1001}})
 		},
 		"deleteMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
 			mu.Lock()
@@ -965,20 +1031,21 @@ func TestTelegramAuthDeepSeekDeletesSecretMessageAndDoesNotRenderKey(t *testing.
 
 	harness := &telegramAuthHarness{}
 	bot, err := New(Options{
-		BotToken:       "bottoken",
-		StatePath:      t.TempDir() + "/state.json",
-		Model:          "deepseek-v4-flash",
-		Profile:        "billy",
-		AllowedChatIDs: map[int64]bool{123: true},
-		SendEnabled:    true,
-		DryRunDefault:  false,
+		BotToken:               "bottoken",
+		StatePath:              t.TempDir() + "/state.json",
+		Model:                  "deepseek-v4-flash",
+		Profile:                "billy",
+		AllowedUserIDs:         map[int64]bool{1001: true},
+		AllowedOperatorUserIDs: map[int64]bool{1001: true},
+		SendEnabled:            true,
+		DryRunDefault:          false,
 	}, client, harness)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	const secret = "sk-test-telegram-secret"
-	bot.handleMessage(context.Background(), Message{MessageID: 77, Chat: Chat{ID: 123, Type: "supergroup"}, Text: "/auth deepseek " + secret})
+	bot.handleMessage(context.Background(), Message{MessageID: 77, Chat: Chat{ID: 1001, Type: "private"}, From: &User{ID: 1001}, Text: "/auth deepseek " + secret})
 
 	harness.mu.Lock()
 	saved := harness.savedDeepSeekKey
@@ -988,7 +1055,7 @@ func TestTelegramAuthDeepSeekDeletesSecretMessageAndDoesNotRenderKey(t *testing.
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if deleteCalls != 1 || deletedChatID != 123 || deletedMessage != 77 {
+	if deleteCalls != 1 || deletedChatID != 1001 || deletedMessage != 77 {
 		t.Fatalf("delete call = count %d chat %d message %d", deleteCalls, deletedChatID, deletedMessage)
 	}
 	if parseMode != "HTML" || !strings.Contains(sentText, "<b>Auth updated</b>") || !strings.Contains(sentText, "deepseek") {
@@ -1017,20 +1084,21 @@ func TestTelegramAuthDeepSeekDoesNotPersistWhenDeleteFails(t *testing.T) {
 
 	harness := &telegramAuthHarness{}
 	bot, err := New(Options{
-		BotToken:       "bottoken",
-		StatePath:      t.TempDir() + "/state.json",
-		Model:          "deepseek-v4-flash",
-		Profile:        "billy",
-		AllowedChatIDs: map[int64]bool{123: true},
-		SendEnabled:    true,
-		DryRunDefault:  false,
+		BotToken:               "bottoken",
+		StatePath:              t.TempDir() + "/state.json",
+		Model:                  "deepseek-v4-flash",
+		Profile:                "billy",
+		AllowedUserIDs:         map[int64]bool{1001: true},
+		AllowedOperatorUserIDs: map[int64]bool{1001: true},
+		SendEnabled:            true,
+		DryRunDefault:          false,
 	}, client, harness)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	const secret = "sk-test-telegram-secret"
-	bot.handleMessage(context.Background(), Message{MessageID: 77, Chat: Chat{ID: 123, Type: "supergroup"}, Text: "/auth deepseek " + secret})
+	bot.handleMessage(context.Background(), Message{MessageID: 77, Chat: Chat{ID: 1001, Type: "private"}, From: &User{ID: 1001}, Text: "/auth deepseek " + secret})
 
 	harness.mu.Lock()
 	saved := harness.savedDeepSeekKey
@@ -1064,19 +1132,20 @@ func TestTelegramAuthDeepSeekRedactsSaveError(t *testing.T) {
 	const secret = "sk-test-telegram-secret"
 	harness := &telegramAuthHarness{saveDeepSeekErr: errors.New("save failed for api_key=" + secret)}
 	bot, err := New(Options{
-		BotToken:       "bottoken",
-		StatePath:      t.TempDir() + "/state.json",
-		Model:          "deepseek-v4-flash",
-		Profile:        "billy",
-		AllowedChatIDs: map[int64]bool{123: true},
-		SendEnabled:    true,
-		DryRunDefault:  false,
+		BotToken:               "bottoken",
+		StatePath:              t.TempDir() + "/state.json",
+		Model:                  "deepseek-v4-flash",
+		Profile:                "billy",
+		AllowedUserIDs:         map[int64]bool{1001: true},
+		AllowedOperatorUserIDs: map[int64]bool{1001: true},
+		SendEnabled:            true,
+		DryRunDefault:          false,
 	}, client, harness)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	bot.handleMessage(context.Background(), Message{MessageID: 77, Chat: Chat{ID: 123, Type: "private"}, Text: "/auth deepseek " + secret})
+	bot.handleMessage(context.Background(), Message{MessageID: 77, Chat: Chat{ID: 1001, Type: "private"}, From: &User{ID: 1001}, Text: "/auth deepseek " + secret})
 
 	harness.mu.Lock()
 	saved := harness.savedDeepSeekKey
@@ -1105,20 +1174,21 @@ func TestTelegramAuthCodexImportAndStatus(t *testing.T) {
 		},
 	})
 	bot, err := New(Options{
-		BotToken:       "bottoken",
-		StatePath:      t.TempDir() + "/state.json",
-		Model:          "deepseek-v4-flash",
-		Profile:        "billy",
-		AllowedChatIDs: map[int64]bool{123: true},
-		SendEnabled:    true,
-		DryRunDefault:  false,
+		BotToken:               "bottoken",
+		StatePath:              t.TempDir() + "/state.json",
+		Model:                  "deepseek-v4-flash",
+		Profile:                "billy",
+		AllowedUserIDs:         map[int64]bool{1001: true},
+		AllowedOperatorUserIDs: map[int64]bool{1001: true},
+		SendEnabled:            true,
+		DryRunDefault:          false,
 	}, client, harness)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	bot.handleMessage(context.Background(), Message{MessageID: 78, Chat: Chat{ID: 123}, Text: "/auth"})
-	bot.handleMessage(context.Background(), Message{MessageID: 79, Chat: Chat{ID: 123}, Text: "/auth codex"})
+	bot.handleMessage(context.Background(), Message{MessageID: 78, Chat: Chat{ID: 1001, Type: "private"}, From: &User{ID: 1001}, Text: "/auth"})
+	bot.handleMessage(context.Background(), Message{MessageID: 79, Chat: Chat{ID: 1001, Type: "private"}, From: &User{ID: 1001}, Text: "/auth codex"})
 
 	harness.mu.Lock()
 	imported := harness.importedCodex

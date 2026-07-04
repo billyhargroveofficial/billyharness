@@ -1288,6 +1288,32 @@ Billy asks for final verification.
 - Blockers/residual risk: no production runtime probe was run for this slice;
   current proof is unit/race/full-suite/rebuild plus code/docs review.
 
+### 2026-07-04 - P0.2/P0.3 Telegram operator policy and private secret auth
+
+- Completed P0.2/P0.3 slice. Telegram now separates chat/user allowlisting
+  from operator authorization. Operator-only commands require an identified
+  non-bot Telegram operator; configured `AllowedOperatorUserIDs` take
+  precedence, with `AllowedUserIDs` as the compatibility fallback. Secret-bearing
+  `/auth deepseek ...` commands are owner-only, private-chat-only, require
+  deletion before persistence, and do not persist from group/dry-run group
+  attempts.
+- Updated durable docs because Telegram command authorization, CLI/env
+  configuration, and secret-bearing auth behavior changed:
+  `docs/architecture/telegram-and-operator-surfaces.md` and
+  `agent-index/docs-manifest.json`.
+- Checked docs routing/index files for this slice: `llms.txt`,
+  `.agents/rules/README.md`, `docs/README.md`, and
+  `docs/documentation-system.md`. No changes were needed there because existing
+  routing already points Telegram behavior changes to the Telegram architecture
+  document and active implementation evidence to this TODO.
+- Verification passed before commit:
+  `go test -count=1 ./internal/telegrambot`;
+  `go test -count=1 ./internal/architecture`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`;
+  `git diff --check`.
+- Commit/push: recorded in the final response for this remediation slice.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text

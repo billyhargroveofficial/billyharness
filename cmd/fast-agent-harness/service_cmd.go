@@ -84,6 +84,7 @@ func telegramCmd(args []string) error {
 	statePath := fs.String("state", telegrambot.DefaultStatePath(), "Telegram gateway state JSON path")
 	allowedRaw := fs.String("allow-chat", lookupEnvAny("BILLYHARNESS_TELEGRAM_ALLOWED_CHAT_IDS", "TELEGRAM_ALLOWED_CHAT_IDS"), "comma-separated allowed Telegram chat IDs")
 	allowedUsersRaw := fs.String("allow-user", lookupEnvAny("BILLYHARNESS_TELEGRAM_ALLOWED_USER_IDS", "TELEGRAM_ALLOWED_USER_IDS"), "comma-separated allowed Telegram user IDs")
+	operatorUsersRaw := fs.String("operator-user", lookupEnvAny("BILLYHARNESS_TELEGRAM_OPERATOR_USER_IDS", "TELEGRAM_OPERATOR_USER_IDS"), "comma-separated Telegram user IDs allowed to run operator-only commands")
 	allowUserGroups := fs.Bool("allow-user-groups", envBoolAnyDefault(false, "BILLYHARNESS_TELEGRAM_ALLOW_USER_GROUPS", "TELEGRAM_ALLOW_USER_GROUPS"), "allow -allow-user IDs to authorize messages outside private chats; unsafe")
 	requireAllowlist := fs.Bool("require-allowlist", envBoolAnyDefault(false, "BILLYHARNESS_TELEGRAM_REQUIRE_ALLOWLIST", "TELEGRAM_REQUIRE_ALLOWLIST"), "reject chats not listed in -allow-chat")
 	allowAllChats := fs.Bool("allow-all-chats", envBoolAnyDefault(false, "BILLYHARNESS_TELEGRAM_ALLOW_ALL_CHATS", "TELEGRAM_ALLOW_ALL_CHATS"), "allow every Telegram chat; unsafe for live bots")
@@ -122,6 +123,10 @@ func telegramCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	operatorUsers, err := parseChatIDs(*operatorUsersRaw)
+	if err != nil {
+		return err
+	}
 	effectiveRequireAllowlist := *requireAllowlist
 	if *allowAllChats {
 		effectiveRequireAllowlist = false
@@ -130,28 +135,29 @@ func telegramCmd(args []string) error {
 		return fmt.Errorf("Telegram live send requires -allow-chat, -allow-user, or -allow-all-chats")
 	}
 	opts := telegrambot.Options{
-		BotToken:             *token,
-		BotAPIBaseURL:        *botAPIBase,
-		GatewayURL:           *gatewayURL,
-		StatePath:            *statePath,
-		Model:                modelAliasForTelegram(*model),
-		Profile:              config.NormalizeProfileName(*profile),
-		ReasoningEffort:      strings.ToLower(strings.TrimSpace(*reasoning)),
-		AccessMode:           mode,
-		MaxToolRounds:        *maxRounds,
-		ContextWindow:        cfg.ContextWindowTokens,
-		ContextWindowSource:  cfg.ContextWindowSourceLabel(),
-		ContextCompact:       cfg.ContextCompactTokens,
-		ContextCompactSource: cfg.ContextCompactSourceLabel(),
-		PollTimeoutSec:       *pollTimeout,
-		EditInterval:         time.Duration(*editIntervalMS) * time.Millisecond,
-		AllowedChatIDs:       allowed,
-		AllowedUserIDs:       allowedUsers,
-		AllowUserInGroups:    *allowUserGroups,
-		AllowAllChats:        *allowAllChats,
-		SendEnabled:          *sendEnabled,
-		DryRunDefault:        *dryRun,
-		RequireAllowlist:     effectiveRequireAllowlist,
+		BotToken:               *token,
+		BotAPIBaseURL:          *botAPIBase,
+		GatewayURL:             *gatewayURL,
+		StatePath:              *statePath,
+		Model:                  modelAliasForTelegram(*model),
+		Profile:                config.NormalizeProfileName(*profile),
+		ReasoningEffort:        strings.ToLower(strings.TrimSpace(*reasoning)),
+		AccessMode:             mode,
+		MaxToolRounds:          *maxRounds,
+		ContextWindow:          cfg.ContextWindowTokens,
+		ContextWindowSource:    cfg.ContextWindowSourceLabel(),
+		ContextCompact:         cfg.ContextCompactTokens,
+		ContextCompactSource:   cfg.ContextCompactSourceLabel(),
+		PollTimeoutSec:         *pollTimeout,
+		EditInterval:           time.Duration(*editIntervalMS) * time.Millisecond,
+		AllowedChatIDs:         allowed,
+		AllowedUserIDs:         allowedUsers,
+		AllowedOperatorUserIDs: operatorUsers,
+		AllowUserInGroups:      *allowUserGroups,
+		AllowAllChats:          *allowAllChats,
+		SendEnabled:            *sendEnabled,
+		DryRunDefault:          *dryRun,
+		RequireAllowlist:       effectiveRequireAllowlist,
 	}
 	bot, err := telegrambot.New(opts, nil, nil)
 	if err != nil {

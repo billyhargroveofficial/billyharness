@@ -6,8 +6,9 @@ gateway client: it owns Telegram transport, state, rendering, and command
 handling, while gateway sessions, admission, replay, authorization, and runtime
 execution stay behind the typed gateway APIs.
 
-Status note: this document was reviewed against the dirty current worktree on
-2026-07-03. Claims describe this checkout, not necessarily a clean release
+Status note: this document was reviewed against the current implementation on
+2026-07-04 for Telegram operator command policy and secret-bearing auth command
+semantics. Claims describe this checkout, not necessarily a clean release
 commit.
 
 The decision record is [ADR 0006](../adr/0006-telegram-is-a-gateway-client.md).
@@ -57,8 +58,8 @@ It resolves runtime config first, then configures the Telegram adapter with:
 - optional Telegram Bot API base URL override;
 - initial model, profile, reasoning effort, access mode, max tool rounds,
   context window, and compact threshold from runtime config and flags;
-- state path, allowed chat IDs, allowed user IDs, live-send/dry-run mode,
-  polling timeout, and live-edit interval.
+- state path, allowed chat IDs, allowed user IDs, allowed operator user IDs,
+  live-send/dry-run mode, polling timeout, and live-edit interval.
 
 The default Telegram state path is
 `$BILLYHARNESS_HOME/telegram/state.json`, falling back to
@@ -87,6 +88,22 @@ Admission accepts a message when any of these is true:
 - the sender user ID is in `AllowedUserIDs`;
 - no allowlist is configured and `RequireAllowlist` is false.
 
+Admission only decides whether the adapter may process the incoming Telegram
+message. Operator command authorization is a second gate. Commands that expose
+local config, MCP status, managed processes, memory management, undo/redo, or
+auth mutation require an identified human Telegram operator. Operators come
+from `AllowedOperatorUserIDs` when configured; otherwise the adapter falls back
+to `AllowedUserIDs` for compatibility. The CLI exposes this through
+`-operator-user`, `BILLYHARNESS_TELEGRAM_OPERATOR_USER_IDS`, and legacy
+`TELEGRAM_OPERATOR_USER_IDS`
+([service_cmd.go](../../cmd/fast-agent-harness/service_cmd.go),
+[command_policy.go](../../internal/telegrambot/command_policy.go)).
+
+Owner-only commands are stricter than operator-only commands. Secret-bearing
+auth configuration requires a private owner chat, an identified non-bot sender,
+and operator authorization. Group chats, anonymous senders, and bot senders are
+rejected before auth material is persisted.
+
 Dry-run mode logs sends and edits instead of calling Telegram. Real sending and
 editing are gated in [delivery.go](../../internal/telegrambot/delivery.go), so
 tests can exercise flows without external Telegram writes.
@@ -98,10 +115,13 @@ and shared `internal/secrets` patterns. Renderer error paths also store
 redacted run and tool failure text before final delivery.
 
 Secret-bearing auth commands have an additional guard. `/auth deepseek ...`
-calls Telegram delete before persisting the key, refuses to persist if a real
-delete fails, and redacts the submitted key from error text
-([commands.go](../../internal/telegrambot/commands.go)). In dry-run mode that
-delete is logged by the delivery layer rather than sent to Telegram.
+is accepted only in a private owner chat. It calls Telegram delete before
+persisting the key, refuses to persist if deletion fails, and redacts the
+submitted key from error text
+([commands.go](../../internal/telegrambot/commands.go),
+[command_policy.go](../../internal/telegrambot/command_policy.go)). Group
+chat attempts, dry-run group attempts, anonymous senders, and bot senders do
+not persist the submitted key.
 `/auth codex` imports local Codex OAuth through the gateway without accepting a
 token in the chat. Auth status output is formatted from redacted credential
 status values.
@@ -316,6 +336,16 @@ Telegram commands are:
   DeepSeek API key through the gateway, or import local Codex OAuth.
 - `/cancel`: cancel the current local/gateway run for the chat.
 
+Command policy is intentionally layered:
+
+- public commands: `/start`, `/help`, `/commands`;
+- session-scoped commands: session selection, runtime defaults, context/diff,
+  tool views, and cancellation for the current Telegram-scoped session;
+- operator-only commands: MCP/config/process status, memory management, and
+  undo/redo;
+- owner-only commands: auth status/import and secret-bearing auth mutation,
+  with private-chat enforcement for secret material.
+
 Commands marked `bypassRunLock` can run while a long generation is active.
 Other commands serialize through the per-chat mutex like normal messages.
 
@@ -331,6 +361,9 @@ These tests cover the main claims in this document:
 - Session owner stamping, resume/fork filtering, status/config/context/process
   surfaces, toolview, auth deletion/redaction, and command behavior:
   [commands_flow_test.go](../../internal/telegrambot/commands_flow_test.go).
+- Operator command authorization, anonymous/bot rejection, configured group
+  operators, and dry-run group secret rejection:
+  [command_policy_test.go](../../internal/telegrambot/command_policy_test.go).
 - Telegram outbound and rendered error redaction:
   [redaction_test.go](../../internal/telegrambot/redaction_test.go).
 - Stream-gap rendering and replay-before-final-delivery:
