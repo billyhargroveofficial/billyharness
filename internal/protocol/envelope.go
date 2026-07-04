@@ -122,6 +122,12 @@ func ValidateEventEnvelope(event Event) error {
 	if event.Source == "" {
 		return fmt.Errorf("%s missing source", event.Type)
 	}
+	if !isKnownEventSource(event.Source) {
+		return fmt.Errorf("%s unsupported source %q", event.Type, event.Source)
+	}
+	if !isKnownEventType(event.Type) {
+		return fmt.Errorf("unsupported event type %q", event.Type)
+	}
 	if strings.TrimSpace(event.TS) == "" {
 		return fmt.Errorf("%s missing ts", event.Type)
 	}
@@ -181,6 +187,60 @@ func requireEnvelope(event Event, fields ...string) error {
 		}
 	}
 	return nil
+}
+
+func isKnownEventSource(source EventSource) bool {
+	switch source {
+	case EventSourceAgent, EventSourceGateway, EventSourceTUI, EventSourceTelegram, EventSourceTool, EventSourceProvider, EventSourceMCP, EventSourceBench:
+		return true
+	default:
+		return false
+	}
+}
+
+func isKnownEventType(eventType EventType) bool {
+	switch eventType {
+	case EventRunStarted,
+		EventTurnStarted,
+		EventTurnCompleted,
+		EventTurnChangeRecorded,
+		EventTurnChangeReverted,
+		EventStepStarted,
+		EventStepCompleted,
+		EventModelCallStarted,
+		EventModelCallFinished,
+		EventAssistantReasoning,
+		EventAssistantDelta,
+		EventToolCallRequested,
+		EventToolPermissionRequested,
+		EventToolPermissionDecided,
+		EventToolAudit,
+		EventToolCallProgress,
+		EventToolCallStarted,
+		EventToolCallFinished,
+		EventToolCallFailed,
+		EventToolCallAborted,
+		EventToolOutputRefCreated,
+		EventContextThreshold,
+		EventContextCompacted,
+		EventHookStarted,
+		EventHookFinished,
+		EventHookFailed,
+		EventRunCompleted,
+		EventRunFailed,
+		EventProviderUsageUpdate,
+		EventProviderHelperUsage,
+		EventSessionStatus,
+		EventGatewayStreamGap,
+		EventStreamStillRunning,
+		EventSessionImported,
+		EventUserInputRequested,
+		EventUserInputAnswered,
+		EventUserInputRejected:
+		return true
+	default:
+		return false
+	}
 }
 
 func enrichEventIDsFromData(event *Event) {

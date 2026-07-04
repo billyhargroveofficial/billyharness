@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -162,6 +164,51 @@ func TestTranscriptSelectionCannotCopyHiddenThinkingOrTools(t *testing.T) {
 		if strings.Contains(stripANSITest(m.selectionHighlightedContent()), hidden) {
 			t.Fatalf("highlight leaked hidden content %q", hidden)
 		}
+	}
+}
+
+func TestTranscriptSelectionClearsWhenToolViewHidesRenderedRows(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.height = 24
+	m.addBlock("assistant", "ASSISTANT", "visible answer")
+	m.addBlock("tool", "TOOL", "secret tool output")
+	m.reflow(true)
+
+	m.selection.Start = tuiselection.Point{Row: 0, Col: 0}
+	m.selection.End = tuiselection.Point{Row: 99, Col: 999}
+	if !m.hasSelection() {
+		t.Fatal("test selection was not active")
+	}
+	if ok := m.setToolView("hidden"); !ok {
+		t.Fatalf("setToolView failed: %s", m.status)
+	}
+	if m.hasSelection() || m.selection.Selecting {
+		t.Fatalf("selection should clear when tool view changes: %#v", m.selection)
+	}
+	if selected := m.selectedTranscriptText(); selected != "" {
+		t.Fatalf("cleared selection copied stale text: %q", selected)
+	}
+}
+
+func TestExportCommandWritesTranscriptToPath(t *testing.T) {
+	m := newTestModel(t)
+	m.addBlock("assistant", "ASSISTANT", "hello export")
+	path := filepath.Join(t.TempDir(), "Transcript.MD")
+
+	handled, cmd := m.handleSlashCommand("/export raw " + path)
+	if !handled || cmd != nil {
+		t.Fatalf("/export handled=%v cmd=%v, want handled without async command", handled, cmd)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read export: %v", err)
+	}
+	if got := string(data); !strings.Contains(got, "hello export") {
+		t.Fatalf("export file missing transcript: %q", got)
+	}
+	if !strings.Contains(m.status, path) {
+		t.Fatalf("status should mention exact export path, got %q", m.status)
 	}
 }
 

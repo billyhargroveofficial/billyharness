@@ -15,6 +15,26 @@ import (
 
 type SessionStatus = gatewayapi.SessionStatus
 
+type sessionPersistenceError struct {
+	SessionID string
+	EventType protocol.EventType
+	Err       error
+}
+
+func (e sessionPersistenceError) Error() string {
+	if e.Err == nil {
+		return "session event persistence failed"
+	}
+	if e.EventType == "" {
+		return fmt.Sprintf("session %s persistence failed: %v", e.SessionID, e.Err)
+	}
+	return fmt.Sprintf("session %s persistence failed for %s: %v", e.SessionID, e.EventType, e.Err)
+}
+
+func (e sessionPersistenceError) Unwrap() error {
+	return e.Err
+}
+
 type eventHub struct {
 	mu          sync.Mutex
 	subscribers map[chan protocol.Event]struct{}
@@ -193,7 +213,7 @@ func (s *Session) abortActiveRun(reason string) bool {
 		reason = "gateway session aborted"
 	}
 	if runID := s.activeRunIDSnapshot(); runID != "" {
-		s.observeRunEvent(protocol.Event{Type: protocol.EventRunFailed, RunID: runID, Data: reason})
+		_, _, _ = s.observeRunEvent(protocol.Event{Type: protocol.EventRunFailed, RunID: runID, Data: reason})
 	}
 	s.Thread.Cancel()
 	return true
@@ -207,7 +227,10 @@ func (s *Session) interruptActiveRunAndWait(ctx context.Context, reason string) 
 		reason = "gateway session interrupted"
 	}
 	if runID := s.activeRunIDSnapshot(); runID != "" {
-		s.observeRunEvent(protocol.Event{Type: protocol.EventRunFailed, RunID: runID, Data: reason})
+		if _, _, err := s.observeRunEvent(protocol.Event{Type: protocol.EventRunFailed, RunID: runID, Data: reason}); err != nil {
+			s.Thread.Cancel()
+			return true, err
+		}
 	}
 	return s.Thread.CancelAndWait(ctx)
 }
@@ -222,7 +245,10 @@ func (s *Session) activeRunIDSnapshot() string {
 	return s.activeRunID
 }
 
-func (s *Session) beginRunStatus(req RunRequest) {
+func (s *Session) beginRunStatus(req RunRequest) error {
+	if s == nil {
+		return nil
+	}
 	now := time.Now().UTC()
 	s.mu.Lock()
 	s.ensureRuntime()
@@ -252,13 +278,18 @@ func (s *Session) beginRunStatus(req RunRequest) {
 	s.mu.Unlock()
 	status.Running = s.Thread != nil && s.Thread.Running()
 	event := protocol.Event{Type: protocol.EventSessionStatus, Data: status}
-	event = s.recordEvent(event)
+	event, err := s.recordEvent(event)
+	if err != nil {
+		s.markPersistenceFailure(err)
+		return err
+	}
 	hub.Publish(event)
+	return nil
 }
 
-func (s *Session) observeRunEvent(event protocol.Event) (protocol.Event, bool) {
+func (s *Session) observeRunEvent(event protocol.Event) (protocol.Event, bool, error) {
 	if s == nil {
-		return event, true
+		return event, true, nil
 	}
 	if event.Type == protocol.EventRunStarted {
 		s.mu.Lock()
@@ -267,7 +298,8 @@ func (s *Session) observeRunEvent(event protocol.Event) (protocol.Event, bool) {
 			s.activeRunID = event.RunID
 		}
 		s.mu.Unlock()
-		return s.publish(event), true
+		stored, err := s.publish(event)
+		return stored, err == nil, err
 	}
 	now := time.Now().UTC()
 	var statusEvent *protocol.Event
@@ -293,7 +325,7 @@ func (s *Session) observeRunEvent(event protocol.Event) (protocol.Event, bool) {
 	}
 	if terminalDuplicate {
 		s.mu.Unlock()
-		return event, false
+		return event, false, nil
 	}
 	s.status.LastEvent = string(event.Type)
 	s.status.LastEventAt = now
@@ -325,31 +357,64 @@ func (s *Session) observeRunEvent(event protocol.Event) (protocol.Event, bool) {
 	}
 	hub := s.events
 	s.mu.Unlock()
-	event = s.recordEvent(event)
-	hub.Publish(event)
-	if statusEvent != nil {
-		storedStatus := s.recordEvent(*statusEvent)
-		hub.Publish(storedStatus)
+	storedEvent, err := s.recordEvent(event)
+	if err != nil {
+		s.markPersistenceFailure(err)
+		return event, false, err
 	}
-	return event, true
+	var storedStatus *protocol.Event
+	if statusEvent != nil {
+		status, err := s.recordEvent(*statusEvent)
+		if err != nil {
+			s.markPersistenceFailure(err)
+			return event, false, err
+		}
+		storedStatus = &status
+	}
+	hub.Publish(storedEvent)
+	if storedStatus != nil {
+		hub.Publish(*storedStatus)
+	}
+	return storedEvent, true, nil
 }
 
-func (s *Session) publish(event protocol.Event) protocol.Event {
+func (s *Session) publish(event protocol.Event) (protocol.Event, error) {
 	if s == nil {
-		return event
+		return event, nil
 	}
 	s.mu.Lock()
 	s.ensureRuntime()
 	hub := s.events
 	s.mu.Unlock()
-	event = s.recordEvent(event)
+	event, err := s.recordEvent(event)
+	if err != nil {
+		s.markPersistenceFailure(err)
+		return event, err
+	}
 	hub.Publish(event)
-	return event
+	return event, nil
 }
 
-func (s *Session) recordEvent(event protocol.Event) protocol.Event {
+func (s *Session) recordEvent(event protocol.Event) (protocol.Event, error) {
 	if s == nil || s.eventRecorder == nil {
-		return event
+		return event, nil
 	}
 	return s.eventRecorder(event)
+}
+
+func (s *Session) markPersistenceFailure(err error) {
+	if s == nil || err == nil {
+		return
+	}
+	now := time.Now().UTC()
+	s.mu.Lock()
+	s.ensureRuntime()
+	s.status.Running = false
+	s.status.FinishedAt = now
+	s.status.LastEvent = "persistence_failed"
+	s.status.LastEventAt = now
+	s.status.LastError = err.Error()
+	s.pendingInput = nil
+	s.activeRunID = ""
+	s.mu.Unlock()
 }

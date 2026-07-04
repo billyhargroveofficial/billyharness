@@ -157,7 +157,7 @@ func startStdio(parent context.Context, settings ManagerSettings, server config.
 func (c *stdioClient) listTools(ctx context.Context) ([]protocol.ToolSpec, error) {
 	result, err := c.request(ctx, "tools/list", map[string]any{})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("MCP %s tools/list request: %w", c.server.Name, err)
 	}
 	var listed listToolsResult
 	if err := json.Unmarshal(result, &listed); err != nil {

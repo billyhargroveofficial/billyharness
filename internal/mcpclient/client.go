@@ -30,6 +30,27 @@ const (
 	mcpStateUnsupported  = "unsupported"
 )
 
+const (
+	mcpTransportStateDisabled     = "disabled"
+	mcpTransportStateConnected    = "connected"
+	mcpTransportStateDisconnected = "disconnected"
+	mcpTransportStateFailed       = "failed"
+	mcpTransportStateCrashed      = "crashed"
+	mcpTransportStateRestarting   = "restarting"
+	mcpTransportStateUnsupported  = "unsupported"
+)
+
+const (
+	mcpCatalogStateDisabled         = "disabled"
+	mcpCatalogStateReady            = "ready"
+	mcpCatalogStateConnectedNoTools = "connected_no_tools"
+	mcpCatalogStateToolsFetchFailed = "tools_fetch_failed"
+	mcpCatalogStateCatalogStale     = "catalog_stale"
+	mcpCatalogStateDisconnected     = "disconnected"
+	mcpCatalogStateDegraded         = "degraded"
+	mcpCatalogStateUnsupported      = "unsupported"
+)
+
 type ExternalTool struct {
 	Spec    protocol.ToolSpec
 	Handler func(context.Context, json.RawMessage) (string, error)
@@ -56,36 +77,46 @@ type CatalogChange struct {
 }
 
 type CatalogSnapshot struct {
-	Version      int64
-	Tools        []ExternalTool
-	Prompts      []Prompt
-	Instructions []string
-	Collisions   []string
+	Version            int64
+	Tools              []ExternalTool
+	Prompts            []Prompt
+	Instructions       []string
+	ServerInstructions []string
+	Collisions         []string
+}
+
+type StatusDiagnostic struct {
+	Code     string `json:"code"`
+	Severity string `json:"severity,omitempty"`
+	Message  string `json:"message,omitempty"`
 }
 
 type ServerStatus struct {
-	Name              string     `json:"name"`
-	Transport         string     `json:"transport"`
-	Command           string     `json:"command,omitempty"`
-	URL               string     `json:"url,omitempty"`
-	UnsupportedReason string     `json:"unsupported_reason,omitempty"`
-	Enabled           bool       `json:"enabled"`
-	Required          bool       `json:"required"`
-	Connected         bool       `json:"connected"`
-	State             string     `json:"state"`
-	ToolCount         int        `json:"tool_count"`
-	PID               int        `json:"pid,omitempty"`
-	StartedAt         *time.Time `json:"started_at,omitempty"`
-	LastConnectedAt   *time.Time `json:"last_connected_at,omitempty"`
-	LastEventAt       *time.Time `json:"last_event_at,omitempty"`
-	LastError         string     `json:"last_error,omitempty"`
-	LastErrorAt       *time.Time `json:"last_error_at,omitempty"`
-	StderrTail        string     `json:"stderr_tail,omitempty"`
-	Error             string     `json:"error,omitempty"`
-	RetryCount        int        `json:"retry_count"`
-	RestartCount      int        `json:"restart_count"`
-	RetryBackoffMS    int64      `json:"retry_backoff_ms,omitempty"`
-	NextRetryAt       *time.Time `json:"next_retry_at,omitempty"`
+	Name              string             `json:"name"`
+	Transport         string             `json:"transport"`
+	Command           string             `json:"command,omitempty"`
+	URL               string             `json:"url,omitempty"`
+	UnsupportedReason string             `json:"unsupported_reason,omitempty"`
+	Enabled           bool               `json:"enabled"`
+	Required          bool               `json:"required"`
+	Connected         bool               `json:"connected"`
+	State             string             `json:"state"`
+	TransportState    string             `json:"transport_state,omitempty"`
+	CatalogState      string             `json:"catalog_state,omitempty"`
+	Diagnostics       []StatusDiagnostic `json:"diagnostics,omitempty"`
+	ToolCount         int                `json:"tool_count"`
+	PID               int                `json:"pid,omitempty"`
+	StartedAt         *time.Time         `json:"started_at,omitempty"`
+	LastConnectedAt   *time.Time         `json:"last_connected_at,omitempty"`
+	LastEventAt       *time.Time         `json:"last_event_at,omitempty"`
+	LastError         string             `json:"last_error,omitempty"`
+	LastErrorAt       *time.Time         `json:"last_error_at,omitempty"`
+	StderrTail        string             `json:"stderr_tail,omitempty"`
+	Error             string             `json:"error,omitempty"`
+	RetryCount        int                `json:"retry_count"`
+	RestartCount      int                `json:"restart_count"`
+	RetryBackoffMS    int64              `json:"retry_backoff_ms,omitempty"`
+	NextRetryAt       *time.Time         `json:"next_retry_at,omitempty"`
 }
 
 type ManagerSettings struct {

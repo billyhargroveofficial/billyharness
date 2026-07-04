@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+	"os"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -22,6 +24,39 @@ func (m *Model) handleCopyCommand(value string) (bool, tea.Cmd) {
 	}
 	m.status = "copying " + label
 	return true, copySelectionCmd(text)
+}
+
+func (m *Model) handleExportCommand(value string) (bool, tea.Cmd) {
+	raw := strings.TrimSpace(value)
+	mode := transcript.ExportModeRich
+	path := ""
+	if raw != "" {
+		fields := strings.Fields(raw)
+		if len(fields) > 0 {
+			if normalized := transcript.NormalizeExportMode(fields[0]); normalized != "" {
+				mode = normalized
+				path = strings.TrimSpace(strings.TrimPrefix(raw, fields[0]))
+			} else {
+				path = raw
+			}
+		}
+	}
+	text := strings.TrimSpace(transcript.FormatCells(m.blocks, mode))
+	if text == "" {
+		m.status = "export empty"
+		return false, nil
+	}
+	if path == "" {
+		m.addInfoBlock("EXPORT "+strings.ToUpper(mode), text)
+		m.status = "export " + mode + " shown"
+		return true, nil
+	}
+	if err := os.WriteFile(path, []byte(text+"\n"), 0o600); err != nil {
+		m.status = fmt.Sprintf("export failed: %v", err)
+		return false, nil
+	}
+	m.status = "exported " + mode + " transcript to " + path
+	return true, nil
 }
 
 func (m Model) semanticCopyText(target string) (text, label string, ok bool) {
@@ -120,6 +155,16 @@ func (m Model) selectedTranscriptText() string {
 
 func (m Model) hasSelection() bool {
 	return m.selection.HasSelection()
+}
+
+func (m *Model) clearTranscriptSelection() {
+	if !m.selection.HasSelection() && !m.selection.Selecting {
+		return
+	}
+	m.selection = tuiselection.Controller{}
+	if m.viewportContent != "" {
+		m.viewport.SetContent(m.viewportContent)
+	}
 }
 
 func (m *Model) applySelectionHighlight() {

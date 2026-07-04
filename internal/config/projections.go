@@ -88,10 +88,11 @@ type DiagnosticsSettings struct {
 }
 
 type MCPSettings struct {
-	Enabled        bool
-	ConfigFiles    []string
-	AllowedServers []string
-	Servers        []MCPServer
+	Enabled                   bool
+	ConfigFiles               []string
+	AllowedServers            []string
+	PromoteServerInstructions bool
+	Servers                   []MCPServer
 }
 
 type HookSettings struct {
@@ -222,19 +223,21 @@ func (c Config) DiagnosticsSettings() DiagnosticsSettings {
 
 func (c Config) MCPSettings() MCPSettings {
 	return MCPSettings{
-		Enabled:        c.MCPEnabled,
-		ConfigFiles:    cloneStrings(c.MCPConfigFiles),
-		AllowedServers: cloneStrings(c.MCPAllowedServers),
-		Servers:        cloneMCPServers(c.MCPServers),
+		Enabled:                   c.MCPEnabled,
+		ConfigFiles:               cloneStrings(c.MCPConfigFiles),
+		AllowedServers:            cloneStrings(c.MCPAllowedServers),
+		PromoteServerInstructions: c.MCPPromoteServerInstructions,
+		Servers:                   cloneMCPServers(c.MCPServers),
 	}
 }
 
 func LoadDefaultMCPSettings(settings MCPSettings) (MCPSettings, error) {
 	cfg := Config{
-		MCPEnabled:        settings.Enabled,
-		MCPConfigFiles:    cloneStrings(settings.ConfigFiles),
-		MCPAllowedServers: cloneStrings(settings.AllowedServers),
-		MCPServers:        cloneMCPServers(settings.Servers),
+		MCPEnabled:                   settings.Enabled,
+		MCPConfigFiles:               cloneStrings(settings.ConfigFiles),
+		MCPAllowedServers:            cloneStrings(settings.AllowedServers),
+		MCPPromoteServerInstructions: settings.PromoteServerInstructions,
+		MCPServers:                   cloneMCPServers(settings.Servers),
 	}
 	if err := cfg.LoadDefaultMCPServers(); err != nil {
 		return MCPSettings{}, err

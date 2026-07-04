@@ -54,24 +54,7 @@ func (c Client) Get(ctx context.Context, rawURL string, maxBytes int) (Response,
 	if err != nil {
 		return Response{}, err
 	}
-	httpClient := &http.Client{
-		Timeout: c.timeout(),
-		Transport: &http.Transport{
-			Proxy:                 nil,
-			DialContext:           c.publicDialContext,
-			ForceAttemptHTTP2:     true,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
-			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
-		},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= c.maxRedirects() {
-				return fmt.Errorf("too many redirects")
-			}
-			_, err := c.validatePublicHTTPURL(req.Context(), req.URL.String())
-			return err
-		},
-	}
+	httpClient := c.publicHTTPClient()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return Response{}, err
@@ -100,6 +83,27 @@ func (c Client) Get(ctx context.Context, rawURL string, maxBytes int) (Response,
 		ContentType: resp.Header.Get("Content-Type"),
 		StatusCode:  resp.StatusCode,
 	}, nil
+}
+
+func (c Client) publicHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: c.timeout(),
+		Transport: &http.Transport{
+			Proxy:                 nil,
+			DialContext:           c.publicDialContext,
+			ForceAttemptHTTP2:     true,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= c.maxRedirects() {
+				return fmt.Errorf("too many redirects")
+			}
+			_, err := c.validatePublicHTTPURL(req.Context(), req.URL.String())
+			return err
+		},
+	}
 }
 
 func ValidatePublicHTTPURL(ctx context.Context, rawURL string, resolver Resolver) (*url.URL, error) {

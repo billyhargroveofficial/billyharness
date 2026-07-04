@@ -42,6 +42,12 @@ func (b *Bot) chatStateWithLegacy(key, legacyKey string) ChatState {
 }
 
 func (b *Bot) setChatState(key string, state ChatState) {
+	if err := b.setChatStateStrict(key, state); err != nil {
+		log.Printf("telegram state save: %v", err)
+	}
+}
+
+func (b *Bot) setChatStateStrict(key string, state ChatState) error {
 	b.saveMu.Lock()
 	defer b.saveMu.Unlock()
 
@@ -52,9 +58,7 @@ func (b *Bot) setChatState(key string, state ChatState) {
 	b.state.Chats[key] = state
 	snapshot := cloneState(b.state)
 	b.mu.Unlock()
-	if err := b.store.Save(snapshot); err != nil {
-		log.Printf("telegram state save: %v", err)
-	}
+	return b.store.Save(snapshot)
 }
 
 func (b *Bot) clearPendingInput(key, inputID string) {
@@ -198,6 +202,37 @@ func (b *Bot) inputSuperseded(key string, seq int64) bool {
 	return seq > 0 && b.inputSeq[key] != seq
 }
 
+func reconcilePendingInputsOnStartup(state *State, store Store, admit *telegramAdmissionStore) error {
+	if state == nil {
+		return nil
+	}
+	if state.Chats == nil {
+		state.Chats = map[string]ChatState{}
+	}
+	now := time.Now().UTC()
+	changed := false
+	for key, chat := range state.Chats {
+		inputID := strings.TrimSpace(chat.PendingInputID)
+		if inputID == "" {
+			continue
+		}
+		if err := admit.RecordAbandoned(key, chat, "abandoned_after_restart"); err != nil {
+			return err
+		}
+		log.Printf("telegram abandoned pending input after restart key=%s session=%s input=%s update=%d",
+			key, short(chat.SessionID), inputID, chat.PendingUpdateID)
+		chat.PendingInputID = ""
+		chat.PendingUpdateID = 0
+		chat.UpdatedAt = now
+		state.Chats[key] = chat
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return store.Save(*state)
+}
+
 func (b *Bot) cancelChat(key string) bool {
 	_, ok := b.cancelChatWithDone(key)
 	return ok
@@ -237,13 +272,14 @@ func cloneStringMap(in map[string]string) map[string]string {
 	return out
 }
 
-func (b *Bot) cancelGatewaySession(sessionID string) {
+func (b *Bot) cancelGatewaySession(ctx context.Context, sessionID string) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" || b.harness == nil {
 		return
 	}
+	ctx = context.WithoutCancel(ctx)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 		cancelled, err := b.harness.CancelSession(ctx, sessionID)
 		if err != nil {

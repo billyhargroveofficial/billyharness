@@ -109,6 +109,70 @@ func TestToolArgumentsValidatedAgainstSchema(t *testing.T) {
 	}
 }
 
+func TestValidateArgsSupportsAnyOfAndRejectsUnsupportedSchemaFeatures(t *testing.T) {
+	anyOfSchema := raw(`{"type":"object","properties":{"topic":{"type":"string"},"path":{"type":"string"}},"anyOf":[{"required":["topic"]},{"required":["path"]}],"additionalProperties":false}`)
+	if err := validateArgs(anyOfSchema, rawArgs(map[string]any{"topic": "ops"})); err != nil {
+		t.Fatalf("anyOf topic should validate: %v", err)
+	}
+	if err := validateArgs(anyOfSchema, rawArgs(map[string]any{"path": "ops.md"})); err != nil {
+		t.Fatalf("anyOf path should validate: %v", err)
+	}
+	err := validateArgs(anyOfSchema, rawArgs(map[string]any{}))
+	if err == nil || !strings.Contains(err.Error(), "must match at least one anyOf schema") {
+		t.Fatalf("missing anyOf fields err = %v", err)
+	}
+
+	unsupportedType := raw(`{"type":"object","properties":{"count":{"type":"int64"}},"additionalProperties":false}`)
+	err = validateArgs(unsupportedType, rawArgs(map[string]any{"count": 1}))
+	if err == nil || !strings.Contains(err.Error(), `unsupported JSON Schema type "int64"`) {
+		t.Fatalf("unsupported type err = %v", err)
+	}
+
+	unsupportedKeyword := raw(`{"type":"object","properties":{"name":{"type":"string","pattern":"^a"}},"additionalProperties":false}`)
+	err = validateArgs(unsupportedKeyword, rawArgs(map[string]any{"name": "bob"}))
+	if err == nil || !strings.Contains(err.Error(), `unsupported JSON Schema keyword "pattern"`) {
+		t.Fatalf("unsupported keyword err = %v", err)
+	}
+}
+
+func TestToolSetCallUsesSnapshotWorkspacePolicyForHandlers(t *testing.T) {
+	oldRoot := t.TempDir()
+	newRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(oldRoot, "old.txt"), []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(newRoot, "allowed.txt"), []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{oldRoot}
+	registry := NewRegistry(cfg)
+
+	snapshotPolicy := cfg.ToolPolicySettings()
+	snapshotPolicy.WorkspaceRoots = []string{newRoot}
+	snapshot := registry.SnapshotWithToolPolicy(context.Background(), snapshotPolicy)
+
+	result, err := snapshot.Call(context.Background(), protocol.ToolCall{
+		Name:      "fs_read_file",
+		Arguments: rawArgs(map[string]any{"path": "allowed.txt"}),
+	})
+	if err != nil {
+		t.Fatalf("snapshot should read from its workspace root, result=%#v err=%v", result, err)
+	}
+	if !strings.Contains(result.Content, "1: new") {
+		t.Fatalf("snapshot read result = %#v", result)
+	}
+
+	_, err = snapshot.Call(context.Background(), protocol.ToolCall{
+		Name:      "fs_read_file",
+		Arguments: rawArgs(map[string]any{"path": filepath.Join(oldRoot, "old.txt")}),
+	})
+	if err == nil || !strings.Contains(err.Error(), "outside workspace roots") {
+		t.Fatalf("snapshot should reject original registry root, err=%v", err)
+	}
+}
+
 func TestTodoWriteStoresBoundedPlanState(t *testing.T) {
 	registry := NewRegistry(config.Default())
 	result, err := registry.Call(context.Background(), protocol.ToolCall{
@@ -362,90 +426,6 @@ func TestGuardedModeDeniesDangerousToolsEvenWhenAutoApproved(t *testing.T) {
 	if result.Metadata["permission_reason"] != "guarded_mode_dangerous_tools_disabled" ||
 		result.Metadata["access_mode"] != config.AccessModeGuarded {
 		t.Fatalf("guarded denial metadata = %#v", result.Metadata)
-	}
-}
-
-func TestWriteToolEnabledByDefault(t *testing.T) {
-	root := t.TempDir()
-	cfg := config.Default()
-	cfg.WorkspaceRoots = []string{root}
-	registry := NewRegistry(cfg)
-
-	target := filepath.Join(root, "default-on.txt")
-	if _, err := registry.Call(context.Background(), protocol.ToolCall{
-		Name:      "fs_write_file",
-		Arguments: rawArgs(map[string]any{"path": target, "content": "enabled"}),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	bytes, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(bytes) != "enabled" {
-		t.Fatalf("content = %q", bytes)
-	}
-}
-
-func TestWriteToolEnabledCreatesDirectories(t *testing.T) {
-	root := t.TempDir()
-	cfg := config.Default()
-	cfg.WorkspaceRoots = []string{root}
-	cfg.AutoApproveDangerous = true
-	registry := NewRegistry(cfg)
-
-	target := filepath.Join(root, "nested", "out.txt")
-	result, err := registry.Call(context.Background(), protocol.ToolCall{
-		Name:      "fs_write_file",
-		Arguments: rawArgs(map[string]any{"path": target, "content": "hello"}),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bytes, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(bytes) != "hello" {
-		t.Fatalf("content = %q", bytes)
-	}
-	if result.Metadata["display_group"] != "filesystem" ||
-		result.Metadata["display_path"] != target ||
-		result.Metadata["display_target"] != "out.txt" ||
-		result.Metadata["display_collapse_default"] != true ||
-		result.Metadata["retry_semantics"] != "overwrite_replay_safe" ||
-		anyInt64(result.Metadata["bytes_written"]) != 5 {
-		t.Fatalf("write metadata = %#v", result.Metadata)
-	}
-}
-
-func TestFSMakeDirEnabledAndRejectsOutsideWorkspace(t *testing.T) {
-	root := t.TempDir()
-	cfg := config.Default()
-	cfg.WorkspaceRoots = []string{root}
-	cfg.AutoApproveDangerous = true
-	registry := NewRegistry(cfg)
-	result, err := registry.Call(context.Background(), protocol.ToolCall{
-		Name:      "fs_make_dir",
-		Arguments: rawArgs(map[string]any{"path": "nested/dir"}),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info, err := os.Stat(filepath.Join(root, "nested", "dir")); err != nil || !info.IsDir() {
-		t.Fatalf("directory not created: info=%v err=%v", info, err)
-	}
-	if result.Metadata["display_group"] != "filesystem" ||
-		result.Metadata["display_target"] != "dir" ||
-		result.Metadata["retry_semantics"] != "idempotent_mkdir_all" ||
-		result.Metadata["existed"] != false {
-		t.Fatalf("mkdir metadata = %#v", result.Metadata)
-	}
-	if _, err := registry.Call(context.Background(), protocol.ToolCall{
-		Name:      "fs_make_dir",
-		Arguments: rawArgs(map[string]any{"path": filepath.Join(t.TempDir(), "outside")}),
-	}); err == nil || !strings.Contains(err.Error(), "outside workspace") {
-		t.Fatalf("expected outside workspace error, got %v", err)
 	}
 }
 

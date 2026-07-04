@@ -19,6 +19,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/clientux"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpstatus"
 	"github.com/billyhargroveofficial/billyharness/internal/promptcommands"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
@@ -794,6 +795,26 @@ func TestReplayGatewayEventsCmdFetchesAfterSeq(t *testing.T) {
 	}
 	if len(updated.messages) != 1 || updated.messages[0].Content != "replayed" {
 		t.Fatalf("messages = %#v", updated.messages)
+	}
+}
+
+func TestReplayGatewayEventsDoesNotFallbackCreateOnCorruptHistory(t *testing.T) {
+	m := newTestModel(t)
+	next, cmd := m.Update(replayEventsMsg{
+		err: &gatewayclient.StatusError{
+			Method:     http.MethodGet,
+			Path:       "/v1/sessions/session-1/events?after_seq=1&follow=false",
+			StatusCode: http.StatusConflict,
+			Body:       `{"error":"corrupt session event history: bad seq"}`,
+		},
+		fallbackCreate: true,
+	})
+	updated := next.(Model)
+	if cmd != nil {
+		t.Fatalf("corrupt replay should not schedule fallback create")
+	}
+	if updated.status != "gateway replay failed" || !strings.Contains(updated.err, "corrupt session event history") {
+		t.Fatalf("status=%q err=%q", updated.status, updated.err)
 	}
 }
 

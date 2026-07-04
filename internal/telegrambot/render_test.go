@@ -44,6 +44,26 @@ func TestRendererFinalChunksAreTelegramSizedAndEscaped(t *testing.T) {
 	}
 }
 
+func TestRendererRunFailureRedactsTelegramErrorText(t *testing.T) {
+	r := NewRenderer()
+	r.Apply(protocol.Event{Type: protocol.EventRunFailed, Data: strings.Join([]string{
+		`gateway https://user-secret:pass-secret@example.com/run?api_key=query-secret failed`,
+		`Authorization: Bearer bearer-secret-value`,
+		`Set-Cookie: session=super-secret-cookie`,
+		`tool failed with sk-telegramsecret123456789`,
+	}, "\n")})
+
+	text := strings.Join(r.FinalChunks("deepseek-v4-flash", "high"), "\n")
+	if !strings.Contains(text, "Error:") || !strings.Contains(text, "[redacted]") {
+		t.Fatalf("final error missing redacted error shape:\n%s", text)
+	}
+	for _, leaked := range []string{"user-secret", "pass-secret", "query-secret", "bearer-secret-value", "super-secret-cookie", "sk-telegramsecret"} {
+		if strings.Contains(text, leaked) {
+			t.Fatalf("final error leaked %q in:\n%s", leaked, text)
+		}
+	}
+}
+
 func TestRendererCoalescedDeltasMatchUncoalescedContent(t *testing.T) {
 	pieces := []string{"hello ", "from ", "coalesced ", "stream"}
 	started := time.Now().Add(-2 * time.Second)

@@ -46,6 +46,18 @@ type telegramCommandSpec struct {
 	handler       telegramCommandHandler
 }
 
+type authCommandSafetyPolicy struct {
+	SecretBearing                bool
+	RequireDeletionBeforePersist bool
+	AllowGroupAfterDeletion      bool
+}
+
+var authCommandSafetyPolicies = map[string]authCommandSafetyPolicy{
+	"deepseek": {SecretBearing: true, RequireDeletionBeforePersist: true, AllowGroupAfterDeletion: true},
+	"api":      {SecretBearing: true, RequireDeletionBeforePersist: true, AllowGroupAfterDeletion: true},
+	"key":      {SecretBearing: true, RequireDeletionBeforePersist: true, AllowGroupAfterDeletion: true},
+}
+
 func telegramCommands() []telegramCommandSpec {
 	return []telegramCommandSpec{
 		telegramActionCommand("help.show", telegramCommandSpec{
@@ -245,7 +257,7 @@ func (b *Bot) handleNewCommand(ctx context.Context, msg Message, scope ChatScope
 
 func (b *Bot) handleStatusCommand(ctx context.Context, msg Message, scope ChatScope, _ string) {
 	state := b.chatStateWithLegacy(scope.Key(), scope.LegacyKey())
-	runtime := b.activeRuntimeStatus(ctx, state)
+	runtime := b.activeRuntimeStatus(b.gatewayScopedContext(ctx, msg, state), state)
 	_ = b.sendHTML(ctx, msg, StatusHTMLWithRuntime(state, b.opts, runtime))
 }
 
@@ -371,7 +383,7 @@ func (b *Bot) handleToolViewCommand(ctx context.Context, msg Message, scope Chat
 		_ = b.sendPlain(ctx, msg, "No active session. Send a message first or use /new.")
 		return
 	}
-	body, err := b.toolViewHTML(ctx, state.SessionID)
+	body, err := b.toolViewHTML(b.gatewayScopedContext(ctx, msg, state), state.SessionID)
 	if err != nil {
 		_ = b.sendPlain(ctx, msg, "Toolview failed: "+err.Error())
 		return
@@ -394,7 +406,7 @@ func (b *Bot) handleContextCommand(ctx context.Context, msg Message, scope ChatS
 		_ = b.sendPlain(ctx, msg, "No active session. Send a message first or use /new.")
 		return
 	}
-	status, err := b.harness.ContextStatus(ctx, state.SessionID)
+	status, err := b.harness.ContextStatus(b.gatewayScopedContext(ctx, msg, state), state.SessionID)
 	if err != nil {
 		_ = b.sendPlain(ctx, msg, "Context status failed: "+err.Error())
 		return
@@ -432,7 +444,7 @@ func (b *Bot) handleDiffCommand(ctx context.Context, msg Message, scope ChatScop
 		_ = b.sendPlain(ctx, msg, "No active session. Send a message first or use /new.")
 		return
 	}
-	out, err := previewer.PreviewSessionUndo(ctx, state.SessionID, strings.TrimSpace(arg))
+	out, err := previewer.PreviewSessionUndo(b.gatewayScopedContext(ctx, msg, state), state.SessionID, strings.TrimSpace(arg))
 	if err != nil {
 		_ = b.sendPlain(ctx, msg, "Diff preview failed: "+err.Error())
 		return
@@ -451,7 +463,7 @@ func (b *Bot) handleUndoCommand(ctx context.Context, msg Message, scope ChatScop
 		_ = b.sendPlain(ctx, msg, "No active session. Send a message first or use /new.")
 		return
 	}
-	out, err := undoer.UndoSession(ctx, state.SessionID, strings.TrimSpace(arg))
+	out, err := undoer.UndoSession(b.gatewayScopedContext(ctx, msg, state), state.SessionID, strings.TrimSpace(arg))
 	if err != nil {
 		_ = b.sendPlain(ctx, msg, "Undo failed: "+err.Error())
 		return
@@ -470,7 +482,7 @@ func (b *Bot) handleRedoCommand(ctx context.Context, msg Message, scope ChatScop
 		_ = b.sendPlain(ctx, msg, "No active session. Send a message first or use /new.")
 		return
 	}
-	out, err := undoer.RedoSession(ctx, state.SessionID)
+	out, err := undoer.RedoSession(b.gatewayScopedContext(ctx, msg, state), state.SessionID)
 	if err != nil {
 		_ = b.sendPlain(ctx, msg, "Redo failed: "+err.Error())
 		return
@@ -556,7 +568,7 @@ func (b *Bot) handleCancelCommand(ctx context.Context, msg Message, scope ChatSc
 	state := b.chatState(key)
 	localCancelled := b.cancelChat(key)
 	if state.SessionID != "" {
-		b.cancelGatewaySession(state.SessionID)
+		b.cancelGatewaySession(b.gatewayScopedContext(ctx, msg, state), state.SessionID)
 	}
 	if localCancelled {
 		_ = b.sendPlain(ctx, msg, "Cancelled current run.")
@@ -573,15 +585,16 @@ func (b *Bot) handleResumeCommand(ctx context.Context, msg Message, scope ChatSc
 		_ = b.sendPlain(ctx, msg, "Gateway session listing is not available in this harness.")
 		return
 	}
-	sessions, err := manager.ListSessions(ctx)
+	key := scope.Key()
+	state := b.chatStateWithLegacy(key, scope.LegacyKey())
+	scopedCtx := b.gatewayScopedContext(ctx, msg, state)
+	sessions, err := manager.ListSessions(scopedCtx)
 	if err != nil {
 		_ = b.sendPlain(ctx, msg, "Resume failed: "+err.Error())
 		return
 	}
 	sessions = filterTelegramSessionsForMessage(sessions, msg)
 	arg = strings.TrimSpace(arg)
-	key := scope.Key()
-	state := b.chatStateWithLegacy(key, scope.LegacyKey())
 	if arg == "" {
 		_ = b.sendHTML(ctx, msg, formatTelegramSessionListHTML(sessions, state.SessionID))
 		return
@@ -629,7 +642,8 @@ func (b *Bot) handleForkCommand(ctx context.Context, msg Message, scope ChatScop
 		_ = b.sendPlain(ctx, msg, "No current session to fork. Send a message first or pass a session id.")
 		return
 	}
-	sessions, err := manager.ListSessions(ctx)
+	scopedCtx := b.gatewayScopedContext(ctx, msg, state)
+	sessions, err := manager.ListSessions(scopedCtx)
 	if err != nil {
 		_ = b.sendPlain(ctx, msg, "Fork failed: "+err.Error())
 		return
@@ -640,7 +654,7 @@ func (b *Bot) handleForkCommand(ctx context.Context, msg Message, scope ChatScop
 		_ = b.sendPlain(ctx, msg, "Fork failed: "+err.Error())
 		return
 	}
-	full, err := manager.GetSession(ctx, source.ID)
+	full, err := manager.GetSession(scopedCtx, source.ID)
 	if err != nil {
 		_ = b.sendPlain(ctx, msg, "Fork failed: "+err.Error())
 		return
@@ -776,10 +790,12 @@ func (b *Bot) handleAuthCommand(ctx context.Context, msg Message, _ ChatScope, a
 			return
 		}
 		apiKey := strings.TrimSpace(strings.Join(fields[1:], ""))
-		b.delete(ctx, msg.Chat.ID, msg.MessageID)
+		if !b.prepareSecretAuthCommand(ctx, msg, authCommandSafetyPolicies[strings.ToLower(fields[0])]) {
+			return
+		}
 		status, err := b.harness.SaveDeepSeekAPIKey(ctx, apiKey)
 		if err != nil {
-			_ = b.sendPlain(ctx, msg, "DeepSeek auth failed: "+err.Error())
+			_ = b.sendPlain(ctx, msg, "DeepSeek auth failed: "+redactAuthErrorText(err.Error(), apiKey))
 			return
 		}
 		_ = b.sendHTML(ctx, msg, "<b>Auth updated</b>\n<pre>"+esc(formatProviderStatusText("deepseek", status))+"</pre>")
@@ -793,4 +809,40 @@ func (b *Bot) handleAuthCommand(ctx context.Context, msg Message, _ ChatScope, a
 	default:
 		_ = b.sendHTML(ctx, msg, authUsageHTML())
 	}
+}
+
+func (b *Bot) prepareSecretAuthCommand(ctx context.Context, msg Message, policy authCommandSafetyPolicy) bool {
+	if !policy.SecretBearing {
+		return true
+	}
+	if msg.MessageID == 0 {
+		_ = b.sendPlain(ctx, msg, "Secret-bearing auth command was not saved because Telegram did not provide a deletable message id. Send it in a private chat and try again.")
+		return false
+	}
+	if err := b.delete(ctx, msg.Chat.ID, msg.MessageID); err != nil {
+		_ = b.sendPlain(ctx, msg, "Secret-bearing auth command was not saved because Telegram could not delete the original message. Send it in a private chat and try again.")
+		return false
+	}
+	if !telegramChatIsPrivate(msg.Chat) && !policy.AllowGroupAfterDeletion {
+		_ = b.sendPlain(ctx, msg, "Secret-bearing auth commands are only accepted in private chat.")
+		return false
+	}
+	return true
+}
+
+func telegramChatIsPrivate(chat Chat) bool {
+	chatType := strings.ToLower(strings.TrimSpace(chat.Type))
+	return chatType == "" || chatType == "private"
+}
+
+func redactAuthErrorText(text string, sensitive ...string) string {
+	out := text
+	for _, value := range sensitive {
+		value = strings.TrimSpace(value)
+		if len(value) < 4 {
+			continue
+		}
+		out = strings.ReplaceAll(out, value, "[redacted]")
+	}
+	return out
 }

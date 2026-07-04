@@ -688,6 +688,70 @@ func TestRunMessagesExecutesParallelSafeToolsConcurrentlyAndPreservesOrder(t *te
 	}
 }
 
+func TestRunMessagesParallelBatchCompletedWithErrorsAggregatesChildren(t *testing.T) {
+	cfg := config.Default()
+	cfg.MaxToolRounds = 3
+	cfg.MaxParallelTools = 2
+	registry := tools.NewRegistry(cfg)
+	if err := registry.Register(tools.Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "read_ok",
+			Description: "Successful read-only test tool.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+			Risk:        protocol.RiskReadOnly,
+		},
+		Handler: func(context.Context, json.RawMessage) (tools.Result, error) {
+			return tools.Result{Content: "ok"}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(tools.Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "read_fail",
+			Description: "Failing read-only test tool.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+			Risk:        protocol.RiskReadOnly,
+		},
+		Handler: func(context.Context, json.RawMessage) (tools.Result, error) {
+			return tools.Result{Content: "planned failure", IsError: true, ErrorCode: "test_failure"}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_ok", ToolName: "read_ok", ArgsDelta: `{}`},
+			{Kind: provider.EventToolCallDelta, ToolIndex: 1, ToolID: "call_fail", ToolName: "read_fail", ArgsDelta: `{}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "finished"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	a := New(cfg, prov, registry)
+	var events []protocol.Event
+	if _, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "run mixed parallel tools"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertAgentLifecycleValid(t, events)
+	batchCompleted, ok := firstStepEvent(events, protocol.EventStepCompleted, protocol.StepKindToolBatch)
+	if !ok || batchCompleted.Status != protocol.StepStatusCompletedWithErrors {
+		t.Fatalf("parallel batch step completed = %#v ok=%v", batchCompleted, ok)
+	}
+	if batchCompleted.Metadata["completed_children"] != float64(1) ||
+		batchCompleted.Metadata["failed_children"] != float64(1) ||
+		batchCompleted.Metadata["aborted_children"] != float64(0) {
+		t.Fatalf("parallel batch child aggregate metadata = %#v", batchCompleted.Metadata)
+	}
+}
+
 func TestRunMessagesParallelBatchCompletesOutOfOrderWithCallIDs(t *testing.T) {
 	cfg := config.Default()
 	cfg.MaxToolRounds = 3

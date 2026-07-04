@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "name": "stream_gap",
+      "summary": "Durable stream jumps from seq 1 to seq 3.",
+      "valid": false,
+      "expect_error": "sequence gap",
+      "events": [
+        {"schema_version":1,"seq":1,"source":"agent","ts":"2026-07-01T01:00:01Z","run_id":"run-stream-gap","type":"run.started"},
+        {"schema_version":1,"seq":3,"source":"agent","ts":"2026-07-01T01:00:03Z","run_id":"run-stream-gap","type":"run.completed"}
+      ]
+    },
+    {
+      "name": "duplicate_tool_call_id",
+      "summary": "Provider emits two executable tool calls with the same ID.",
+      "valid": false,
+      "expect_error": "duplicate tool.call_requested",
+      "events": [
+        {"schema_version":1,"seq":1,"source":"agent","ts":"2026-07-01T01:01:01Z","run_id":"run-duplicate-tool","type":"run.started"},
+        {"schema_version":1,"seq":2,"source":"agent","ts":"2026-07-01T01:01:02Z","run_id":"run-duplicate-tool","call_id":"call-dup","type":"tool.call_requested","data":{"id":"call-dup","name":"time_now","arguments":{}}},
+        {"schema_version":1,"seq":3,"source":"agent","ts":"2026-07-01T01:01:03Z","run_id":"run-duplicate-tool","call_id":"call-dup","type":"tool.call_requested","data":{"id":"call-dup","name":"fs_read_file","arguments":{"path":"README.md"}}}
+      ]
+    },
+    {
+      "name": "parallel_cancellation",
+      "summary": "Parallel tools where one finishes and the other is aborted before a failed run terminal.",
+      "valid": true,
+      "events": [
+        {"schema_version":1,"seq":1,"source":"agent","ts":"2026-07-01T01:02:01Z","run_id":"run-parallel-cancel","type":"run.started"},
+        {"schema_version":1,"seq":2,"source":"agent","ts":"2026-07-01T01:02:02Z","run_id":"run-parallel-cancel","call_id":"call-fast","type":"tool.call_requested","data":{"id":"call-fast","name":"read_fast","arguments":{}}},
+        {"schema_version":1,"seq":3,"source":"agent","ts":"2026-07-01T01:02:03Z","run_id":"run-parallel-cancel","call_id":"call-slow","type":"tool.call_requested","data":{"id":"call-slow","name":"slow_network","arguments":{}}},
+        {"schema_version":1,"seq":4,"source":"agent","ts":"2026-07-01T01:02:04Z","run_id":"run-parallel-cancel","call_id":"call-fast","attempt_id":"attempt-fast","type":"tool.call_started","data":"read_fast"},
+        {"schema_version":1,"seq":5,"source":"agent","ts":"2026-07-01T01:02:05Z","run_id":"run-parallel-cancel","call_id":"call-slow","attempt_id":"attempt-slow","type":"tool.call_started","data":"slow_network"},
+        {"schema_version":1,"seq":6,"source":"agent","ts":"2026-07-01T01:02:06Z","run_id":"run-parallel-cancel","call_id":"call-fast","attempt_id":"attempt-fast","type":"tool.call_finished","data":{"call_id":"call-fast","name":"read_fast","content":"ok"}},
+        {"schema_version":1,"seq":7,"source":"agent","ts":"2026-07-01T01:02:07Z","run_id":"run-parallel-cancel","call_id":"call-slow","attempt_id":"attempt-slow","type":"tool.call_aborted","data":{"call_id":"call-slow","name":"slow_network","content":"cancelled","is_error":true,"error_code":"interrupted"}},
+        {"schema_version":1,"seq":8,"source":"agent","ts":"2026-07-01T01:02:08Z","run_id":"run-parallel-cancel","type":"run.failed","data":"cancelled by newer user input"}
+      ]
+    },
+    {
+      "name": "late_output_ref",
+      "summary": "Output-ref audit event arrives after the terminal tool result.",
+      "valid": true,
+      "events": [
+        {"schema_version":1,"seq":1,"source":"agent","ts":"2026-07-01T01:03:01Z","run_id":"run-late-output-ref","type":"run.started"},
+        {"schema_version":1,"seq":2,"source":"agent","ts":"2026-07-01T01:03:02Z","run_id":"run-late-output-ref","call_id":"call-ref","type":"tool.call_requested","data":{"id":"call-ref","name":"fs_read_file","arguments":{"path":"large.log"}}},
+        {"schema_version":1,"seq":3,"source":"agent","ts":"2026-07-01T01:03:03Z","run_id":"run-late-output-ref","call_id":"call-ref","attempt_id":"attempt-ref","type":"tool.call_started","data":"fs_read_file"},
+        {"schema_version":1,"seq":4,"source":"agent","ts":"2026-07-01T01:03:04Z","run_id":"run-late-output-ref","call_id":"call-ref","attempt_id":"attempt-ref","type":"tool.call_finished","data":{"call_id":"call-ref","name":"fs_read_file","content":"truncated","output_ref":"/tmp/billyharness/tool-output/late-ref.txt","truncated":true}},
+        {"schema_version":1,"seq":5,"source":"agent","ts":"2026-07-01T01:03:05Z","run_id":"run-late-output-ref","call_id":"call-ref","attempt_id":"attempt-ref","type":"tool.output_ref_created","data":{"call_id":"call-ref","name":"fs_read_file","attempt_id":"attempt-ref","output_ref":"/tmp/billyharness/tool-output/late-ref.txt","output_ref_id":"late-ref","output_ref_bytes":8192,"output_ref_sha256":"sha256-late","output_ref_permissions":"0600","output_ref_plaintext":true,"truncated":true}},
+        {"schema_version":1,"seq":6,"source":"agent","ts":"2026-07-01T01:03:06Z","run_id":"run-late-output-ref","type":"run.completed"}
+      ]
+    },
+    {
+      "name": "provider_error_after_partial_stream",
+      "summary": "Assistant content is partially streamed before provider failure terminates the run.",
+      "valid": true,
+      "events": [
+        {"schema_version":1,"seq":1,"source":"agent","ts":"2026-07-01T01:04:01Z","run_id":"run-provider-error","type":"run.started"},
+        {"schema_version":1,"seq":2,"source":"agent","ts":"2026-07-01T01:04:02Z","run_id":"run-provider-error","turn_id":"turn-001","step_id":"turn-001:model-call-001","type":"model.call_started","data":{"request_id":"req-provider-error","provider_id":"mock","model_id":"mock"}},
+        {"schema_version":1,"seq":3,"source":"agent","ts":"2026-07-01T01:04:03Z","run_id":"run-provider-error","turn_id":"turn-001","step_id":"turn-001:model-call-001","type":"assistant.content_delta","data":"partial answer before provider error"},
+        {"schema_version":1,"seq":4,"source":"agent","ts":"2026-07-01T01:04:04Z","run_id":"run-provider-error","type":"run.failed","data":"provider stream closed early"}
+      ]
+    },
+    {
+      "name": "invalid_tool_args",
+      "summary": "Tool call keeps invalid argument text and fails without executing a normal result.",
+      "valid": true,
+      "events": [
+        {"schema_version":1,"seq":1,"source":"agent","ts":"2026-07-01T01:05:01Z","run_id":"run-invalid-args","type":"run.started"},
+        {"schema_version":1,"seq":2,"source":"agent","ts":"2026-07-01T01:05:02Z","run_id":"run-invalid-args","call_id":"call-bad-args","type":"tool.call_requested","data":{"id":"call-bad-args","name":"fs_write_file","arguments":{},"invalid_arguments":"{\"path\":","invalid_argument_error":"unexpected EOF"}},
+        {"schema_version":1,"seq":3,"source":"agent","ts":"2026-07-01T01:05:03Z","run_id":"run-invalid-args","call_id":"call-bad-args","attempt_id":"attempt-bad-args","type":"tool.call_started","data":"fs_write_file"},
+        {"schema_version":1,"seq":4,"source":"agent","ts":"2026-07-01T01:05:04Z","run_id":"run-invalid-args","call_id":"call-bad-args","attempt_id":"attempt-bad-args","type":"tool.call_failed","data":{"call_id":"call-bad-args","name":"fs_write_file","content":"invalid JSON arguments: unexpected EOF","is_error":true,"error_code":"invalid_json_args"}},
+        {"schema_version":1,"seq":5,"source":"agent","ts":"2026-07-01T01:05:05Z","run_id":"run-invalid-args","type":"run.failed","data":"invalid tool arguments"}
+      ]
+    },
+    {
+      "name": "mcp_catalog_change",
+      "summary": "MCP-backed tool call observes a catalog hash change and still completes.",
+      "valid": true,
+      "events": [
+        {"schema_version":1,"seq":1,"source":"agent","ts":"2026-07-01T01:06:01Z","run_id":"run-mcp-catalog","type":"run.started"},
+        {"schema_version":1,"seq":2,"source":"agent","ts":"2026-07-01T01:06:02Z","run_id":"run-mcp-catalog","call_id":"call-mcp","type":"tool.call_requested","data":{"id":"call-mcp","name":"mcp_call","arguments":{"name":"mcp__fake__search","arguments":{"query":"catalog"}}}},
+        {"schema_version":1,"seq":3,"source":"agent","ts":"2026-07-01T01:06:03Z","run_id":"run-mcp-catalog","call_id":"call-mcp","attempt_id":"attempt-mcp","type":"tool.call_started","data":"mcp_call"},
+        {"schema_version":1,"seq":4,"source":"agent","ts":"2026-07-01T01:06:04Z","run_id":"run-mcp-catalog","call_id":"call-mcp","attempt_id":"attempt-mcp","type":"tool.call_progress","data":{"call_id":"call-mcp","name":"mcp_call","attempt_id":"attempt-mcp","phase":"catalog_refresh","status":"changed","metadata":{"previous_hash":"mcp-old","current_hash":"mcp-new"}}},
+        {"schema_version":1,"seq":5,"source":"agent","ts":"2026-07-01T01:06:05Z","run_id":"run-mcp-catalog","call_id":"call-mcp","attempt_id":"attempt-mcp","type":"tool.call_finished","data":{"call_id":"call-mcp","name":"mcp_call","content":"catalog refreshed","metadata":{"mcp_catalog_hash":"mcp-new"}}},
+        {"schema_version":1,"seq":6,"source":"agent","ts":"2026-07-01T01:06:06Z","run_id":"run-mcp-catalog","type":"run.completed"}
+      ]
+    },
+    {
+      "name": "telegram_interruption",
+      "summary": "Telegram user rejects a pending input request and the tool/run aborts.",
+      "valid": true,
+      "events": [
+        {"schema_version":1,"seq":1,"source":"agent","ts":"2026-07-01T01:07:01Z","run_id":"run-telegram-interrupt","type":"run.started"},
+        {"schema_version":1,"seq":2,"source":"agent","ts":"2026-07-01T01:07:02Z","run_id":"run-telegram-interrupt","call_id":"call-ask","type":"tool.call_requested","data":{"id":"call-ask","name":"ask_user","arguments":{"questions":[{"question":"Continue?","options":[{"id":"yes","label":"Yes"}]}]}}},
+        {"schema_version":1,"seq":3,"source":"agent","ts":"2026-07-01T01:07:03Z","run_id":"run-telegram-interrupt","call_id":"call-ask","attempt_id":"attempt-ask","type":"tool.call_started","data":"ask_user"},
+        {"schema_version":1,"seq":4,"source":"agent","ts":"2026-07-01T01:07:04Z","run_id":"run-telegram-interrupt","turn_id":"turn-001","step_id":"turn-001:tool-call-001","call_id":"call-ask","attempt_id":"attempt-ask","type":"user_input.requested","data":{"request_id":"telegram-input-1","prompt":"Continue?"}},
+        {"schema_version":1,"seq":5,"source":"telegram","ts":"2026-07-01T01:07:05Z","run_id":"run-telegram-interrupt","turn_id":"turn-001","step_id":"turn-001:tool-call-001","call_id":"call-ask","attempt_id":"attempt-ask","type":"user_input.rejected","data":{"request_id":"telegram-input-1","reason":"new Telegram message interrupted the wait"}},
+        {"schema_version":1,"seq":6,"source":"agent","ts":"2026-07-01T01:07:06Z","run_id":"run-telegram-interrupt","call_id":"call-ask","attempt_id":"attempt-ask","type":"tool.call_aborted","data":{"call_id":"call-ask","name":"ask_user","content":"interrupted by Telegram user","is_error":true,"error_code":"telegram_interrupted"}},
+        {"schema_version":1,"seq":7,"source":"agent","ts":"2026-07-01T01:07:07Z","run_id":"run-telegram-interrupt","type":"run.failed","data":"telegram interruption"}
+      ]
+    },
+    {
+      "name": "corrupted_replay_envelope",
+      "summary": "V1 event omits required source metadata.",
+      "valid": false,
+      "expect_error": "missing source",
+      "events": [
+        {"schema_version":1,"seq":1,"ts":"2026-07-01T01:08:01Z","run_id":"run-corrupt-envelope","type":"run.started"}
+      ]
+    }
+  ]
+}

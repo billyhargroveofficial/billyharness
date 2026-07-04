@@ -18,16 +18,11 @@ fi
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
-cp go.mod "$tmp_dir/go.mod"
-cp go.sum "$tmp_dir/go.sum"
 
-"$go_bin" mod tidy
-if ! cmp -s go.mod "$tmp_dir/go.mod" || ! cmp -s go.sum "$tmp_dir/go.sum"; then
-	echo "go mod tidy produced a diff; restore from the diff below and commit tidy metadata" >&2
-	diff -u "$tmp_dir/go.mod" go.mod >&2 || true
-	diff -u "$tmp_dir/go.sum" go.sum >&2 || true
-	cp "$tmp_dir/go.mod" go.mod
-	cp "$tmp_dir/go.sum" go.sum
+"$go_bin" mod tidy -diff >"$tmp_dir/tidy.diff"
+if [[ -s "$tmp_dir/tidy.diff" ]]; then
+	echo "go mod tidy would produce a diff; commit tidy metadata" >&2
+	cat "$tmp_dir/tidy.diff" >&2
 	exit 1
 fi
 

@@ -401,7 +401,7 @@ func backendHTTPClient(client *http.Client) *http.Client {
 	if client != nil {
 		return client
 	}
-	return &http.Client{Timeout: 30 * time.Second}
+	return Client{Timeout: 30 * time.Second}.publicHTTPClient()
 }
 
 func normalizedRetries(value int) int {

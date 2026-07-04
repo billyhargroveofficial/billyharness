@@ -3,6 +3,7 @@ package telegrambot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,6 +22,15 @@ import (
 type accessModeCaptureHarness struct {
 	scriptedHarness
 	run gatewayapi.RunRequest
+}
+
+type failingMCPStatusHarness struct {
+	scriptedHarness
+	err error
+}
+
+func (h failingMCPStatusHarness) MCPStatus(context.Context) (string, error) {
+	return "", h.err
 }
 
 func (h *accessModeCaptureHarness) RunSession(_ context.Context, _ string, req gatewayapi.RunRequest, emit func(protocol.Event)) error {
@@ -58,6 +68,44 @@ func TestTelegramConfigCommandSendsSanitizedSummary(t *testing.T) {
 	}
 	if strings.Contains(sentText, "sk-secret") {
 		t.Fatalf("config leaked secret: %q", sentText)
+	}
+}
+
+func TestTelegramCommandErrorsAreRedactedBeforeSend(t *testing.T) {
+	var sentText string
+	client := newTelegramAPIClient(t, "bottoken", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			sentText, _ = payload["text"].(string)
+			writeTelegramResult(w, SentMessage{MessageID: 11, Chat: Chat{ID: 123}})
+		},
+	})
+	errText := strings.Join([]string{
+		`gateway https://user-secret:pass-secret@example.com/v1/mcp?token=query-secret failed`,
+		`Authorization: Bearer bearer-secret-value`,
+		`X-Api-Key: header-secret-value`,
+		`provider sk-telegramsecret123456789`,
+	}, "\n")
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      t.TempDir() + "/state.json",
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, failingMCPStatusHarness{err: errors.New(errText)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/mcp"})
+	if !strings.Contains(sentText, "MCP status failed") || !strings.Contains(sentText, "[redacted]") {
+		t.Fatalf("redacted command error missing expected shape: %q", sentText)
+	}
+	for _, leaked := range []string{"user-secret", "pass-secret", "query-secret", "bearer-secret-value", "header-secret-value", "sk-telegramsecret"} {
+		if strings.Contains(sentText, leaked) {
+			t.Fatalf("command error leaked %q in %q", leaked, sentText)
+		}
 	}
 }
 
@@ -930,7 +978,7 @@ func TestTelegramAuthDeepSeekDeletesSecretMessageAndDoesNotRenderKey(t *testing.
 	}
 
 	const secret = "sk-test-telegram-secret"
-	bot.handleMessage(context.Background(), Message{MessageID: 77, Chat: Chat{ID: 123}, Text: "/auth deepseek " + secret})
+	bot.handleMessage(context.Background(), Message{MessageID: 77, Chat: Chat{ID: 123, Type: "supergroup"}, Text: "/auth deepseek " + secret})
 
 	harness.mu.Lock()
 	saved := harness.savedDeepSeekKey
@@ -948,6 +996,96 @@ func TestTelegramAuthDeepSeekDeletesSecretMessageAndDoesNotRenderKey(t *testing.
 	}
 	if strings.Contains(sentText, secret) || strings.Contains(sentText, "sk-test") {
 		t.Fatalf("auth response leaked secret: %q", sentText)
+	}
+}
+
+func TestTelegramAuthDeepSeekDoesNotPersistWhenDeleteFails(t *testing.T) {
+	var (
+		sentText    string
+		deleteCalls int
+	)
+	client := newTelegramAPIClient(t, "bottoken", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			sentText, _ = payload["text"].(string)
+			writeTelegramResult(w, SentMessage{MessageID: 11, Chat: Chat{ID: 123}})
+		},
+		"deleteMessage": func(w http.ResponseWriter, _ *http.Request, _ map[string]any) {
+			deleteCalls++
+			writeTelegramError(w, http.StatusBadRequest, "message can't be deleted")
+		},
+	})
+
+	harness := &telegramAuthHarness{}
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      t.TempDir() + "/state.json",
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const secret = "sk-test-telegram-secret"
+	bot.handleMessage(context.Background(), Message{MessageID: 77, Chat: Chat{ID: 123, Type: "supergroup"}, Text: "/auth deepseek " + secret})
+
+	harness.mu.Lock()
+	saved := harness.savedDeepSeekKey
+	harness.mu.Unlock()
+	if saved != "" {
+		t.Fatalf("saved DeepSeek key after delete failure = %q", saved)
+	}
+	if deleteCalls != 1 {
+		t.Fatalf("delete calls = %d, want 1", deleteCalls)
+	}
+	if !strings.Contains(sentText, "was not saved") {
+		t.Fatalf("delete failure response = %q", sentText)
+	}
+	if strings.Contains(sentText, secret) || strings.Contains(sentText, "sk-test") {
+		t.Fatalf("delete failure response leaked secret: %q", sentText)
+	}
+}
+
+func TestTelegramAuthDeepSeekRedactsSaveError(t *testing.T) {
+	var sentText string
+	client := newTelegramAPIClient(t, "bottoken", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			sentText, _ = payload["text"].(string)
+			writeTelegramResult(w, SentMessage{MessageID: 11, Chat: Chat{ID: 123}})
+		},
+		"deleteMessage": func(w http.ResponseWriter, _ *http.Request, _ map[string]any) {
+			writeTelegramResult(w, true)
+		},
+	})
+
+	const secret = "sk-test-telegram-secret"
+	harness := &telegramAuthHarness{saveDeepSeekErr: errors.New("save failed for api_key=" + secret)}
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      t.TempDir() + "/state.json",
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bot.handleMessage(context.Background(), Message{MessageID: 77, Chat: Chat{ID: 123, Type: "private"}, Text: "/auth deepseek " + secret})
+
+	harness.mu.Lock()
+	saved := harness.savedDeepSeekKey
+	harness.mu.Unlock()
+	if saved != "" {
+		t.Fatalf("saved DeepSeek key after save failure = %q", saved)
+	}
+	if !strings.Contains(sentText, "DeepSeek auth failed") || strings.Contains(sentText, secret) || strings.Contains(sentText, "sk-test") {
+		t.Fatalf("save failure response = %q", sentText)
 	}
 }
 

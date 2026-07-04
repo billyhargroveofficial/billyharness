@@ -1,0 +1,785 @@
+{
+  "schema_version": 1,
+  "project": "billyharness",
+  "generated_at": "2026-07-03",
+  "source_commit": "b9df841b391b62c4087f6a7a38a13fd9af65dfd6",
+  "dirty_at_generation": true,
+  "notes": [
+    "Initial hand-maintained manifest for agent-readable documentation routing.",
+    "dirty_at_generation is true because the worktree already had unrelated edits when this system was scaffolded.",
+    "Documentation coverage is initial and not exhaustive; use source code or live inspection for details not covered by canonical docs, generated references, or dated runbooks."
+  ],
+  "known_gaps": [
+    "Generated CLI, gateway API, config-key, protocol-event, tool-catalog, package-map, and full repo-map references are planned in agent-index/generated/reference-plan.md but are not implemented yet.",
+    "agent-index/generated/repo-map.md is a hand-curated seed until docsgen replaces it with generated output.",
+    "ops/ contains seed diagnostics and production-service runbooks; live systemd units, environment files, log routing, host state, and deployment history require production-host inspection before being documented as verified facts."
+  ],
+  "documents": [
+    {
+      "path": "AGENTS.md",
+      "kind": "agent-contract",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated",
+      "read_when": [
+        "always before editing",
+        "checking project workflow rules",
+        "checking verification expectations"
+      ],
+      "related_code": []
+    },
+    {
+      "path": "README.md",
+      "kind": "project-readme",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated",
+      "read_when": [
+        "needing the project overview or basic usage",
+        "checking user-facing setup or command examples"
+      ],
+      "related_code": [
+        "cmd/fast-agent-harness/main.go",
+        "cmd/fast-agent-harness"
+      ]
+    },
+    {
+      "path": ".agents/rules/README.md",
+      "kind": "agent-rules-index",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated",
+      "read_when": [
+        "choosing detailed agent rule files",
+        "checking repo-specific agent behavior rules"
+      ],
+      "related_code": []
+    },
+    {
+      "path": ".agents/rules/documentation.md",
+      "kind": "agent-rule",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated",
+      "read_when": [
+        "editing documentation",
+        "deciding whether a code change needs docs",
+        "creating generated documentation"
+      ],
+      "related_code": []
+    },
+    {
+      "path": ".agents/rules/stop-hook-docguard.md",
+      "kind": "agent-rule",
+      "status": "canonical_installed",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated",
+      "read_when": [
+        "installing or auditing the Codex Stop hook docguard",
+        "auditing documentation drift hook behavior",
+        "changing docs drift checks or hook config shape"
+      ],
+      "related_code": [
+        ".codex/hooks.json",
+        ".codex/hooks/docguard_stop.py"
+      ]
+    },
+    {
+      "path": "llms.txt",
+      "kind": "agent-index",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": false,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated",
+      "read_when": [
+        "needing the smallest repo documentation map",
+        "onboarding an LLM or external agent"
+      ],
+      "related_code": []
+    },
+    {
+      "path": "agent-index/docs-manifest.json",
+      "kind": "docs-manifest",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated",
+      "read_when": [
+        "checking machine-readable docs metadata",
+        "auditing manifest path coverage, freshness hints, or read triggers"
+      ],
+      "related_code": []
+    },
+    {
+      "path": "agent-index/README.md",
+      "kind": "machine-index-policy",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated",
+      "read_when": [
+        "changing agent-index policy",
+        "adding generated or machine-oriented index files",
+        "checking where generated references belong"
+      ],
+      "related_code": []
+    },
+    {
+      "path": "agent-index/generated/reference-plan.md",
+      "kind": "docsgen-docguard-design",
+      "status": "design_not_implemented",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated_from_current_worktree",
+      "read_when": [
+        "designing or implementing docsgen",
+        "creating generated CLI/API/config/protocol/tool/package references",
+        "designing or implementing docguard checks",
+        "defining generated-reference source globs or dirty_at_generation semantics"
+      ],
+      "related_code": [
+        "cmd/fast-agent-harness",
+        "internal/gateway",
+        "internal/gatewayapi",
+        "internal/config",
+        "internal/protocol",
+        "internal/eventlog",
+        "internal/tools",
+        "internal/mcpclient",
+        "internal/architecture"
+      ]
+    },
+    {
+      "path": "agent-index/generated/repo-map.md",
+      "kind": "generated-reference-seed",
+      "status": "seed_until_docsgen_exists",
+      "owner": "billy",
+      "source_of_truth": false,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated_seed",
+      "read_when": [
+        "needing a compact package orientation map",
+        "replacing the seed repo map with generated docsgen output",
+        "checking package-map or repo-map generation strategy"
+      ],
+      "related_code": [
+        "docs/architecture.md",
+        "internal/architecture/architecture_test.go"
+      ]
+    },
+    {
+      "path": "docs/README.md",
+      "kind": "docs-index",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": false,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated",
+      "read_when": [
+        "choosing an architecture document",
+        "checking whether content belongs in docs"
+      ],
+      "related_code": []
+    },
+    {
+      "path": "docs/architecture.md",
+      "kind": "architecture-canon",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated_and_tested",
+      "read_when": [
+        "changing package boundaries",
+        "changing internal imports",
+        "debugging architecture guard failures",
+        "changing file-size budget policy"
+      ],
+      "related_code": [
+        "internal/architecture/architecture_test.go",
+        "cmd/fast-agent-harness/hygiene.go"
+      ],
+      "required_tests": [
+        "go test -count=1 ./internal/architecture"
+      ]
+    },
+    {
+      "path": "docs/architecture/runtime-event-system.md",
+      "kind": "architecture-canon",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated_and_code_checked",
+      "read_when": [
+        "changing protocol event types",
+        "changing runtime event emission",
+        "changing JSONL replay or corruption handling",
+        "changing lifecycle validation",
+        "changing trace replay summaries",
+        "changing context compaction or output-ref events"
+      ],
+      "related_code": [
+        "internal/protocol/types.go",
+        "internal/protocol/envelope.go",
+        "internal/eventlog/eventlog.go",
+        "internal/eventlog/jsonl.go",
+        "internal/agent/runtime_loop.go",
+        "internal/agent/model_call.go",
+        "internal/agent/tool_attempt.go",
+        "internal/agent/context_threshold.go",
+        "internal/agent/compaction.go",
+        "internal/runstate/runstate.go",
+        "internal/session/session.go",
+        "internal/trace/trace.go",
+        "internal/bench/bench.go"
+      ],
+      "required_tests": [
+        "go test -count=1 ./internal/architecture"
+      ]
+    },
+    {
+      "path": "docs/architecture/config-provider-context.md",
+      "kind": "architecture-canon",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated_and_code_checked",
+      "read_when": [
+        "changing config keys, env vars, profiles, or config provenance",
+        "changing provider/model/auth behavior",
+        "changing instruction, project context, memory, skills, or context accounting behavior"
+      ],
+      "related_code": [
+        "internal/config",
+        "internal/provider",
+        "internal/credentials",
+        "internal/codexauth",
+        "internal/modelinfo",
+        "internal/instructions",
+        "internal/projectcontext",
+        "internal/memory",
+        "internal/skills",
+        "internal/runstate"
+      ],
+      "required_tests": [
+        "go test -count=1 ./internal/architecture"
+      ]
+    },
+    {
+      "path": "docs/architecture/gateway-and-sessions.md",
+      "kind": "architecture-canon",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated_from_current_worktree",
+      "read_when": [
+        "changing gateway HTTP routes",
+        "changing session lifecycle, session store, replay, or catch-up semantics",
+        "changing gateway client DTOs or owner/scope behavior",
+        "changing gateway mutation auth or session authorization"
+      ],
+      "related_code": [
+        "internal/gateway/gateway.go",
+        "internal/gateway/response.go",
+        "internal/gateway/session_events.go",
+        "internal/gateway/session_store.go",
+        "internal/gateway/session_inputs.go",
+        "internal/gateway/http_security.go",
+        "internal/gateway/session_authz.go",
+        "internal/gatewayapi/types.go",
+        "internal/gatewayclient/client.go",
+        "internal/gatewaybase/gatewaybase.go",
+        "internal/session/session.go",
+        "internal/clientux/context.go"
+      ],
+      "required_tests": [
+        "git diff --check",
+        "go test -count=1 ./internal/architecture"
+      ]
+    },
+    {
+      "path": "docs/architecture/security-model.md",
+      "kind": "architecture-canon",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated_from_current_worktree",
+      "read_when": [
+        "changing gateway auth, mutation trust, or browser/loopback security",
+        "changing Telegram allowlists, owner scope, or auth command safety",
+        "changing tool policy, filesystem/shell boundaries, or workspace roots",
+        "changing MCP trust, instructions, env handling, or tool catalog visibility",
+        "changing secret redaction or public web SSRF protections"
+      ],
+      "related_code": [
+        "internal/gateway/gateway.go",
+        "internal/gateway/http_security.go",
+        "internal/gateway/session_authz.go",
+        "internal/gateway/response.go",
+        "internal/gatewayapi/types.go",
+        "internal/gatewayclient/client.go",
+        "internal/gatewaybase/gatewaybase.go",
+        "internal/tools",
+        "internal/mcpclient",
+        "internal/telegrambot",
+        "internal/secrets",
+        "internal/webtools",
+        "internal/config"
+      ],
+      "required_tests": [
+        "jq empty agent-index/docs-manifest.json",
+        "git diff --check",
+        "go test -count=1 ./internal/architecture"
+      ]
+    },
+    {
+      "path": "docs/architecture/tools-mcp-and-policy.md",
+      "kind": "architecture-canon",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated_and_code_checked",
+      "read_when": [
+        "changing native tool specs, schemas, risks, or policy",
+        "changing MCP discovery, status, lifecycle, instructions, prompts, or mcp_call",
+        "changing web tools, public-host safety, web summaries, or web backend behavior",
+        "changing tool output refs, tool compact metadata, or client tool rendering"
+      ],
+      "related_code": [
+        "internal/protocol/types.go",
+        "internal/tools/tools.go",
+        "internal/tools/policy.go",
+        "internal/tools/schema.go",
+        "internal/tools/discovery/discovery.go",
+        "internal/mcpclient/manager.go",
+        "internal/mcpclient/catalog.go",
+        "internal/mcpclient/stdio.go",
+        "internal/mcpclient/jsonrpc.go",
+        "internal/mcpstatus/status.go",
+        "internal/webtools/client.go",
+        "internal/webtools/backends.go",
+        "internal/webtools/summary.go",
+        "internal/tooloutput/tooloutput.go",
+        "internal/toolrender/toolrender.go",
+        "internal/commandregistry/registry.go",
+        "internal/agent/tool_attempt.go",
+        "internal/agent/agent.go"
+      ],
+      "required_tests": [
+        "go test -count=1 ./internal/architecture"
+      ]
+    },
+    {
+      "path": "docs/architecture/telegram-and-operator-surfaces.md",
+      "kind": "architecture-canon",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated_and_tested",
+      "read_when": [
+        "changing Telegram adapter behavior",
+        "changing Telegram command flows",
+        "changing Telegram rendering or attachments",
+        "changing gateway owner scope as used by Telegram",
+        "changing operator-facing Telegram status surfaces"
+      ],
+      "related_code": [
+        "internal/telegrambot",
+        "internal/gatewayclient",
+        "internal/gatewayapi",
+        "internal/mcpstatus",
+        "internal/toolrender",
+        "internal/clientux",
+        "cmd/fast-agent-harness/service_cmd.go",
+        "cmd/fast-agent-harness/doctor.go"
+      ],
+      "required_tests": [
+        "go test -count=1 ./internal/architecture",
+        "go test -count=1 ./internal/telegrambot ./internal/gatewayclient",
+        "go test -count=1 ./internal/gateway -run 'TestGatewaySessionOwner(MetadataPersistsAndLists|ScopeFiltersAndDeniesCrossOwner)$'"
+      ]
+    },
+    {
+      "path": "docs/documentation-system.md",
+      "kind": "architecture-canon",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated",
+      "read_when": [
+        "changing documentation hierarchy",
+        "moving or deleting docs",
+        "adding generated docs",
+        "creating docguard checks"
+      ],
+      "related_code": [
+        "internal/architecture/architecture_test.go"
+      ]
+    },
+    {
+      "path": "docs/architecture/tui-and-clientux.md",
+      "kind": "architecture-canon",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated_and_tested",
+      "read_when": [
+        "changing TUI event projection",
+        "changing transcript cells or saved TUI sessions",
+        "changing TUI rendering, selection, copy, or transcript export helpers",
+        "changing client UX action metadata or projector behavior",
+        "changing local TUI runtime adapter boundaries"
+      ],
+      "related_code": [
+        "internal/tui",
+        "internal/tui/transcript",
+        "internal/tui/render",
+        "internal/tui/selection",
+        "internal/tui/runtimeclient",
+        "internal/clientux",
+        "internal/clientux/projector",
+        "internal/toolrender"
+      ],
+      "required_tests": [
+        "go test -count=1 ./internal/architecture",
+        "go test -count=1 ./internal/tui ./internal/tui/transcript ./internal/tui/render ./internal/tui/selection ./internal/tui/runtimeclient ./internal/clientux ./internal/clientux/projector ./internal/toolrender"
+      ]
+    },
+    {
+      "path": "docs/adr/README.md",
+      "kind": "adr-index",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated",
+      "read_when": [
+        "recording a durable architecture decision",
+        "superseding an architecture decision"
+      ],
+      "related_code": []
+    },
+    {
+      "path": "docs/adr/0001-jsonl-event-log-source-of-truth.md",
+      "kind": "adr",
+      "status": "accepted",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated_and_code_checked",
+      "read_when": [
+        "changing event-log source-of-truth semantics",
+        "changing persisted event replay",
+        "introducing non-JSONL event persistence",
+        "changing live-stream gap recovery expectations"
+      ],
+      "related_code": [
+        "internal/protocol/types.go",
+        "internal/eventlog/eventlog.go",
+        "internal/eventlog/jsonl.go",
+        "internal/trace/trace.go"
+      ]
+    },
+    {
+      "path": "docs/adr/0002-gateway-owns-session-authority.md",
+      "kind": "adr",
+      "status": "accepted",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated_from_current_worktree",
+      "read_when": [
+        "changing session owner matching or scope headers",
+        "changing gateway authorization for session reads or mutations",
+        "deciding whether clients or gateway own session access control"
+      ],
+      "related_code": [
+        "internal/gateway/session_authz.go",
+        "internal/gateway/http_security.go",
+        "internal/gateway/gateway.go",
+        "internal/gateway/session_store.go",
+        "internal/gatewayapi/types.go",
+        "internal/gatewayclient/client.go"
+      ]
+    },
+    {
+      "path": "docs/adr/0003-mcp-instructions-are-untrusted-metadata.md",
+      "kind": "adr",
+      "status": "accepted",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated_and_code_checked",
+      "read_when": [
+        "changing MCP initialize instruction trust",
+        "changing MCP prompt metadata behavior",
+        "changing dynamic MCP tool visibility",
+        "introducing MCP prompt invocation or remote MCP transports"
+      ],
+      "related_code": [
+        "internal/mcpclient/catalog.go",
+        "internal/mcpclient/manager.go",
+        "internal/mcpclient/client_test.go",
+        "internal/tools/tools.go",
+        "internal/tools/mcp_test.go",
+        "internal/mcpstatus/status.go",
+        "internal/commandregistry/registry.go"
+      ]
+    },
+    {
+      "path": "docs/adr/0006-telegram-is-a-gateway-client.md",
+      "kind": "adr",
+      "status": "accepted",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated_and_tested",
+      "read_when": [
+        "changing Telegram/gateway ownership boundaries",
+        "deciding whether Telegram may import gateway server internals",
+        "changing scoped session owner behavior for Telegram"
+      ],
+      "related_code": [
+        "internal/telegrambot/session_owner.go",
+        "internal/telegrambot/gateway_client.go",
+        "internal/gatewayclient/client.go",
+        "internal/gateway/session_authz.go",
+        "internal/gateway/gateway.go"
+      ],
+      "required_tests": [
+        "go test -count=1 ./internal/architecture",
+        "go test -count=1 ./internal/telegrambot ./internal/gatewayclient",
+        "go test -count=1 ./internal/gateway -run 'TestGatewaySessionOwner(MetadataPersistsAndLists|ScopeFiltersAndDeniesCrossOwner)$'"
+      ]
+    },
+    {
+      "path": "docs/adr/0007-local-gateway-mutating-routes-require-explicit-trust.md",
+      "kind": "adr",
+      "status": "accepted",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated_from_current_worktree",
+      "read_when": [
+        "changing gateway mutation auth",
+        "changing loopback/browser trust rules",
+        "changing gateway bearer-token requirements",
+        "changing serve startup auth requirements",
+        "changing per-run override privilege checks"
+      ],
+      "related_code": [
+        "internal/gateway/http_security.go",
+        "internal/gateway/session_authz.go",
+        "internal/gateway/gateway.go",
+        "internal/gateway/url.go",
+        "internal/gatewaybase/gatewaybase.go",
+        "internal/gatewayapi/types.go",
+        "internal/gatewayclient/client.go",
+        "cmd/fast-agent-harness/service_cmd.go"
+      ],
+      "required_tests": [
+        "go test -count=1 ./internal/gateway -run 'TestGateway(AuthMiddlewareProtectsNonLoopbackClients|MutationAuthProtectsLoopbackBrowserRoutes|MutationAuthExplicitDevLoopbackBypass|RunRequestPrivilegeClamps)$'",
+        "go test -count=1 ./internal/gateway -run 'TestGatewaySessionOwner(MetadataPersistsAndLists|ScopeFiltersAndDeniesCrossOwner)$'",
+        "go test -count=1 ./internal/architecture"
+      ]
+    },
+    {
+      "path": "docs/research/README.md",
+      "kind": "research-index",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": false,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated",
+      "read_when": [
+        "routing historical or clean-room research docs",
+        "cleaning up legacy research files",
+        "deciding whether old research content belongs in canon or loop TODOs"
+      ],
+      "related_code": []
+    },
+    {
+      "path": "docs/codex-research-roadmap.md",
+      "kind": "legacy-research",
+      "status": "legacy_contains_backlog_language",
+      "owner": "billy",
+      "source_of_truth": false,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "historical_legacy_backlog_language",
+      "read_when": [
+        "auditing legacy Codex research before cleanup",
+        "checking whether old roadmap language has already been extracted"
+      ],
+      "routing_notes": [
+        "Historical source material only; not current backlog or implementation plan.",
+        "Contains Active Backlog P0/P1/P2 language that must be verified and extracted into loop-develop/current-todo before use.",
+        "Stable architecture rules should live in docs/architecture, ADRs, or documentation-system before this file is moved or deleted."
+      ],
+      "related_code": []
+    },
+    {
+      "path": "docs/competitive-architecture-analysis.md",
+      "kind": "clean-room-research",
+      "status": "historical_source_material",
+      "owner": "billy",
+      "source_of_truth": false,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "clean_room_research_not_canon",
+      "read_when": [
+        "doing clean-room competitor architecture comparison",
+        "extracting stable design pressure before cleanup"
+      ],
+      "routing_notes": [
+        "Clean-room source material and design pressure only; not current Billyharness truth.",
+        "Before moving or deleting, extract stable current rules into canonical architecture docs or ADRs.",
+        "Extract actionable work into loop-develop/current-todo instead of preserving implementation order in docs."
+      ],
+      "related_code": []
+    },
+    {
+      "path": "ops/README.md",
+      "kind": "ops-index",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated_from_code_help_and_readme",
+      "read_when": [
+        "looking for production or diagnostics runbooks",
+        "deciding where operator procedures belong",
+        "checking redaction rules for operational evidence"
+      ],
+      "related_code": [
+        "README.md",
+        "cmd/fast-agent-harness/main.go",
+        "cmd/fast-agent-harness/doctor.go",
+        "cmd/fast-agent-harness/incident.go"
+      ]
+    },
+    {
+      "path": "ops/doctor-and-diagnostics.md",
+      "kind": "ops-runbook",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated_from_code_help_and_readme",
+      "read_when": [
+        "running doctor or health checks",
+        "debugging gateway readiness",
+        "inspecting config, MCP status, or session diagnostics",
+        "collecting an incident bundle for a persisted session",
+        "collecting sanitized operational evidence"
+      ],
+      "related_code": [
+        "README.md",
+        "cmd/fast-agent-harness/main.go",
+        "cmd/fast-agent-harness/doctor.go",
+        "cmd/fast-agent-harness/incident.go",
+        "cmd/fast-agent-harness/config_cmd.go",
+        "cmd/fast-agent-harness/sessions.go",
+        "cmd/fast-agent-harness/service_cmd.go",
+        "internal/gateway/gateway.go",
+        "internal/gatewaybase/gatewaybase.go"
+      ],
+      "required_tests": [
+        "git diff --check",
+        "go test -count=1 ./internal/architecture"
+      ]
+    },
+    {
+      "path": "ops/production-services.md",
+      "kind": "ops-runbook",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated_from_code_help_and_readme",
+      "read_when": [
+        "operating production",
+        "checking systemd service names",
+        "restarting gateway or Telegram services",
+        "checking production readiness and deploy-time commands"
+      ],
+      "related_code": [
+        "README.md",
+        "cmd/fast-agent-harness/doctor.go",
+        "cmd/fast-agent-harness/service_cmd.go",
+        "internal/gatewaybase/gatewaybase.go",
+        "internal/gateway/http_security.go"
+      ],
+      "required_tests": [
+        "git diff --check",
+        "go test -count=1 ./internal/architecture"
+      ]
+    },
+    {
+      "path": "loop-develop/README.md",
+      "kind": "loop-workflow",
+      "status": "canonical",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-03",
+      "trust_level": "hand_curated",
+      "read_when": [
+        "creating, updating, verifying, or archiving loop TODOs"
+      ],
+      "related_code": []
+    }
+  ]
+}

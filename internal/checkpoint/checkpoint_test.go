@@ -1,6 +1,7 @@
 package checkpoint
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -148,6 +149,56 @@ func TestCheckpointRestoreConflictPreventsPartialRestore(t *testing.T) {
 	}
 	if string(gotB) != "b1\n" {
 		t.Fatalf("restore should not partially modify b.txt, got %q", gotB)
+	}
+}
+
+func TestCheckpointRestoreOneRejectsSymlinkFileTarget(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "file.txt")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	file := FilePatch{
+		Path: link,
+		Before: &FileState{
+			Exists:        true,
+			Kind:          KindFile,
+			Mode:          0o644,
+			ContentBase64: base64.StdEncoding.EncodeToString([]byte("restore\n")),
+		},
+	}
+	if err := restoreOne(file, false); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink restore rejection, got %v", err)
+	}
+	if got := readCheckpointFile(t, outside); got != "outside\n" {
+		t.Fatalf("outside target mutated: %q", got)
+	}
+	if _, err := os.Lstat(link); err != nil {
+		t.Fatalf("symlink should remain in place: %v", err)
+	}
+}
+
+func TestCheckpointRestoreOneRejectsSymlinkDirectoryTarget(t *testing.T) {
+	root := t.TempDir()
+	outsideDir := t.TempDir()
+	link := filepath.Join(root, "dir")
+	if err := os.Symlink(outsideDir, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	file := FilePatch{
+		Path: link,
+		Before: &FileState{
+			Exists: true,
+			Kind:   KindDir,
+			Mode:   0o755,
+		},
+	}
+	if err := restoreOne(file, false); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink directory restore rejection, got %v", err)
 	}
 }
 

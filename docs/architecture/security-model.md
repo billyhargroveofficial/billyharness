@@ -1,0 +1,418 @@
+# Security And Trust Model
+
+This document is the durable architecture map for Billyharness security and
+trust boundaries. It consolidates the gateway, Telegram, tools, MCP, secrets,
+filesystem, and public-web rules that are spread across the implementation.
+It is not a checklist or runbook.
+
+Status note: reviewed against current worktree on 2026-07-03 at HEAD
+`b9df841`. The worktree already contains uncommitted security hardening. This
+document separates committed HEAD behavior from current dirty-worktree behavior
+where that difference matters.
+
+Primary code anchors:
+
+- [internal/gateway/gateway.go](../../internal/gateway/gateway.go): HTTP
+  route ownership, session handlers, runtime override projection.
+- [internal/gateway/http_security.go](../../internal/gateway/http_security.go):
+  current worktree bearer, browser, mutation, host, content-type, and privilege
+  clamp checks.
+- [internal/gateway/session_authz.go](../../internal/gateway/session_authz.go):
+  current worktree session owner-header authorization.
+- [internal/gateway/response.go](../../internal/gateway/response.go):
+  redacted JSON and NDJSON gateway responses.
+- [internal/gatewayapi/types.go](../../internal/gatewayapi/types.go) and
+  [internal/gatewayclient/client.go](../../internal/gatewayclient/client.go):
+  shared session-owner DTOs and request headers.
+- [internal/tools](../../internal/tools): native tool registry, policy,
+  filesystem, shell, MCP gateway, and web tool handlers.
+- [internal/mcpclient](../../internal/mcpclient): MCP process lifecycle,
+  catalog handling, env handling, and untrusted server metadata.
+- [internal/telegrambot](../../internal/telegrambot): Telegram allowlists,
+  gateway scoping, send safety, and auth-command safety.
+- [internal/secrets](../../internal/secrets): process-wide redaction helpers.
+- [internal/webtools](../../internal/webtools): public-host-safe HTTP client.
+- [internal/config](../../internal/config): security-relevant defaults,
+  projections, and sanitized config status.
+
+The route/session details live in
+[Gateway and sessions](gateway-and-sessions.md). Tool/MCP/web details live in
+[Tools, MCP, webtools, and rendering boundaries](tools-mcp-and-policy.md).
+Telegram details live in
+[Telegram and operator surfaces](telegram-and-operator-surfaces.md). Runtime
+override and auth-binding details live in
+[Config, provider, and context architecture](config-provider-context.md).
+
+## Trust Boundary Summary
+
+Billyharness is a local-first harness. The default runtime is powerful:
+`internal/config/defaults.go` defaults `AutoApproveDangerous=true`,
+`AccessMode=build`, workspace roots to the current working directory, gateway
+address to `127.0.0.1:8765`, and MCP enabled for the configured allowlist.
+That is appropriate for Billy's solo-owner local workflow, but it means the
+security boundary is explicit policy plus process/network locality, not a
+multi-tenant sandbox.
+
+The major boundaries are:
+
+- Local gateway: HTTP requests can create sessions, run agents, mutate auth,
+  cancel runs, and undo/redo workspace changes. Mutating routes therefore need
+  an explicit trust decision.
+- Browser/loopback: loopback is convenient for TUI/browser/local tools, but a
+  browser can send requests to local services. Current worktree hardening
+  treats browser-originated loopback mutation as a security-relevant path.
+- Bearer auth: `BILLYHARNESS_GATEWAY_AUTH_TOKEN` and legacy
+  `FAST_AGENT_GATEWAY_AUTH_TOKEN` are gateway transport credentials, not
+  provider credentials.
+- Session owner scope: owner headers are gateway-enforced scoping claims inside
+  the HTTP security boundary. They are not cryptographic identity.
+- Telegram: Telegram is a scoped gateway client with its own allowlist and
+  send/delete safety; it does not get direct gateway-server imports.
+- Tools: tool risk, access mode, workspace path checks, dangerous-tool config,
+  and schema validation are the main native execution boundary.
+- MCP: MCP server descriptions, schemas, prompts, initialize instructions, and
+  outputs are untrusted external-process content unless operator policy
+  explicitly promotes them.
+- Filesystem: native filesystem tools operate inside configured workspace
+  roots, with sensitive-path and symlink policy checks. Billyharness
+  tool-output refs are a narrow read exception.
+- Secrets: status and response paths redact secret-looking values, but secrets
+  still exist in process memory, provider requests, credential files, dotenv
+  files, and child processes explicitly configured to receive them.
+- Public web: native web fetch/extract/crawl use a public-host-only client to
+  reduce SSRF and DNS-rebinding risk.
+
+## Gateway And Browser Trust
+
+Committed HEAD `b9df841` has a simple gateway auth model in
+`internal/gateway/gateway.go`: if `ServerOptions.AuthToken` is configured,
+`authMiddleware` protects non-loopback clients with bearer auth and always
+allows `/health` and loopback remote addresses. If no gateway token is
+configured, `Handler()` returns the mux directly. HEAD does not have
+`RequireMutationAuth`, browser-origin checks, mutating-route content-type
+checks, or session-owner authorization in `session_authz.go`.
+
+Current dirty-worktree behavior hardens that boundary:
+
+- `Server.Handler()` always wraps the mux in `httpSecurityMiddleware`.
+- `/health` remains unauthenticated for readiness probes.
+- Mutating non-`GET`/`HEAD`/`OPTIONS` `/v1/` requests are classified as gateway
+  mutations.
+- When `RequireMutationAuth` is true, mutating requests must pass browser-style
+  checks before handlers run: loopback host must be allowed, `Origin` or
+  `Referer` must match the gateway host when present, and requests with a body
+  must use `application/json`.
+- Mutations then require a matching bearer token unless
+  `DevAllowUnauthenticatedLoopbackMutations` is explicitly enabled and the
+  remote address is loopback.
+- If mutation auth is required and no bearer token is configured, mutating
+  requests receive `503` instead of silently downgrading security.
+- When mutation auth is not required, a configured gateway token still protects
+  non-loopback requests, while loopback requests keep the older local-operator
+  behavior.
+
+The CLI `serve` path in
+[cmd/fast-agent-harness/service_cmd.go](../../cmd/fast-agent-harness/service_cmd.go)
+is part of the current worktree hardening. It prebinds the listener, requires a
+gateway auth token for mutating routes unless the operator explicitly passes
+`-dev-allow-unauthenticated-loopback-mutations`, and treats non-loopback or
+wildcard listen addresses as requiring auth. This decision is recorded in
+[ADR 0007](../adr/0007-local-gateway-mutating-routes-require-explicit-trust.md).
+
+Bearer token handling is shared through
+[internal/gatewaybase/gatewaybase.go](../../internal/gatewaybase/gatewaybase.go)
+and surfaced through [internal/gateway/url.go](../../internal/gateway/url.go).
+Clients attach `Authorization: Bearer <token>` from
+`BILLYHARNESS_GATEWAY_AUTH_TOKEN` first, then
+`FAST_AGENT_GATEWAY_AUTH_TOKEN`. The current worktree bearer comparison uses
+constant-time comparison in `bearerTokenMatches`.
+
+Runtime override trust also sits at this boundary. In the current worktree,
+`runOverrideSettingsForRequest` drops provider/model/thinking/reasoning
+overrides unless mutation auth is disabled or the request authenticated with
+the mutation bearer token. It still allows stricter request knobs such as a
+lower `max_tool_rounds` or a less-privileged `access_mode`, and clamps requests
+that try to raise tool rounds or access privilege above server configuration.
+
+## Session Scope
+
+Session owner metadata is a routing and authorization claim, not a credential.
+It is represented by `gatewayapi.SessionOwner` and the
+`X-Billyharness-Session-*` headers in
+[internal/gatewayapi/types.go](../../internal/gatewayapi/types.go). The shared
+gateway client attaches those headers from `gatewayclient.WithSessionOwner`.
+
+Committed HEAD stores owner metadata when supplied in create-session bodies,
+but it does not enforce owner scope on reads or mutations. Current worktree
+behavior adds [internal/gateway/session_authz.go](../../internal/gateway/session_authz.go):
+
+- create-session body owner must match scoped request headers when both are
+  present;
+- if scoped headers are present and the create body owner is empty, the gateway
+  stores the actor as owner;
+- session lists are filtered for scoped actors;
+- scoped actors may read their own sessions and legacy unowned sessions;
+- scoped actors may not mutate legacy unowned sessions;
+- cross-owner reads and mutations are denied with `403`;
+- unscoped local callers remain unscoped gateway operators.
+
+The authority decision is recorded in
+[ADR 0002](../adr/0002-gateway-owns-session-authority.md). Future clients
+should use owner headers only after the transport request is already trusted by
+gateway auth, loopback exposure, or another deployment boundary.
+
+## Telegram Boundary
+
+Telegram is a scoped gateway client, not a runtime peer. The package boundary
+in [docs/architecture.md](../architecture.md) forbids
+`internal/telegrambot` from importing `internal/gateway`; Telegram talks to the
+gateway through [internal/telegrambot/gateway_client.go](../../internal/telegrambot/gateway_client.go)
+and `internal/gatewayclient`.
+
+Telegram has two separate trust checks:
+
+- Telegram admission/send authorization in
+  [internal/telegrambot/authz.go](../../internal/telegrambot/authz.go).
+- Gateway transport and session authorization through bearer auth plus
+  Telegram owner headers.
+
+Live Telegram sending is fail-closed unless the operator scopes it. When real
+sending is enabled and dry-run is false, the CLI requires at least one allowed
+chat ID, one allowed user ID, or the explicit allow-all option. Runtime
+admission accepts a message only when `AllowAllChats` is set, the chat/user is
+allowlisted, or no allowlist is configured and `RequireAllowlist` is false.
+
+Secret-bearing Telegram auth commands have extra safety in the current
+worktree. `/auth deepseek ...` in
+[internal/telegrambot/commands.go](../../internal/telegrambot/commands.go)
+must delete the source Telegram message before persisting the key; if Telegram
+does not provide a deletable message ID or deletion fails, the key is not
+saved. Save errors are redacted against the submitted key before being sent
+back to chat. `/auth codex` imports local Codex OAuth through the gateway and
+does not accept a token pasted into Telegram. In dry-run mode, delete is logged
+by [internal/telegrambot/delivery.go](../../internal/telegrambot/delivery.go)
+rather than sent to Telegram, so dry-run verifies control flow rather than
+real chat deletion.
+
+Telegram owner scope is attached from
+[internal/telegrambot/session_owner.go](../../internal/telegrambot/session_owner.go):
+`client_type=telegram`, chat ID, thread ID, user ID, profile, and model. Local
+Telegram filtering for `/resume` and `/fork` is defense in depth; gateway
+session authorization is the hard boundary in the current worktree.
+
+## Tool Policy Boundary
+
+Native tool execution enters through `Registry.Call()` in
+[internal/tools/tools.go](../../internal/tools/tools.go). The order is:
+model-visible tool lookup, empty-argument normalization, central policy check,
+schema validation, then handler execution.
+
+Tool risk comes from `internal/protocol`: `read_only`, `network`, `write`,
+`execute`, and `external`. The central decision point is
+[internal/tools/policy.go](../../internal/tools/policy.go):
+
+- `access_mode=plan` hides and denies `write`, `execute`, and `external`.
+- `access_mode=guarded` denies `write` and `execute`.
+- `access_mode=build` allows the normal build-mode surface.
+- `write` and `execute` require `AutoApproveDangerous`; if disabled, the call
+  returns a permission-denied result before handler execution.
+- `external` tools require approval metadata and are blocked by plan mode, but
+  are otherwise allowed by the existing build/guarded policy.
+
+The default config in `internal/config/defaults.go` is powerful:
+`AutoApproveDangerous=true` and `AccessMode=build`. This means default local
+operation trusts the operator's workspace and agent loop. Safer sessions should
+lower access mode or disable dangerous auto-approval through config/runtime
+policy.
+
+Shell tools are `execute` risk. `shell_exec` resolves its `cwd` through
+`safePath`, so commands run in an allowed workspace directory. It also blocks
+selected destructive git shapes such as `git reset --hard`, `git clean -f`,
+workspace-wide `git checkout` or `git restore`, stash deletion, and force push.
+Background shell processes are Billyharness-owned, capped, listed by opaque
+IDs, and polled/killed through shell process tools in
+[internal/tools/shell_process.go](../../internal/tools/shell_process.go).
+
+Filesystem write/edit tools are `write` risk. `fs_write_file` writes UTF-8
+content under a workspace root. `fs_edit_file` works on an existing regular
+UTF-8 file, applies exact replacements, can require `expected_sha256`, writes
+atomically, and rejects no-op or ambiguous replacements.
+
+## Filesystem Workspace Boundary
+
+Filesystem and shell path policy is implemented by `safePath` in
+[internal/tools/tools.go](../../internal/tools/tools.go). It resolves relative
+paths against the first configured workspace root, uses absolute and symlink-
+resolved policy paths, rejects sensitive-looking paths, and allows only paths
+inside configured workspace roots.
+
+Sensitive path detection is intentionally broad rather than precise. Paths
+containing markers such as `.env`, `.ssh`, `id_rsa`, `id_ed25519`,
+`auth.json`, `token`, `secret`, `.aws`, `.kube`, or `.docker` are refused by
+filesystem tools even when they are under a workspace root.
+
+`fs_read_file` has one explicit exception in
+[internal/tools/fs_read.go](../../internal/tools/fs_read.go): it can read
+absolute paths under `$BILLYHARNESS_HOME/tool-output` because tool-output refs
+are how large web/tool artifacts are stored out of band. Ordinary files under
+`$BILLYHARNESS_HOME` remain blocked unless they are also under an allowed
+workspace root. [internal/tooloutput](../../internal/tooloutput) writes
+tool-output directories as `0700` and files as `0600`.
+
+This is a path boundary, not an OS sandbox. A shell command that is allowed to
+run can still exercise normal process privileges within its working directory
+and whatever the operating system permits. The policy boundary is designed for
+local operator control and replayable guardrails, not hostile multi-user code
+execution.
+
+## MCP Boundary
+
+MCP servers are external processes or, in future, endpoints. Their tool
+descriptions, schemas, prompts, initialize instructions, stdout/stderr, and
+tool outputs are untrusted server content.
+
+Committed HEAD `b9df841` already has several MCP hardening properties:
+
+- MCP config is loaded from `$BILLYHARNESS_HOME/mcp.config.toml` when enabled
+  and no explicit server list is already present.
+- The default allowlist is `telegram`, `telegram-parilka`, `github`, and
+  `context7` in `internal/config/defaults.go`.
+- Streamable HTTP MCP config is parsed and reported as unsupported; it is not
+  connected or called.
+- Stdio commands such as shells and PowerShell are rejected as MCP launchers in
+  [internal/mcpclient/stdio.go](../../internal/mcpclient/stdio.go).
+- MCP `cwd` resolves inside configured workspace roots.
+- Child environments contain a small parent allowlist, explicitly requested
+  `env_vars`, and literal configured `env`.
+- Secret-like configured env values are redacted from MCP errors, stderr tails,
+  and tool output.
+- Optional startup failures remain visible in status; required failures fail
+  manager initialization.
+- Enabled/disabled tool filters are applied before catalog publication.
+- Sanitized MCP tool-name collisions fail catalog initialization.
+- Dynamic MCP tool specs are mirrored internally and reached through static
+  gateway tools such as `tool_search`, `mcp_list_tools`, and `mcp_call`.
+
+The dirty worktree hardens MCP initialize instructions. In HEAD,
+`buildCatalog` placed server initialize instructions into the manager
+instruction path, and `Agent.withMCPInstructions` could inject those
+server-provided instructions into model context. In the current worktree,
+[internal/mcpclient/catalog.go](../../internal/mcpclient/catalog.go) separates
+`ServerInstructions` metadata from promoted `Instructions`.
+`Manager.Instructions()` is empty by default; initialize instructions enter
+model context only when `MCPPromoteServerInstructions` is enabled, and promoted
+text is tagged with
+`trust=operator_promoted_mcp_initialize_instructions`. That decision is
+recorded in
+[ADR 0003](../adr/0003-mcp-instructions-are-untrusted-metadata.md).
+
+MCP prompt catalogs are metadata only. They may appear in status and command
+metadata, but prompt invocation is not current behavior.
+
+## Secret Redaction
+
+Secret handling is layered:
+
+- `internal/credentials` resolves and persists DeepSeek API keys and Codex auth
+  payloads. Status values report `credential=redacted` instead of raw tokens.
+- `internal/config.Resolve` tracks redacted config keys, and status surfaces
+  use `SanitizedValues` and `SanitizedConfig`.
+- Gateway JSON and NDJSON responses pass through `marshalRedactedJSON` in
+  [internal/gateway/response.go](../../internal/gateway/response.go), which
+  recursively redacts JSON string values with `internal/secrets.Redact`.
+- Providers redact API tokens and OAuth tokens from HTTP error bodies.
+- Hooks, MCP status/errors, Telegram client errors, Telegram auth-command save
+  failures, and Telegram outbound delivery/rendered run errors have targeted
+  redaction paths.
+
+`internal/secrets.Redact` is pattern and environment based. It handles common
+bearer headers, token/api-key/password fields, DeepSeek-style `sk-...` keys,
+GitHub tokens, Yandex tokens, JWTs, and image data URLs. It also replaces
+secret-looking environment values whose variable names contain token, secret,
+password, api_key, or apikey.
+
+Redaction is a leak-reduction boundary, not a guarantee that secrets never
+exist. Secrets still exist in local files, environment variables, provider
+requests, memory, and child processes that are explicitly configured to receive
+them. Durable docs and status surfaces should avoid echoing raw config, raw
+Telegram messages containing keys, or credential-bearing URLs.
+
+## Public Web Boundary
+
+Native web tools use [internal/webtools.Client](../../internal/webtools/client.go)
+for HTTP fetches. It is designed for public web access, not local-network
+fetching:
+
+- only `http` and `https` schemes are allowed;
+- empty hosts are rejected;
+- `localhost`, `*.localhost`, loopback, private, link-local, multicast, and
+  unspecified IPs are rejected;
+- hostnames are resolved before the request;
+- redirects are revalidated before following;
+- dialing re-resolves and rechecks public addresses, which blocks public-to-
+  private DNS rebinding before the second connection;
+- non-2xx responses return bounded body text.
+
+`web_fetch`, `web_extract`, and `web_crawl` store full extracted text in
+tool-output refs and return compact inline digests by default. Inline raw text
+requires explicit `include_text` or `full_text` and is still capped. Provider
+web backends in `internal/webtools/backends.go` use configured API keys and
+bounded responses; missing backend keys fail explicitly rather than silently
+changing auth behavior.
+
+## Current Truth Boundaries
+
+Current committed HEAD truth:
+
+- Gateway bearer auth exists only when an auth token is configured.
+- `/health` and loopback remote addresses bypass the HEAD bearer middleware.
+- HEAD does not require explicit trust for loopback mutations.
+- HEAD does not enforce session owner headers for reads or mutations.
+- HEAD can inject MCP initialize instructions into the model instruction path.
+
+Current dirty-worktree hardening:
+
+- Mutating `/v1/` gateway routes require bearer trust or an explicit loopback
+  development bypass when `RequireMutationAuth` is true.
+- The `serve` command refuses to start mutating routes without a token unless
+  that explicit development bypass is set.
+- Browser-oriented host, origin/referer, and JSON content-type checks run
+  before mutating gateway handlers.
+- Provider/model/reasoning per-run overrides are bearer-gated under mutation
+  auth; tool-round and access-mode requests are clamped.
+- Session owner headers scope list/read/mutation behavior.
+- Telegram carries owner scope through gateway requests and hardens
+  secret-bearing auth commands.
+- MCP initialize instructions are metadata-only by default and require explicit
+  operator promotion before model-context injection.
+
+These dirty-worktree behaviors are documented because they are visible in this
+checkout and referenced by adjacent architecture docs. They should not be
+described as clean-release behavior until the hardening files are committed.
+
+## Verification Anchors
+
+Documentation-only verification for this page should include:
+
+```sh
+jq empty agent-index/docs-manifest.json
+git diff --check
+go test -count=1 ./internal/architecture
+```
+
+When changing the security behavior itself, use focused package tests in the
+owning packages. The most relevant current test names are:
+
+- `TestGatewayAuthMiddlewareProtectsNonLoopbackClients`
+- `TestGatewayMutationAuthProtectsLoopbackBrowserRoutes`
+- `TestGatewayMutationAuthExplicitDevLoopbackBypass`
+- `TestGatewayRunRequestPrivilegeClamps`
+- `TestGatewaySessionOwnerMetadataPersistsAndLists`
+- `TestGatewaySessionOwnerScopeFiltersAndDeniesCrossOwner`
+- `TestStdioLifecycleCallEnvAndRedaction`
+- `TestRunMessagesDoesNotInjectUntrustedMCPInstructionsByDefault`
+- `TestClientRejectsLocalhostAndRFC1918Targets`
+- `TestClientRejectsRedirectToPrivateIPBeforeSecondDial`
+- `TestClientRejectsPublicThenPrivateRebinding`
+- `TestTelegramAuthDeepSeekDeletesSecretMessageAndDoesNotRenderKey`
+- `TestTelegramAuthDeepSeekRedactsSaveError`

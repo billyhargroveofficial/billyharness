@@ -82,6 +82,52 @@ func TestRecordValidatorRejectsCorruptRecords(t *testing.T) {
 	}
 }
 
+func TestRecordValidatorRequiresEnvelopeAndChecksEventSeq(t *testing.T) {
+	validator := NewRecordValidator(RecordValidatorOptions{
+		SchemaVersion:    1,
+		ScopeName:        "session_id",
+		ExpectedScopeID:  "session-1",
+		ValidateEnvelope: true,
+		RequireEnvelope:  true,
+	})
+	err := validator.Validate(Record{
+		SchemaVersion: 1,
+		Seq:           1,
+		ScopeID:       "session-1",
+		EventType:     string(protocol.EventRunStarted),
+		Event:         protocol.Event{Type: protocol.EventRunStarted, RunID: "run-1"},
+		HasEvent:      true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "missing event schema_version") {
+		t.Fatalf("missing envelope error = %v", err)
+	}
+
+	event := protocol.EnrichEvent(protocol.Event{Type: protocol.EventRunStarted}, protocol.EventEnvelope{
+		Seq:    2,
+		Source: protocol.EventSourceGateway,
+		RunID:  "run-1",
+		TS:     time.Unix(10, 0).UTC().Format(time.RFC3339Nano),
+	})
+	validator = NewRecordValidator(RecordValidatorOptions{
+		SchemaVersion:    1,
+		ScopeName:        "session_id",
+		ExpectedScopeID:  "session-1",
+		ValidateEnvelope: true,
+		RequireEnvelope:  true,
+	})
+	err = validator.Validate(Record{
+		SchemaVersion: 1,
+		Seq:           1,
+		ScopeID:       "session-1",
+		EventType:     string(protocol.EventRunStarted),
+		Event:         event,
+		HasEvent:      true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "event seq = 2, record seq = 1") {
+		t.Fatalf("seq mismatch error = %v", err)
+	}
+}
+
 func TestAppendAndReplayJSONL(t *testing.T) {
 	type testRecord struct {
 		Seq  int    `json:"seq"`
@@ -194,6 +240,68 @@ func TestLifecycleValidatorRejectsOrderingViolations(t *testing.T) {
 			want: "matching attempt_id",
 		},
 		{
+			name: "duplicate tool request",
+			events: []protocol.Event{
+				{Type: protocol.EventRunStarted, RunID: "run-1"},
+				{Type: protocol.EventToolCallRequested, RunID: "run-1", CallID: "call-1"},
+				{Type: protocol.EventToolCallRequested, RunID: "run-1", CallID: "call-1"},
+			},
+			want: "duplicate tool.call_requested",
+		},
+		{
+			name: "permission without matching call",
+			events: []protocol.Event{
+				{Type: protocol.EventRunStarted, RunID: "run-1"},
+				{Type: protocol.EventToolPermissionRequested, RunID: "run-1", CallID: "call-1"},
+			},
+			want: "matching call_id",
+		},
+		{
+			name: "orphan progress",
+			events: []protocol.Event{
+				{Type: protocol.EventRunStarted, RunID: "run-1"},
+				{Type: protocol.EventToolCallProgress, RunID: "run-1", CallID: "call-1", Data: protocol.ToolProgressEvent{CallID: "call-1", Phase: "executing", Status: protocol.StepStatusStarted}},
+			},
+			want: "matching call_id",
+		},
+		{
+			name: "orphan output ref",
+			events: []protocol.Event{
+				{Type: protocol.EventRunStarted, RunID: "run-1"},
+				{Type: protocol.EventToolCallRequested, RunID: "run-1", CallID: "call-1"},
+				{Type: protocol.EventToolOutputRefCreated, RunID: "run-1", CallID: "call-1", AttemptID: "attempt-1", Data: protocol.ToolOutputRefEvent{CallID: "call-1", AttemptID: "attempt-1", OutputRef: "/tmp/out"}},
+			},
+			want: "matching attempt_id",
+		},
+		{
+			name: "user input without matching attempt",
+			events: []protocol.Event{
+				{Type: protocol.EventRunStarted, RunID: "run-1"},
+				{Type: protocol.EventToolCallRequested, RunID: "run-1", CallID: "call-1"},
+				{Type: protocol.EventUserInputRequested, RunID: "run-1", TurnID: "turn-1", StepID: "step-1", CallID: "call-1", AttemptID: "attempt-1", Data: protocol.UserInputRequestEvent{RequestID: "request-1", RunID: "run-1", TurnID: "turn-1", StepID: "step-1", CallID: "call-1", AttemptID: "attempt-1"}},
+			},
+			want: "matching attempt_id",
+		},
+		{
+			name: "hook with unknown call",
+			events: []protocol.Event{
+				{Type: protocol.EventRunStarted, RunID: "run-1"},
+				{Type: protocol.EventHookFinished, RunID: "run-1", CallID: "call-1", Data: protocol.HookEvent{HookEvent: "before_tool", Status: protocol.StepStatusCompleted, CallID: "call-1"}},
+			},
+			want: "matching call_id",
+		},
+		{
+			name: "progress after terminal attempt",
+			events: []protocol.Event{
+				{Type: protocol.EventRunStarted, RunID: "run-1"},
+				{Type: protocol.EventToolCallRequested, RunID: "run-1", CallID: "call-1"},
+				{Type: protocol.EventToolCallStarted, RunID: "run-1", CallID: "call-1", AttemptID: "attempt-1"},
+				{Type: protocol.EventToolCallFinished, RunID: "run-1", CallID: "call-1", AttemptID: "attempt-1"},
+				{Type: protocol.EventToolCallProgress, RunID: "run-1", CallID: "call-1", AttemptID: "attempt-1", Data: protocol.ToolProgressEvent{CallID: "call-1", AttemptID: "attempt-1", Phase: "executing", Status: protocol.StepStatusStarted}},
+			},
+			want: "after terminal tool attempt",
+		},
+		{
 			name: "duplicate terminal run event",
 			events: []protocol.Event{
 				{Type: protocol.EventRunStarted, RunID: "run-1"},
@@ -243,6 +351,21 @@ func TestLifecycleValidatorRejectsOrderingViolations(t *testing.T) {
 				t.Fatalf("error = %v, want containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestLifecycleValidatorAllowsOutputRefBeforeTerminalAndCleanupProgress(t *testing.T) {
+	events := []protocol.Event{
+		{Type: protocol.EventRunStarted, RunID: "run-1"},
+		{Type: protocol.EventToolCallRequested, RunID: "run-1", CallID: "call-1"},
+		{Type: protocol.EventToolCallProgress, RunID: "run-1", CallID: "call-1", AttemptID: "attempt-1", Data: protocol.ToolProgressEvent{CallID: "call-1", AttemptID: "attempt-1", Phase: "attempt_started", Status: protocol.StepStatusStarted}},
+		{Type: protocol.EventToolCallStarted, RunID: "run-1", CallID: "call-1", AttemptID: "attempt-1"},
+		{Type: protocol.EventToolOutputRefCreated, RunID: "run-1", CallID: "call-1", AttemptID: "attempt-1", Data: protocol.ToolOutputRefEvent{CallID: "call-1", AttemptID: "attempt-1", OutputRef: "/tmp/out"}},
+		{Type: protocol.EventToolCallFinished, RunID: "run-1", CallID: "call-1", AttemptID: "attempt-1"},
+		{Type: protocol.EventToolCallProgress, RunID: "run-1", CallID: "call-1", AttemptID: "attempt-1", Data: protocol.ToolProgressEvent{CallID: "call-1", AttemptID: "attempt-1", Phase: "finalize", Status: protocol.StepStatusCompleted}},
+	}
+	if err := ValidateLifecycle(events); err != nil {
+		t.Fatal(err)
 	}
 }
 

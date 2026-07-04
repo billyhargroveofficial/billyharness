@@ -27,6 +27,7 @@ type ProviderStatus struct {
 	Status     string `json:"status,omitempty"`
 	Credential string `json:"credential,omitempty"`
 	Source     string `json:"source,omitempty"`
+	Provenance string `json:"provenance,omitempty"`
 	Path       string `json:"path,omitempty"`
 	AccountID  string `json:"account_id,omitempty"`
 	ExpiresAt  string `json:"expires_at,omitempty"`
@@ -43,10 +44,11 @@ type Status struct {
 }
 
 type SecretValue struct {
-	Value  string
-	Source string
-	Path   string
-	EnvVar string
+	Value      string
+	Source     string
+	Provenance string
+	Path       string
+	EnvVar     string
 }
 
 type CodexAuthResolution struct {
@@ -105,7 +107,7 @@ func (m Manager) DeepSeekStatus() ProviderStatus {
 	if err != nil {
 		return classifyProviderStatus("deepseek", "api-key", ProviderStatus{Path: BillyDotenvPath()})
 	}
-	return classifyProviderStatus("deepseek", "api-key", ProviderStatus{Configured: true, Source: secret.Source, Path: secret.Path})
+	return classifyProviderStatus("deepseek", "api-key", ProviderStatus{Configured: true, Source: secret.Source, Provenance: secret.Provenance, Path: secret.Path})
 }
 
 func (m Manager) ResolveDeepSeekAPIKey() (SecretValue, error) {
@@ -113,20 +115,10 @@ func (m Manager) ResolveDeepSeekAPIKey() (SecretValue, error) {
 	if envKey == "" {
 		envKey = deepSeekKeyEnv
 	}
-	if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
-		return SecretValue{Value: value, Source: "env:" + envKey, EnvVar: envKey}, nil
-	}
-	path := BillyDotenvPath()
-	if value, ok := dotenvValue(path, envKey); ok && strings.TrimSpace(value) != "" {
-		return SecretValue{Value: strings.TrimSpace(value), Source: path, Path: path, EnvVar: envKey}, nil
-	}
-	if secret := m.lookupCredentialFileSecret(envKey, "deepseek_api_key"); strings.TrimSpace(secret.Value) != "" {
+	if secret := m.lookupSecret(envKey, "deepseek_api_key"); strings.TrimSpace(secret.Value) != "" {
 		return secret, nil
 	}
-	if value, ok := config.LookupEnvOrDotenv(envKey); ok && strings.TrimSpace(value) != "" {
-		return SecretValue{Value: strings.TrimSpace(value), Source: ".env", EnvVar: envKey}, nil
-	}
-	return SecretValue{Path: path, EnvVar: envKey}, fmt.Errorf("missing API key env var %s", envKey)
+	return SecretValue{Path: BillyDotenvPath(), EnvVar: envKey}, fmt.Errorf("missing API key env var %s", envKey)
 }
 
 func (m Manager) ResolveCodexAuth() CodexAuthResolution {
@@ -183,7 +175,7 @@ func (m Manager) CodexStatus() ProviderStatus {
 	path := resolved.AuthFile
 	status := classifyProviderStatus("codex", "codex-oauth", ProviderStatus{Path: path})
 	if token := strings.TrimSpace(resolved.AccessToken.Value); token != "" {
-		return codexEnvStatus(token, strings.TrimSpace(resolved.AccountID.Value), resolved.AccessToken.Source, path)
+		return codexEnvStatus(token, strings.TrimSpace(resolved.AccountID.Value), resolved.AccessToken, path)
 	}
 	payload, err := readAuthPayload(path)
 	if err != nil {
@@ -232,16 +224,13 @@ func (m Manager) lookupSecret(envKey, fileKey string) SecretValue {
 	if envKey == "" {
 		return SecretValue{}
 	}
-	if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
-		return SecretValue{Value: value, Source: "env:" + envKey, EnvVar: envKey}
+	if value, source, ok := config.LookupEnvOrDotenvSource(envKey); ok && strings.TrimSpace(value) != "" {
+		return secretFromConfigEnvSource(strings.TrimSpace(value), source)
 	}
 	if secret := m.lookupCredentialFileSecret(envKey, fileKey); strings.TrimSpace(secret.Value) != "" {
 		return secret
 	}
-	if value, ok := config.LookupEnvOrDotenv(envKey); ok && strings.TrimSpace(value) != "" {
-		return SecretValue{Value: strings.TrimSpace(value), Source: ".env", EnvVar: envKey}
-	}
-	return SecretValue{EnvVar: envKey}
+	return SecretValue{EnvVar: envKey, Path: m.CredentialFilePath()}
 }
 
 func (m Manager) lookupCredentialFileSecret(envKey, fileKey string) SecretValue {
@@ -250,11 +239,22 @@ func (m Manager) lookupCredentialFileSecret(envKey, fileKey string) SecretValue 
 	if !ok || strings.TrimSpace(value) == "" {
 		return SecretValue{Path: path, EnvVar: envKey}
 	}
-	return SecretValue{Value: strings.TrimSpace(value), Source: path, Path: path, EnvVar: envKey}
+	return SecretValue{Value: strings.TrimSpace(value), Source: path, Provenance: "credential_file", Path: path, EnvVar: envKey}
 }
 
-func codexEnvStatus(token, accountID, source, path string) ProviderStatus {
-	status := classifyProviderStatus("codex", "codex-oauth", ProviderStatus{Configured: true, Source: source, Path: path, AccountID: accountID})
+func secretFromConfigEnvSource(value string, source config.EnvValueSource) SecretValue {
+	switch source.Kind {
+	case config.EnvValueSourceEnvironment:
+		return SecretValue{Value: value, Source: "env:" + source.Key, Provenance: "env", EnvVar: source.Key}
+	case config.EnvValueSourceDotenv:
+		return SecretValue{Value: value, Source: source.Path, Provenance: "dotenv", Path: source.Path, EnvVar: source.Key}
+	default:
+		return SecretValue{Value: value, Source: source.Kind, Provenance: source.Kind, Path: source.Path, EnvVar: source.Key}
+	}
+}
+
+func codexEnvStatus(token, accountID string, secret SecretValue, path string) ProviderStatus {
+	status := classifyProviderStatus("codex", "codex-oauth", ProviderStatus{Configured: true, Source: secret.Source, Provenance: secret.Provenance, Path: path, AccountID: accountID})
 	if strings.HasPrefix(strings.TrimSpace(token), "at-") {
 		status.Mode = "personalAccessToken"
 		status.Refresh = "not_required"
@@ -357,6 +357,9 @@ func FormatProviderStatusText(name string, status ProviderStatus) string {
 	}
 	if status.Refresh != "" {
 		parts = append(parts, "refresh="+status.Refresh)
+	}
+	if status.Provenance != "" {
+		parts = append(parts, "provenance="+status.Provenance)
 	}
 	if status.AccountID != "" {
 		parts = append(parts, "account="+status.AccountID)

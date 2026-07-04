@@ -40,7 +40,7 @@ func (r *Registry) addFSEdit() {
 	})
 }
 
-func (r *Registry) handleFSEdit(_ context.Context, args json.RawMessage) (Result, error) {
+func (r *Registry) handleFSEdit(ctx context.Context, args json.RawMessage) (Result, error) {
 	var in fsEditInput
 	if err := json.Unmarshal(args, &in); err != nil {
 		return Result{}, err
@@ -51,13 +51,16 @@ func (r *Registry) handleFSEdit(_ context.Context, args json.RawMessage) (Result
 	if len(in.Edits) > maxFSEditEdits {
 		return Result{}, fmt.Errorf("too many edits: %d > %d", len(in.Edits), maxFSEditEdits)
 	}
-	path, err := r.safePath(in.Path)
+	path, err := r.safePath(ctx, in.Path)
 	if err != nil {
 		return Result{}, err
 	}
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		return Result{}, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return Result{}, fmt.Errorf("refusing to edit symlink target %s", path)
 	}
 	if !info.Mode().IsRegular() {
 		return Result{}, fmt.Errorf("refusing to edit non-regular file %s", path)
@@ -148,7 +151,14 @@ func applyExactEdit(text string, edit fsEditSpec, index int) (string, int, error
 }
 
 func atomicWriteFile(path string, content []byte, mode os.FileMode) error {
+	mode, err := mutationTargetMode(path, mode)
+	if err != nil {
+		return err
+	}
 	dir := filepath.Dir(path)
+	if err := ensureRealDirectory(dir); err != nil {
+		return err
+	}
 	base := filepath.Base(path)
 	tmp, err := os.CreateTemp(dir, "."+base+".*.tmp")
 	if err != nil {
@@ -168,6 +178,40 @@ func atomicWriteFile(path string, content []byte, mode os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
+}
+
+func mutationTargetMode(path string, fallback os.FileMode) (os.FileMode, error) {
+	if fallback == 0 {
+		fallback = 0o644
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fallback, nil
+		}
+		return 0, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return 0, fmt.Errorf("refusing to write symlink target %s", path)
+	}
+	if !info.Mode().IsRegular() {
+		return 0, fmt.Errorf("refusing to write non-regular file %s", path)
+	}
+	return info.Mode().Perm(), nil
+}
+
+func ensureRealDirectory(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to write through symlink directory %s", path)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("refusing to write through non-directory parent %s", path)
+	}
+	return nil
 }
 
 func sha256Hex(content []byte) string {

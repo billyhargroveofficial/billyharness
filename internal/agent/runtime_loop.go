@@ -80,17 +80,23 @@ func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []pro
 	var lastPromptTokens int64
 	var previousTurnSnapshot *runstate.Snapshot
 	emittedContextThresholds := map[int]bool{}
-	emitContextThresholdEvents(messages, a.runtime, 0, "initial", emittedContextThresholds, emit)
+	contextEpoch := 0
+	emitContextThresholdEvents(messages, a.runtime, 0, "initial", contextEpoch, emittedContextThresholds, emit)
 	for round := 0; round < a.runtime.MaxToolRounds; round++ {
 		roundNum := round + 1
 		turnID := agentTurnID(roundNum)
 		turnStarted := time.Now()
-		emitContextThresholdEvents(messages, a.runtime, roundNum, "before_turn", emittedContextThresholds, emit)
+		emitContextThresholdEvents(messages, a.runtime, roundNum, "before_turn", contextEpoch, emittedContextThresholds, emit)
 		var compacted bool
 		var compaction *compactionReport
 		messages, compaction, compacted = a.compactMessages(ctx, messages, lastPromptTokens)
 		if compacted {
 			lastPromptTokens = 0
+			previousContextEpoch := contextEpoch
+			contextEpoch++
+			emittedContextThresholds = map[int]bool{}
+			compaction.PreviousContextEpoch = previousContextEpoch
+			compaction.ContextEpoch = contextEpoch
 			emit(protocol.Event{Type: protocol.EventContextCompacted, Data: compaction})
 			if usage, ok := compaction.helperUsageEvent(run.ID); ok {
 				emit(protocol.Event{Type: protocol.EventProviderHelperUsage, Data: usage})
@@ -128,7 +134,7 @@ func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []pro
 		}
 		if len(modelStep.ToolCalls) == 0 {
 			messages = a.appendModelResponse(messages, modelStep)
-			emitContextThresholdEvents(messages, a.runtime, roundNum, "after_final_answer", emittedContextThresholds, emit)
+			emitContextThresholdEvents(messages, a.runtime, roundNum, "after_final_answer", contextEpoch, emittedContextThresholds, emit)
 			a.emitTurnCompleted(emit, turnCompletion{
 				TurnID:       turnID,
 				Round:        roundNum,
@@ -145,7 +151,7 @@ func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []pro
 		messages = a.appendModelResponse(messages, modelStep)
 		results := a.executeToolCalls(ctx, hookRunner, toolSet, run.ID, turnID, roundNum, modelStep.ToolCalls, emit)
 		messages = appendToolResultMessages(messages, results)
-		emitContextThresholdEvents(messages, a.runtime, roundNum, "after_tool_results", emittedContextThresholds, emit)
+		emitContextThresholdEvents(messages, a.runtime, roundNum, "after_tool_results", contextEpoch, emittedContextThresholds, emit)
 		a.emitTurnCompleted(emit, turnCompletion{
 			TurnID:        turnID,
 			Round:         roundNum,

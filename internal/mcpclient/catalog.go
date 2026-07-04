@@ -30,12 +30,17 @@ type catalogToolCandidate struct {
 	server       config.MCPServer
 }
 
-func buildCatalog(catalogs []serverCatalog) ([]ExternalTool, []string, []string) {
+func buildCatalog(catalogs []serverCatalog, promoteInstructions bool) ([]ExternalTool, []string, []string, []string) {
 	grouped := map[string][]catalogToolCandidate{}
-	var instructions []string
+	var serverInstructions []string
+	var promotedInstructions []string
 	for _, catalog := range catalogs {
 		if strings.TrimSpace(catalog.instructions) != "" {
-			instructions = append(instructions, fmt.Sprintf("%s: %s", catalog.server.Name, truncateText(catalog.instructions, 512)))
+			instruction := fmt.Sprintf("%s: %s", catalog.server.Name, truncateText(catalog.instructions, 512))
+			serverInstructions = append(serverInstructions, instruction)
+			if promoteInstructions {
+				promotedInstructions = append(promotedInstructions, fmt.Sprintf("%s [trust=operator_promoted_mcp_initialize_instructions]", instruction))
+			}
 		}
 		for _, spec := range catalog.specs {
 			originalName := spec.Name
@@ -91,7 +96,7 @@ func buildCatalog(catalogs []serverCatalog) ([]ExternalTool, []string, []string)
 			},
 		})
 	}
-	return tools, instructions, collisions
+	return tools, serverInstructions, promotedInstructions, collisions
 }
 
 func buildPromptCatalog(catalogs []serverCatalog) []Prompt {

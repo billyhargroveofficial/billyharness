@@ -238,9 +238,10 @@ const (
 	TurnStopToolResults = "tool_results"
 	TurnStopError       = "error"
 
-	StepStatusStarted   = "started"
-	StepStatusCompleted = "completed"
-	StepStatusFailed    = "failed"
+	StepStatusStarted             = "started"
+	StepStatusCompleted           = "completed"
+	StepStatusCompletedWithErrors = "completed_with_errors"
+	StepStatusFailed              = "failed"
 
 	StepKindModelCall = "model_call"
 	StepKindToolBatch = "tool_batch"
@@ -555,6 +556,8 @@ type HookEvent struct {
 
 type ContextThresholdEvent struct {
 	Percent             int    `json:"percent"`
+	ContextEpoch        int    `json:"context_epoch,omitempty"`
+	ThresholdKey        string `json:"threshold_key,omitempty"`
 	EstimatedTokens     int64  `json:"estimated_tokens"`
 	ContextWindowTokens int64  `json:"context_window_tokens"`
 	ThresholdTokens     int64  `json:"threshold_tokens"`

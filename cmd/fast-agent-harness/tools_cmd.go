@@ -6,12 +6,15 @@ import (
 	"os"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
-	"github.com/billyhargroveofficial/billyharness/internal/provider"
+	"github.com/billyhargroveofficial/billyharness/internal/runtimehost"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
 func printTools() error {
-	cfg := config.Default()
+	cfg, err := resolveRuntimeConfig()
+	if err != nil {
+		return err
+	}
 	registry, err := newToolRegistry(context.Background(), cfg)
 	if err != nil {
 		return err
@@ -23,11 +26,9 @@ func printTools() error {
 }
 
 func newToolRegistry(ctx context.Context, cfg config.Config) (*tools.Registry, error) {
-	settings := tools.RegistrySettingsFromConfig(cfg)
-	return tools.NewRegistryWithMCPFromSettings(ctx, settings, tools.WithWebSummarizer(provider.NewWebSummarizerFromProjections(settings.Provider, settings.ToolPolicy)))
+	return runtimehost.NewRegistry(ctx, runtimehost.SettingsFromConfig(cfg))
 }
 
 func newToolRegistryNoMCP(cfg config.Config) *tools.Registry {
-	settings := tools.RegistrySettingsFromConfig(cfg)
-	return tools.NewRegistryFromSettings(settings, tools.WithWebSummarizer(provider.NewWebSummarizerFromProjections(settings.Provider, settings.ToolPolicy)))
+	return runtimehost.NewRegistryNoMCP(runtimehost.SettingsFromConfig(cfg))
 }

@@ -28,6 +28,7 @@ type Options struct {
 	EditInterval         time.Duration
 	AllowedChatIDs       map[int64]bool
 	AllowedUserIDs       map[int64]bool
+	AllowUserInGroups    bool
 	AllowAllChats        bool
 	SendEnabled          bool
 	DryRunDefault        bool
@@ -39,7 +40,7 @@ type Bot struct {
 	client  *Client
 	harness Harness
 	store   Store
-	admit   telegramAdmissionStore
+	admit   *telegramAdmissionStore
 	state   State
 
 	mu       sync.Mutex
@@ -85,12 +86,16 @@ func New(opts Options, client *Client, harness Harness) (*Bot, error) {
 	if err != nil {
 		return nil, err
 	}
+	admit := newTelegramAdmissionStore(opts.StatePath)
+	if err := reconcilePendingInputsOnStartup(&state, store, admit); err != nil {
+		return nil, err
+	}
 	return &Bot{
 		opts:     opts,
 		client:   client,
 		harness:  harness,
 		store:    store,
-		admit:    newTelegramAdmissionStore(opts.StatePath),
+		admit:    admit,
 		state:    state,
 		chatMux:  map[string]*sync.Mutex{},
 		cancel:   map[string]context.CancelFunc{},

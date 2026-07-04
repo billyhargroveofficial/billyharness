@@ -384,6 +384,18 @@ func TestRunMessagesStoresLargeToolOutputAndSendsPreview(t *testing.T) {
 		refEvent["output_ref_bytes"] == nil {
 		t.Fatalf("output ref event = %#v metadata=%#v ok=%v", refEvent, result.Metadata, ok)
 	}
+	refIndex := eventIndex(events, protocol.EventToolOutputRefCreated)
+	terminalIndex := eventIndex(events, protocol.EventToolCallFinished)
+	finalizeIndex := toolProgressEventIndex(events, "call_big", toolPhaseFinalize)
+	if refIndex < 0 || terminalIndex < 0 || finalizeIndex < 0 || !(refIndex < terminalIndex && terminalIndex < finalizeIndex) {
+		t.Fatalf("output ref should settle before terminal result and finalize progress, ref=%d terminal=%d finalize=%d", refIndex, terminalIndex, finalizeIndex)
+	}
+	refEventTyped, ok := firstToolOutputRefEvent(events)
+	if !ok || refEventTyped.AttemptID == "" || refEventTyped.CallID != result.CallID ||
+		refEventTyped.Compact == nil || refEventTyped.Compact.Lifecycle != "output_ref" ||
+		refEventTyped.Compact.OutputRef != result.OutputRef || refEventTyped.Compact.OutputRefID == "" {
+		t.Fatalf("typed output ref event = %#v ok=%v result=%#v", refEventTyped, ok, result)
+	}
 	var toolMessage protocol.Message
 	for _, msg := range next {
 		if msg.Role == protocol.RoleTool && msg.Name == "big_output" {
@@ -394,6 +406,38 @@ func TestRunMessagesStoresLargeToolOutputAndSendsPreview(t *testing.T) {
 	if toolMessage.Content == "" || strings.Contains(toolMessage.Content, fullOutput) || !strings.Contains(toolMessage.Content, result.OutputRef) {
 		t.Fatalf("tool message should contain preview and output ref, got %#v", toolMessage)
 	}
+}
+
+func firstToolOutputRefEvent(events []protocol.Event) (protocol.ToolOutputRefEvent, bool) {
+	for _, event := range events {
+		if event.Type != protocol.EventToolOutputRefCreated {
+			continue
+		}
+		var ref protocol.ToolOutputRefEvent
+		bytes, _ := json.Marshal(event.Data)
+		if err := json.Unmarshal(bytes, &ref); err != nil {
+			return protocol.ToolOutputRefEvent{}, false
+		}
+		return ref, true
+	}
+	return protocol.ToolOutputRefEvent{}, false
+}
+
+func toolProgressEventIndex(events []protocol.Event, callID, phase string) int {
+	for i, event := range events {
+		if event.Type != protocol.EventToolCallProgress {
+			continue
+		}
+		var progress protocol.ToolProgressEvent
+		bytes, _ := json.Marshal(event.Data)
+		if err := json.Unmarshal(bytes, &progress); err != nil {
+			continue
+		}
+		if progress.CallID == callID && progress.Phase == phase {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestRunMessagesEnforcesBudgetForAlreadyTruncatedToolOutput(t *testing.T) {
@@ -457,6 +501,7 @@ func TestRunMessagesExecutesMCPToolAndContinuesLoop(t *testing.T) {
 	cfg := config.Default()
 	cfg.WorkspaceRoots = []string{root}
 	cfg.MaxToolRounds = 3
+	cfg.MCPPromoteServerInstructions = true
 	cfg.MCPServers = []config.MCPServer{{
 		Name:           "fake",
 		Command:        os.Args[0],
@@ -522,5 +567,52 @@ func TestRunMessagesExecutesMCPToolAndContinuesLoop(t *testing.T) {
 		!strings.HasPrefix(injected[1].Content, "# MCP server instructions") ||
 		!strings.HasPrefix(injected[2].Content, compactionMarker) {
 		t.Fatalf("MCP instructions should be inserted into protected prefix before prior summary: %#v", injected)
+	}
+}
+
+func TestRunMessagesDoesNotInjectUntrustedMCPInstructionsByDefault(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.MaxToolRounds = 1
+	cfg.MCPServers = []config.MCPServer{{
+		Name:           "fake",
+		Command:        os.Args[0],
+		Args:           []string{"-test.run=TestAgentFakeStdioMCPServer"},
+		Env:            map[string]string{"BILLYHARNESS_AGENT_MCP_HELPER": "1"},
+		StartupTimeout: 2 * time.Second,
+		ToolTimeout:    2 * time.Second,
+		Enabled:        true,
+	}}
+	registry, err := tools.NewRegistryWithMCP(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	serverInstructions := strings.Join(registry.MCPServerInstructions(), "\n")
+	if !strings.Contains(serverInstructions, "Use echo when asked to repeat text") {
+		t.Fatalf("server instructions metadata = %#v", registry.MCPServerInstructions())
+	}
+	if got := registry.Instructions(); len(got) != 0 {
+		t.Fatalf("untrusted MCP instructions were model-visible: %#v", got)
+	}
+	prov := &scriptedProvider{steps: [][]provider.Event{{
+		{Kind: provider.EventContent, Text: "finished"},
+		{Kind: provider.EventDone},
+	}}}
+	a := New(cfg, prov, registry)
+	base := []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "use mcp"},
+	}
+	if injected := a.withMCPInstructions(base); len(injected) != len(base) || hasMCPInstructions(injected) {
+		t.Fatalf("untrusted MCP instructions should not be injected: %#v", injected)
+	}
+	next, err := a.RunMessages(context.Background(), base, func(protocol.Event) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasMCPInstructions(next) {
+		t.Fatalf("untrusted MCP instructions leaked into transcript: %#v", next)
 	}
 }

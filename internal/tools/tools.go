@@ -76,33 +76,36 @@ const (
 )
 
 type Registry struct {
-	toolPolicy      config.ToolPolicySettings
-	profile         config.ProfileSelection
-	diagnostics     config.DiagnosticsSettings
-	diagnosticsErr  string
-	mcpSettings     config.MCPSettings
-	tools           map[string]Tool
-	mcpTools        map[string]Tool
-	mcpCatalog      mcpCatalogState
-	mcpStatuses     []mcpclient.ServerStatus
-	mcpPrompts      []mcpclient.Prompt
-	mcpUnsubscribe  func()
-	mcpMu           sync.RWMutex
-	manager         *mcpclient.Manager
-	instructions    []string
-	fileResolver    *filesearch.Resolver
-	shellMu         sync.Mutex
-	shellProcesses  map[string]*managedShellProcess
-	shellSeq        int64
-	webSummarizer   webtools.Summarizer
-	webSummarySlots chan struct{}
-	webSummarySeq   int64
-	nativeWebClient *webtools.Client
-	webBackendHTTP  *http.Client
-	webBackendSleep func(context.Context, time.Duration) error
-	tavilyBaseURL   string
-	exaBaseURL      string
+	toolPolicy            config.ToolPolicySettings
+	profile               config.ProfileSelection
+	diagnostics           config.DiagnosticsSettings
+	diagnosticsErr        string
+	mcpSettings           config.MCPSettings
+	tools                 map[string]Tool
+	mcpTools              map[string]Tool
+	mcpCatalog            mcpCatalogState
+	mcpStatuses           []mcpclient.ServerStatus
+	mcpPrompts            []mcpclient.Prompt
+	mcpServerInstructions []string
+	mcpUnsubscribe        func()
+	mcpMu                 sync.RWMutex
+	manager               *mcpclient.Manager
+	instructions          []string
+	fileResolver          *filesearch.Resolver
+	shellMu               sync.Mutex
+	shellProcesses        map[string]*managedShellProcess
+	shellSeq              int64
+	webSummarizer         webtools.Summarizer
+	webSummarySlots       chan struct{}
+	webSummarySeq         int64
+	nativeWebClient       *webtools.Client
+	webBackendHTTP        *http.Client
+	webBackendSleep       func(context.Context, time.Duration) error
+	tavilyBaseURL         string
+	exaBaseURL            string
 }
+
+type toolPolicyContextKey struct{}
 
 type RegistryOption func(*Registry)
 
@@ -116,6 +119,7 @@ type RegistrySettings struct {
 
 type mcpCatalogState struct {
 	Kind         string   `json:"kind"`
+	State        string   `json:"state,omitempty"`
 	Version      int64    `json:"version"`
 	ToolCount    int      `json:"tool_count"`
 	Stale        bool     `json:"stale"`
@@ -275,6 +279,32 @@ func cloneToolPolicySettings(settings config.ToolPolicySettings) config.ToolPoli
 	return settings
 }
 
+func contextWithToolPolicy(ctx context.Context, policy config.ToolPolicySettings) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, ok := ctx.Value(toolPolicyContextKey{}).(config.ToolPolicySettings); ok {
+		return ctx
+	}
+	return context.WithValue(ctx, toolPolicyContextKey{}, cloneToolPolicySettings(policy))
+}
+
+func toolPolicyFromContext(ctx context.Context, fallback config.ToolPolicySettings) config.ToolPolicySettings {
+	if ctx != nil {
+		if policy, ok := ctx.Value(toolPolicyContextKey{}).(config.ToolPolicySettings); ok {
+			return cloneToolPolicySettings(policy)
+		}
+	}
+	return cloneToolPolicySettings(fallback)
+}
+
+func (r *Registry) toolPolicyForContext(ctx context.Context) config.ToolPolicySettings {
+	if r == nil {
+		return toolPolicyFromContext(ctx, config.ToolPolicySettings{})
+	}
+	return toolPolicyFromContext(ctx, r.toolPolicy)
+}
+
 func cloneDiagnosticsSettings(settings config.DiagnosticsSettings) config.DiagnosticsSettings {
 	return config.Config{
 		DiagnosticsEnabled:     settings.Enabled,
@@ -285,10 +315,11 @@ func cloneDiagnosticsSettings(settings config.DiagnosticsSettings) config.Diagno
 
 func cloneMCPSettings(settings config.MCPSettings) config.MCPSettings {
 	return config.Config{
-		MCPEnabled:        settings.Enabled,
-		MCPConfigFiles:    settings.ConfigFiles,
-		MCPAllowedServers: settings.AllowedServers,
-		MCPServers:        settings.Servers,
+		MCPEnabled:                   settings.Enabled,
+		MCPConfigFiles:               settings.ConfigFiles,
+		MCPAllowedServers:            settings.AllowedServers,
+		MCPPromoteServerInstructions: settings.PromoteServerInstructions,
+		MCPServers:                   settings.Servers,
 	}.MCPSettings()
 }
 
@@ -316,16 +347,26 @@ func (r *Registry) Instructions() []string {
 	return instructions
 }
 
+func (r *Registry) MCPServerInstructions() []string {
+	if r == nil {
+		return nil
+	}
+	r.mcpMu.RLock()
+	defer r.mcpMu.RUnlock()
+	return append([]string(nil), r.mcpServerInstructions...)
+}
+
 func (r *Registry) MCPSettings() config.MCPSettings {
 	if r == nil {
 		return config.MCPSettings{}
 	}
 	settings := r.mcpSettings
 	return config.Config{
-		MCPEnabled:        settings.Enabled,
-		MCPConfigFiles:    settings.ConfigFiles,
-		MCPAllowedServers: settings.AllowedServers,
-		MCPServers:        settings.Servers,
+		MCPEnabled:                   settings.Enabled,
+		MCPConfigFiles:               settings.ConfigFiles,
+		MCPAllowedServers:            settings.AllowedServers,
+		MCPPromoteServerInstructions: settings.PromoteServerInstructions,
+		MCPServers:                   settings.Servers,
 	}.MCPSettings()
 }
 
@@ -395,8 +436,10 @@ func (r *Registry) syncMCPToolsFromManager() {
 	r.mcpMu.Lock()
 	r.mcpTools = next
 	r.instructions = snapshot.Instructions
+	r.mcpServerInstructions = snapshot.ServerInstructions
 	r.mcpCatalog = mcpCatalogState{
 		Kind:         "dynamic_mcp_catalog",
+		State:        mcpCatalogReadyState(len(next), snapshot.Collisions),
 		Version:      snapshot.Version,
 		ToolCount:    len(next),
 		Stale:        false,
@@ -414,6 +457,7 @@ func (r *Registry) markMCPCatalogStale(change mcpclient.CatalogChange) {
 	r.mcpMu.Lock()
 	if change.Version > r.mcpCatalog.Version {
 		r.mcpCatalog.Stale = true
+		r.mcpCatalog.State = "catalog_stale"
 	}
 	r.mcpMu.Unlock()
 }
@@ -427,9 +471,25 @@ func (r *Registry) mcpCatalogSnapshot() mcpCatalogState {
 	state := r.mcpCatalog
 	state.Kind = "dynamic_mcp_catalog"
 	state.ToolCount = len(r.mcpTools)
+	if state.State == "" {
+		state.State = mcpCatalogReadyState(state.ToolCount, state.Collisions)
+	}
+	if state.Stale {
+		state.State = "catalog_stale"
+	}
 	state.ModelVisible = false
 	state.Collisions = append([]string(nil), state.Collisions...)
 	return state
+}
+
+func mcpCatalogReadyState(toolCount int, collisions []string) string {
+	if len(collisions) > 0 {
+		return "degraded"
+	}
+	if toolCount == 0 {
+		return "empty"
+	}
+	return "ready"
 }
 
 func (r *Registry) modelVisibleToolCatalogSnapshot() modelVisibleToolCatalog {
@@ -450,6 +510,7 @@ func addMCPCatalogMetadata(metadata map[string]any, state mcpCatalogState) map[s
 		metadata = map[string]any{}
 	}
 	metadata["mcp_catalog_kind"] = state.Kind
+	metadata["mcp_catalog_state"] = state.State
 	metadata["mcp_catalog_version"] = state.Version
 	metadata["mcp_catalog_tool_count"] = state.ToolCount
 	metadata["mcp_catalog_stale"] = state.Stale
@@ -524,6 +585,7 @@ func (r *Registry) Call(ctx context.Context, call protocol.ToolCall) (Result, er
 	if !ok {
 		return errorResult("unknown_tool", fmt.Sprintf("unknown tool %s", call.Name)), fmt.Errorf("unknown tool %s", call.Name)
 	}
+	ctx = contextWithToolPolicy(ctx, r.toolPolicy)
 	call.Arguments = normalizeArgs(call.Arguments)
 	if decision, err := r.checkPolicy(tool); err != nil {
 		result := errorResult("permission_denied", err.Error())
@@ -563,43 +625,6 @@ func (r *Registry) Risk(name string) (protocol.Risk, bool) {
 		return "", false
 	}
 	return tool.Spec.Risk, true
-}
-
-func (r *Registry) lookup(name string) (Tool, bool) {
-	tool, ok := r.tools[name]
-	return tool, ok
-}
-
-func normalizeArgs(args json.RawMessage) json.RawMessage {
-	if len(args) == 0 || strings.TrimSpace(string(args)) == "" || strings.TrimSpace(string(args)) == "null" {
-		return json.RawMessage(`{}`)
-	}
-	return args
-}
-
-func errorResult(code, content string) Result {
-	return Result{Content: content, IsError: true, ErrorCode: code}
-}
-
-func fileDisplayMetadata(path, summary string) map[string]any {
-	target := fileDisplayTarget(path)
-	return map[string]any{
-		"path":                     path,
-		"display_group":            "filesystem",
-		"display_target":           target,
-		"display_path":             path,
-		"display_summary":          summary,
-		"display_preview":          summary,
-		"display_collapse_default": true,
-	}
-}
-
-func fileDisplayTarget(path string) string {
-	target := filepath.Base(strings.TrimSpace(path))
-	if target == "" || target == "." || target == string(filepath.Separator) {
-		return strings.TrimSpace(path)
-	}
-	return target
 }
 
 func validationErrorResult(toolName string, err error) Result {
@@ -736,7 +761,7 @@ func (r *Registry) addFSList() {
 			Parameters:  raw(`{"type":"object","properties":{"path":{"type":"string"},"limit":{"type":"integer","default":100}},"required":["path"],"additionalProperties":false}`),
 			Risk:        protocol.RiskReadOnly,
 		},
-		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
+		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in struct {
 				Path  string `json:"path"`
 				Limit int    `json:"limit"`
@@ -747,7 +772,7 @@ func (r *Registry) addFSList() {
 			if in.Limit <= 0 || in.Limit > 500 {
 				in.Limit = 100
 			}
-			path, err := r.safePath(in.Path)
+			path, err := r.safePath(ctx, in.Path)
 			if err != nil {
 				return Result{}, err
 			}
@@ -776,7 +801,7 @@ func (r *Registry) addFSSearch() {
 			Parameters:  raw(`{"type":"object","properties":{"query":{"type":"string"},"path":{"type":"string","default":"."},"limit":{"type":"integer","default":100}},"required":["query"],"additionalProperties":false}`),
 			Risk:        protocol.RiskReadOnly,
 		},
-		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
+		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in struct {
 				Query string `json:"query"`
 				Path  string `json:"path"`
@@ -791,7 +816,7 @@ func (r *Registry) addFSSearch() {
 			if in.Limit <= 0 || in.Limit > 500 {
 				in.Limit = 100
 			}
-			base, err := r.safePath(in.Path)
+			base, err := r.safePath(ctx, in.Path)
 			if err != nil {
 				return Result{}, err
 			}
@@ -830,7 +855,7 @@ func (r *Registry) addFSWrite() {
 			Parameters:  raw(`{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"append":{"type":"boolean","default":false},"create_dirs":{"type":"boolean","default":true}},"required":["path","content"],"additionalProperties":false}`),
 			Risk:        protocol.RiskWrite,
 		},
-		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
+		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in struct {
 				Path       string `json:"path"`
 				Content    string `json:"content"`
@@ -843,7 +868,7 @@ func (r *Registry) addFSWrite() {
 			if len(in.Content) > maxWriteBytes {
 				return Result{}, fmt.Errorf("content too large: %d bytes", len(in.Content))
 			}
-			path, err := r.safePath(in.Path)
+			path, err := r.safePath(ctx, in.Path)
 			if err != nil {
 				return Result{}, err
 			}
@@ -856,17 +881,24 @@ func (r *Registry) addFSWrite() {
 					return Result{}, err
 				}
 			}
-			flag := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+			n := len(in.Content)
 			if in.Append {
-				flag = os.O_CREATE | os.O_WRONLY | os.O_APPEND
-			}
-			file, err := os.OpenFile(path, flag, 0o644)
-			if err != nil {
-				return Result{}, err
-			}
-			defer file.Close()
-			n, err := file.WriteString(in.Content)
-			if err != nil {
+				if _, err := mutationTargetMode(path, 0o644); err != nil {
+					return Result{}, err
+				}
+				if err := ensureRealDirectory(filepath.Dir(path)); err != nil {
+					return Result{}, err
+				}
+				file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+				if err != nil {
+					return Result{}, err
+				}
+				defer file.Close()
+				n, err = file.WriteString(in.Content)
+				if err != nil {
+					return Result{}, err
+				}
+			} else if err := atomicWriteFile(path, []byte(in.Content), 0o644); err != nil {
 				return Result{}, err
 			}
 			action := "wrote"
@@ -894,14 +926,14 @@ func (r *Registry) addFSMkdir() {
 			Parameters:  raw(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}`),
 			Risk:        protocol.RiskWrite,
 		},
-		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
+		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in struct {
 				Path string `json:"path"`
 			}
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
 			}
-			path, err := r.safePath(in.Path)
+			path, err := r.safePath(ctx, in.Path)
 			if err != nil {
 				return Result{}, err
 			}
@@ -1067,7 +1099,7 @@ func (r *Registry) addSkills() {
 			Parameters:  raw(`{"type":"object","properties":{"query":{"type":"string","description":"Optional case-insensitive name/description/source/tag filter."},"source":{"type":"string","description":"Optional source filter: home, project, claude_compat, hermes_home, hermes_runtime, or hermes_optional."},"include_compat":{"type":"boolean","default":false,"description":"Also list compatibility sources: project .claude/skills, /root/.hermes/skills, /opt/hermes-agent-src/skills, and /opt/hermes-agent-src/optional-skills."},"limit":{"type":"integer","default":40}},"additionalProperties":false}`),
 			Risk:        protocol.RiskReadOnly,
 		},
-		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
+		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in struct {
 				Query         string `json:"query"`
 				Source        string `json:"source"`
@@ -1077,7 +1109,7 @@ func (r *Registry) addSkills() {
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
 			}
-			list, err := skills.List(r.skillsOptions(in.IncludeCompat), skills.ListRequest{
+			list, err := skills.List(r.skillsOptions(ctx, in.IncludeCompat), skills.ListRequest{
 				Query:  in.Query,
 				Source: in.Source,
 				Limit:  in.Limit,
@@ -1112,7 +1144,7 @@ func (r *Registry) addSkills() {
 			Parameters:  raw(`{"type":"object","properties":{"name":{"type":"string","description":"Skill name to import."},"source":{"type":"string","description":"Optional source filter, usually hermes_home, hermes_runtime, hermes_optional, or claude_compat."},"force":{"type":"boolean","default":false,"description":"Replace an existing home skill with the same normalized name."}},"required":["name"],"additionalProperties":false}`),
 			Risk:        protocol.RiskWrite,
 		},
-		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
+		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in struct {
 				Name   string `json:"name"`
 				Source string `json:"source"`
@@ -1121,7 +1153,7 @@ func (r *Registry) addSkills() {
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
 			}
-			imported, err := skills.Import(r.skillsOptions(true), skills.ImportRequest{Name: in.Name, Source: in.Source, Force: in.Force})
+			imported, err := skills.Import(r.skillsOptions(ctx, true), skills.ImportRequest{Name: in.Name, Source: in.Source, Force: in.Force})
 			if err != nil {
 				return Result{}, err
 			}
@@ -1146,7 +1178,7 @@ func (r *Registry) addSkillViewTool(name, description string) {
 			Parameters:  raw(`{"type":"object","properties":{"name":{"type":"string","description":"Skill name, for example imagegen or code-review."},"source":{"type":"string","description":"Optional source filter: home, project, claude_compat, hermes_home, hermes_runtime, or hermes_optional."},"include_compat":{"type":"boolean","default":false,"description":"Allow reading compatibility sources."},"file_path":{"type":"string","description":"Optional bounded support file under references/, templates/, scripts/, or assets/."},"max_chars":{"type":"integer","default":12288}},"required":["name"],"additionalProperties":false}`),
 			Risk:        protocol.RiskReadOnly,
 		},
-		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
+		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in struct {
 				Name          string `json:"name"`
 				Source        string `json:"source"`
@@ -1157,7 +1189,7 @@ func (r *Registry) addSkillViewTool(name, description string) {
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
 			}
-			view, err := skills.View(r.skillsOptions(in.IncludeCompat), skills.ViewRequest{
+			view, err := skills.View(r.skillsOptions(ctx, in.IncludeCompat), skills.ViewRequest{
 				Name:     in.Name,
 				Source:   in.Source,
 				FilePath: in.FilePath,
@@ -1196,9 +1228,10 @@ func (r *Registry) addSkillViewTool(name, description string) {
 	})
 }
 
-func (r *Registry) skillsOptions(includeCompat bool) skills.Options {
+func (r *Registry) skillsOptions(ctx context.Context, includeCompat bool) skills.Options {
+	policy := r.toolPolicyForContext(ctx)
 	return skills.Options{
-		WorkspaceRoots: r.toolPolicy.WorkspaceRoots,
+		WorkspaceRoots: policy.WorkspaceRoots,
 		IncludeCompat:  includeCompat,
 	}
 }
@@ -1237,20 +1270,23 @@ func (r *Registry) addMCPGateway() {
 				SchemaOmittedReason string          `json:"schema_omitted,omitempty"`
 			}
 			type serverItem struct {
-				Name              string     `json:"name"`
-				Transport         string     `json:"transport,omitempty"`
-				Enabled           bool       `json:"enabled"`
-				Required          bool       `json:"required"`
-				Connected         bool       `json:"connected"`
-				State             string     `json:"state,omitempty"`
-				ToolCount         int        `json:"tool_count,omitempty"`
-				UnsupportedReason string     `json:"unsupported_reason,omitempty"`
-				LastError         string     `json:"last_error,omitempty"`
-				RetryCount        int        `json:"retry_count,omitempty"`
-				RestartCount      int        `json:"restart_count,omitempty"`
-				RetryBackoffMS    int64      `json:"retry_backoff_ms,omitempty"`
-				NextRetryAt       *time.Time `json:"next_retry_at,omitempty"`
-				Error             string     `json:"error,omitempty"`
+				Name              string                       `json:"name"`
+				Transport         string                       `json:"transport,omitempty"`
+				Enabled           bool                         `json:"enabled"`
+				Required          bool                         `json:"required"`
+				Connected         bool                         `json:"connected"`
+				State             string                       `json:"state,omitempty"`
+				TransportState    string                       `json:"transport_state,omitempty"`
+				CatalogState      string                       `json:"catalog_state,omitempty"`
+				Diagnostics       []mcpclient.StatusDiagnostic `json:"diagnostics,omitempty"`
+				ToolCount         int                          `json:"tool_count,omitempty"`
+				UnsupportedReason string                       `json:"unsupported_reason,omitempty"`
+				LastError         string                       `json:"last_error,omitempty"`
+				RetryCount        int                          `json:"retry_count,omitempty"`
+				RestartCount      int                          `json:"restart_count,omitempty"`
+				RetryBackoffMS    int64                        `json:"retry_backoff_ms,omitempty"`
+				NextRetryAt       *time.Time                   `json:"next_retry_at,omitempty"`
+				Error             string                       `json:"error,omitempty"`
 			}
 			r.refreshMCPTools(ctx)
 			results := discovery.Search(r.discoveryCandidates(false, true), discovery.Query{
@@ -1294,6 +1330,9 @@ func (r *Registry) addMCPGateway() {
 					Required:          status.Required,
 					Connected:         status.Connected,
 					State:             status.State,
+					TransportState:    status.TransportState,
+					CatalogState:      status.CatalogState,
+					Diagnostics:       append([]mcpclient.StatusDiagnostic(nil), status.Diagnostics...),
 					ToolCount:         status.ToolCount,
 					UnsupportedReason: status.UnsupportedReason,
 					LastError:         status.LastError,
@@ -1354,12 +1393,12 @@ func (r *Registry) addMCPGateway() {
 	})
 }
 
-func (r *Registry) safePath(input string) (string, error) {
+func (r *Registry) safePath(ctx context.Context, input string) (string, error) {
 	if input == "" {
 		input = "."
 	}
 	if !filepath.IsAbs(input) {
-		input = filepath.Join(r.relativeBase(), input)
+		input = filepath.Join(r.relativeBase(ctx), input)
 	}
 	path, err := filepath.Abs(input)
 	if err != nil {
@@ -1375,7 +1414,8 @@ func (r *Registry) safePath(input string) (string, error) {
 	if sensitive(policyPath) {
 		return "", fmt.Errorf("refusing sensitive path %s", policyPath)
 	}
-	for _, root := range r.toolPolicy.WorkspaceRoots {
+	policy := r.toolPolicyForContext(ctx)
+	for _, root := range policy.WorkspaceRoots {
 		absRoot, _ := filepath.Abs(root)
 		policyRoot, err := filepath.EvalSymlinks(absRoot)
 		if err != nil {
@@ -1415,9 +1455,10 @@ func resolvedPathForPolicy(path string) (string, error) {
 	}
 }
 
-func (r *Registry) relativeBase() string {
-	if len(r.toolPolicy.WorkspaceRoots) > 0 && r.toolPolicy.WorkspaceRoots[0] != "" {
-		return r.toolPolicy.WorkspaceRoots[0]
+func (r *Registry) relativeBase(ctx context.Context) string {
+	policy := r.toolPolicyForContext(ctx)
+	if len(policy.WorkspaceRoots) > 0 && policy.WorkspaceRoots[0] != "" {
+		return policy.WorkspaceRoots[0]
 	}
 	cwd, _ := os.Getwd()
 	return cwd

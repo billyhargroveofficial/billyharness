@@ -129,12 +129,20 @@ func (o *toolOrchestrator) Execute(ctx context.Context, runID, turnID string, in
 			Metadata:  map[string]any{"hook_event": "before_tool"},
 		}
 	} else if decision.Decision == "deny" {
+		content := tools.PolicyDeniedMessage(tools.PolicyDecision{
+			Name:   decision.Name,
+			Reason: decision.Reason,
+		})
+		errorCode := "permission_denied"
+		if decision.Reason == "unknown_tool" {
+			errorCode = "unknown_tool"
+		}
 		out = protocol.ToolResult{
 			CallID:    call.ID,
 			Name:      call.Name,
-			Content:   dangerousToolDisabledMessage(),
+			Content:   content,
 			IsError:   true,
-			ErrorCode: "permission_denied",
+			ErrorCode: errorCode,
 			Metadata:  map[string]any{},
 		}
 	} else if call.InvalidArgumentError != "" {

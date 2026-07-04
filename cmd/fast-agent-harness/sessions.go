@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
 	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
@@ -129,7 +128,10 @@ func sessionsContextCommand(args []string, out io.Writer) error {
 	if fs.NArg() != 1 {
 		return fmt.Errorf("usage: sessions context [-dir DIR] [-json] SESSION_ID")
 	}
-	cfg := config.Default()
+	cfg, err := resolveRuntimeConfig()
+	if err != nil {
+		return err
+	}
 	resp, err := gateway.StoredSessionContext(*dir, fs.Arg(0), cfg.RuntimeLimits())
 	if err != nil {
 		return err
@@ -761,6 +763,51 @@ func printSessionInspection(out io.Writer, inspection gateway.StoredSessionInspe
 		inspection.Events.MissingOutputRefs,
 		inspection.Events.OutputRefHashMismatch,
 	)
+	validation := inspection.Events.Validation
+	fmt.Fprintf(out, "validation: valid=%t envelope=%t sequence=%t lifecycle=%t gaps=%d duplicates=%d unmatched_progress=%d unmatched_output_refs=%d unmatched_permissions=%d\n",
+		validation.Valid,
+		validation.EnvelopeValid,
+		validation.SequenceValid,
+		validation.LifecycleValid,
+		validation.SequenceGaps,
+		validation.DuplicateSeqs,
+		validation.UnmatchedProgress,
+		validation.UnmatchedOutputRefs,
+		validation.UnmatchedPermissions,
+	)
+	if validation.Error != "" {
+		fmt.Fprintf(out, "validation error: kind=%s line=%d record=%d error=%s\n",
+			emptyDash(validation.CorruptionKind),
+			validation.Line,
+			validation.RecordNo,
+			validation.Error,
+		)
+	}
+	terminal := inspection.Events.Terminal
+	fmt.Fprintf(out, "terminal: state=%s event=%s run=%s seq=%d\n",
+		emptyDash(terminal.State),
+		emptyDash(terminal.Event),
+		emptyDash(terminal.RunID),
+		terminal.Seq,
+	)
+	if terminal.LastError != "" {
+		fmt.Fprintf(out, "terminal error: %s\n", terminal.LastError)
+	}
+	projector := inspection.Events.Projector
+	fmt.Fprintf(out, "projector: parity=%t run_state=%s last_seq=%d snapshot_seq=%d transcript_events=%d tool_calls=%d/%d assistant_bytes=%d reasoning_bytes=%d\n",
+		projector.ParityOK,
+		emptyDash(projector.RunState),
+		projector.LastSeq,
+		projector.SnapshotLastSeq,
+		projector.TranscriptEvents,
+		projector.ToolCallsProjected,
+		projector.ToolCallsRaw,
+		projector.AssistantBytes,
+		projector.ReasoningBytes,
+	)
+	if projector.SeqGap != nil {
+		fmt.Fprintf(out, "projector seq gap: after=%d got=%d\n", projector.SeqGap.AfterSeq, projector.SeqGap.GotSeq)
+	}
 	fmt.Fprintln(out, "files:")
 	for _, file := range inspection.Files {
 		fmt.Fprintf(out, "  - %s exists=%t bytes=%d path=%s\n", file.Name, file.Exists, file.Bytes, file.Path)

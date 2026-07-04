@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -268,6 +269,96 @@ func (m Model) statusText() string {
 	)
 }
 
+func (m Model) debugStatusText() string {
+	selected := "none"
+	if m.selected >= 0 && m.selected < len(m.blocks) {
+		block := m.blocks[m.selected]
+		selected = fmt.Sprintf("index=%d id=%s kind=%s cell=%s call_id=%s step_id=%s tool=%s",
+			m.selected,
+			debugText(block.ID),
+			debugText(block.Kind),
+			debugText(string(block.CellType)),
+			debugText(block.CallID),
+			debugText(block.StepID),
+			debugText(block.ToolName),
+		)
+	}
+	compact := m.contextCompactText()
+	if compact == "" {
+		compact = "none"
+	}
+	pendingInput := m.pendingUserInput != nil
+	return strings.Join([]string{
+		"session: " + debugText(m.sessionID),
+		fmt.Sprintf("gateway: url=%s last_seq=%d mode=%s", debugText(m.gatewayURL), m.lastGatewayEventSeq, debugMode(m.gatewayURL)),
+		fmt.Sprintf("runtime: provider=%s selected_model=%s active_model=%s profile=%s access_mode=%s busy=%t",
+			debugText(m.currentProvider()), debugText(m.currentModel()), debugText(m.activeRuntimeModelText()), debugText(m.currentProfile()), debugText(m.currentAccessMode()), m.busy),
+		fmt.Sprintf("stream queue: pending_events=%d scheduled=%t channel_buffer=%d/%d pending_user_input=%t",
+			len(m.pendingStreamEvents), m.streamBatchScheduled, len(m.events), cap(m.events), pendingInput),
+		fmt.Sprintf("stale: transcript=%t file_searching=%t file_error=%t slash_dismissed=%t",
+			m.transcriptStale, m.fileMentionSearching, strings.TrimSpace(m.fileMentionErr) != "", strings.TrimSpace(m.slashDismissed) != ""),
+		fmt.Sprintf("blocks: total=%d kinds=%s cells=%s selected=%s",
+			len(m.blocks), debugBlockKindCounts(m.blocks), debugBlockCellCounts(m.blocks), selected),
+		fmt.Sprintf("cache: rich=%d collapsed=%d ux_projector=%t transcript_projector=%t",
+			len(m.richRenderCache), len(m.collapsed), m.uxProjector != nil, m.transcriptProjector != nil),
+		fmt.Sprintf("viewport: app=%dx%d viewport=%dx%d offset=%d,%d lines=%d visible=%d reflows=%d at_bottom=%t follow=%t",
+			m.width, m.height, m.viewport.Width(), m.viewport.Height(), m.viewport.XOffset(), m.viewport.YOffset(),
+			m.viewport.TotalLineCount(), m.viewport.VisibleLineCount(), m.reflowCount, m.viewport.AtBottom(), m.followOutput),
+		fmt.Sprintf("usage: model_calls=%d tool_calls=%d input=%d output=%d cache_hit=%d cache_miss=%d reasoning=%d helper_model_calls=%d helper_api_calls=%d helper_api_cost=%.6f",
+			m.modelCalls, m.toolCalls, m.inputTok, m.outputTok, m.cacheHitTok, m.cacheMissTok, m.reasoningTok,
+			m.helperModelCalls, m.helperAPICalls, m.helperCostUSD),
+		fmt.Sprintf("context: used=%s compact=%s window=%d window_source=%s compact_source=%s cost=%s",
+			m.contextText(), compact, m.runtime.ContextWindowTokens, debugText(m.runtime.ContextWindowSource), debugText(m.runtime.ContextCompactSource), m.costText()),
+	}, "\n")
+}
+
+func debugMode(gatewayURL string) string {
+	if strings.TrimSpace(gatewayURL) == "" {
+		return "local"
+	}
+	return "gateway"
+}
+
+func debugText(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "none"
+	}
+	return value
+}
+
+func debugBlockKindCounts(blocks []transcript.Cell) string {
+	counts := map[string]int{}
+	for _, block := range blocks {
+		counts[debugText(block.Kind)]++
+	}
+	return debugCounts(counts)
+}
+
+func debugBlockCellCounts(blocks []transcript.Cell) string {
+	counts := map[string]int{}
+	for _, block := range blocks {
+		counts[debugText(string(block.CellType))]++
+	}
+	return debugCounts(counts)
+}
+
+func debugCounts(counts map[string]int) string {
+	if len(counts) == 0 {
+		return "none"
+	}
+	keys := make([]string, 0, len(counts))
+	for key := range counts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", key, counts[key]))
+	}
+	return strings.Join(parts, ",")
+}
+
 func (m Model) activeRuntimeModelText() string {
 	if strings.TrimSpace(m.activeRuntimeModel) == "" {
 		return "unknown"
@@ -348,6 +439,9 @@ func (m *Model) applyProjectedTranscript(event protocol.Event) {
 	previous := append([]transcript.Cell(nil), m.blocks...)
 	selected := m.selected
 	m.blocks = refreshedTranscriptCells(projector.Apply(event))
+	if transcriptStructureChanged(previous, m.blocks) {
+		m.clearTranscriptSelection()
+	}
 	m.selected = selectedAfterTranscriptProjection(previous, m.blocks, selected)
 }
 
@@ -412,6 +506,21 @@ func projectedBlockChanged(before, after transcript.Cell) bool {
 		before.RawCopy != after.RawCopy ||
 		before.Collapsed != after.Collapsed ||
 		before.CollapseSet != after.CollapseSet
+}
+
+func transcriptStructureChanged(before, after []transcript.Cell) bool {
+	if len(before) != len(after) {
+		return true
+	}
+	for i := range before {
+		if before[i].Kind != after[i].Kind ||
+			before[i].CallID != after[i].CallID ||
+			before[i].StepID != after[i].StepID ||
+			before[i].TurnID != after[i].TurnID {
+			return true
+		}
+	}
+	return false
 }
 
 func transcriptProjectsEvent(eventType protocol.EventType) bool {
@@ -586,6 +695,8 @@ func (m *Model) applyStepStatus(event protocol.Event) {
 	switch step.Status {
 	case protocol.StepStatusCompleted:
 		m.status = "tool batch completed"
+	case protocol.StepStatusCompletedWithErrors:
+		m.status = "tool batch completed with errors"
 	case protocol.StepStatusFailed:
 		m.status = "tool batch failed"
 	default:
@@ -826,22 +937,12 @@ func eventCallID(event protocol.Event) string {
 }
 
 func (m *Model) collapseToolBlockIfLarge(callID string) {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return
+	}
 	i, ok := m.toolBlockIndex(callID)
 	if !ok {
-		m.collapseLastToolBlockIfLarge()
-		return
-	}
-	if len(m.blocks[i].Content) > 8000 || strings.Count(m.blocks[i].Content, "\n") > 40 {
-		m.setBlockCollapsed(i, true)
-	}
-}
-
-func (m *Model) collapseLastToolBlockIfLarge() {
-	if len(m.blocks) == 0 {
-		return
-	}
-	i := len(m.blocks) - 1
-	if m.blocks[i].Kind != "tool" {
 		return
 	}
 	if len(m.blocks[i].Content) > 8000 || strings.Count(m.blocks[i].Content, "\n") > 40 {
@@ -850,6 +951,7 @@ func (m *Model) collapseLastToolBlockIfLarge() {
 }
 
 func (m *Model) addBlock(kind, title, content string) {
+	m.clearTranscriptSelection()
 	b := m.newBlock(kind, title, content)
 	m.blocks = append(m.blocks, b)
 	m.selected = len(m.blocks) - 1
@@ -857,6 +959,7 @@ func (m *Model) addBlock(kind, title, content string) {
 }
 
 func (m *Model) addEventBlock(eventType protocol.EventType, title, content string) {
+	m.clearTranscriptSelection()
 	b := m.newBlock(blockKindForEvent(eventType), title, content)
 	b.EventType = eventType
 	b.Live = b.Kind == "assistant" || b.Kind == "reasoning"

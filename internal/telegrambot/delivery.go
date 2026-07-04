@@ -18,6 +18,7 @@ func (b *Bot) sendPlain(ctx context.Context, msg Message, text string) error {
 }
 
 func (b *Bot) send(ctx context.Context, chatID int64, threadID int, text, parseMode string, force bool) (SentMessage, error) {
+	text = redactTelegramText(text)
 	if !b.opts.SendEnabled || (b.opts.DryRunDefault && !force) {
 		log.Printf("telegram dry-run send chat=%d thread=%d text=%q", chatID, threadID, preview(text, 300))
 		return SentMessage{MessageID: int(time.Now().UnixNano() % 1_000_000), Chat: Chat{ID: chatID}}, nil
@@ -26,6 +27,7 @@ func (b *Bot) send(ctx context.Context, chatID int64, threadID int, text, parseM
 }
 
 func (b *Bot) edit(ctx context.Context, chatID int64, messageID int, text, parseMode string) error {
+	text = redactTelegramText(text)
 	if !b.opts.SendEnabled || b.opts.DryRunDefault {
 		log.Printf("telegram dry-run edit chat=%d message=%d text=%q", chatID, messageID, preview(text, 300))
 		return nil
@@ -40,6 +42,7 @@ func (b *Bot) edit(ctx context.Context, chatID int64, messageID int, text, parse
 }
 
 func (b *Bot) editProgress(ctx context.Context, chatID int64, messageID int, text string) error {
+	text = redactTelegramText(text)
 	if !b.opts.SendEnabled || b.opts.DryRunDefault {
 		log.Printf("telegram dry-run progress edit chat=%d message=%d text=%q", chatID, messageID, preview(text, 300))
 		return nil
@@ -54,6 +57,7 @@ func (b *Bot) editProgress(ctx context.Context, chatID int64, messageID int, tex
 }
 
 func (b *Bot) sendRichMarkdown(ctx context.Context, chatID int64, threadID int, markdown string) (SentMessage, error) {
+	markdown = redactTelegramText(markdown)
 	if !b.opts.SendEnabled || b.opts.DryRunDefault {
 		log.Printf("telegram dry-run send-rich chat=%d thread=%d text=%q", chatID, threadID, preview(markdown, 300))
 		return SentMessage{MessageID: int(time.Now().UnixNano() % 1_000_000), Chat: Chat{ID: chatID}}, nil
@@ -62,6 +66,7 @@ func (b *Bot) sendRichMarkdown(ctx context.Context, chatID int64, threadID int, 
 }
 
 func (b *Bot) editRichMarkdown(ctx context.Context, chatID int64, messageID int, markdown string) error {
+	markdown = redactTelegramText(markdown)
 	if !b.opts.SendEnabled || b.opts.DryRunDefault {
 		log.Printf("telegram dry-run edit-rich chat=%d message=%d text=%q", chatID, messageID, preview(markdown, 300))
 		return nil
@@ -83,14 +88,16 @@ func telegramProgressEditContext(ctx context.Context) (context.Context, context.
 	return context.WithTimeout(ctx, telegramProgressEditTimeout)
 }
 
-func (b *Bot) delete(ctx context.Context, chatID int64, messageID int) {
+func (b *Bot) delete(ctx context.Context, chatID int64, messageID int) error {
 	if !b.opts.SendEnabled || b.opts.DryRunDefault {
 		log.Printf("telegram dry-run delete chat=%d message=%d", chatID, messageID)
-		return
+		return nil
 	}
 	if err := b.client.DeleteMessage(ctx, chatID, messageID); err != nil {
 		log.Printf("telegram delete: %v", err)
+		return err
 	}
+	return nil
 }
 
 func (b *Bot) finishRich(ctx context.Context, msg Message, placeholder SentMessage, renderer *Renderer, model, reasoning string) bool {

@@ -9,11 +9,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/billyhargroveofficial/billyharness/internal/agent"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
-	"github.com/billyhargroveofficial/billyharness/internal/provider"
+	"github.com/billyhargroveofficial/billyharness/internal/runtimehost"
 )
 
 func runOnce(args []string) error {
@@ -46,31 +45,30 @@ func runOnce(args []string) error {
 		}
 		return gatewayRun(context.Background(), *gatewayURL, "/v1/run", req, terminalEmitter(*noReasoning))
 	}
-	cfg := config.Default()
+	var overrides []config.ResolveOverride
 	if *mock {
-		cfg.Provider = "mock"
-		cfg.Model = "mock"
+		overrides = append(overrides,
+			config.ResolveOverride{Key: "provider", Value: "mock", Source: config.SourceCLI, SourceKey: "-mock"},
+			config.ResolveOverride{Key: "model", Value: "mock", Source: config.SourceCLI, SourceKey: "-mock"},
+		)
 	}
-	if *model != "" {
-		cfg.Model = *model
-	}
-	if *profile != "" {
-		cfg.Profile = config.NormalizeProfileName(*profile)
+	overrides = appendStringOverride(overrides, "model", *model, "-model")
+	if strings.TrimSpace(*profile) != "" {
+		overrides = appendStringOverride(overrides, "profile", config.NormalizeProfileName(*profile), "-profile")
 	}
 	if mode != "" {
-		cfg.AccessMode = mode
+		overrides = append(overrides, config.ResolveOverride{Key: "access_mode", Value: mode, Source: config.SourceCLI, SourceKey: "-access-mode"})
 	}
-	cfg.ApplyModelProviderDefaults()
-	prov, err := provider.NewFromBinding(cfg.ProviderBinding())
+	cfg, err := resolveRuntimeConfig(overrides...)
 	if err != nil {
 		return err
 	}
-	registry, err := newToolRegistry(context.Background(), cfg)
+	host, err := runtimehost.New(context.Background(), cfg)
 	if err != nil {
 		return err
 	}
-	defer registry.Close()
-	a := agent.NewFromSettings(agent.SettingsFromConfig(cfg), prov, registry)
+	defer host.Close()
+	a := host.Agent()
 	return a.Run(context.Background(), prompt, terminalEmitter(*noReasoning))
 }
 
@@ -92,32 +90,31 @@ func chat(args []string) error {
 	if *gatewayURL != "" {
 		return chatGateway(*gatewayURL, *noReasoning, *model, *profile, mode, *mock)
 	}
-	cfg := config.Default()
+	var overrides []config.ResolveOverride
 	if *mock {
-		cfg.Provider = "mock"
-		cfg.Model = "mock"
+		overrides = append(overrides,
+			config.ResolveOverride{Key: "provider", Value: "mock", Source: config.SourceCLI, SourceKey: "-mock"},
+			config.ResolveOverride{Key: "model", Value: "mock", Source: config.SourceCLI, SourceKey: "-mock"},
+		)
 	}
-	if *model != "" {
-		cfg.Model = *model
-	}
-	if *profile != "" {
-		cfg.Profile = config.NormalizeProfileName(*profile)
+	overrides = appendStringOverride(overrides, "model", *model, "-model")
+	if strings.TrimSpace(*profile) != "" {
+		overrides = appendStringOverride(overrides, "profile", config.NormalizeProfileName(*profile), "-profile")
 	}
 	if mode != "" {
-		cfg.AccessMode = mode
+		overrides = append(overrides, config.ResolveOverride{Key: "access_mode", Value: mode, Source: config.SourceCLI, SourceKey: "-access-mode"})
 	}
-	cfg.ApplyModelProviderDefaults()
-	prov, err := provider.NewFromBinding(cfg.ProviderBinding())
+	cfg, err := resolveRuntimeConfig(overrides...)
 	if err != nil {
 		return err
 	}
-	registry, err := newToolRegistry(context.Background(), cfg)
+	host, err := runtimehost.New(context.Background(), cfg)
 	if err != nil {
 		return err
 	}
-	defer registry.Close()
-	a := agent.NewFromSettings(agent.SettingsFromConfig(cfg), prov, registry)
-	messages := agent.InitialMessagesFromSettings(cfg.InstructionSettings())
+	defer host.Close()
+	a := host.Agent()
+	messages := runtimehost.InitialMessages(host.Settings.Instructions)
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Fprintln(os.Stderr, "fast-agent-harness chat. Type /exit or press Ctrl-D to quit.")
 	for {

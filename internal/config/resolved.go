@@ -99,6 +99,17 @@ func Resolve(overrides ...ResolveOverride) (ResolvedConfig, error) {
 	}, nil
 }
 
+func ResolveStrict(overrides ...ResolveOverride) (ResolvedConfig, error) {
+	resolved, err := Resolve(overrides...)
+	if err != nil {
+		return ResolvedConfig{}, fmt.Errorf("resolve runtime config: %w", err)
+	}
+	if err := resolved.StrictError(); err != nil {
+		return resolved, err
+	}
+	return resolved, nil
+}
+
 func MustResolve(overrides ...ResolveOverride) ResolvedConfig {
 	resolved, err := Resolve(overrides...)
 	if err != nil {
@@ -154,6 +165,37 @@ func (r ResolvedConfig) SanitizedValues() []ResolvedValue {
 		out = append(out, value)
 	}
 	return out
+}
+
+func (r ResolvedConfig) StrictError() error {
+	var invalid []string
+	for _, value := range r.Values {
+		if strings.TrimSpace(value.Error) == "" {
+			continue
+		}
+		location := value.Source
+		if strings.TrimSpace(value.SourceKey) != "" {
+			if location != "" {
+				location += ":"
+			}
+			location += value.SourceKey
+		}
+		if strings.TrimSpace(value.SourcePath) != "" {
+			if location != "" {
+				location += " @ "
+			}
+			location += value.SourcePath
+		}
+		if location == "" {
+			location = "unknown source"
+		}
+		invalid = append(invalid, fmt.Sprintf("%s from %s: %s", value.Key, location, value.Error))
+	}
+	if len(invalid) == 0 {
+		return nil
+	}
+	sort.Strings(invalid)
+	return fmt.Errorf("invalid runtime config: %s", strings.Join(invalid, "; "))
 }
 
 func (r ResolvedConfig) SanitizedConfig() map[string]any {
@@ -226,6 +268,7 @@ func configSpecs() []configSpec {
 		boolSpec("mcp_enabled", []string{"FAST_AGENT_MCP_ENABLED"}, func(c Config) any { return c.MCPEnabled }, func(c *Config, v bool) { c.MCPEnabled = v }),
 		stringListSpec("mcp_config_files", []string{"FAST_AGENT_MCP_CONFIG_FILES"}, func(c Config) any { return c.MCPConfigFiles }, func(c *Config, v []string) { c.MCPConfigFiles = v }),
 		stringListSpec("mcp_allowed_servers", []string{"FAST_AGENT_MCP_ALLOWED_SERVERS"}, func(c Config) any { return c.MCPAllowedServers }, func(c *Config, v []string) { c.MCPAllowedServers = v }),
+		boolSpec("mcp_promote_server_instructions", []string{"BILLYHARNESS_MCP_PROMOTE_SERVER_INSTRUCTIONS", "FAST_AGENT_MCP_PROMOTE_SERVER_INSTRUCTIONS"}, func(c Config) any { return c.MCPPromoteServerInstructions }, func(c *Config, v bool) { c.MCPPromoteServerInstructions = v }),
 		boolSpec("hooks_enabled", []string{"BILLYHARNESS_HOOKS_ENABLED", "FAST_AGENT_HOOKS_ENABLED"}, func(c Config) any { return c.HooksEnabled }, func(c *Config, v bool) { c.HooksEnabled = v }),
 		stringListSpec("hooks_config_files", []string{"BILLYHARNESS_HOOKS_CONFIG_FILES", "FAST_AGENT_HOOKS_CONFIG_FILES"}, func(c Config) any { return c.HookConfigFiles }, func(c *Config, v []string) { c.HookConfigFiles = v }),
 	}

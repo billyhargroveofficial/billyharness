@@ -47,6 +47,9 @@ func TestRunMessagesUsesTurnToolSnapshotForExecution(t *testing.T) {
 	if result.Name != "late_tool" || !result.IsError || result.ErrorCode != "unknown_tool" || !strings.Contains(result.Content, "unknown tool late_tool") {
 		t.Fatalf("late tool should fail against the frozen snapshot, got %#v", result)
 	}
+	if !sawPermissionDecision(events, "late_tool", "deny", "registry", "unknown_tool") {
+		t.Fatalf("unknown snapshot tool should be denied before execution: %#v", events)
+	}
 	assertAgentLifecycleValid(t, events)
 }
 

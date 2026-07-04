@@ -78,6 +78,7 @@ func (a *Agent) applyModelCompactionSummary(ctx context.Context, messages []prot
 	report.SummaryEstimatedTokens = estimateMessagesTokens([]protocol.Message{messages[report.ReplacementIndex]})
 	report.AfterEstimatedTokens = estimateMessagesTokens(messages)
 	report.ActiveEstimatedTokens = report.AfterEstimatedTokens
+	report.refreshReplacementAudit(messages)
 	report.ModelSummaryInputTokens = usage.InputTokens
 	report.ModelSummaryOutputTokens = usage.OutputTokens
 	report.ModelSummaryCacheHit = usage.CacheHitTokens

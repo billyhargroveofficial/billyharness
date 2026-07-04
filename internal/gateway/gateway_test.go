@@ -20,8 +20,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/agent"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
@@ -171,7 +173,7 @@ func TestGatewaySessionCancelEndpointCancelsActiveThread(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"
 	cfg.Model = "mock"
-	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: filepath.Join(t.TempDir(), "gateway-sessions")})
 	thread := sessionpkg.New([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
 	server.sessions["test-session"] = &Session{
 		ID:      "test-session",
@@ -298,6 +300,60 @@ func TestGatewayRunAcceptsModelOverrides(t *testing.T) {
 	}
 }
 
+func TestGatewayRunSettingsUseEffectiveProfileInstructions(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	profilePath, err := config.EnsureDefaultProfileFile("teacher")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(profilePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(profilePath, []byte("TEACHER_PROFILE_MARKER"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+
+	settings, err := server.runSettingsForRequest(context.Background(), RunRequest{Profile: "teacher"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.instructions.Profile.Profile != "teacher" {
+		t.Fatalf("profile = %q, want teacher", settings.instructions.Profile.Profile)
+	}
+	messages := agent.InitialMessagesFromSettings(settings.instructions)
+	var joined strings.Builder
+	for _, msg := range messages {
+		joined.WriteString(msg.Content)
+		joined.WriteByte('\n')
+	}
+	if !strings.Contains(joined.String(), "TEACHER_PROFILE_MARKER") {
+		t.Fatalf("effective profile instructions missing marker:\n%s", joined.String())
+	}
+}
+
+func TestGatewayRunRejectsExplicitProviderModelConflict(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "deepseek"
+	cfg.Model = "deepseek-v4-flash"
+	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+
+	authCtx := context.WithValue(context.Background(), mutationAuthContextKey{}, mutationAuthInfo{bearer: true})
+	_, err := server.runSettingsForRequest(authCtx, RunRequest{Provider: "openai-codex"})
+	if err == nil {
+		t.Fatal("provider/model conflict was accepted")
+	}
+	for _, want := range []string{"provider/model conflict", "deepseek-v4-flash", "deepseek", "openai-codex"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("conflict error missing %q: %v", want, err)
+		}
+	}
+}
+
 func TestGatewayRunProviderOverrideWorksWithoutDefaultCredentials(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "deepseek"
@@ -325,7 +381,7 @@ func TestGatewayAuthEndpointsSaveDeepSeekAndImportCodex(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"
 	cfg.Model = "mock"
-	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: filepath.Join(t.TempDir(), "gateway-sessions")})
 
 	deepseek := httptest.NewRecorder()
 	server.Handler().ServeHTTP(deepseek, httptest.NewRequest(http.MethodPost, "/v1/auth/deepseek", bytes.NewBufferString(`{"api_key":"sk-test-secret"}`)))
@@ -381,6 +437,8 @@ func TestGatewayAuthEndpointsSaveDeepSeekAndImportCodex(t *testing.T) {
 func TestGatewayConfigStatusIsSanitized(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", root)
+	t.Setenv("BILLYHARNESS_CREDENTIAL_FILE", filepath.Join(root, "credentials.json"))
+	t.Setenv("BILLYHARNESS_WEB_TAVILY_API_KEY_ENV", "TAVILY_SUPER_SECRET_API_KEY")
 	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("DEEPSEEK_API_KEY=sk-gateway-config-secret\nFAST_AGENT_MODEL=deepseek-v4-pro\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -397,6 +455,20 @@ func TestGatewayConfigStatusIsSanitized(t *testing.T) {
 	body := rec.Body.String()
 	if strings.Contains(body, "sk-gateway-config-secret") {
 		t.Fatalf("config endpoint leaked secret: %s", body)
+	}
+	for _, forbidden := range []string{
+		"source_key",
+		"source_path",
+		root,
+		"DEEPSEEK_API_KEY",
+		"FAST_AGENT_MODEL",
+		"BILLYHARNESS_WEB_TAVILY_API_KEY_ENV",
+		"TAVILY_SUPER_SECRET_API_KEY",
+		filepath.Join(root, "credentials.json"),
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("config endpoint leaked public DTO detail %q: %s", forbidden, body)
+		}
 	}
 	if !strings.Contains(body, `"key":"model"`) || !strings.Contains(body, config.SourceGateway) {
 		t.Fatalf("config endpoint missing runtime model provenance: %s", body)
@@ -419,7 +491,7 @@ func TestGatewayAPIRedactsSecretsAcrossResponsesAndStreams(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"
 	cfg.Model = "mock"
-	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: filepath.Join(t.TempDir(), "gateway-sessions")})
 	rawKey := "sk-session-boundary-secret-1234567890"
 	rawPAT := "github_pat_" + strings.Repeat("A", 30)
 	assertRedacted := func(label, body string) {
@@ -555,6 +627,131 @@ func TestGatewayAuthMiddlewareProtectsNonLoopbackClients(t *testing.T) {
 	server.Handler().ServeHTTP(local, localReq)
 	if local.Code != http.StatusOK {
 		t.Fatalf("local status = %d body=%s", local.Code, local.Body.String())
+	}
+}
+
+func TestGatewayMutationAuthProtectsLoopbackBrowserRoutes(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{
+		AuthToken:           "secret",
+		RequireMutationAuth: true,
+	})
+
+	for _, tc := range []struct {
+		name        string
+		auth        string
+		host        string
+		origin      string
+		contentType string
+		want        int
+	}{
+		{name: "missing bearer", host: "127.0.0.1:8765", contentType: "application/json", want: http.StatusUnauthorized},
+		{name: "wrong bearer", auth: "Bearer wrong", host: "127.0.0.1:8765", contentType: "application/json", want: http.StatusUnauthorized},
+		{name: "cross origin", auth: "Bearer secret", host: "127.0.0.1:8765", origin: "https://evil.example", contentType: "application/json", want: http.StatusForbidden},
+		{name: "bad host", auth: "Bearer secret", host: "evil.example", contentType: "application/json", want: http.StatusForbidden},
+		{name: "simple form content type", auth: "Bearer secret", host: "127.0.0.1:8765", contentType: "text/plain", want: http.StatusUnsupportedMediaType},
+		{name: "allowed cli json", auth: "Bearer secret", host: "127.0.0.1:8765", contentType: "application/json", want: http.StatusCreated},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/v1/sessions", strings.NewReader(`{}`))
+			req.RemoteAddr = "127.0.0.1:4444"
+			req.Host = tc.host
+			if tc.auth != "" {
+				req.Header.Set("Authorization", tc.auth)
+			}
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.contentType != "" {
+				req.Header.Set("Content-Type", tc.contentType)
+			}
+			server.Handler().ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d body=%s", rec.Code, tc.want, rec.Body.String())
+			}
+			if tc.want == http.StatusUnauthorized && rec.Header().Get("WWW-Authenticate") == "" {
+				t.Fatal("missing WWW-Authenticate header")
+			}
+		})
+	}
+}
+
+func TestGatewayMutationAuthExplicitDevLoopbackBypass(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{
+		RequireMutationAuth:                      true,
+		DevAllowUnauthenticatedLoopbackMutations: true,
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", strings.NewReader(`{}`))
+	req.RemoteAddr = "127.0.0.1:4444"
+	req.Host = "127.0.0.1:8765"
+	req.Header.Set("Content-Type", "application/json")
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGatewayRunRequestPrivilegeClamps(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.MaxToolRounds = 5
+	cfg.AccessMode = config.AccessModeGuarded
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{
+		AuthToken:           "secret",
+		RequireMutationAuth: true,
+	})
+
+	authCtx := context.WithValue(context.Background(), mutationAuthContextKey{}, mutationAuthInfo{bearer: true})
+	settings, err := server.runSettingsForRequest(authCtx, RunRequest{
+		Provider:      "openai-codex",
+		Model:         "gpt-5.5",
+		MaxToolRounds: 99,
+		AccessMode:    config.AccessModeBuild,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.runtime.MaxToolRounds != 5 {
+		t.Fatalf("max tool rounds = %d, want 5", settings.runtime.MaxToolRounds)
+	}
+	if settings.toolPolicy.AccessMode != config.AccessModeGuarded {
+		t.Fatalf("access mode = %q, want guarded", settings.toolPolicy.AccessMode)
+	}
+	if settings.provider.Provider.Provider != "openai-codex" || settings.provider.Model.Model != "gpt-5.5" {
+		t.Fatalf("authenticated provider override was not preserved: %#v", settings.provider)
+	}
+	if want := modelinfo.Lookup("gpt-5.5").ContextWindowTokens; settings.runtime.ContextWindowTokens != want {
+		t.Fatalf("context window = %d, want effective gpt-5.5 window %d", settings.runtime.ContextWindowTokens, want)
+	}
+
+	devSettings, err := server.runSettingsForRequest(context.Background(), RunRequest{
+		Provider:        "openai-codex",
+		Model:           "gpt-5.5",
+		Thinking:        "enabled",
+		ReasoningEffort: "xhigh",
+		MaxToolRounds:   2,
+		AccessMode:      config.AccessModePlan,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if devSettings.provider.Provider.Provider != server.providerBinding.Provider.Provider ||
+		devSettings.provider.Model.Model != server.providerBinding.Model.Model ||
+		devSettings.provider.Model.Thinking != server.providerBinding.Model.Thinking ||
+		devSettings.provider.Model.ReasoningEffort != server.providerBinding.Model.ReasoningEffort {
+		t.Fatalf("unauthenticated provider/model override was not clamped: %#v", devSettings.provider)
+	}
+	if devSettings.runtime.MaxToolRounds != 2 || devSettings.toolPolicy.AccessMode != config.AccessModePlan {
+		t.Fatalf("safe clamps should still allow stricter request knobs: runtime=%#v policy=%#v", devSettings.runtime, devSettings.toolPolicy)
 	}
 }
 
@@ -730,7 +927,8 @@ func TestGatewayToolsExposeMCPRegistry(t *testing.T) {
 		!strings.Contains(rec.Body.String(), `"connected":true`) ||
 		!strings.Contains(rec.Body.String(), `"state":"connected"`) ||
 		!strings.Contains(rec.Body.String(), `"retry_count":0`) ||
-		!strings.Contains(rec.Body.String(), `"restart_count":0`) {
+		!strings.Contains(rec.Body.String(), `"restart_count":0`) ||
+		!strings.Contains(rec.Body.String(), `"instructions":["fake: Use echo for gateway MCP status tests."]`) {
 		t.Fatalf("mcp body missing connected server status: %s", rec.Body.String())
 	}
 }
@@ -804,6 +1002,7 @@ func TestGatewayFakeStdioMCPServer(t *testing.T) {
 				"protocolVersion": "2025-06-18",
 				"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 				"serverInfo":      map[string]any{"name": "fake", "version": "1.0.0"},
+				"instructions":    "Use echo for gateway MCP status tests.",
 			}})
 		case "tools/list":
 			_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"tools": []map[string]any{{

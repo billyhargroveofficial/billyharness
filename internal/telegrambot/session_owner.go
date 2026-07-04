@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -20,6 +21,7 @@ type ownerSessionForker interface {
 func (b *Bot) createOwnedSession(ctx context.Context, msg Message, state ChatState) (string, error) {
 	profile := fallback(state.Profile, b.opts.Profile)
 	owner := b.telegramSessionOwner(msg, state)
+	ctx = gatewayclient.WithSessionOwner(ctx, owner)
 	if creator, ok := b.harness.(ownerSessionCreator); ok {
 		return creator.CreateSessionWithOwner(ctx, profile, owner)
 	}
@@ -28,6 +30,7 @@ func (b *Bot) createOwnedSession(ctx context.Context, msg Message, state ChatSta
 
 func (b *Bot) forkOwnedSession(ctx context.Context, msg Message, profile string, messages []protocol.Message, state ChatState) (string, error) {
 	owner := b.telegramSessionOwner(msg, state)
+	ctx = gatewayclient.WithSessionOwner(ctx, owner)
 	if forker, ok := b.harness.(ownerSessionForker); ok {
 		return forker.CreateSessionFromMessagesWithOwner(ctx, profile, messages, owner)
 	}
@@ -36,6 +39,10 @@ func (b *Bot) forkOwnedSession(ctx context.Context, msg Message, profile string,
 		return "", fmt.Errorf("gateway session forking is not available in this harness")
 	}
 	return manager.CreateSessionFromMessages(ctx, profile, messages)
+}
+
+func (b *Bot) gatewayScopedContext(ctx context.Context, msg Message, state ChatState) context.Context {
+	return gatewayclient.WithSessionOwner(ctx, b.telegramSessionOwner(msg, state))
 }
 
 func (b *Bot) telegramSessionOwner(msg Message, state ChatState) gatewayapi.SessionOwner {

@@ -415,6 +415,69 @@ func TestToolResultsUpdateMatchingBlockByCallIDOutOfOrder(t *testing.T) {
 	}
 }
 
+func TestLargeToolResultCollapseRequiresExactCallID(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.toolView = "expanded"
+	m.applyEvent(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{
+			ID:        "call-dup",
+			Name:      "fs_read_file",
+			Arguments: json.RawMessage(`{"path":"dup-a.txt"}`),
+		},
+	})
+	m.applyEvent(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{
+			ID:        "call-live",
+			Name:      "fs_read_file",
+			Arguments: json.RawMessage(`{"path":"live.txt"}`),
+		},
+	})
+	m.applyEvent(protocol.Event{
+		Type: protocol.EventToolCallRequested,
+		Data: protocol.ToolCall{
+			ID:        "call-dup",
+			Name:      "fs_read_file",
+			Arguments: json.RawMessage(`{"path":"dup-b.txt"}`),
+		},
+	})
+
+	m.applyEvent(protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
+		CallID:  "call-live",
+		Name:    "fs_read_file",
+		Content: strings.Repeat("matched output\n", 45),
+	}})
+	if len(m.blocks) != 3 {
+		t.Fatalf("blocks after matched result = %d, want 3", len(m.blocks))
+	}
+	if !m.blocks[1].CollapseSet || !m.blocks[1].Collapsed {
+		t.Fatalf("matched non-last tool block was not collapsed: %#v", m.blocks[1])
+	}
+	if m.blocks[2].CollapseSet {
+		t.Fatalf("duplicate call-id neighbor was collapsed: %#v", m.blocks[2])
+	}
+
+	m.applyEvent(protocol.Event{Type: protocol.EventToolCallFinished, Data: protocol.ToolResult{
+		Name:    "fs_read_file",
+		Content: strings.Repeat("orphan output\n", 45),
+	}})
+	if len(m.blocks) != 4 {
+		t.Fatalf("blocks after orphan result = %d, want 4", len(m.blocks))
+	}
+	orphan := m.blocks[3]
+	if !strings.Contains(orphan.Title, "Unmatched") || orphan.CallID != "" {
+		t.Fatalf("orphan result should remain an unmatched diagnostic: %#v", orphan)
+	}
+	if orphan.CollapseSet || orphan.Collapsed {
+		t.Fatalf("orphan diagnostic was collapsed without an exact call ID: %#v", orphan)
+	}
+	if m.blocks[2].CollapseSet {
+		t.Fatalf("missing call-id result collapsed previous duplicate block: %#v", m.blocks[2])
+	}
+}
+
 func TestTranscriptBlocksCarryTypedCellMetadata(t *testing.T) {
 	m := newTestModel(t)
 	m.addBlock("user", "USER", "hello")

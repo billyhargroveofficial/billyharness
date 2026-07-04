@@ -14,6 +14,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/testkit"
 )
@@ -292,12 +293,24 @@ func (h *missingSessionRetryHarness) RunSession(_ context.Context, sessionID str
 	h.prompts = append(h.prompts, req.Prompt)
 	h.mu.Unlock()
 	if call == 1 {
-		return fmt.Errorf("gateway run http 404: session not found")
+		return &gatewayclient.StatusError{Method: http.MethodPost, Path: "/v1/sessions/" + sessionID + "/run", StatusCode: http.StatusNotFound, Body: `{"error":"session not found"}`}
 	}
 	emit(protocol.Event{Seq: 1, Type: protocol.EventRunStarted})
 	emit(protocol.Event{Seq: 2, Type: protocol.EventAssistantDelta, Data: "retried answer"})
 	emit(protocol.Event{Seq: 3, Type: protocol.EventRunCompleted})
 	return nil
+}
+
+func TestGatewaySessionMissingOnlyMatchesTypedNotFound(t *testing.T) {
+	if !gatewaySessionMissing(&gatewayclient.StatusError{Method: http.MethodPost, Path: "/v1/sessions/missing/run", StatusCode: http.StatusNotFound, Body: `{"error":"session not found"}`}) {
+		t.Fatal("typed 404 should be treated as missing session")
+	}
+	if gatewaySessionMissing(fmt.Errorf("gateway run http 404: session not found")) {
+		t.Fatal("legacy text 404 should not trigger fallback creation")
+	}
+	if gatewaySessionMissing(&gatewayclient.StatusError{Method: http.MethodGet, Path: "/v1/sessions/session-1/events", StatusCode: http.StatusConflict, Body: `{"error":"corrupt session event history"}`}) {
+		t.Fatal("corrupt replay should not trigger fallback creation")
+	}
 }
 
 func (h scriptedHarness) MCPStatus(context.Context) (string, error) {
@@ -339,6 +352,7 @@ type telegramAuthHarness struct {
 
 	mu               sync.Mutex
 	savedDeepSeekKey string
+	saveDeepSeekErr  error
 	importedCodex    bool
 }
 
@@ -463,6 +477,11 @@ func (h *telegramSessionHarness) CreateSessionFromMessagesWithOwner(_ context.Co
 
 func (h *telegramAuthHarness) SaveDeepSeekAPIKey(_ context.Context, apiKey string) (credentials.ProviderStatus, error) {
 	h.mu.Lock()
+	if h.saveDeepSeekErr != nil {
+		err := h.saveDeepSeekErr
+		h.mu.Unlock()
+		return credentials.ProviderStatus{}, err
+	}
 	h.savedDeepSeekKey = apiKey
 	h.mu.Unlock()
 	return credentials.ProviderStatus{Configured: true, Source: "/root/billyharness/.env", Path: "/root/billyharness/.env"}, nil
@@ -645,10 +664,44 @@ func TestTelegramAllowsExplicitUserID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bot.allowed(Message{Chat: Chat{ID: 999}, From: &User{ID: 8226987886}}) {
-		t.Fatal("explicit allowed user should be accepted even when chat id differs")
+	if !bot.allowed(Message{Chat: Chat{ID: 8226987886, Type: "private"}, From: &User{ID: 8226987886}}) {
+		t.Fatal("explicit allowed user should be accepted in private chat")
 	}
-	if bot.allowed(Message{Chat: Chat{ID: 999}, From: &User{ID: 111}}) {
+	if !bot.allowed(Message{Chat: Chat{ID: 8226987886}, From: &User{ID: 8226987886}}) {
+		t.Fatal("explicit allowed user should be accepted when private chat id matches user id")
+	}
+	if bot.allowed(Message{Chat: Chat{ID: -100123, Type: "supergroup"}, From: &User{ID: 8226987886}}) {
+		t.Fatal("explicit allowed user should not authorize an unlisted group by default")
+	}
+	allowedGroup, err := New(Options{
+		BotToken:       "token",
+		StatePath:      t.TempDir() + "/state.json",
+		AllowedChatIDs: map[int64]bool{-100123: true},
+		AllowedUserIDs: map[int64]bool{8226987886: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, nil, newBlockingHarness())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !allowedGroup.allowed(Message{Chat: Chat{ID: -100123, Type: "supergroup"}, From: &User{ID: 8226987886}}) {
+		t.Fatal("allowed group should permit messages in that group")
+	}
+	broadUser, err := New(Options{
+		BotToken:          "token",
+		StatePath:         t.TempDir() + "/state.json",
+		AllowedUserIDs:    map[int64]bool{8226987886: true},
+		AllowUserInGroups: true,
+		SendEnabled:       true,
+		DryRunDefault:     false,
+	}, nil, newBlockingHarness())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !broadUser.allowed(Message{Chat: Chat{ID: -100999, Type: "supergroup"}, From: &User{ID: 8226987886}}) {
+		t.Fatal("explicit broad user scope should permit allowed user in groups")
+	}
+	if bot.allowed(Message{Chat: Chat{ID: 111, Type: "private"}, From: &User{ID: 111}}) {
 		t.Fatal("unknown user in unknown chat should be rejected")
 	}
 }

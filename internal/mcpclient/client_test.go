@@ -41,8 +41,8 @@ func TestStdioLifecycleCallEnvAndRedaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	if got := strings.Join(manager.Instructions(), "\n"); !strings.Contains(got, "Use echo for smoke tests") {
-		t.Fatalf("instructions = %#v", manager.Instructions())
+	if got := manager.Instructions(); len(got) != 0 {
+		t.Fatalf("instructions should be untrusted by default, got %#v", got)
 	}
 	statuses := manager.Statuses()
 	if len(statuses) != 1 || statuses[0].Name != "fake" || !statuses[0].Connected || statuses[0].ToolCount != 3 {
@@ -51,6 +51,12 @@ func TestStdioLifecycleCallEnvAndRedaction(t *testing.T) {
 	snapshot := manager.CatalogSnapshot()
 	if len(snapshot.Prompts) != 1 {
 		t.Fatalf("prompts = %#v", snapshot.Prompts)
+	}
+	if got := strings.Join(snapshot.ServerInstructions, "\n"); !strings.Contains(got, "Use echo for smoke tests") {
+		t.Fatalf("server instruction metadata = %#v", snapshot.ServerInstructions)
+	}
+	if len(snapshot.Instructions) != 0 {
+		t.Fatalf("promoted instructions should be empty by default: %#v", snapshot.Instructions)
 	}
 	prompt := snapshot.Prompts[0]
 	if prompt.Server != "fake" || prompt.Name != "review" || prompt.Description != "Review a target" {
@@ -67,6 +73,19 @@ func TestStdioLifecycleCallEnvAndRedaction(t *testing.T) {
 	}
 	if text != "hello mcp" {
 		t.Fatalf("echo = %q", text)
+	}
+
+	promotedCfg := cfg
+	promotedCfg.MCPPromoteServerInstructions = true
+	promotedManager, err := NewManager(context.Background(), promotedCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer promotedManager.Close()
+	promoted := strings.Join(promotedManager.Instructions(), "\n")
+	if !strings.Contains(promoted, "Use echo for smoke tests") ||
+		!strings.Contains(promoted, "trust=operator_promoted_mcp_initialize_instructions") {
+		t.Fatalf("promoted instructions = %#v", promotedManager.Instructions())
 	}
 
 	envTool := findTool(t, manager, "mcp__fake__env")
@@ -88,6 +107,42 @@ func TestStdioLifecycleCallEnvAndRedaction(t *testing.T) {
 	}
 	if strings.Contains(failText, "sk-test-secret") || strings.Contains(err.Error(), "sk-test-secret") {
 		t.Fatalf("error leaked secret: text=%q err=%v", failText, err)
+	}
+}
+
+func TestMCPStatusRedactsURLCredentialsAndArgSecrets(t *testing.T) {
+	server := config.MCPServer{
+		Name: "remote",
+		URL:  "https://user-secret-123:pass-secret-456@example.com/mcp",
+		Args: []string{
+			"--token", "argv-token-secret",
+			"--api-key=argv-inline-secret",
+		},
+	}
+	message := redactServerError(server, fmt.Errorf(
+		"failed with %s %s %s",
+		"pass-secret-456",
+		"argv-token-secret",
+		"argv-inline-secret",
+	))
+	status := cloneStatus(ServerStatus{
+		Name:       "remote",
+		URL:        server.URL,
+		LastError:  message,
+		Error:      message,
+		StderrTail: "Authorization: Bearer argv-token-secret",
+	})
+
+	rendered := fmt.Sprintf("%#v", status)
+	for _, leaked := range []string{"user-secret-123", "pass-secret-456", "argv-token-secret", "argv-inline-secret"} {
+		if strings.Contains(rendered, leaked) {
+			t.Fatalf("status leaked %q: %#v", leaked, status)
+		}
+	}
+	if !strings.Contains(status.URL, "redacted:redacted") ||
+		!strings.Contains(status.LastError, "[redacted]") ||
+		!strings.Contains(status.StderrTail, "[redacted]") {
+		t.Fatalf("status did not preserve redaction markers: %#v", status)
 	}
 }
 
@@ -119,6 +174,67 @@ func TestMCPPromptCatalogSnapshotFromStdio(t *testing.T) {
 	if prompt.Server != "fake" || prompt.Name != "review" || len(prompt.Arguments) != 1 || prompt.Arguments[0].Name != "target" || !prompt.Arguments[0].Required {
 		t.Fatalf("prompt = %#v", prompt)
 	}
+}
+
+func TestMCPStatusSeparatesTransportAndCatalogState(t *testing.T) {
+	root := t.TempDir()
+
+	t.Run("connected no tools", func(t *testing.T) {
+		manager, err := NewManager(context.Background(), config.Config{
+			WorkspaceRoots:     []string{root},
+			MaxToolOutputBytes: 64 * 1024,
+			MCPServers: []config.MCPServer{{
+				Name:           "empty",
+				Command:        os.Args[0],
+				Args:           []string{"-test.run=TestFakeStdioMCPServer"},
+				Env:            helperEnv("no_tools", nil),
+				CWD:            root,
+				Enabled:        true,
+				StartupTimeout: 2 * time.Second,
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer manager.Close()
+		statuses := manager.Statuses()
+		if len(statuses) != 1 || !statuses[0].Connected ||
+			statuses[0].TransportState != mcpTransportStateConnected ||
+			statuses[0].CatalogState != mcpCatalogStateConnectedNoTools ||
+			statuses[0].ToolCount != 0 || len(statuses[0].Diagnostics) != 0 {
+			t.Fatalf("connected no-tools status = %#v", statuses)
+		}
+	})
+
+	t.Run("tools fetch failed", func(t *testing.T) {
+		pidFile := filepath.Join(root, "bad-list-state.pid")
+		manager, err := NewManager(context.Background(), config.Config{
+			WorkspaceRoots:     []string{root},
+			MaxToolOutputBytes: 64 * 1024,
+			MCPServers: []config.MCPServer{{
+				Name:           "bad-list-state",
+				Command:        os.Args[0],
+				Args:           []string{"-test.run=TestFakeStdioMCPServer"},
+				Env:            helperEnv("bad_list", map[string]string{"BILLYHARNESS_MCP_PID_FILE": pidFile}),
+				CWD:            root,
+				Enabled:        true,
+				StartupTimeout: 2 * time.Second,
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer manager.Close()
+		statuses := manager.Statuses()
+		if len(statuses) != 1 || statuses[0].Connected ||
+			statuses[0].TransportState != mcpTransportStateFailed ||
+			statuses[0].CatalogState != mcpCatalogStateToolsFetchFailed ||
+			len(statuses[0].Diagnostics) != 1 ||
+			statuses[0].Diagnostics[0].Code != "tools_fetch_failed" {
+			t.Fatalf("tools-fetch-failed status = %#v", statuses)
+		}
+		waitProcessGone(t, readPID(t, pidFile))
+	})
 }
 
 func TestOptionalRequiredShellCWDAndCollisionRules(t *testing.T) {
@@ -569,6 +685,11 @@ func TestMCPStdioToolsListChangedNotificationRefreshesCatalog(t *testing.T) {
 		changes <- change
 	})
 	defer cancel()
+	statuses := make(chan ServerStatus, 8)
+	cancelStatus := manager.AddStatusListener(func(status ServerStatus) {
+		statuses <- status
+	})
+	defer cancelStatus()
 
 	text, err := echo.Handler(context.Background(), json.RawMessage(`{"text":"first"}`))
 	if err != nil {
@@ -577,8 +698,16 @@ func TestMCPStdioToolsListChangedNotificationRefreshesCatalog(t *testing.T) {
 	if text != "first" {
 		t.Fatalf("echo = %q", text)
 	}
+	stale := waitMCPStatusChange(t, statuses, func(status ServerStatus) bool {
+		return status.CatalogState == mcpCatalogStateCatalogStale &&
+			len(status.Diagnostics) == 1 &&
+			status.Diagnostics[0].Code == "catalog_stale"
+	})
+	if stale.TransportState != mcpTransportStateConnected {
+		t.Fatalf("stale catalog changed transport state: %#v", stale)
+	}
 	change := waitCatalogChange(t, changes, func(change CatalogChange) bool {
-		return change.Version > initialVersion && change.ToolCount == 1
+		return change.Version > initialVersion+1 && change.ToolCount == 1
 	})
 	if len(change.Collisions) > 0 {
 		t.Fatalf("unexpected catalog collisions: %#v", change)
@@ -898,6 +1027,23 @@ func waitMCPStatus(t *testing.T, manager *Manager, match func(ServerStatus) bool
 	return ServerStatus{}
 }
 
+func waitMCPStatusChange(t *testing.T, statuses <-chan ServerStatus, match func(ServerStatus) bool) ServerStatus {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	var last ServerStatus
+	for {
+		select {
+		case status := <-statuses:
+			last = status
+			if match(status) {
+				return status
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for status change, last=%#v", last)
+		}
+	}
+}
+
 func waitProcessGone(t *testing.T, pid int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -1020,29 +1166,6 @@ func runFakeMCPServer() {
 	}
 }
 
-func fakePromptsForMode(mode string) []map[string]any {
-	if (mode == "close_once_then_new_tool" || mode == "notify_list_changed") && phaseExists() {
-		return []map[string]any{{
-			"name":        "new_review",
-			"description": "Review after catalog refresh",
-			"arguments": []map[string]any{{
-				"name":        "target",
-				"description": "path or topic",
-				"required":    true,
-			}},
-		}}
-	}
-	return []map[string]any{{
-		"name":        "review",
-		"description": "Review a target",
-		"arguments": []map[string]any{{
-			"name":        "target",
-			"description": "path or topic",
-			"required":    true,
-		}},
-	}}
-}
-
 func sleepForever() {
 	for {
 		time.Sleep(time.Hour)
@@ -1063,42 +1186,4 @@ func writePhase() {
 	if path != "" {
 		_ = os.WriteFile(path, []byte("closed"), 0o600)
 	}
-}
-
-func fakeToolsForMode(mode string) []map[string]any {
-	emptyObject := map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}
-	echoSchema := map[string]any{"type": "object", "properties": map[string]any{"text": map[string]any{"type": "string"}}, "required": []string{"text"}, "additionalProperties": false}
-	switch mode {
-	case "hang":
-		return []map[string]any{{"name": "hang", "description": "Never responds", "inputSchema": emptyObject}}
-	case "close_on_call":
-		return []map[string]any{{"name": "close", "description": "Close transport", "inputSchema": emptyObject}}
-	case "close_once_then_new_tool", "notify_list_changed":
-		if phaseExists() {
-			return []map[string]any{{"name": "new_echo", "description": "New echo text", "inputSchema": echoSchema}}
-		}
-		return []map[string]any{{"name": "echo", "description": "Echo text", "inputSchema": echoSchema}}
-	case "large":
-		return []map[string]any{{"name": "large", "description": "Large text", "inputSchema": emptyObject}}
-	case "huge_raw":
-		return []map[string]any{{"name": "huge_raw", "description": "Oversized raw response", "inputSchema": emptyObject}}
-	default:
-		return []map[string]any{
-			{"name": "echo", "description": "Echo text", "inputSchema": echoSchema},
-			{"name": "env", "description": "Show selected env", "inputSchema": emptyObject},
-			{"name": "fail", "description": "Fail with secret", "inputSchema": emptyObject},
-		}
-	}
-}
-
-func response(id any, result any) map[string]any {
-	return map[string]any{"jsonrpc": "2.0", "id": id, "result": result}
-}
-
-func rpcErrorResponse(id any, code int, message string) map[string]any {
-	return map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": message}}
-}
-
-func toolResult(text string, isError bool) map[string]any {
-	return map[string]any{"content": []map[string]any{{"type": "text", "text": text}}, "isError": isError}
 }

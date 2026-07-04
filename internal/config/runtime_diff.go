@@ -176,6 +176,7 @@ func runtimeDiffConfigFromSettings(base Config, settings RuntimeDiffSettings) Co
 	cfg.MCPEnabled = settings.MCP.Enabled
 	cfg.MCPConfigFiles = cloneStrings(settings.MCP.ConfigFiles)
 	cfg.MCPAllowedServers = cloneStrings(settings.MCP.AllowedServers)
+	cfg.MCPPromoteServerInstructions = settings.MCP.PromoteServerInstructions
 	cfg.MCPServers = cloneMCPServers(settings.MCP.Servers)
 	cfg.HooksEnabled = settings.Hooks.Enabled
 	cfg.HookConfigFiles = cloneStrings(settings.Hooks.ConfigFiles)

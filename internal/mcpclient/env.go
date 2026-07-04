@@ -1,6 +1,7 @@
 package mcpclient
 
 import (
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -53,6 +54,8 @@ func mcpEnv(server config.MCPServer) []string {
 
 func serverSecrets(server config.MCPServer) []string {
 	var values []string
+	values = append(values, urlCredentialSecrets(server.URL)...)
+	values = append(values, argSecrets(server.Args)...)
 	for key, value := range server.Env {
 		if value == "" || len(value) < 8 {
 			continue
@@ -80,4 +83,44 @@ func serverSecrets(server config.MCPServer) []string {
 		}
 	}
 	return values
+}
+
+func urlCredentialSecrets(rawURL string) []string {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || u.User == nil {
+		return nil
+	}
+	var values []string
+	if username := u.User.Username(); len(username) >= 8 {
+		values = append(values, username)
+	}
+	if password, ok := u.User.Password(); ok && len(password) >= 8 {
+		values = append(values, password)
+	}
+	return values
+}
+
+func argSecrets(args []string) []string {
+	var values []string
+	for i, arg := range args {
+		key, value, ok := strings.Cut(arg, "=")
+		if ok && tokenLikeName(key) && len(value) >= 8 {
+			values = append(values, value)
+			continue
+		}
+		if tokenLikeName(arg) && i+1 < len(args) && len(args[i+1]) >= 8 {
+			values = append(values, args[i+1])
+		}
+	}
+	return values
+}
+
+func tokenLikeName(value string) bool {
+	value = strings.ToLower(strings.TrimLeft(strings.TrimSpace(value), "-/"))
+	value = strings.ReplaceAll(value, "-", "_")
+	return strings.Contains(value, "token") ||
+		strings.Contains(value, "secret") ||
+		strings.Contains(value, "password") ||
+		strings.Contains(value, "api_key") ||
+		strings.Contains(value, "apikey")
 }

@@ -104,6 +104,28 @@ func TestSnapshotHashesAreStableForEquivalentToolAndMCPOrder(t *testing.T) {
 	}
 }
 
+func TestSnapshotMCPHashChangesWhenServerInstructionPromotionChanges(t *testing.T) {
+	cfg := config.Config{
+		Model:      "mock",
+		Provider:   "mock",
+		MCPEnabled: true,
+		MCPServers: []config.MCPServer{{
+			Name:    "fake",
+			Command: "/usr/bin/fake-mcp",
+			Enabled: true,
+		}},
+	}
+	defaultSnapshot := NewSnapshot(snapshotInput(cfg), nil, nil)
+	cfg.MCPPromoteServerInstructions = true
+	promotedSnapshot := NewSnapshot(snapshotInput(cfg), nil, nil)
+	if defaultSnapshot.MCPStatusSnapshotHash == "" || promotedSnapshot.MCPStatusSnapshotHash == "" {
+		t.Fatalf("mcp hashes should be populated: default=%q promoted=%q", defaultSnapshot.MCPStatusSnapshotHash, promotedSnapshot.MCPStatusSnapshotHash)
+	}
+	if defaultSnapshot.MCPStatusSnapshotHash == promotedSnapshot.MCPStatusSnapshotHash {
+		t.Fatalf("mcp trust policy hash did not change: %s", defaultSnapshot.MCPStatusSnapshotHash)
+	}
+}
+
 func TestSnapshotInstructionHashIncludesProtectedUserContext(t *testing.T) {
 	cfg := config.Config{Model: "mock", Provider: "mock", Profile: "billy"}
 	base := []protocol.Message{

@@ -382,6 +382,24 @@ func TestProjectorApplyUpsertsToolBatchSteps(t *testing.T) {
 	if got := cells[0]; got.CellType != CellTypeToolBatch || got.StepID != "batch-1" || !strings.Contains(got.Title, "Tool batch done") || !strings.Contains(got.Title, "0s") {
 		t.Fatalf("batch cell = %#v", got)
 	}
+	cells = p.Apply(protocol.Event{Type: protocol.EventStepCompleted, Data: map[string]any{
+		"turn_id":        "turn-1",
+		"step_id":        "batch-1",
+		"kind":           protocol.StepKindToolBatch,
+		"status":         protocol.StepStatusCompletedWithErrors,
+		"batch_id":       "batch-1",
+		"batch_size":     2,
+		"parallel":       true,
+		"parallel_limit": 2,
+		"duration_ms":    42,
+		"metadata": map[string]any{
+			"completed_children": 1,
+			"failed_children":    1,
+		},
+	}})
+	if got := cells[0]; got.CellType != CellTypeToolBatch || got.StepID != "batch-1" || !strings.Contains(got.Title, "Tool batch done with errors") {
+		t.Fatalf("batch cell with errors = %#v", got)
+	}
 }
 
 func TestProjectorApplyContextDiagnosticCells(t *testing.T) {

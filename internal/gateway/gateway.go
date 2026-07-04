@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,15 +19,15 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/agent"
 	"github.com/billyhargroveofficial/billyharness/internal/attachments"
 	"github.com/billyhargroveofficial/billyharness/internal/checkpoint"
-	"github.com/billyhargroveofficial/billyharness/internal/clientux"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
+	"github.com/billyhargroveofficial/billyharness/internal/eventlog"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpstatus"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
-	"github.com/billyhargroveofficial/billyharness/internal/runstate"
+	"github.com/billyhargroveofficial/billyharness/internal/runtimehost"
 	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
@@ -49,14 +48,18 @@ type Server struct {
 	auth            credentials.Manager
 	mux             *http.ServeMux
 	authToken       string
+	httpSecurity    httpSecurityOptions
 	sessions        map[string]*Session
 	store           *sessionStore
+	storeHealth     gatewayapi.SessionStoreHealth
 	mu              sync.Mutex
 }
 
 type ServerOptions struct {
-	AuthToken       string
-	SessionStoreDir string
+	AuthToken                                string
+	SessionStoreDir                          string
+	RequireMutationAuth                      bool
+	DevAllowUnauthenticatedLoopbackMutations bool
 }
 
 type ServerSettings struct {
@@ -79,7 +82,7 @@ type Session struct {
 	Owner          gatewayapi.SessionOwner `json:"owner,omitempty"`
 	Thread         *sessionpkg.Session     `json:"-"`
 	events         *eventHub
-	eventRecorder  func(protocol.Event) protocol.Event
+	eventRecorder  func(protocol.Event) (protocol.Event, error)
 	storeSnapshots sessionStoreSnapshots
 	activeRunID    string
 	terminalRunIDs map[string]struct{}
@@ -130,18 +133,22 @@ func NewServerWithOptions(cfg config.Config, prov provider.Provider, registry *t
 }
 
 func ServerSettingsFromConfig(cfg config.Config) ServerSettings {
+	return ServerSettingsFromRuntimeHost(runtimehost.SettingsFromConfig(cfg))
+}
+
+func ServerSettingsFromRuntimeHost(settings runtimehost.Settings) ServerSettings {
 	return ServerSettings{
-		ProviderAuth:    cfg.ProviderAuthSnapshot(),
-		ProviderBinding: cfg.ProviderBinding(),
-		Profile:         cfg.ProfileSelection(),
-		Runtime:         cfg.RuntimeLimits(),
-		ToolPolicy:      cfg.ToolPolicySettings(),
-		Diagnostics:     cfg.DiagnosticsSettings(),
-		MCP:             cfg.MCPSettings(),
-		Hooks:           cfg.HookSettings(),
-		Instructions:    cfg.InstructionSettings(),
-		GatewayAddr:     cfg.GatewayAddr,
-		Auth:            cfg.AuthSettings(),
+		ProviderAuth:    settings.ProviderAuth,
+		ProviderBinding: settings.ProviderBinding,
+		Profile:         settings.Profile,
+		Runtime:         settings.Runtime,
+		ToolPolicy:      settings.ToolPolicy,
+		Diagnostics:     settings.Diagnostics,
+		MCP:             settings.MCP,
+		Hooks:           settings.Hooks,
+		Instructions:    settings.Instructions,
+		GatewayAddr:     settings.GatewayAddr,
+		Auth:            settings.Auth,
 	}
 }
 
@@ -162,7 +169,7 @@ func NewServerWithOptionsFromSettings(settings ServerSettings, prov provider.Pro
 		hookSettings:    settings.Hooks,
 		instructions:    settings.Instructions,
 		gatewayAddr:     settings.GatewayAddr,
-		agent:           agent.NewFromSettings(agentSettingsFromServerSettings(settings), prov, registry),
+		agent:           runtimehost.NewAgent(runtimeHostSettingsFromServerSettings(settings), prov, registry),
 		registry:        registry,
 		auth:            credentials.NewManagerFromAuthSettings(settings.Auth),
 		mux:             http.NewServeMux(),
@@ -170,9 +177,13 @@ func NewServerWithOptionsFromSettings(settings ServerSettings, prov provider.Pro
 	}
 	if strings.TrimSpace(opts.SessionStoreDir) != "" {
 		s.store = newSessionStore(opts.SessionStoreDir)
-		loaded, err := s.store.LoadAll()
+		loaded, diagnostics, err := s.store.LoadAllWithDiagnostics()
+		s.storeHealth = diagnostics
 		if err != nil {
 			log.Printf("gateway session store load failed: %v", err)
+		}
+		for _, item := range diagnostics.Errors {
+			log.Printf("gateway session store load skipped entry=%s type=%s session_id=%s session_hash=%s corrupt=%t: %s", item.Entry, item.EntryType, item.SessionID, item.SessionIDHash, item.Corrupt, item.Error)
 		}
 		for _, session := range loaded {
 			s.attachSessionStore(session)
@@ -181,19 +192,31 @@ func NewServerWithOptionsFromSettings(settings ServerSettings, prov provider.Pro
 	}
 	opts.AuthToken = strings.TrimSpace(opts.AuthToken)
 	s.authToken = opts.AuthToken
+	s.httpSecurity = httpSecurityOptions{
+		requireMutationAuth:                      opts.RequireMutationAuth,
+		devAllowUnauthenticatedLoopbackMutations: opts.DevAllowUnauthenticatedLoopbackMutations,
+	}
 	s.routes()
 	return s
 }
 
 func agentSettingsFromServerSettings(settings ServerSettings) agent.Settings {
-	return agent.Settings{
+	return runtimeHostSettingsFromServerSettings(settings).AgentSettings()
+}
+
+func runtimeHostSettingsFromServerSettings(settings ServerSettings) runtimehost.Settings {
+	return runtimehost.Settings{
+		ProviderAuth:    settings.ProviderAuth,
 		ProviderBinding: settings.ProviderBinding,
 		Profile:         settings.Profile,
 		Runtime:         settings.Runtime,
 		ToolPolicy:      settings.ToolPolicy,
+		Diagnostics:     settings.Diagnostics,
 		MCP:             settings.MCP,
 		Hooks:           settings.Hooks,
 		Instructions:    settings.Instructions,
+		GatewayAddr:     settings.GatewayAddr,
+		Auth:            settings.Auth,
 	}
 }
 
@@ -206,10 +229,11 @@ func cloneServerSettings(settings ServerSettings) ServerSettings {
 		DiagnosticsCommands:    settings.Diagnostics.Commands,
 	}.DiagnosticsSettings()
 	settings.MCP = config.Config{
-		MCPEnabled:        settings.MCP.Enabled,
-		MCPConfigFiles:    settings.MCP.ConfigFiles,
-		MCPAllowedServers: settings.MCP.AllowedServers,
-		MCPServers:        settings.MCP.Servers,
+		MCPEnabled:                   settings.MCP.Enabled,
+		MCPConfigFiles:               settings.MCP.ConfigFiles,
+		MCPAllowedServers:            settings.MCP.AllowedServers,
+		MCPPromoteServerInstructions: settings.MCP.PromoteServerInstructions,
+		MCPServers:                   settings.MCP.Servers,
 	}.MCPSettings()
 	settings.Hooks = config.Config{
 		HooksEnabled:    settings.Hooks.Enabled,
@@ -226,10 +250,7 @@ func DefaultSessionStoreDir() string {
 }
 
 func (s *Server) Handler() http.Handler {
-	if s.authToken != "" {
-		return s.authMiddleware(s.mux)
-	}
-	return s.mux
+	return s.httpSecurityMiddleware(s.mux)
 }
 
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
@@ -266,25 +287,6 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	}
 }
 
-func (s *Server) authMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" || isLoopbackRemoteAddr(r.RemoteAddr) || bearerTokenMatches(r.Header.Get("Authorization"), s.authToken) {
-			next.ServeHTTP(w, r)
-			return
-		}
-		w.Header().Set("WWW-Authenticate", `Bearer realm="billyharness-gateway"`)
-		writeError(w, http.StatusUnauthorized, "gateway bearer token required")
-	})
-}
-
-func bearerTokenMatches(header, token string) bool {
-	fields := strings.Fields(strings.TrimSpace(header))
-	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(fields[1]), []byte(token)) == 1
-}
-
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("GET /v1/auth/status", s.handleAuthStatus)
@@ -312,10 +314,21 @@ func (s *Server) routes() {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, HealthResponse{
+	resp := HealthResponse{
 		OK:       true,
 		Provider: s.providerAuth.Provider,
 		Model:    s.providerAuth.Model,
+	}
+	if s.store != nil {
+		storeHealth := s.storeHealth
+		storeHealth.Enabled = true
+		resp.SessionStore = &storeHealth
+	}
+	writeJSON(w, http.StatusOK, HealthResponse{
+		OK:           resp.OK,
+		Provider:     resp.Provider,
+		Model:        resp.Model,
+		SessionStore: resp.SessionStore,
 	})
 }
 
@@ -338,12 +351,7 @@ func (s *Server) handleConfigStatus(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, ConfigStatusResponse{
-		Config:      resolved.SanitizedConfig(),
-		Values:      resolved.SanitizedValues(),
-		Diagnostics: resolved.Config.DiagnosticSnapshot(),
-		Warnings:    resolved.Warnings,
-	})
+	writeJSON(w, http.StatusOK, publicConfigStatusResponse(resolved))
 }
 
 func (s *Server) handleDeepSeekAuth(w http.ResponseWriter, r *http.Request) {
@@ -391,12 +399,13 @@ func (s *Server) handleCodexImport(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMCP(w http.ResponseWriter, _ *http.Request) {
 	mcpSettings := s.registry.MCPSettings()
 	writeJSON(w, http.StatusOK, mcpstatus.Response{
-		Source:      "runtime config",
-		ConfigFiles: mcpSettings.ConfigFiles,
-		Allowed:     mcpSettings.AllowedServers,
-		Enabled:     mcpSettings.Enabled,
-		Servers:     s.registry.MCPStatuses(),
-		Prompts:     s.registry.MCPPrompts(),
+		Source:       "runtime config",
+		ConfigFiles:  mcpSettings.ConfigFiles,
+		Allowed:      mcpSettings.AllowedServers,
+		Enabled:      mcpSettings.Enabled,
+		Servers:      s.registry.MCPStatuses(),
+		Prompts:      s.registry.MCPPrompts(),
+		Instructions: s.registry.MCPServerInstructions(),
 	})
 }
 
@@ -427,6 +436,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	actor := sessionOwnerFromRequest(r)
 	messages := req.Messages
 	profile := s.profile.Profile
 	if strings.TrimSpace(req.Profile) != "" {
@@ -438,6 +448,13 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		messages = agent.InitialMessagesFromSettings(instructions)
 	}
 	owner := normalizeSessionOwner(req.Owner)
+	if !sessionOwnerBodyMatchesActor(owner, actor) {
+		writeError(w, http.StatusForbidden, "session owner scope mismatch")
+		return
+	}
+	if sessionOwnerEmpty(owner) && !sessionOwnerEmpty(actor) {
+		owner = actor
+	}
 	if owner.Profile == "" {
 		owner.Profile = profile
 	}
@@ -456,10 +473,14 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, sessionResponse(session, false))
 }
 
-func (s *Server) handleListSessions(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	actor := sessionOwnerFromRequest(r)
 	sessions := s.allSessions()
 	summaries := make([]SessionSummary, 0, len(sessions))
 	for _, session := range sessions {
+		if err := authorizeSessionAccess(session, actor, sessionAccessRead); err != nil {
+			continue
+		}
 		summaries = append(summaries, sessionSummary(session))
 	}
 	sort.Slice(summaries, func(i, j int) bool {
@@ -469,36 +490,32 @@ func (s *Server) handleListSessions(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
-	session, ok := s.session(r.PathValue("id"))
+	session, ok := s.sessionForRequest(w, r, sessionAccessRead)
 	if !ok {
-		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, sessionResponse(session, true))
 }
 
 func (s *Server) handleSessionStatus(w http.ResponseWriter, r *http.Request) {
-	session, ok := s.session(r.PathValue("id"))
+	session, ok := s.sessionForRequest(w, r, sessionAccessRead)
 	if !ok {
-		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, session.Status())
 }
 
 func (s *Server) handleSessionContextStatus(w http.ResponseWriter, r *http.Request) {
-	session, ok := s.session(r.PathValue("id"))
+	session, ok := s.sessionForRequest(w, r, sessionAccessRead)
 	if !ok {
-		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, s.sessionContextResponse(session))
 }
 
 func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
-	session, ok := s.session(r.PathValue("id"))
+	session, ok := s.sessionForRequest(w, r, sessionAccessRead)
 	if !ok {
-		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
 	afterSeq, hasAfterSeq, err := parseEventReplayCursor(r)
@@ -510,6 +527,18 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	var initialReplay []protocol.Event
+	if hasAfterSeq {
+		if s.store == nil {
+			writeError(w, http.StatusConflict, "session history unavailable: no session store")
+			return
+		}
+		initialReplay, err = s.store.ReplayEventsAfter(session.ID, afterSeq)
+		if err != nil {
+			writeSessionReplayError(w, err)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -525,12 +554,7 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
 	events, unsubscribe := session.Subscribe()
 	defer unsubscribe()
 	cursor := afterSeq
-	flushReplay := func() bool {
-		replayed, err := s.store.ReplayEventsAfter(session.ID, afterSeq)
-		if err != nil {
-			_ = emit(protocol.Event{Type: protocol.EventRunFailed, Data: "event replay failed: " + err.Error()})
-			return false
-		}
+	emitReplay := func(replayed []protocol.Event) bool {
 		for _, event := range replayed {
 			if event.Seq > cursor {
 				cursor = event.Seq
@@ -541,8 +565,16 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		return true
 	}
-	if hasAfterSeq && s.store != nil {
-		if !flushReplay() {
+	flushReplay := func() bool {
+		replayed, err := s.store.ReplayEventsAfter(session.ID, afterSeq)
+		if err != nil {
+			_ = emit(protocol.Event{Type: protocol.EventRunFailed, Data: "event replay failed: " + err.Error()})
+			return false
+		}
+		return emitReplay(replayed)
+	}
+	if hasAfterSeq {
+		if !emitReplay(initialReplay) {
 			return
 		}
 	} else if !hasAfterSeq {
@@ -602,6 +634,15 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func writeSessionReplayError(w http.ResponseWriter, err error) {
+	var corrupt *eventlog.CorruptionError
+	if errors.As(err, &corrupt) {
+		writeError(w, http.StatusConflict, "corrupt session event history: "+err.Error())
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "session event replay failed: "+err.Error())
+}
+
 func parseEventReplayCursor(r *http.Request) (int64, bool, error) {
 	raw := strings.TrimSpace(r.URL.Query().Get("after_seq"))
 	if raw == "" {
@@ -644,7 +685,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	streamEvents(w, func(emit func(protocol.Event)) error {
-		settings, err := s.runSettingsForRequest(req)
+		settings, err := s.runSettingsForRequest(r.Context(), req)
 		if err != nil {
 			return err
 		}
@@ -652,7 +693,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		messages := agent.InitialMessagesFromSettings(s.instructions)
+		messages := agent.InitialMessagesFromSettings(settings.instructions)
 		messages = append(messages, protocol.UserMessage(req.Prompt, req.Attachments))
 		_, err = a.RunMessagesWithPromptOptions(r.Context(), messages, promptSubmitOptionsFromRun(req, "gateway"), emit)
 		return err
@@ -660,9 +701,8 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
-	session, ok := s.session(r.PathValue("id"))
+	session, ok := s.sessionForRequest(w, r, sessionAccessMutate)
 	if !ok {
-		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
 	var req RunRequest
@@ -703,7 +743,7 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 		if err := s.applySessionInterruptPolicy(r.Context(), session, interruptPolicy); err != nil {
 			return err
 		}
-		settings, err := s.runSettingsForRequest(req)
+		settings, err := s.runSettingsForRequest(r.Context(), req)
 		if err != nil {
 			return err
 		}
@@ -716,16 +756,50 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		userMessage := protocol.UserMessage(req.Prompt, req.Attachments)
-		err = session.Thread.RunMessage(r.Context(), sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
+		runCtx, cancelRun := context.WithCancel(r.Context())
+		defer cancelRun()
+		var persistenceMu sync.Mutex
+		var persistenceErr error
+		setPersistenceErr := func(err error) {
+			if err == nil {
+				return
+			}
+			persistenceMu.Lock()
+			if persistenceErr == nil {
+				persistenceErr = err
+				cancelRun()
+			}
+			persistenceMu.Unlock()
+		}
+		getPersistenceErr := func() error {
+			persistenceMu.Lock()
+			defer persistenceMu.Unlock()
+			return persistenceErr
+		}
+		err = session.Thread.RunMessage(runCtx, sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
 			return a.RunMessagesWithPromptOptions(ctx, messages, promptSubmitOptionsFromRun(req, "gateway_session"), emit)
 		}), userMessage, func(event protocol.Event) {
-			if event.Type == protocol.EventRunStarted {
-				session.beginRunStatus(statusReq)
+			if getPersistenceErr() != nil {
+				return
 			}
-			if observed, ok := session.observeRunEvent(event); ok {
+			if event.Type == protocol.EventRunStarted {
+				if err := session.beginRunStatus(statusReq); err != nil {
+					setPersistenceErr(err)
+					return
+				}
+			}
+			observed, ok, err := session.observeRunEvent(event)
+			if err != nil {
+				setPersistenceErr(err)
+				return
+			}
+			if ok {
 				emit(observed)
 			}
 		})
+		if persistErr := getPersistenceErr(); persistErr != nil {
+			err = persistErr
+		}
 		if !errors.Is(err, sessionpkg.ErrBusy) {
 			if saveErr := s.saveSession(session); saveErr != nil {
 				log.Printf("gateway session save failed id=%s: %v", session.ID, saveErr)
@@ -749,9 +823,8 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessionInput(w http.ResponseWriter, r *http.Request) {
-	session, ok := s.session(r.PathValue("id"))
+	session, ok := s.sessionForRequest(w, r, sessionAccessMutate)
 	if !ok {
-		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
 	var req gatewayapi.SessionInputRequest
@@ -790,9 +863,8 @@ func (s *Server) handleSessionInput(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUserInputAnswer(w http.ResponseWriter, r *http.Request) {
-	session, ok := s.session(r.PathValue("id"))
+	session, ok := s.sessionForRequest(w, r, sessionAccessMutate)
 	if !ok {
-		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
 	var req UserInputAnswerRequest
@@ -810,9 +882,8 @@ func (s *Server) handleUserInputAnswer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUserInputReject(w http.ResponseWriter, r *http.Request) {
-	session, ok := s.session(r.PathValue("id"))
+	session, ok := s.sessionForRequest(w, r, sessionAccessMutate)
 	if !ok {
-		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
 	var req UserInputRejectRequest
@@ -953,9 +1024,8 @@ func promptSubmitOptionsFromRun(req RunRequest, fallbackSource string) agent.Pro
 }
 
 func (s *Server) handleSessionCancel(w http.ResponseWriter, r *http.Request) {
-	session, ok := s.session(r.PathValue("id"))
+	session, ok := s.sessionForRequest(w, r, sessionAccessMutate)
 	if !ok {
-		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
 	waitCtx, cancel := context.WithTimeout(r.Context(), gatewayInterruptWaitTimeout)
@@ -974,9 +1044,8 @@ func (s *Server) handleSessionCancel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessionUndo(w http.ResponseWriter, r *http.Request) {
-	session, ok := s.session(r.PathValue("id"))
+	session, ok := s.sessionForRequest(w, r, sessionAccessMutate)
 	if !ok {
-		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
 	var req gatewayapi.SessionUndoRequest
@@ -1048,7 +1117,7 @@ func (s *Server) handleSessionUndo(w http.ResponseWriter, r *http.Request) {
 	change := stored.Data
 	change.Status = "reverted"
 	change.Summary = "reverted " + change.ChangeID
-	session.publish(protocol.Event{
+	if _, err := session.publish(protocol.Event{
 		Type:      protocol.EventTurnChangeReverted,
 		RunID:     change.RunID,
 		TurnID:    change.TurnID,
@@ -1056,7 +1125,10 @@ func (s *Server) handleSessionUndo(w http.ResponseWriter, r *http.Request) {
 		CallID:    change.CallID,
 		AttemptID: change.AttemptID,
 		Data:      change,
-	})
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "session event persistence failed: "+err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, gatewayapi.SessionUndoResponse{
 		ChangeID:      stored.Data.ChangeID,
 		RestoredFiles: result.RestoredFiles,
@@ -1065,9 +1137,8 @@ func (s *Server) handleSessionUndo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessionRedo(w http.ResponseWriter, r *http.Request) {
-	session, ok := s.session(r.PathValue("id"))
+	session, ok := s.sessionForRequest(w, r, sessionAccessMutate)
 	if !ok {
-		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
 	if session.Status().Running || (session.Thread != nil && session.Thread.Running()) {
@@ -1109,7 +1180,7 @@ func (s *Server) handleSessionRedo(w http.ResponseWriter, r *http.Request) {
 	change := stored.Data
 	change.Status = "redone"
 	change.Summary = "redone " + change.ChangeID
-	session.publish(protocol.Event{
+	if _, err := session.publish(protocol.Event{
 		Type:      protocol.EventTurnChangeRecorded,
 		RunID:     change.RunID,
 		TurnID:    change.TurnID,
@@ -1117,7 +1188,10 @@ func (s *Server) handleSessionRedo(w http.ResponseWriter, r *http.Request) {
 		CallID:    change.CallID,
 		AttemptID: change.AttemptID,
 		Data:      change,
-	})
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "session event persistence failed: "+err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, gatewayapi.SessionUndoResponse{
 		ChangeID:      stored.Data.ChangeID,
 		RestoredFiles: result.RestoredFiles,
@@ -1205,232 +1279,12 @@ func normalizeSessionOwner(owner gatewayapi.SessionOwner) gatewayapi.SessionOwne
 	return owner
 }
 
-func (s *Server) sessionContextResponse(session *Session) SessionContextResponse {
-	if session == nil {
-		return clientux.BuildContextResponse(s.runtime, "", nil)
+func (s *Server) runSettingsForRequest(ctx context.Context, req RunRequest) (runSettings, error) {
+	overrides := s.runOverrideSettingsForRequest(ctx, req)
+	if err := s.validateRunProviderModelOverride(overrides); err != nil {
+		return runSettings{}, err
 	}
-	status := session.Status()
-	var events []protocol.Event
-	var warnings []string
-	if s != nil && s.store != nil {
-		replayed, err := s.store.ReplayEventsAfter(session.ID, 0)
-		if err != nil {
-			warnings = append(warnings, "event replay unavailable: "+err.Error())
-		} else {
-			events = replayed
-		}
-	}
-	return clientux.BuildContextResponseWithOptions(s.runtime, session.ID, session.messages(), clientux.ContextReportOptions{
-		Runtime: gatewayapi.ContextRuntime{
-			Provider:      status.Provider,
-			Model:         status.Model,
-			Profile:       status.Profile,
-			ReasoningMode: status.ReasoningEffort,
-			AccessMode:    status.AccessMode,
-		},
-		Events:   events,
-		Warnings: warnings,
-	})
-}
-
-func (s *Server) saveSession(session *Session) error {
-	if s.store == nil {
-		return nil
-	}
-	s.refreshSessionSnapshots(session)
-	return s.store.Save(session)
-}
-
-func (s *Server) attachSessionStore(session *Session) {
-	if s.store == nil || session == nil {
-		return
-	}
-	session.eventRecorder = func(event protocol.Event) protocol.Event {
-		stored, err := s.store.AppendEvent(session, event)
-		if err != nil {
-			log.Printf("gateway session event save failed id=%s type=%s: %v", session.ID, event.Type, err)
-			return event
-		}
-		return stored
-	}
-}
-
-func (s *Server) refreshSessionSnapshots(session *Session) {
-	if s == nil || session == nil {
-		return
-	}
-	snapshot := s.sessionSnapshot(session)
-	var specs []protocol.ToolSpec
-	if s.registry != nil {
-		specs = s.registry.SnapshotWithToolPolicy(context.Background(), snapshot.ToolPolicy).Specs()
-	}
-	runtimeSnapshot := runstate.NewSnapshot(runstate.SnapshotInput{
-		Provider:   snapshot.Provider,
-		Profile:    snapshot.Profile,
-		Runtime:    snapshot.Runtime,
-		ToolPolicy: snapshot.ToolPolicy,
-		MCP:        snapshot.MCP,
-	}, session.messages(), specs)
-	session.setStoreSnapshots(sessionStoreSnapshots{
-		Config:        sessionConfigSnapshot(snapshot.ProviderAuth, snapshot.Runtime, snapshot.ToolPolicy, snapshot.MCP, snapshot.GatewayAddr),
-		ModelProvider: runtimeSnapshot.Metadata(),
-		MCP:           s.mcpSnapshot(snapshot.MCP),
-	})
-}
-
-type sessionSnapshotProjection struct {
-	ProviderAuth config.ProviderAuthSnapshot
-	Provider     config.ProviderBinding
-	Profile      config.ProfileSelection
-	Runtime      config.RuntimeLimits
-	ToolPolicy   config.ToolPolicySettings
-	Diagnostics  config.DiagnosticsSettings
-	MCP          config.MCPSettings
-	GatewayAddr  string
-}
-
-func (s *Server) sessionSnapshot(session *Session) sessionSnapshotProjection {
-	snapshot := sessionSnapshotProjection{
-		ProviderAuth: s.providerAuth,
-		Provider:     s.providerBinding,
-		Profile:      s.profile,
-		Runtime:      s.runtime,
-		ToolPolicy:   s.toolPolicy,
-		Diagnostics:  s.diagnostics,
-		MCP:          s.mcpSettings,
-		GatewayAddr:  s.gatewayAddr,
-	}
-	if session == nil {
-		return normalizeSessionSnapshot(snapshot)
-	}
-	status := session.Status()
-	if strings.TrimSpace(status.Provider) != "" {
-		snapshot.Provider.Provider.Provider = status.Provider
-	}
-	if strings.TrimSpace(status.Model) != "" {
-		snapshot.Provider.Model.Model = status.Model
-	}
-	if strings.TrimSpace(status.Profile) != "" {
-		snapshot.Profile = config.ProfileSelection{Profile: config.NormalizeProfileName(status.Profile)}
-	}
-	if strings.TrimSpace(status.ReasoningEffort) != "" {
-		snapshot.Provider.Model.ReasoningEffort = status.ReasoningEffort
-	}
-	if strings.TrimSpace(status.AccessMode) != "" {
-		snapshot.ToolPolicy.AccessMode = config.NormalizeAccessMode(status.AccessMode)
-	}
-	return normalizeSessionSnapshot(snapshot)
-}
-
-func normalizeSessionSnapshot(snapshot sessionSnapshotProjection) sessionSnapshotProjection {
-	rawModel := snapshot.Provider.Model.Model
-	model := modelinfo.NormalizeAlias(rawModel)
-	if snapshot.Provider.Model.DisableSpark && modelinfo.IsSparkAlias(rawModel) {
-		model = "gpt-5.4-mini"
-	}
-	providerID := modelinfo.ProviderForModel(model, snapshot.Provider.Provider.Provider)
-	snapshot.Provider.Model.Model = model
-	snapshot.Provider.Provider.Provider = providerID
-	snapshot.ProviderAuth.Provider = providerID
-	snapshot.ProviderAuth.Model = model
-	snapshot.ProviderAuth.Profile = snapshot.Profile.Profile
-	snapshot.ProviderAuth.ReasoningEffort = snapshot.Provider.Model.ReasoningEffort
-	snapshot.ToolPolicy.AccessMode = config.NormalizeAccessMode(snapshot.ToolPolicy.AccessMode)
-	return snapshot
-}
-
-func sessionConfigSnapshot(providerAuth config.ProviderAuthSnapshot, limits config.RuntimeLimits, toolPolicy config.ToolPolicySettings, mcpSettings config.MCPSettings, gatewayAddr string) map[string]any {
-	return map[string]any{
-		"provider":                         providerAuth.Provider,
-		"model":                            providerAuth.Model,
-		"profile":                          providerAuth.Profile,
-		"thinking":                         providerAuth.Thinking,
-		"reasoning_effort":                 providerAuth.ReasoningEffort,
-		"disable_spark":                    providerAuth.DisableSpark,
-		"max_tokens":                       limits.MaxTokens,
-		"max_tool_rounds":                  limits.MaxToolRounds,
-		"max_parallel_tools":               limits.MaxParallelTools,
-		"provider_max_retries":             limits.ProviderMaxRetries,
-		"context_window_tokens":            limits.ContextWindowTokens,
-		"context_compact_tokens":           limits.ContextCompactTokens,
-		"context_compact_keep":             limits.ContextCompactKeep,
-		"context_compact_max_chars":        limits.ContextCompactMaxChars,
-		"context_compact_strategy":         limits.ContextCompactStrategy,
-		"context_compact_summary_provider": limits.ContextCompactSummaryProvider,
-		"context_compact_summary_model":    limits.ContextCompactSummaryModel,
-		"web_summary_mode":                 toolPolicy.WebSummaryMode,
-		"web_summary_provider":             toolPolicy.WebSummaryProvider,
-		"web_summary_model":                toolPolicy.WebSummaryModel,
-		"web_summary_max_input_tokens":     toolPolicy.WebSummaryMaxInputTokens,
-		"web_summary_max_output_tokens":    toolPolicy.WebSummaryMaxOutputTokens,
-		"web_cache_enabled":                toolPolicy.WebCacheEnabled,
-		"web_cache_ttl_ms":                 toolPolicy.WebCacheTTL.Milliseconds(),
-		"web_cache_max_bytes":              toolPolicy.WebCacheMaxBytes,
-		"workspace_roots":                  append([]string(nil), toolPolicy.WorkspaceRoots...),
-		"project_context_max_bytes":        toolPolicy.ProjectContextMaxBytes,
-		"max_tool_output_bytes":            toolPolicy.MaxToolOutputBytes,
-		"auto_approve_dangerous":           toolPolicy.AutoApproveDangerous,
-		"access_mode":                      toolPolicy.AccessMode,
-		"store_reasoning_content":          toolPolicy.StoreReasoningContent,
-		"gateway_addr":                     gatewayAddr,
-		"mcp_enabled":                      mcpSettings.Enabled,
-		"mcp_config_files":                 append([]string(nil), mcpSettings.ConfigFiles...),
-		"mcp_allowed_servers":              append([]string(nil), mcpSettings.AllowedServers...),
-	}
-}
-
-func (s *Server) mcpSnapshot(mcpSettings config.MCPSettings) map[string]any {
-	if s != nil && s.registry != nil {
-		registrySettings := s.registry.MCPSettings()
-		if len(registrySettings.Servers) > 0 || len(registrySettings.ConfigFiles) > 0 {
-			mcpSettings = registrySettings
-		}
-	}
-	var runtimeStatuses []any
-	connected := 0
-	if s.registry != nil {
-		for _, status := range s.registry.MCPStatuses() {
-			runtimeStatuses = append(runtimeStatuses, status)
-			if status.Connected {
-				connected++
-			}
-		}
-	}
-	return map[string]any{
-		"enabled":        mcpSettings.Enabled,
-		"config_files":   append([]string(nil), mcpSettings.ConfigFiles...),
-		"allowed":        append([]string(nil), mcpSettings.AllowedServers...),
-		"server_count":   len(mcpSettings.Servers),
-		"status_count":   len(runtimeStatuses),
-		"connected":      connected,
-		"configured":     mcpServerSummaries(mcpSettings.Servers),
-		"runtime_status": runtimeStatuses,
-	}
-}
-
-func mcpServerSummaries(servers []config.MCPServer) []map[string]any {
-	out := make([]map[string]any, 0, len(servers))
-	for _, server := range servers {
-		transport := "stdio"
-		if strings.TrimSpace(server.URL) != "" {
-			transport = "http"
-		}
-		out = append(out, map[string]any{
-			"name":           server.Name,
-			"enabled":        server.Enabled,
-			"required":       server.Required,
-			"transport":      transport,
-			"command":        filepath.Base(server.Command),
-			"url_set":        strings.TrimSpace(server.URL) != "",
-			"enabled_tools":  append([]string(nil), server.EnabledTools...),
-			"disabled_tools": append([]string(nil), server.DisabledTools...),
-		})
-	}
-	return out
-}
-
-func (s *Server) runSettingsForRequest(req RunRequest) (runSettings, error) {
-	settings, err := config.RuntimeDiffSettingsWithRunOverrides(s.runtimeDiffSettings(), runOverrideSettingsFromRequest(req))
+	settings, err := config.RuntimeDiffSettingsWithRunOverrides(s.runtimeDiffSettings(), overrides)
 	if err != nil {
 		return runSettings{}, err
 	}
@@ -1451,13 +1305,7 @@ func (s *Server) runtimeDiffSettings() config.RuntimeDiffSettings {
 }
 
 func runSettingsFromRuntimeDiffSettings(settings config.RuntimeDiffSettings) runSettings {
-	instructions := config.InstructionSettings{
-		Profile:                settings.Profile,
-		WorkspaceRoots:         append([]string(nil), settings.ToolPolicy.WorkspaceRoots...),
-		ProjectDocMaxBytes:     settings.ToolPolicy.ProjectDocMaxBytes,
-		ProjectDocFallbacks:    append([]string(nil), settings.ToolPolicy.ProjectDocFallbacks...),
-		ProjectContextMaxBytes: settings.ToolPolicy.ProjectContextMaxBytes,
-	}
+	instructions := runtimehost.InstructionSettingsFromRuntimeDiffSettings(settings)
 	return runSettings{
 		provider:     settings.Provider,
 		profile:      settings.Profile,
@@ -1471,38 +1319,38 @@ func runSettingsFromRuntimeDiffSettings(settings config.RuntimeDiffSettings) run
 }
 
 func (s *Server) agentForRunSettings(settings runSettings) (*agent.Agent, error) {
-	prov, err := provider.NewFromBinding(settings.provider)
+	hostSettings := runtimeHostSettingsFromRunSettings(settings)
+	prov, err := runtimehost.NewProvider(hostSettings)
 	if err != nil {
 		return nil, err
 	}
-	return agent.NewFromSettings(agent.Settings{
-		ProviderBinding: settings.provider,
-		Profile:         settings.profile,
-		Runtime:         settings.runtime,
-		ToolPolicy:      settings.toolPolicy,
-		MCP:             settings.mcp,
-		Hooks:           settings.hooks,
-		Instructions:    settings.instructions,
-	}, prov, s.registry), nil
+	return runtimehost.NewAgent(hostSettings, prov, s.registry), nil
 }
 
 func (s *Server) agentForSessionRunSettings(session *Session, settings runSettings) (*agent.Agent, error) {
-	prov, err := provider.NewFromBinding(settings.provider)
+	hostSettings := runtimeHostSettingsFromRunSettings(settings)
+	prov, err := runtimehost.NewProvider(hostSettings)
 	if err != nil {
 		return nil, err
 	}
-	return agent.NewFromSettings(agent.Settings{
+	return runtimehost.NewAgent(hostSettings, prov, s.registry, runtimehost.WithAskUser(func(ctx context.Context, request protocol.UserInputRequestEvent, emit func(protocol.Event)) (protocol.UserInputAnswerEvent, error) {
+		return session.askUser(ctx, request, emit)
+	})), nil
+}
+
+func runtimeHostSettingsFromRunSettings(settings runSettings) runtimehost.Settings {
+	return runtimehost.Settings{
 		ProviderBinding: settings.provider,
+		ProviderCaps:    config.Config{Provider: settings.provider.Provider.Provider, Model: settings.provider.Model.Model}.ProviderCapabilitySnapshot(),
 		Profile:         settings.profile,
 		Runtime:         settings.runtime,
 		ToolPolicy:      settings.toolPolicy,
+		Diagnostics:     settings.diagnostics,
 		MCP:             settings.mcp,
 		Hooks:           settings.hooks,
 		Instructions:    settings.instructions,
-		AskUser: func(ctx context.Context, request protocol.UserInputRequestEvent, emit func(protocol.Event)) (protocol.UserInputAnswerEvent, error) {
-			return session.askUser(ctx, request, emit)
-		},
-	}, prov, s.registry), nil
+		Auth:            settings.provider.Auth,
+	}
 }
 
 func runRequestFromSettings(settings runSettings) RunRequest {
@@ -1517,8 +1365,8 @@ func runRequestFromSettings(settings runSettings) RunRequest {
 	}
 }
 
-func runOverrideSettingsFromRequest(req RunRequest) config.RunOverrideSettings {
-	return config.RunOverrideSettings{
+func (s *Server) runOverrideSettingsForRequest(ctx context.Context, req RunRequest) config.RunOverrideSettings {
+	overrides := config.RunOverrideSettings{
 		Provider:        req.Provider,
 		Model:           req.Model,
 		Profile:         req.Profile,
@@ -1527,4 +1375,33 @@ func runOverrideSettingsFromRequest(req RunRequest) config.RunOverrideSettings {
 		MaxToolRounds:   req.MaxToolRounds,
 		AccessMode:      req.AccessMode,
 	}
+	if !s.requestMayOverrideProviderModel(ctx) {
+		overrides.Provider = ""
+		overrides.Model = ""
+		overrides.Thinking = ""
+		overrides.ReasoningEffort = ""
+	}
+	overrides.MaxToolRounds = clampMaxToolRoundsOverride(s.runtime.MaxToolRounds, overrides.MaxToolRounds)
+	overrides.AccessMode = clampAccessModeOverride(s.toolPolicy.AccessMode, overrides.AccessMode)
+	return overrides
+}
+
+func (s *Server) validateRunProviderModelOverride(overrides config.RunOverrideSettings) error {
+	providerID := modelinfo.NormalizeProvider(overrides.Provider)
+	if providerID == "" {
+		return nil
+	}
+	modelID := strings.TrimSpace(overrides.Model)
+	if modelID == "" && s != nil {
+		modelID = s.providerBinding.Model.Model
+	}
+	modelID = modelinfo.NormalizeAlias(modelID)
+	if modelID == "" {
+		return nil
+	}
+	info := modelinfo.Lookup(modelID)
+	if info.Provider == "" || info.Provider == providerID || modelinfo.Provider(providerID).Custom {
+		return nil
+	}
+	return fmt.Errorf("provider/model conflict: model %q belongs to provider %q, not %q", modelID, info.Provider, providerID)
 }

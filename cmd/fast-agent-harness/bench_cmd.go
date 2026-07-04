@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/bench"
-	"github.com/billyhargroveofficial/billyharness/internal/config"
 )
 
 func benchCmd(args []string) error {
@@ -54,7 +53,10 @@ func benchRunCmd(args []string) error {
 	if *tasksPath == "" {
 		return fmt.Errorf("-tasks required")
 	}
-	cfg := config.Default()
+	cfg, err := resolveRuntimeConfig()
+	if err != nil {
+		return err
+	}
 	cfg.MaxToolRounds = *maxRounds
 	cfg.StoreReasoningContent = true
 	if *allowDangerous {
@@ -74,7 +76,6 @@ func benchRunCmd(args []string) error {
 	if *timeoutSec > 0 {
 		rc.Timeout = time.Duration(*timeoutSec) * time.Second
 	}
-	cfg.ApplyModelProviderDefaults()
 	summary, err := bench.Run(context.Background(), cfg, rc)
 	if err != nil {
 		return err
@@ -117,7 +118,10 @@ func benchLocalLoopCmd(args []string) error {
 		return enc.Encode(generated)
 	}
 
-	cfg := config.Default()
+	cfg, err := resolveRuntimeConfig()
+	if err != nil {
+		return err
+	}
 	cfg.StoreReasoningContent = true
 	cfg.AutoApproveDangerous = true
 	if *maxRounds > 0 {
@@ -125,7 +129,6 @@ func benchLocalLoopCmd(args []string) error {
 	} else {
 		cfg.MaxToolRounds = max(100, generated.ExpectedTurns+10)
 	}
-	cfg.ApplyModelProviderDefaults()
 	rc := bench.RunConfig{
 		TasksPath:              generated.TasksPath,
 		OutDir:                 *outDir,
@@ -151,7 +154,10 @@ func benchLocalLoopCmd(args []string) error {
 }
 
 func benchCompareProvidersCmd(args []string) error {
-	cfg := config.Default()
+	cfg, err := resolveRuntimeConfig()
+	if err != nil {
+		return err
+	}
 	fs := flag.NewFlagSet("bench compare-providers", flag.ExitOnError)
 	tasksPath := fs.String("tasks", "", "JSONL task file to run for every provider/model")
 	outDir := fs.String("out", "bench-runs/provider-compare", "output directory for provider comparison trace bundles")

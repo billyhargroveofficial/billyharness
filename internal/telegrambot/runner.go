@@ -185,7 +185,7 @@ func (b *Bot) handleMessageWithAdmission(parent context.Context, msg Message, ad
 	})
 	var seqGap *gatewayclient.EventSeqGapError
 	if runCtx.Err() == nil && !b.inputSuperseded(key, inputSeq) && (streamGapSeen || errors.As(err, &seqGap)) {
-		if replayErr := b.harness.ReplaySessionEvents(runCtx, state.SessionID, lastEventSeq, emitEvent); replayErr != nil {
+		if replayErr := b.harness.ReplaySessionEvents(b.gatewayScopedContext(runCtx, msg, state), state.SessionID, lastEventSeq, emitEvent); replayErr != nil {
 			log.Printf("telegram stream-gap replay failed chat=%d session=%s after_seq=%d dropped=%d: %v", msg.Chat.ID, short(state.SessionID), lastEventSeq, streamGapDropped, replayErr)
 			if err == nil {
 				err = replayErr
@@ -259,7 +259,7 @@ func (b *Bot) admitTelegramPromptUpdate(ctx context.Context, update Update) (tel
 		metadata["attachment_count"] = strconv.Itoa(len(refs))
 		metadata["vision_input"] = "true"
 	}
-	resp, err := b.harness.AdmitSessionInput(ctx, state.SessionID, gatewayapi.SessionInputRequest{
+	resp, err := b.harness.AdmitSessionInput(b.gatewayScopedContext(ctx, msg, state), state.SessionID, gatewayapi.SessionInputRequest{
 		InputID:         inputID,
 		Prompt:          prompt,
 		Attachments:     append([]protocol.AttachmentRef(nil), refs...),
@@ -284,7 +284,9 @@ func (b *Bot) admitTelegramPromptUpdate(ctx context.Context, update Update) (tel
 		state.PendingInputID = resp.InputID
 		state.PendingUpdateID = update.UpdateID
 		state.UpdatedAt = time.Now().UTC()
-		b.setChatState(key, state)
+		if err := b.setChatStateStrict(key, state); err != nil {
+			return telegramPromptAdmission{}, fmt.Errorf("telegram pending input state save: %w", err)
+		}
 	}
 	log.Printf("telegram admitted update=%d chat=%d key=%s session=%s input=%s state=%s duplicate=%t skip_run=%t",
 		update.UpdateID, msg.Chat.ID, key, short(state.SessionID), resp.InputID, resp.State, resp.Duplicate, skipRun)
@@ -327,7 +329,7 @@ func (b *Bot) answerPendingUserInput(ctx context.Context, msg Message, updateID 
 	if updateID > 0 {
 		answer.Metadata = telegramInputMetadata(updateID, msg, scope)
 	}
-	_, err := answerer.AnswerUserInput(ctx, state.SessionID, requestID, answer)
+	_, err := answerer.AnswerUserInput(b.gatewayScopedContext(ctx, msg, state), state.SessionID, requestID, answer)
 	if err != nil {
 		if errors.Is(err, gatewayclient.ErrSessionNotFound) {
 			b.clearPendingUserInput(key, requestID)
@@ -341,7 +343,7 @@ func (b *Bot) answerPendingUserInput(ctx context.Context, msg Message, updateID 
 }
 
 func (b *Bot) runGatewaySessionWithRetry(ctx context.Context, msg Message, key string, state ChatState, runReq gatewayapi.RunRequest, emit func(protocol.Event), beforeRetry func(ChatState)) (ChatState, error) {
-	err := b.harness.RunSession(ctx, state.SessionID, runReq, emit)
+	err := b.harness.RunSession(b.gatewayScopedContext(ctx, msg, state), state.SessionID, runReq, emit)
 	if !gatewaySessionMissing(err) {
 		return state, err
 	}
@@ -357,7 +359,7 @@ func (b *Bot) runGatewaySessionWithRetry(ctx context.Context, msg Message, key s
 	if beforeRetry != nil {
 		beforeRetry(state)
 	}
-	return state, b.harness.RunSession(ctx, state.SessionID, runReq, emit)
+	return state, b.harness.RunSession(b.gatewayScopedContext(ctx, msg, state), state.SessionID, runReq, emit)
 }
 
 func (b *Bot) deliverRunFinal(ctx context.Context, msg Message, live *telegramLiveRunView, state ChatState) {
@@ -477,7 +479,7 @@ func (v *telegramLiveRunView) Finish(err error) {
 	}
 	v.mu.Lock()
 	if err != nil {
-		v.renderer.LastError = err.Error()
+		v.renderer.LastError = telegramErrorText(err)
 	}
 	v.tools.Done = true
 	v.answerDirty = true
@@ -503,7 +505,7 @@ func (b *Bot) interruptActiveRunForInput(msg Message, scope ChatScope, isCommand
 	if done, cancelled := b.cancelChatWithDone(key); cancelled {
 		state := b.chatStateWithLegacy(key, scope.LegacyKey())
 		if state.SessionID != "" {
-			b.cancelGatewaySession(state.SessionID)
+			b.cancelGatewaySession(b.gatewayScopedContext(context.Background(), msg, state), state.SessionID)
 		}
 		log.Printf("telegram new message interrupted active run chat=%d key=%s seq=%d", msg.Chat.ID, key, inputSeq)
 		waitForRunDone(done)
@@ -557,7 +559,7 @@ func (b *Bot) replayRunCatchup(ctx context.Context, msg Message, key string, sta
 		state = b.applyUserInputEventToState(key, state, event)
 		catchup.Apply(event)
 	}
-	if err := b.harness.ReplaySessionEvents(ctx, state.SessionID, state.LastEventSeq, catchupEmit); err != nil {
+	if err := b.harness.ReplaySessionEvents(b.gatewayScopedContext(ctx, msg, state), state.SessionID, state.LastEventSeq, catchupEmit); err != nil {
 		if gatewaySessionMissing(err) {
 			log.Printf("telegram gateway replay session missing; recreating chat=%d old_session=%s", msg.Chat.ID, short(state.SessionID))
 			id, createErr := b.createOwnedSession(ctx, msg, state)

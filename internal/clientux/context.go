@@ -1,6 +1,8 @@
 package clientux
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -14,6 +16,7 @@ import (
 type ContextReportOptions struct {
 	Runtime  gatewayapi.ContextRuntime
 	Usage    gatewayapi.ContextUsage
+	Memory   gatewayapi.ContextMemory
 	Events   []protocol.Event
 	Warnings []string
 }
@@ -133,6 +136,8 @@ func BuildContextResponseWithOptions(limits config.RuntimeLimits, id string, mes
 		Runtime:                 runtime,
 		Usage:                   usage,
 		Prompt:                  prompt,
+		Memory:                  opts.Memory,
+		Diagnostics:             contextDiagnosticsIndex(messages, eventReport, prompt, usage, estimatedTokens, contextWindow, compactAt),
 		LastCompaction:          eventReport.compaction,
 		OutputRefs: gatewayapi.ContextOutputRefs{
 			Count:             outputRefCount,
@@ -144,13 +149,15 @@ func BuildContextResponseWithOptions(limits config.RuntimeLimits, id string, mes
 }
 
 type contextEventMetrics struct {
-	runtime    gatewayapi.ContextRuntime
-	usage      gatewayapi.ContextUsage
-	prompt     gatewayapi.ContextPrompt
-	compaction *gatewayapi.ContextCompaction
-	outputRefs int
-	usageAcc   contextUsageAccumulator
-	helperSeen map[string]bool
+	runtime     gatewayapi.ContextRuntime
+	usage       gatewayapi.ContextUsage
+	prompt      gatewayapi.ContextPrompt
+	compaction  *gatewayapi.ContextCompaction
+	outputRefs  int
+	thresholds  int
+	compactions int
+	usageAcc    contextUsageAccumulator
+	helperSeen  map[string]bool
 }
 
 func contextEventReport(events []protocol.Event) contextEventMetrics {
@@ -183,7 +190,10 @@ func contextEventReport(events []protocol.Event) contextEventMetrics {
 		case protocol.EventToolOutputRefCreated:
 			metrics.outputRefs++
 		case protocol.EventContextCompacted:
+			metrics.compactions++
 			metrics.compaction = contextCompactionFromEvent(event)
+		case protocol.EventContextThreshold:
+			metrics.thresholds++
 		}
 	}
 	return metrics
@@ -300,12 +310,17 @@ func contextCompactionFromEvent(event protocol.Event) *gatewayapi.ContextCompact
 		return nil
 	}
 	return &gatewayapi.ContextCompaction{
-		Seq:          event.Seq,
-		CompactionID: metadataString(m, "compaction_id"),
-		Strategy:     metadataString(m, "summary_strategy"),
-		BeforeTokens: metadataInt64(m, "before_estimated_tokens"),
-		AfterTokens:  metadataInt64(m, "after_estimated_tokens"),
-		Reason:       metadataString(m, "reason"),
+		Seq:             event.Seq,
+		CompactionID:    metadataString(m, "compaction_id"),
+		ContextEpoch:    int(metadataInt64(m, "context_epoch")),
+		Strategy:        metadataString(m, "summary_strategy"),
+		BeforeTokens:    metadataInt64(m, "before_estimated_tokens"),
+		AfterTokens:     metadataInt64(m, "after_estimated_tokens"),
+		Reason:          metadataString(m, "reason"),
+		InputSpanHash:   metadataString(m, "input_span_hash"),
+		ReplacementHash: metadataString(m, "replacement_hash"),
+		PreHistoryHash:  metadataString(m, "pre_history_hash"),
+		PostHistoryHash: metadataString(m, "post_history_hash"),
 	}
 }
 
@@ -334,6 +349,116 @@ func mergeContextUsage(primary, fallback gatewayapi.ContextUsage) gatewayapi.Con
 		return primary
 	}
 	return fallback
+}
+
+func contextDiagnosticsIndex(messages []protocol.Message, events contextEventMetrics, prompt gatewayapi.ContextPrompt, usage gatewayapi.ContextUsage, estimatedTokens, contextWindow, compactAt int64) gatewayapi.ContextDiagnostics {
+	protectedTokens, bodyTokens := contextTokenSplit(messages)
+	diag := gatewayapi.ContextDiagnostics{
+		CurrentEpoch:              contextCurrentEpoch(events),
+		CompactionEvents:          events.compactions,
+		ThresholdEvents:           events.thresholds,
+		ToolCallEvents:            usage.ToolCalls,
+		HelperModelCalls:          usage.HelperModelCalls,
+		ProtectedPrefixTokens:     protectedTokens,
+		BodyTokens:                bodyTokens,
+		MemoryContextHash:         contextSectionHash(messages, prompt, "memory_context"),
+		ProjectContextHash:        contextSectionHash(messages, prompt, "project_context"),
+		AgentsInstructionsHash:    contextSectionHash(messages, prompt, "agents_instructions"),
+		MCPInstructionsHash:       contextSectionHash(messages, prompt, "mcp_instructions"),
+		PromptInventoryHash:       prompt.InventoryHash,
+		LastCompactionHistoryHash: "",
+	}
+	if contextWindow > 0 {
+		diag.WindowRemainingTokens = contextWindow - estimatedTokens
+	}
+	if compactAt > 0 {
+		diag.CompactMarginTokens = compactAt - estimatedTokens
+	}
+	if events.compaction != nil {
+		diag.LastCompactionHistoryHash = events.compaction.PostHistoryHash
+	}
+	return diag
+}
+
+func contextCurrentEpoch(events contextEventMetrics) int {
+	if events.compaction != nil && events.compaction.ContextEpoch > 0 {
+		return events.compaction.ContextEpoch
+	}
+	return 0
+}
+
+func contextTokenSplit(messages []protocol.Message) (int64, int64) {
+	var protected, body int64
+	for _, msg := range messages {
+		tokens := messageTokens(msg)
+		if contextProtectedPrefixMessage(msg) {
+			protected += tokens
+		} else {
+			body += tokens
+		}
+	}
+	return protected, body
+}
+
+func contextProtectedPrefixMessage(msg protocol.Message) bool {
+	switch contextSource(msg) {
+	case "system_instructions", "memory_context", "project_context", "agents_instructions", "mcp_instructions":
+		return true
+	default:
+		return false
+	}
+}
+
+func contextSectionHash(messages []protocol.Message, prompt gatewayapi.ContextPrompt, name string) string {
+	for _, section := range prompt.Sections {
+		if section.Name == name && section.SHA256 != "" {
+			return section.SHA256
+		}
+	}
+	for _, msg := range messages {
+		if contextSectionName(msg) == name {
+			return hashContextText(msg.Content)
+		}
+	}
+	return ""
+}
+
+func contextSectionName(msg protocol.Message) string {
+	content := strings.TrimSpace(msg.Content)
+	if msg.Role == protocol.RoleSystem {
+		if strings.HasPrefix(content, "# Billyharness profile") {
+			return "profile"
+		}
+		if content != "" {
+			return "system_prompt"
+		}
+		return ""
+	}
+	if msg.Role != protocol.RoleUser {
+		return ""
+	}
+	switch {
+	case strings.HasPrefix(content, "# Memory context") || strings.Contains(content, "<MEMORY_CONTEXT>"):
+		return "memory_context"
+	case strings.HasPrefix(content, "# Project context") || strings.Contains(content, "<PROJECT_CONTEXT>"):
+		return "project_context"
+	case strings.HasPrefix(content, "# AGENTS.md instructions"):
+		return "agents_instructions"
+	case strings.HasPrefix(content, "# MCP server instructions"):
+		return "mcp_instructions"
+	case strings.HasPrefix(content, "# user_prompt_submit hook context"):
+		return "prompt_hook_context"
+	default:
+		return ""
+	}
+}
+
+func hashContextText(text string) string {
+	if text == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
 }
 
 func contextUsageEmpty(usage gatewayapi.ContextUsage) bool {
@@ -459,6 +584,12 @@ func contextSource(msg protocol.Message) string {
 		}
 		if strings.HasPrefix(strings.TrimSpace(msg.Content), "# Project context") || strings.Contains(msg.Content, "<PROJECT_CONTEXT>") {
 			return "project_context"
+		}
+		if strings.HasPrefix(strings.TrimSpace(msg.Content), "# AGENTS.md instructions") {
+			return "agents_instructions"
+		}
+		if strings.HasPrefix(strings.TrimSpace(msg.Content), "# MCP server instructions") {
+			return "mcp_instructions"
 		}
 		return "user_messages"
 	case protocol.RoleAssistant:

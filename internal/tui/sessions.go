@@ -256,6 +256,7 @@ func (m *Model) forkChat(prefix string) tea.Cmd {
 }
 
 func (m *Model) applyChatSession(session chatSession) {
+	m.clearTranscriptSelection()
 	m.localChatID = session.ID
 	m.chatTitle = session.Title
 	if m.chatTitle == "" {

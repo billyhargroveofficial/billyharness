@@ -22,13 +22,13 @@ func (r *Registry) addMemory() {
 			Risk:        protocol.RiskReadOnly,
 		},
 		Parallel: ParallelMetadata{Policy: ParallelPolicyReadOnly, Idempotent: true, Cancellable: true},
-		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
+		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in memory.OperationInput
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
 			}
 			in.Op = "list"
-			return r.memoryResult(in)
+			return r.memoryResult(ctx, in)
 		},
 	})
 	r.add(Tool{
@@ -39,13 +39,13 @@ func (r *Registry) addMemory() {
 			Risk:        protocol.RiskReadOnly,
 		},
 		Parallel: ParallelMetadata{Policy: ParallelPolicyReadOnly, Idempotent: true, Cancellable: true},
-		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
+		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in memory.OperationInput
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
 			}
 			in.Op = "search"
-			return r.memoryResult(in)
+			return r.memoryResult(ctx, in)
 		},
 	})
 	r.add(Tool{
@@ -56,30 +56,30 @@ func (r *Registry) addMemory() {
 			Risk:        protocol.RiskReadOnly,
 		},
 		Parallel: ParallelMetadata{Policy: ParallelPolicyReadOnly, Idempotent: true, Cancellable: true},
-		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
+		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in memory.OperationInput
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
 			}
 			in.Op = "read"
-			return r.memoryResult(in)
+			return r.memoryResult(ctx, in)
 		},
 	})
-	r.add(memoryWriteTool("memory_add", "Preview or add a Billyharness memory topic. Mutates only when confirm=true; body defaults to summary when omitted.", func(_ context.Context, args json.RawMessage) (Result, error) {
+	r.add(memoryWriteTool("memory_add", "Preview or add a Billyharness memory topic. Mutates only when confirm=true; body defaults to summary when omitted.", func(ctx context.Context, args json.RawMessage) (Result, error) {
 		var in memory.OperationInput
 		if err := json.Unmarshal(args, &in); err != nil {
 			return Result{}, err
 		}
 		in.Op = "add"
-		return r.memoryResult(in)
+		return r.memoryResult(ctx, in)
 	}))
-	r.add(memoryWriteTool("memory_replace", "Preview or replace an existing Billyharness memory topic. Mutates only when confirm=true.", func(_ context.Context, args json.RawMessage) (Result, error) {
+	r.add(memoryWriteTool("memory_replace", "Preview or replace an existing Billyharness memory topic. Mutates only when confirm=true.", func(ctx context.Context, args json.RawMessage) (Result, error) {
 		var in memory.OperationInput
 		if err := json.Unmarshal(args, &in); err != nil {
 			return Result{}, err
 		}
 		in.Op = "replace"
-		return r.memoryResult(in)
+		return r.memoryResult(ctx, in)
 	}))
 	r.add(Tool{
 		Spec: protocol.ToolSpec{
@@ -89,13 +89,13 @@ func (r *Registry) addMemory() {
 			Risk:        protocol.RiskWrite,
 		},
 		Parallel: ParallelMetadata{Policy: ParallelPolicyExclusiveWorkspace, RequiresExclusiveWorkspace: true, Cancellable: true, MaxConcurrency: 1},
-		Handler: func(_ context.Context, args json.RawMessage) (Result, error) {
+		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 			var in memory.OperationInput
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
 			}
 			in.Op = "remove"
-			return r.memoryResult(in)
+			return r.memoryResult(ctx, in)
 		},
 	})
 }
@@ -113,8 +113,8 @@ func memoryWriteTool(name, description string, handler func(context.Context, jso
 	}
 }
 
-func (r *Registry) memoryResult(in memory.OperationInput) (Result, error) {
-	out, err := memory.Execute(r.memorySettings(), in)
+func (r *Registry) memoryResult(ctx context.Context, in memory.OperationInput) (Result, error) {
+	out, err := memory.Execute(r.memorySettings(ctx), in)
 	if err != nil {
 		return Result{}, err
 	}
@@ -124,19 +124,20 @@ func (r *Registry) memoryResult(in memory.OperationInput) (Result, error) {
 	}, nil
 }
 
-func (r *Registry) memorySettings() config.InstructionSettings {
+func (r *Registry) memorySettings(ctx context.Context) config.InstructionSettings {
 	if r == nil {
 		return config.InstructionSettings{MemoryEnabled: true}
 	}
+	policy := r.toolPolicyForContext(ctx)
 	return config.InstructionSettings{
 		Profile:               r.profile,
-		WorkspaceRoots:        append([]string(nil), r.toolPolicy.WorkspaceRoots...),
-		ProjectDocMaxBytes:    r.toolPolicy.ProjectDocMaxBytes,
-		ProjectDocFallbacks:   append([]string(nil), r.toolPolicy.ProjectDocFallbacks...),
+		WorkspaceRoots:        append([]string(nil), policy.WorkspaceRoots...),
+		ProjectDocMaxBytes:    policy.ProjectDocMaxBytes,
+		ProjectDocFallbacks:   append([]string(nil), policy.ProjectDocFallbacks...),
 		MemoryEnabled:         true,
-		MemorySummaryMaxBytes: r.toolPolicy.MemorySummaryMaxBytes,
-		MemoryIndexMaxBytes:   r.toolPolicy.MemoryIndexMaxBytes,
-		MemoryTopicMaxBytes:   r.toolPolicy.MemoryTopicMaxBytes,
+		MemorySummaryMaxBytes: policy.MemorySummaryMaxBytes,
+		MemoryIndexMaxBytes:   policy.MemoryIndexMaxBytes,
+		MemoryTopicMaxBytes:   policy.MemoryTopicMaxBytes,
 	}
 }
 

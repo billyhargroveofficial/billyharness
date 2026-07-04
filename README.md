@@ -26,6 +26,7 @@ Project health:
 
 ```bash
 ./bin/fast-agent-harness doctor
+./bin/fast-agent-harness doctor -deep
 ./bin/fast-agent-harness doctor -json
 ```
 
@@ -36,6 +37,12 @@ For a non-failing local snapshot while editing, disable active checks:
 
 ```bash
 ./bin/fast-agent-harness doctor -build=false -services=false -gateway=false
+```
+
+For a redacted local incident bundle tied to one persisted session:
+
+```bash
+./bin/fast-agent-harness incident collect -session SESSION_ID -out /tmp/billyharness-incident
 ```
 
 Production runs on `root@82.23.163.16` under `/root/billyharness`. Competitor

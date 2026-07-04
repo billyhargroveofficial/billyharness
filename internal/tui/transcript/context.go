@@ -30,10 +30,15 @@ func CompactEventText(value any) string {
 		SummaryChars             int                 `json:"summary_chars"`
 		Detail                   string              `json:"detail"`
 		CompactionID             string              `json:"compaction_id"`
+		ContextEpoch             int                 `json:"context_epoch"`
 		Reason                   string              `json:"reason"`
 		TriggerSource            string              `json:"trigger_source"`
 		TriggerPromptToks        int64               `json:"trigger_prompt_tokens"`
 		ThresholdTokens          int64               `json:"threshold_tokens"`
+		InputSpanHash            string              `json:"input_span_hash"`
+		ReplacementHash          string              `json:"replacement_hash"`
+		PreHistoryHash           string              `json:"pre_history_hash"`
+		PostHistoryHash          string              `json:"post_history_hash"`
 		BeforeEstimatedTokens    int64               `json:"before_estimated_tokens"`
 		AfterEstimatedTokens     int64               `json:"after_estimated_tokens"`
 		CutStartIndex            int                 `json:"cut_start_index"`
@@ -58,6 +63,9 @@ func CompactEventText(value any) string {
 	if data.CompactionID != "" {
 		lines = append(lines, "id: "+data.CompactionID)
 	}
+	if data.ContextEpoch > 0 {
+		lines = append(lines, fmt.Sprintf("epoch: %d", data.ContextEpoch))
+	}
 	if data.Reason != "" {
 		line := "reason: " + data.Reason
 		if data.TriggerSource != "" {
@@ -75,6 +83,9 @@ func CompactEventText(value any) string {
 	}
 	if data.CutEndIndex > data.CutStartIndex {
 		lines = append(lines, fmt.Sprintf("cut: [%d:%d) -> replacement index %d", data.CutStartIndex, data.CutEndIndex, data.ReplacementIndex))
+	}
+	if audit := compactionAuditLine(data.InputSpanHash, data.ReplacementHash, data.PreHistoryHash, data.PostHistoryHash); audit != "" {
+		lines = append(lines, audit)
 	}
 	if data.KeepMessages > 0 || data.MaxSummaryChars > 0 {
 		lines = append(lines, fmt.Sprintf("policy: keep %d messages / summary cap %d chars", data.KeepMessages, data.MaxSummaryChars))
@@ -131,6 +142,34 @@ func CompactEventText(value any) string {
 	return strings.Join(lines, "\n")
 }
 
+func compactionAuditLine(inputSpanHash, replacementHash, preHistoryHash, postHistoryHash string) string {
+	var parts []string
+	if inputSpanHash = shortCompactionHash(inputSpanHash); inputSpanHash != "" {
+		parts = append(parts, "input="+inputSpanHash)
+	}
+	if replacementHash = shortCompactionHash(replacementHash); replacementHash != "" {
+		parts = append(parts, "replacement="+replacementHash)
+	}
+	if preHistoryHash = shortCompactionHash(preHistoryHash); preHistoryHash != "" {
+		parts = append(parts, "pre="+preHistoryHash)
+	}
+	if postHistoryHash = shortCompactionHash(postHistoryHash); postHistoryHash != "" {
+		parts = append(parts, "post="+postHistoryHash)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "audit: " + strings.Join(parts, " ")
+}
+
+func shortCompactionHash(hash string) string {
+	hash = strings.TrimSpace(hash)
+	if len(hash) <= 12 {
+		return hash
+	}
+	return hash[:12]
+}
+
 func ContextThresholdEventText(value any) string {
 	bytes, _ := json.Marshal(value)
 	var data protocol.ContextThresholdEvent
@@ -141,6 +180,9 @@ func ContextThresholdEventText(value any) string {
 	window := data.ContextWindowTokens
 	var lines []string
 	lines = append(lines, fmt.Sprintf("threshold: %d%%", data.Percent))
+	if data.ContextEpoch > 0 {
+		lines = append(lines, fmt.Sprintf("epoch: %d", data.ContextEpoch))
+	}
 	if window > 0 {
 		lines = append(lines, fmt.Sprintf("active: %s / %s", compactNumber(data.EstimatedTokens), compactNumber(window)))
 	} else {
@@ -160,6 +202,9 @@ func ContextThresholdEventText(value any) string {
 	}
 	if data.Round > 0 {
 		lines = append(lines, fmt.Sprintf("round: %d", data.Round))
+	}
+	if data.ThresholdKey != "" {
+		lines = append(lines, "key: "+data.ThresholdKey)
 	}
 	return strings.Join(lines, "\n")
 }

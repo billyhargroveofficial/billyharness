@@ -23,6 +23,7 @@ import (
 type doctorOptions struct {
 	RepoDir       string
 	JSON          bool
+	Deep          bool
 	Strict        bool
 	CheckBuild    bool
 	CheckServices bool
@@ -130,6 +131,7 @@ func (osDoctorRunner) CombinedOutput(ctx context.Context, dir, name string, args
 func doctorCmd(args []string) error {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
+	deep := fs.Bool("deep", false, "run full operator checks; currently the default")
 	strict := fs.Bool("strict", false, "exit non-zero when a check fails")
 	repoDir := fs.String("repo", "", "repository directory; defaults to current git root")
 	checkBuild := fs.Bool("build", true, "compile-check the CLI package")
@@ -142,13 +144,17 @@ func doctorCmd(args []string) error {
 	opts := doctorOptions{
 		RepoDir:       strings.TrimSpace(*repoDir),
 		JSON:          *jsonOut,
+		Deep:          *deep,
 		Strict:        *strict,
 		CheckBuild:    *checkBuild,
 		CheckServices: *checkServices,
 		CheckGateway:  *checkGateway,
 		Timeout:       time.Duration(*timeoutSec) * time.Second,
 	}
-	resolved := config.MustResolve()
+	resolved, err := config.ResolveStrict()
+	if err != nil {
+		return err
+	}
 	report := collectDoctorReportFromResolved(context.Background(), resolved, opts, osDoctorRunner{})
 	if opts.JSON {
 		enc := json.NewEncoder(os.Stdout)

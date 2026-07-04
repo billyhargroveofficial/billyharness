@@ -293,6 +293,8 @@ func toolBatchTitle(step protocol.StepEvent) string {
 		status = "Tool batch running"
 	case protocol.StepStatusCompleted:
 		status = "Tool batch done"
+	case protocol.StepStatusCompletedWithErrors:
+		status = "Tool batch done with errors"
 	case protocol.StepStatusFailed:
 		status = "Tool batch failed"
 	}

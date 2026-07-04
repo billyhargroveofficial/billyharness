@@ -20,6 +20,7 @@ func TestContextStatusClassifiesSourcesAndThresholds(t *testing.T) {
 		{Role: protocol.RoleSystem, Content: "system instructions"},
 		{Role: protocol.RoleUser, Content: "# Memory context\n<MEMORY_CONTEXT>\nentries:\n- type=\"user\" topic=\"style\" summary=\"concise\" path=\"topics/style.md\" source=\"home\"\n</MEMORY_CONTEXT>"},
 		{Role: protocol.RoleUser, Content: "# Project context\n<PROJECT_CONTEXT>\ncwd: /repo\n</PROJECT_CONTEXT>"},
+		{Role: protocol.RoleUser, Content: "# AGENTS.md instructions\n\nproject rules"},
 		{Role: protocol.RoleUser, Content: strings.Repeat("ask ", 90)},
 		{Role: protocol.RoleAssistant, ToolCalls: []protocol.ToolCall{{ID: "call_1", Name: "web_fetch", Arguments: []byte(`{"url":"https://example.com/a/very/long/path"}`)}}},
 		{Role: protocol.RoleTool, Name: "web_fetch", ToolCallID: "call_1", Content: strings.Repeat("web summary ", 120) + " output_ref=/tmp/ref"},
@@ -33,7 +34,7 @@ func TestContextStatusClassifiesSourcesAndThresholds(t *testing.T) {
 	for _, source := range resp.Sources {
 		sourceTokens[source.Source] = source.EstimatedTokens
 	}
-	for _, source := range []string{"memory_context", "project_context", "web_summaries", "mcp_outputs", "assistant_tool_calls", "user_messages", "system_instructions", "reasoning_summaries"} {
+	for _, source := range []string{"memory_context", "project_context", "agents_instructions", "web_summaries", "mcp_outputs", "assistant_tool_calls", "user_messages", "system_instructions", "reasoning_summaries"} {
 		if sourceTokens[source] <= 0 {
 			t.Fatalf("missing source %s in %#v", source, resp.Sources)
 		}
@@ -54,8 +55,13 @@ func TestContextStatusClassifiesSourcesAndThresholds(t *testing.T) {
 	if len(resp.Thresholds) != 4 || !resp.Thresholds[0].Crossed || resp.Thresholds[3].Crossed {
 		t.Fatalf("thresholds = %#v", resp.Thresholds)
 	}
+	if resp.Diagnostics.ProtectedPrefixTokens <= 0 || resp.Diagnostics.BodyTokens <= 0 ||
+		resp.Diagnostics.MemoryContextHash == "" || resp.Diagnostics.ProjectContextHash == "" ||
+		resp.Diagnostics.AgentsInstructionsHash == "" || resp.Diagnostics.CompactMarginTokens >= 0 {
+		t.Fatalf("diagnostics = %#v", resp.Diagnostics)
+	}
 	formatted := gatewayclient.FormatSessionContext(resp)
-	for _, want := range []string{"active context:", "thresholds:", "memory_context", "project_context", "web_summaries", "mcp_outputs", "top contributors:", "large inline", "output_ref"} {
+	for _, want := range []string{"active context:", "thresholds:", "memory_context", "project_context", "agents_instructions", "web_summaries", "mcp_outputs", "diagnostics:", "memory_hash=", "project_hash=", "agents_hash=", "top contributors:", "large inline", "output_ref"} {
 		if !strings.Contains(formatted, want) {
 			t.Fatalf("formatted context missing %q:\n%s", want, formatted)
 		}
@@ -152,10 +158,17 @@ func TestContextReportV2IncludesEventsRuntimePromptAndHelperUsage(t *testing.T) 
 			{Seq: 8, Type: protocol.EventToolOutputRefCreated},
 			{Seq: 9, Type: protocol.EventContextCompacted, Data: map[string]any{
 				"compaction_id":           "compact-1",
+				"context_epoch":           2,
 				"summary_strategy":        "deterministic",
 				"before_estimated_tokens": 800,
 				"after_estimated_tokens":  320,
 				"reason":                  "prompt_tokens_at_or_above_threshold",
+				"post_history_hash":       "post-history-hash",
+			}},
+			{Seq: 10, Type: protocol.EventContextThreshold, Data: protocol.ContextThresholdEvent{
+				Percent:      70,
+				ContextEpoch: 2,
+				Stage:        "before_turn",
 			}},
 		},
 	})
@@ -183,14 +196,22 @@ func TestContextReportV2IncludesEventsRuntimePromptAndHelperUsage(t *testing.T) 
 		t.Fatalf("prompt = %#v", resp.Prompt)
 	}
 	if resp.LastCompaction == nil || resp.LastCompaction.CompactionID != "compact-1" ||
-		resp.LastCompaction.BeforeTokens != 800 || resp.LastCompaction.AfterTokens != 320 {
+		resp.LastCompaction.ContextEpoch != 2 ||
+		resp.LastCompaction.BeforeTokens != 800 || resp.LastCompaction.AfterTokens != 320 ||
+		resp.LastCompaction.PostHistoryHash != "post-history-hash" {
 		t.Fatalf("last compaction = %#v", resp.LastCompaction)
 	}
 	if resp.OutputRefs.Count != 1 || resp.OutputRefs.SourceBucketCount != 1 {
 		t.Fatalf("output refs = %#v", resp.OutputRefs)
 	}
+	if resp.Diagnostics.CurrentEpoch != 2 || resp.Diagnostics.CompactionEvents != 1 ||
+		resp.Diagnostics.ThresholdEvents != 1 || resp.Diagnostics.ToolCallEvents != 1 ||
+		resp.Diagnostics.HelperModelCalls != 1 || resp.Diagnostics.PromptInventoryHash != "inventory-sha" ||
+		resp.Diagnostics.LastCompactionHistoryHash != "post-history-hash" {
+		t.Fatalf("diagnostics = %#v", resp.Diagnostics)
+	}
 	formatted := gatewayclient.FormatSessionContext(resp)
-	for _, want := range []string{"runtime:", "cache: hit=90", "helper usage: websum=200", "sumapi=100", "helper API calls=1", "helper API cost=$0.003000", "prompt sections:", "prompt cache: status=changed", "last compaction:", "output refs:"} {
+	for _, want := range []string{"runtime:", "cache: hit=90", "helper usage: websum=200", "sumapi=100", "helper API calls=1", "helper API cost=$0.003000", "prompt sections:", "prompt cache: status=changed", "last compaction:", "epoch=2", "post_hash=post-history", "diagnostics:", "compactions=1", "thresholds=1", "output refs:"} {
 		if !strings.Contains(formatted, want) {
 			t.Fatalf("formatted v2 context missing %q:\n%s", want, formatted)
 		}

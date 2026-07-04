@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,6 +33,7 @@ import (
 )
 
 type Options struct {
+	Config        *config.Config
 	GatewayURL    string
 	GatewayNotice string
 	Model         string
@@ -268,7 +270,16 @@ const defaultTextareaPlaceholder = "Message billyharness. Type / for commands."
 const streamEventBatchInterval = 25 * time.Millisecond
 
 func Run(opts Options) error {
-	cfg := config.Default()
+	var cfg config.Config
+	if opts.Config != nil {
+		cfg = *opts.Config
+	} else {
+		resolved, err := config.ResolveStrict()
+		if err != nil {
+			return err
+		}
+		cfg = resolved.Config
+	}
 	cfg.StoreReasoningContent = true
 	if opts.Dangerous {
 		cfg.AutoApproveDangerous = true
@@ -519,7 +530,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		_ = m.saveCurrentSession()
 	case replayEventsMsg:
 		if msg.err != nil {
-			if msg.fallbackCreate {
+			if msg.fallbackCreate && errors.Is(msg.err, gatewayclient.ErrSessionNotFound) {
 				m.status = "gateway replay failed; creating session"
 				cmds = append(cmds, m.createSessionCmd())
 			} else {

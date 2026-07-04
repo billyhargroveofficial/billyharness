@@ -11,17 +11,19 @@ import (
 )
 
 type Manager struct {
-	tools            []ExternalTool
-	prompts          []Prompt
-	instructions     []string
-	collisions       []string
-	catalogVersion   int64
-	mu               sync.RWMutex
-	servers          []*managedServer
-	listenerSeq      int64
-	listenersMu      sync.RWMutex
-	statusListeners  map[int64]func(ServerStatus)
-	catalogListeners map[int64]func(CatalogChange)
+	tools                     []ExternalTool
+	prompts                   []Prompt
+	instructions              []string
+	serverInstructions        []string
+	collisions                []string
+	catalogVersion            int64
+	promoteServerInstructions bool
+	mu                        sync.RWMutex
+	servers                   []*managedServer
+	listenerSeq               int64
+	listenersMu               sync.RWMutex
+	statusListeners           map[int64]func(ServerStatus)
+	catalogListeners          map[int64]func(CatalogChange)
 }
 
 func ManagerSettingsFromConfig(cfg config.Config) ManagerSettings {
@@ -41,7 +43,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 }
 
 func NewManagerFromSettings(ctx context.Context, settings ManagerSettings) (*Manager, error) {
-	manager := &Manager{}
+	manager := &Manager{promoteServerInstructions: settings.MCP.PromoteServerInstructions}
 	var errs []string
 	settings = cloneManagerSettings(settings)
 	for _, server := range settings.MCP.Servers {
@@ -94,10 +96,11 @@ func cloneManagerSettings(settings ManagerSettings) ManagerSettings {
 
 func cloneMCPSettings(settings config.MCPSettings) config.MCPSettings {
 	return config.Config{
-		MCPEnabled:        settings.Enabled,
-		MCPConfigFiles:    settings.ConfigFiles,
-		MCPAllowedServers: settings.AllowedServers,
-		MCPServers:        settings.Servers,
+		MCPEnabled:                   settings.Enabled,
+		MCPConfigFiles:               settings.ConfigFiles,
+		MCPAllowedServers:            settings.AllowedServers,
+		MCPPromoteServerInstructions: settings.PromoteServerInstructions,
+		MCPServers:                   settings.Servers,
 	}.MCPSettings()
 }
 
@@ -181,11 +184,12 @@ func (m *Manager) CatalogSnapshot() CatalogSnapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return CatalogSnapshot{
-		Version:      m.catalogVersion,
-		Tools:        append([]ExternalTool(nil), m.tools...),
-		Prompts:      clonePrompts(m.prompts),
-		Instructions: append([]string(nil), m.instructions...),
-		Collisions:   append([]string(nil), m.collisions...),
+		Version:            m.catalogVersion,
+		Tools:              append([]ExternalTool(nil), m.tools...),
+		Prompts:            clonePrompts(m.prompts),
+		Instructions:       append([]string(nil), m.instructions...),
+		ServerInstructions: append([]string(nil), m.serverInstructions...),
+		Collisions:         append([]string(nil), m.collisions...),
 	}
 }
 
@@ -254,7 +258,7 @@ func (m *Manager) rebuildCatalog() CatalogChange {
 			catalogs = append(catalogs, server.catalogSnapshot())
 		}
 	}
-	tools, instructions, collisions := buildCatalog(catalogs)
+	tools, serverInstructions, instructions, collisions := buildCatalog(catalogs, m.promoteServerInstructions)
 	prompts := buildPromptCatalog(catalogs)
 	m.catalogVersion++
 	change := CatalogChange{
@@ -265,6 +269,7 @@ func (m *Manager) rebuildCatalog() CatalogChange {
 	}
 	m.tools = tools
 	m.prompts = prompts
+	m.serverInstructions = serverInstructions
 	m.instructions = instructions
 	m.collisions = append([]string(nil), collisions...)
 	m.mu.Unlock()

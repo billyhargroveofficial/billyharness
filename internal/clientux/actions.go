@@ -306,6 +306,14 @@ var sharedActionDefinitions = []ActionDefinition{
 		Summary:   "copy raw transcript text without UI chrome",
 	},
 	{
+		ID:        "transcript.export",
+		Title:     "Export Transcript",
+		Category:  "ui",
+		Slash:     "/export",
+		SlashArgs: "raw|rich [path]",
+		Summary:   "write or show transcript export",
+	},
+	{
 		ID:              "chat.new",
 		Title:           "New Chat",
 		Category:        "chat",

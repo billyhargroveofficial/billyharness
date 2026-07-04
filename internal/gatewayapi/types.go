@@ -4,8 +4,15 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+)
+
+const (
+	HeaderSessionClientType       = "X-Billyharness-Session-Client-Type"
+	HeaderSessionTelegramChatID   = "X-Billyharness-Session-Telegram-Chat-ID"
+	HeaderSessionTelegramThreadID = "X-Billyharness-Session-Telegram-Thread-ID"
+	HeaderSessionTelegramUserID   = "X-Billyharness-Session-Telegram-User-ID"
+	HeaderSessionTUIChatID        = "X-Billyharness-Session-TUI-Chat-ID"
 )
 
 type RunRequest struct {
@@ -70,16 +77,46 @@ type CodexImportRequest struct {
 }
 
 type HealthResponse struct {
-	OK       bool   `json:"ok"`
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
+	OK           bool                `json:"ok"`
+	Provider     string              `json:"provider"`
+	Model        string              `json:"model"`
+	SessionStore *SessionStoreHealth `json:"session_store,omitempty"`
+}
+
+type SessionStoreHealth struct {
+	Enabled      bool                    `json:"enabled"`
+	LoadedCount  int                     `json:"loaded_count"`
+	ErrorCount   int                     `json:"error_count,omitempty"`
+	CorruptCount int                     `json:"corrupt_count,omitempty"`
+	Errors       []SessionStoreLoadError `json:"errors,omitempty"`
+}
+
+type SessionStoreLoadError struct {
+	Entry          string `json:"entry,omitempty"`
+	EntryType      string `json:"entry_type,omitempty"`
+	SessionID      string `json:"session_id,omitempty"`
+	SessionIDHash  string `json:"session_id_hash,omitempty"`
+	Corrupt        bool   `json:"corrupt,omitempty"`
+	CorruptionKind string `json:"corruption_kind,omitempty"`
+	Line           int    `json:"line,omitempty"`
+	RecordNo       int64  `json:"record_no,omitempty"`
+	Error          string `json:"error"`
 }
 
 type ConfigStatusResponse struct {
-	Config      map[string]any            `json:"config"`
-	Values      []config.ResolvedValue    `json:"values"`
-	Diagnostics config.DiagnosticSnapshot `json:"diagnostics"`
-	Warnings    []string                  `json:"warnings,omitempty"`
+	Config      map[string]any      `json:"config"`
+	Values      []ConfigStatusValue `json:"values"`
+	Diagnostics map[string]any      `json:"diagnostics"`
+	Warnings    []string            `json:"warnings,omitempty"`
+}
+
+type ConfigStatusValue struct {
+	Key      string `json:"key"`
+	Value    any    `json:"value,omitempty"`
+	Source   string `json:"source,omitempty"`
+	Redacted bool   `json:"redacted,omitempty"`
+	Warning  string `json:"warning,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 type ManagedProcessResponse struct {
@@ -166,6 +203,8 @@ type SessionContextResponse struct {
 	Runtime                 ContextRuntime       `json:"runtime,omitempty"`
 	Usage                   ContextUsage         `json:"usage,omitempty"`
 	Prompt                  ContextPrompt        `json:"prompt,omitempty"`
+	Memory                  ContextMemory        `json:"memory,omitempty"`
+	Diagnostics             ContextDiagnostics   `json:"diagnostics,omitempty"`
 	LastCompaction          *ContextCompaction   `json:"last_compaction,omitempty"`
 	OutputRefs              ContextOutputRefs    `json:"output_refs,omitempty"`
 	Warnings                []string             `json:"warnings,omitempty"`
@@ -214,13 +253,48 @@ type ContextPrompt struct {
 	CacheReason   string                   `json:"cache_reason,omitempty"`
 }
 
+type ContextMemory struct {
+	Policy          string `json:"policy,omitempty"`
+	Status          string `json:"status,omitempty"`
+	LockedHash      string `json:"locked_hash,omitempty"`
+	CurrentHash     string `json:"current_hash,omitempty"`
+	CurrentRoots    int    `json:"current_roots,omitempty"`
+	CurrentEntries  int    `json:"current_entries,omitempty"`
+	CurrentWarnings int    `json:"current_warnings,omitempty"`
+	CurrentCapped   bool   `json:"current_capped,omitempty"`
+	CurrentError    string `json:"current_error,omitempty"`
+}
+
+type ContextDiagnostics struct {
+	CurrentEpoch              int    `json:"current_epoch,omitempty"`
+	CompactionEvents          int    `json:"compaction_events,omitempty"`
+	ThresholdEvents           int    `json:"threshold_events,omitempty"`
+	ToolCallEvents            int    `json:"tool_call_events,omitempty"`
+	HelperModelCalls          int    `json:"helper_model_calls,omitempty"`
+	ProtectedPrefixTokens     int64  `json:"protected_prefix_tokens,omitempty"`
+	BodyTokens                int64  `json:"body_tokens,omitempty"`
+	WindowRemainingTokens     int64  `json:"window_remaining_tokens,omitempty"`
+	CompactMarginTokens       int64  `json:"compact_margin_tokens,omitempty"`
+	MemoryContextHash         string `json:"memory_context_hash,omitempty"`
+	ProjectContextHash        string `json:"project_context_hash,omitempty"`
+	AgentsInstructionsHash    string `json:"agents_instructions_hash,omitempty"`
+	MCPInstructionsHash       string `json:"mcp_instructions_hash,omitempty"`
+	PromptInventoryHash       string `json:"prompt_inventory_hash,omitempty"`
+	LastCompactionHistoryHash string `json:"last_compaction_history_hash,omitempty"`
+}
+
 type ContextCompaction struct {
-	Seq          int64  `json:"seq,omitempty"`
-	CompactionID string `json:"compaction_id,omitempty"`
-	Strategy     string `json:"strategy,omitempty"`
-	BeforeTokens int64  `json:"before_tokens,omitempty"`
-	AfterTokens  int64  `json:"after_tokens,omitempty"`
-	Reason       string `json:"reason,omitempty"`
+	Seq             int64  `json:"seq,omitempty"`
+	CompactionID    string `json:"compaction_id,omitempty"`
+	ContextEpoch    int    `json:"context_epoch,omitempty"`
+	Strategy        string `json:"strategy,omitempty"`
+	BeforeTokens    int64  `json:"before_tokens,omitempty"`
+	AfterTokens     int64  `json:"after_tokens,omitempty"`
+	Reason          string `json:"reason,omitempty"`
+	InputSpanHash   string `json:"input_span_hash,omitempty"`
+	ReplacementHash string `json:"replacement_hash,omitempty"`
+	PreHistoryHash  string `json:"pre_history_hash,omitempty"`
+	PostHistoryHash string `json:"post_history_hash,omitempty"`
 }
 
 type ContextOutputRefs struct {

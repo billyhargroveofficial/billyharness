@@ -40,20 +40,20 @@ func (r *Registry) addFSRead() {
 	})
 }
 
-func (r *Registry) handleFSRead(_ context.Context, args json.RawMessage) (Result, error) {
+func (r *Registry) handleFSRead(ctx context.Context, args json.RawMessage) (Result, error) {
 	var in fsReadInput
 	if err := json.Unmarshal(args, &in); err != nil {
 		return Result{}, err
 	}
-	path, err := r.safeReadPath(in.Path)
+	path, err := r.safeReadPath(ctx, in.Path)
 	if err != nil {
 		return Result{}, err
 	}
 	return readFSLineWindow(path, in)
 }
 
-func (r *Registry) safeReadPath(input string) (string, error) {
-	path, err := r.safePath(input)
+func (r *Registry) safeReadPath(ctx context.Context, input string) (string, error) {
+	path, err := r.safePath(ctx, input)
 	if err == nil {
 		return path, nil
 	}

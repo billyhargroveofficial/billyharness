@@ -279,6 +279,7 @@ func (m *Model) setReasoning(value string) bool {
 }
 
 func (m *Model) toggleThinkingDisplay() {
+	m.clearTranscriptSelection()
 	if m.thinkView == "hidden" {
 		m.thinkView = "expanded"
 	} else {
@@ -294,10 +295,16 @@ func (m *Model) setThinkingDisplay(value string) bool {
 	case "", "toggle", "next":
 		m.toggleThinkingDisplay()
 	case "on", "show", "shown", "visible", "yes", "true":
+		if m.thinkView != "expanded" {
+			m.clearTranscriptSelection()
+		}
 		m.showThinking = true
 		m.thinkView = "expanded"
 		m.status = "thinking blocks expanded"
 	case "off", "hide", "hidden", "no", "false":
+		if m.thinkView != "hidden" {
+			m.clearTranscriptSelection()
+		}
 		m.showThinking = false
 		m.thinkView = "hidden"
 		m.status = "thinking blocks hidden"
@@ -341,6 +348,9 @@ func (m *Model) setToolView(value string) bool {
 		m.status = "unknown toolview " + value
 		return false
 	}
+	if m.toolView != value {
+		m.clearTranscriptSelection()
+	}
 	m.toolView = value
 	m.status = "tool blocks " + value
 	_ = m.saveSettings()
@@ -362,6 +372,9 @@ func (m *Model) setTranscriptMode(value string) bool {
 	default:
 		m.status = "unknown transcript mode " + value
 		return false
+	}
+	if m.transcriptMode != value {
+		m.clearTranscriptSelection()
 	}
 	m.transcriptMode = value
 	m.status = "transcript " + value

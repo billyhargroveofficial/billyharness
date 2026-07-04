@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"strings"
 )
 
@@ -36,21 +37,84 @@ func validateArgs(schema json.RawMessage, args json.RawMessage) error {
 }
 
 type schemaNode struct {
-	Type                 any                   `json:"type"`
-	Properties           map[string]schemaNode `json:"properties"`
-	Required             []string              `json:"required"`
-	AdditionalProperties any                   `json:"additionalProperties"`
-	Items                *schemaNode           `json:"items"`
-	Enum                 []any                 `json:"enum"`
-	MinItems             *int                  `json:"minItems"`
-	MaxItems             *int                  `json:"maxItems"`
+	Type                 any
+	Properties           map[string]schemaNode
+	Required             []string
+	AdditionalProperties any
+	Items                *schemaNode
+	Enum                 []any
+	MinItems             *int
+	MaxItems             *int
+	AnyOf                []schemaNode
+	UnsupportedKeywords  []string
+}
+
+func (s *schemaNode) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var parsed struct {
+		Type                 any                   `json:"type"`
+		Properties           map[string]schemaNode `json:"properties"`
+		Required             []string              `json:"required"`
+		AdditionalProperties any                   `json:"additionalProperties"`
+		Items                *schemaNode           `json:"items"`
+		Enum                 []any                 `json:"enum"`
+		MinItems             *int                  `json:"minItems"`
+		MaxItems             *int                  `json:"maxItems"`
+		AnyOf                []schemaNode          `json:"anyOf"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return err
+	}
+	*s = schemaNode{
+		Type:                 parsed.Type,
+		Properties:           parsed.Properties,
+		Required:             parsed.Required,
+		AdditionalProperties: parsed.AdditionalProperties,
+		Items:                parsed.Items,
+		Enum:                 parsed.Enum,
+		MinItems:             parsed.MinItems,
+		MaxItems:             parsed.MaxItems,
+		AnyOf:                parsed.AnyOf,
+	}
+	for key := range raw {
+		if !supportedSchemaKeyword(key) && !schemaAnnotationKeyword(key) {
+			s.UnsupportedKeywords = append(s.UnsupportedKeywords, key)
+		}
+	}
+	sort.Strings(s.UnsupportedKeywords)
+	return nil
 }
 
 func validateValue(path string, schema schemaNode, value any) error {
+	if len(schema.UnsupportedKeywords) > 0 {
+		return fmt.Errorf("%s uses unsupported JSON Schema keyword %q", path, schema.UnsupportedKeywords[0])
+	}
+	if len(schema.AnyOf) > 0 {
+		var failures []string
+		for _, option := range schema.AnyOf {
+			if err := validateValue(path, option, value); err == nil {
+				failures = nil
+				break
+			} else {
+				failures = append(failures, err.Error())
+			}
+		}
+		if len(failures) > 0 {
+			return fmt.Errorf("%s must match at least one anyOf schema: %s", path, strings.Join(failures, "; "))
+		}
+	}
 	if len(schema.Enum) > 0 && !enumContains(schema.Enum, value) {
 		return fmt.Errorf("%s must be one of %s", path, enumValues(schema.Enum))
 	}
 	types := schemaTypes(schema.Type)
+	for _, typ := range types {
+		if !supportedSchemaType(typ) {
+			return fmt.Errorf("%s uses unsupported JSON Schema type %q", path, typ)
+		}
+	}
 	if len(types) > 0 && !matchesAnyType(types, value) {
 		return fmt.Errorf("%s must be %s", path, strings.Join(types, " or "))
 	}
@@ -99,6 +163,33 @@ func validateValue(path string, schema schemaNode, value any) error {
 		}
 	}
 	return nil
+}
+
+func supportedSchemaKeyword(key string) bool {
+	switch key {
+	case "type", "properties", "required", "additionalProperties", "items", "enum", "minItems", "maxItems", "anyOf":
+		return true
+	default:
+		return false
+	}
+}
+
+func schemaAnnotationKeyword(key string) bool {
+	switch key {
+	case "$id", "$schema", "default", "deprecated", "description", "examples", "title":
+		return true
+	default:
+		return false
+	}
+}
+
+func supportedSchemaType(typ string) bool {
+	switch typ {
+	case "object", "array", "string", "boolean", "integer", "number", "null":
+		return true
+	default:
+		return false
+	}
 }
 
 func schemaTypes(raw any) []string {

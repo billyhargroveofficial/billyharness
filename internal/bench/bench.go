@@ -23,7 +23,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/runstate"
-	"github.com/billyhargroveofficial/billyharness/internal/tools"
+	"github.com/billyhargroveofficial/billyharness/internal/runtimehost"
 	"github.com/billyhargroveofficial/billyharness/internal/trace"
 )
 
@@ -615,16 +615,15 @@ func runTask(parent context.Context, cfg config.Config, rc RunConfig, runID stri
 		result.WallTimeMS = time.Since(start).Milliseconds()
 		return result
 	}
-	registrySettings := tools.RegistrySettingsFromConfig(taskCfg)
-	registry, err := tools.NewRegistryWithMCPFromSettings(ctx, registrySettings, tools.WithWebSummarizer(provider.NewWebSummarizerFromProjections(registrySettings.Provider, registrySettings.ToolPolicy)))
+	host, err := runtimehost.NewFromSettings(ctx, runtimehost.SettingsFromConfig(taskCfg), runtimehost.WithProvider(prov))
 	if err != nil {
 		result.Outcome = "crash"
 		result.Error = err.Error()
 		result.WallTimeMS = time.Since(start).Milliseconds()
 		return result
 	}
-	defer registry.Close()
-	a := agent.NewFromSettings(agent.SettingsFromConfig(taskCfg), prov, registry)
+	defer host.Close()
+	a := host.Agent()
 	var eventWriteErr error
 	err = a.Run(ctx, task.Prompt, func(event protocol.Event) {
 		observe(&result, event)
@@ -802,7 +801,7 @@ func taskProvider(cfg config.Config, rc RunConfig, task Task) (provider.Provider
 	if rc.Mock && rounds > 0 {
 		return newScriptedLoopProvider(rounds, task.ScriptedToolName, task.ScriptedToolArgs), nil
 	}
-	return provider.NewFromBinding(cfg.ProviderBinding())
+	return runtimehost.NewProvider(runtimehost.SettingsFromConfig(cfg))
 }
 
 func toolResultIsError(value any) bool {

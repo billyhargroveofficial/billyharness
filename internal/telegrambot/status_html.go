@@ -71,7 +71,18 @@ func StatusHTMLWithRuntime(state ChatState, opts Options, runtime gatewayapi.Ses
 		"selected compact threshold: <code>" + esc(compactInt(compactThreshold.Tokens)) + "</code> (" + esc(formatThresholdPercent(compactThreshold.Percent)) + ")" + esc(contextCompactStatusSuffix(compactThreshold.Source)) + "\n" +
 		"send: <code>" + esc(fmt.Sprint(opts.SendEnabled && !opts.DryRunDefault)) + "</code>\n" +
 		"allowed chats: <code>" + esc(strings.Join(allowedChats, ",")) + "</code>\n" +
-		"allowed users: <code>" + esc(strings.Join(allowedUsers, ",")) + "</code>"
+		"allowed users: <code>" + esc(strings.Join(allowedUsers, ",")) + "</code>\n" +
+		"allowed user scope: <code>" + esc(allowedUserScope(opts)) + "</code>"
+}
+
+func allowedUserScope(opts Options) string {
+	if opts.AllowAllChats {
+		return "all chats"
+	}
+	if opts.AllowUserInGroups {
+		return "private and group chats"
+	}
+	return "private chats"
 }
 
 type compactThresholdResolution struct {

@@ -26,10 +26,19 @@ type compactionPolicy struct {
 
 type compactionReport struct {
 	CompactionID             string                          `json:"compaction_id"`
+	ContextEpoch             int                             `json:"context_epoch,omitempty"`
+	PreviousContextEpoch     int                             `json:"previous_context_epoch,omitempty"`
 	Reason                   string                          `json:"reason"`
 	TriggerSource            string                          `json:"trigger_source"`
 	TriggerPromptTokens      int64                           `json:"trigger_prompt_tokens"`
 	ThresholdTokens          int64                           `json:"threshold_tokens"`
+	InputSpanHash            string                          `json:"input_span_hash,omitempty"`
+	ReplacementHash          string                          `json:"replacement_hash,omitempty"`
+	SummaryHash              string                          `json:"summary_hash,omitempty"`
+	PreHistorySeq            int                             `json:"pre_history_seq,omitempty"`
+	PreHistoryHash           string                          `json:"pre_history_hash,omitempty"`
+	PostHistorySeq           int                             `json:"post_history_seq,omitempty"`
+	PostHistoryHash          string                          `json:"post_history_hash,omitempty"`
 	BeforeEstimatedTokens    int64                           `json:"before_estimated_tokens"`
 	AfterEstimatedTokens     int64                           `json:"after_estimated_tokens"`
 	CutStartIndex            int                             `json:"cut_start_index"`
@@ -259,6 +268,30 @@ func compactionID(messages []protocol.Message, triggerTokens, threshold int64) s
 	return hex.EncodeToString(sum[:6])
 }
 
+func messagesCompactionHash(messages []protocol.Message) string {
+	hash := sha256.New()
+	fmt.Fprintf(hash, "messages=%d\n", len(messages))
+	for i, msg := range messages {
+		fmt.Fprintf(hash, "index=%d role=%s name=%s tool_call_id=%s content=%s reasoning=%s\n", i, msg.Role, msg.Name, msg.ToolCallID, msg.Content, msg.ReasoningContent)
+		for _, part := range msg.Parts {
+			fmt.Fprintf(hash, "part=%s text=%s", part.Type, part.Text)
+			if part.Attachment != nil {
+				fmt.Fprintf(hash, " attachment=%s kind=%s storage=%s sha=%s", part.Attachment.ID, part.Attachment.Kind, part.Attachment.StorageRef, part.Attachment.SHA256)
+			}
+			fmt.Fprintln(hash)
+		}
+		for _, call := range msg.ToolCalls {
+			fmt.Fprintf(hash, "call=%s name=%s args=%s invalid=%s error=%s\n", call.ID, call.Name, string(call.Arguments), call.InvalidArguments, call.InvalidArgumentError)
+		}
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func textCompactionHash(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
+}
+
 func compactMessageEntry(index int, msg protocol.Message) string {
 	role := string(msg.Role)
 	if msg.Name != "" {
@@ -336,12 +369,15 @@ func newCompactionReport(
 	active []protocol.Message,
 	before []protocol.Message,
 ) *compactionReport {
-	return &compactionReport{
+	report := &compactionReport{
 		CompactionID:             id,
 		Reason:                   "prompt_tokens_at_or_above_threshold",
 		TriggerSource:            triggerSource,
 		TriggerPromptTokens:      triggerTokens,
 		ThresholdTokens:          policy.ThresholdTokens,
+		InputSpanHash:            messagesCompactionHash(compacted),
+		PreHistorySeq:            len(before),
+		PreHistoryHash:           messagesCompactionHash(before),
 		BeforeEstimatedTokens:    estimateMessagesTokens(before),
 		AfterEstimatedTokens:     estimateMessagesTokens(active),
 		CutStartIndex:            protected.EndIndex,
@@ -364,6 +400,22 @@ func newCompactionReport(
 		SummaryEstimatedTokens:   estimateMessagesTokens([]protocol.Message{summary}),
 		TopContextContributors:   topCompactionContributors(before, 5),
 	}
+	report.refreshReplacementAudit(active)
+	return report
+}
+
+func (r *compactionReport) refreshReplacementAudit(active []protocol.Message) {
+	if r == nil {
+		return
+	}
+	r.PostHistorySeq = len(active)
+	r.PostHistoryHash = messagesCompactionHash(active)
+	if r.ReplacementIndex < 0 || r.ReplacementIndex >= len(active) {
+		return
+	}
+	replacement := active[r.ReplacementIndex]
+	r.ReplacementHash = messagesCompactionHash([]protocol.Message{replacement})
+	r.SummaryHash = textCompactionHash(replacement.Content)
 }
 
 func topCompactionContributors(messages []protocol.Message, limit int) []compactionContributor {

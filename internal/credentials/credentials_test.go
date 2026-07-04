@@ -49,11 +49,11 @@ func TestManagerResolveDeepSeekAPIKeyUsesConfiguredEnvName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if secret.Value != "sk-custom-value" || secret.EnvVar != "CUSTOM_DEEPSEEK_KEY" || secret.Path != filepath.Join(root, ".env") {
+	if secret.Value != "sk-custom-value" || secret.EnvVar != "CUSTOM_DEEPSEEK_KEY" || secret.Path != filepath.Join(root, ".env") || secret.Provenance != "dotenv" {
 		t.Fatalf("secret = %#v", secret)
 	}
 	status := manager.DeepSeekStatus()
-	if !status.Configured || status.Source != filepath.Join(root, ".env") || status.Path != filepath.Join(root, ".env") {
+	if !status.Configured || status.Source != filepath.Join(root, ".env") || status.Path != filepath.Join(root, ".env") || status.Provenance != "dotenv" {
 		t.Fatalf("status = %#v", status)
 	}
 }
@@ -71,7 +71,8 @@ func TestAuthStatusClassifiesAndRedactsCredentials(t *testing.T) {
 		t.Fatalf("runtime status = %#v", status)
 	}
 	if status.DeepSeek.Provider != "deepseek" || status.DeepSeek.AuthType != "api-key" ||
-		status.DeepSeek.Status != "configured" || status.DeepSeek.Credential != "redacted" {
+		status.DeepSeek.Status != "configured" || status.DeepSeek.Credential != "redacted" ||
+		status.DeepSeek.Provenance != "env" {
 		t.Fatalf("deepseek classified status = %#v", status.DeepSeek)
 	}
 	if status.Codex.Provider != "codex" || status.Codex.AuthType != "codex-oauth" ||
@@ -85,7 +86,7 @@ func TestAuthStatusClassifiesAndRedactsCredentials(t *testing.T) {
 			t.Fatalf("formatted status leaked %q:\n%s", leak, text)
 		}
 	}
-	for _, want := range []string{"runtime: provider=openai-codex model=gpt-5.5 cost_mode=subscription", "auth=api-key", "auth=codex-oauth", "credential=redacted"} {
+	for _, want := range []string{"runtime: provider=openai-codex model=gpt-5.5 cost_mode=subscription", "auth=api-key", "auth=codex-oauth", "credential=redacted", "provenance=env"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("formatted status missing %q:\n%s", want, text)
 		}
@@ -115,7 +116,7 @@ func TestNewManagerFromAuthSettingsUsesProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if secret.Value != "sk-projected" || secret.EnvVar != "PROJECTED_DEEPSEEK_KEY" {
+	if secret.Value != "sk-projected" || secret.EnvVar != "PROJECTED_DEEPSEEK_KEY" || secret.Provenance != "dotenv" {
 		t.Fatalf("secret = %#v", secret)
 	}
 	if got := manager.CodexAuthFilePath(); got != authFile {
@@ -177,15 +178,15 @@ func TestManagerResolvesCredentialFileSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deepseek.Value != "sk-from-credential-file" || deepseek.Source != credentialFile || deepseek.Path != credentialFile {
+	if deepseek.Value != "sk-from-credential-file" || deepseek.Source != credentialFile || deepseek.Path != credentialFile || deepseek.Provenance != "credential_file" {
 		t.Fatalf("deepseek secret = %#v", deepseek)
 	}
 	resolved := manager.ResolveCodexAuth()
-	if resolved.AccessToken.Value != "codex-token-from-file" || resolved.AccessToken.Source != credentialFile || resolved.AccountID.Value != "acct_file" {
+	if resolved.AccessToken.Value != "codex-token-from-file" || resolved.AccessToken.Source != credentialFile || resolved.AccessToken.Provenance != "credential_file" || resolved.AccountID.Value != "acct_file" {
 		t.Fatalf("codex resolution = %#v", resolved)
 	}
 	status := manager.CodexStatus()
-	if !status.Configured || status.Source != credentialFile || status.AccountID != "acct_file" {
+	if !status.Configured || status.Source != credentialFile || status.Provenance != "credential_file" || status.AccountID != "acct_file" {
 		t.Fatalf("codex status = %#v", status)
 	}
 	if strings.Contains(status.Source, "codex-token-from-file") || strings.Contains(status.Path, "codex-token-from-file") {
@@ -266,14 +267,49 @@ func TestManagerResolveCodexAuthUsesSharedSources(t *testing.T) {
 	manager := NewManagerFromAuthSettings(config.AuthSettings{CodexAuthFile: authPath})
 
 	resolved := manager.ResolveCodexAuth()
-	if resolved.AccessToken.Value != "token-from-dotenv" || resolved.AccessToken.Source != ".env" || resolved.AccessToken.EnvVar != CodexAccessTokenEnv {
+	if resolved.AccessToken.Value != "token-from-dotenv" || resolved.AccessToken.Source != envPath || resolved.AccessToken.Provenance != "dotenv" || resolved.AccessToken.EnvVar != CodexAccessTokenEnv {
 		t.Fatalf("access token source = %#v", resolved.AccessToken)
 	}
-	if resolved.AccountID.Value != "acct_dotenv" || resolved.AccountID.EnvVar != CodexAccountIDEnv {
+	if resolved.AccountID.Value != "acct_dotenv" || resolved.AccountID.Source != envPath || resolved.AccountID.Provenance != "dotenv" || resolved.AccountID.EnvVar != CodexAccountIDEnv {
 		t.Fatalf("account source = %#v", resolved.AccountID)
 	}
 	if resolved.AuthFile != authPath {
 		t.Fatalf("auth file = %q", resolved.AuthFile)
+	}
+}
+
+func TestManagerSecretLookupUsesSharedDotenvPrecedence(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	t.Setenv("CODEX_ACCESS_TOKEN", "")
+	t.Setenv("CODEX_CHATGPT_ACCOUNT_ID", "")
+	envPath := filepath.Join(root, ".env")
+	if err := os.WriteFile(envPath, []byte("DEEPSEEK_API_KEY=sk-from-dotenv\nCODEX_ACCESS_TOKEN=codex-from-dotenv\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	credentialFile := filepath.Join(root, "auth", "credentials.json")
+	if err := os.MkdirAll(filepath.Dir(credentialFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(credentialFile, map[string]any{
+		"deepseek_api_key":   "sk-from-credential-file",
+		"codex_access_token": "codex-from-credential-file",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManagerFromAuthSettings(config.AuthSettings{CredentialFile: credentialFile})
+
+	deepseek, err := manager.ResolveDeepSeekAPIKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deepseek.Value != "sk-from-dotenv" || deepseek.Source != envPath || deepseek.Provenance != "dotenv" {
+		t.Fatalf("deepseek shared lookup = %#v", deepseek)
+	}
+	codex := manager.ResolveCodexAuth()
+	if codex.AccessToken.Value != "codex-from-dotenv" || codex.AccessToken.Source != envPath || codex.AccessToken.Provenance != "dotenv" {
+		t.Fatalf("codex shared lookup = %#v", codex)
 	}
 }
 

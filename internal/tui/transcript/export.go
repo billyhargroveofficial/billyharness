@@ -48,7 +48,11 @@ func FormatMessages(messages []protocol.Message, mode string) string {
 }
 
 func FormatEvents(events []protocol.Event, mode string) string {
-	return FormatCells(CellsFromEvents(events), mode)
+	mode = NormalizeExportMode(mode)
+	if mode == "" {
+		mode = ExportModeRich
+	}
+	return FormatCells(cellsFromEvents(events, mode), mode)
 }
 
 func FormatSession(messages []protocol.Message, events []protocol.Event, mode string) string {
@@ -71,11 +75,25 @@ func FormatSession(messages []protocol.Message, events []protocol.Event, mode st
 }
 
 func CellsFromEvents(events []protocol.Event) []Cell {
+	return cellsFromEvents(events, ExportModeRich)
+}
+
+func cellsFromEvents(events []protocol.Event, mode string) []Cell {
 	p := NewProjector()
 	for _, event := range events {
+		if !exportProjectsEvent(event.Type, mode) {
+			continue
+		}
 		p.Apply(event)
 	}
 	return p.Cells()
+}
+
+func exportProjectsEvent(eventType protocol.EventType, mode string) bool {
+	if NormalizeExportMode(mode) == ExportModeRaw {
+		return true
+	}
+	return protocol.EventPresentationPolicy(eventType).Transcript
 }
 
 func CellsFromMessages(messages []protocol.Message) []Cell {

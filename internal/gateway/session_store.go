@@ -158,15 +158,24 @@ func newSessionStore(dir string) *sessionStore {
 }
 
 func (s *sessionStore) LoadAll() ([]*Session, error) {
+	sessions, _, err := s.LoadAllWithDiagnostics()
+	return sessions, err
+}
+
+func (s *sessionStore) LoadAllWithDiagnostics() ([]*Session, gatewayapi.SessionStoreHealth, error) {
+	diagnostics := gatewayapi.SessionStoreHealth{
+		Enabled: s != nil && strings.TrimSpace(s.dir) != "",
+	}
 	if s == nil || strings.TrimSpace(s.dir) == "" {
-		return nil, nil
+		return nil, diagnostics, nil
 	}
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, diagnostics, nil
 		}
-		return nil, err
+		appendSessionStoreLoadError(&diagnostics, s.dir, "", "store", "", err)
+		return nil, diagnostics, err
 	}
 	var sessions []*Session
 	loaded := map[string]struct{}{}
@@ -174,26 +183,104 @@ func (s *sessionStore) LoadAll() ([]*Session, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		session, err := s.loadSessionDir(filepath.Join(s.dir, entry.Name()))
+		if entry.Name() == sessionIndexDirName {
+			continue
+		}
+		entryName := entry.Name()
+		session, err := s.loadSessionDir(filepath.Join(s.dir, entryName))
 		if err == nil && session != nil {
 			sessions = append(sessions, session)
 			loaded[session.ID] = struct{}{}
+			continue
+		}
+		if err != nil {
+			sessionID := sessionIDFromStoreEntry(entryName, true)
+			appendSessionStoreLoadError(&diagnostics, s.dir, entryName, "session_dir", sessionID, err)
 		}
 	}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		session, err := s.loadLegacySnapshot(filepath.Join(s.dir, entry.Name()))
+		entryName := entry.Name()
+		session, err := s.loadLegacySnapshot(filepath.Join(s.dir, entryName))
 		if err == nil && session != nil {
 			if _, ok := loaded[session.ID]; ok {
 				continue
 			}
 			sessions = append(sessions, session)
 			loaded[session.ID] = struct{}{}
+			continue
+		}
+		if err != nil {
+			sessionID := sessionIDFromStoreEntry(entryName, false)
+			appendSessionStoreLoadError(&diagnostics, s.dir, entryName, "legacy_snapshot", sessionID, err)
 		}
 	}
-	return sessions, nil
+	diagnostics.LoadedCount = len(sessions)
+	return sessions, diagnostics, nil
+}
+
+func appendSessionStoreLoadError(diagnostics *gatewayapi.SessionStoreHealth, storeDir, entry, entryType, sessionID string, err error) {
+	if diagnostics == nil || err == nil {
+		return
+	}
+	item := gatewayapi.SessionStoreLoadError{
+		Entry:     entry,
+		EntryType: entryType,
+		SessionID: sessionID,
+		Error:     sanitizeSessionStoreLoadError(storeDir, err.Error()),
+	}
+	if item.SessionID != "" {
+		item.SessionIDHash = hashSessionIDForDiagnostics(item.SessionID)
+	}
+	var corrupt *eventlog.CorruptionError
+	if errors.As(err, &corrupt) {
+		item.Corrupt = true
+		item.CorruptionKind = corrupt.Kind
+		item.Line = corrupt.Line
+		item.RecordNo = corrupt.RecordNo
+		if corrupt.Err != nil {
+			item.Error = sanitizeSessionStoreLoadError(storeDir, corrupt.Err.Error())
+		}
+		diagnostics.CorruptCount++
+	}
+	diagnostics.Errors = append(diagnostics.Errors, item)
+	diagnostics.ErrorCount = len(diagnostics.Errors)
+}
+
+func sessionIDFromStoreEntry(entry string, directory bool) string {
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return ""
+	}
+	if !directory {
+		entry = strings.TrimSuffix(entry, ".json")
+	}
+	if id, err := cleanSessionID(entry); err == nil {
+		return id
+	}
+	return ""
+}
+
+func sanitizeSessionStoreLoadError(storeDir, message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return "session store load failed"
+	}
+	storeDir = filepath.Clean(strings.TrimSpace(storeDir))
+	if storeDir != "" && storeDir != "." {
+		message = strings.ReplaceAll(message, storeDir, "<session-store>")
+	}
+	return message
+}
+
+func hashSessionIDForDiagnostics(sessionID string) string {
+	if strings.TrimSpace(sessionID) == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(sessionID))
+	return fmt.Sprintf("%x", sum[:])[:16]
 }
 
 func (s *sessionStore) Save(session *Session) error {
@@ -661,11 +748,7 @@ func replaySessionHistory(path, sessionID string) (replayedSessionHistory, error
 }
 
 func lastSessionEventSeq(path, sessionID string) (int64, error) {
-	validator := eventlog.NewRecordValidator(eventlog.RecordValidatorOptions{
-		SchemaVersion:   gatewaySessionSchemaVersion,
-		ScopeName:       "session_id",
-		ExpectedScopeID: sessionID,
-	})
+	validator := newSessionEventRecordValidator(sessionID)
 	err := eventlog.ReplayJSONL[sessionEventRecord](path, eventlog.JSONLOptions{MissingOK: true}, func(item eventlog.JSONLRecord[sessionEventRecord]) error {
 		record := item.Value
 		recordNo := validator.NextSeq()
@@ -675,7 +758,7 @@ func lastSessionEventSeq(path, sessionID string) (int64, error) {
 			ScopeID:       record.SessionID,
 			EventType:     record.EventType,
 			Event:         record.Event,
-			HasEvent:      record.Event.Type != "",
+			HasEvent:      true,
 		}); err != nil {
 			return eventlog.NewCorruptionError(path, item.Line, recordNo, "", err)
 		}
@@ -691,11 +774,7 @@ func replaySessionStatus(path, sessionID string) (SessionStatus, bool, error) {
 	var status SessionStatus
 	var found bool
 	var maxRunSeq int64
-	validator := eventlog.NewRecordValidator(eventlog.RecordValidatorOptions{
-		SchemaVersion:   gatewaySessionSchemaVersion,
-		ScopeName:       "session_id",
-		ExpectedScopeID: sessionID,
-	})
+	validator := newSessionEventRecordValidator(sessionID)
 	err := eventlog.ReplayJSONL[sessionEventRecord](path, eventlog.JSONLOptions{MissingOK: true}, func(item eventlog.JSONLRecord[sessionEventRecord]) error {
 		record := item.Value
 		recordNo := validator.NextSeq()
@@ -705,7 +784,7 @@ func replaySessionStatus(path, sessionID string) (SessionStatus, bool, error) {
 			ScopeID:       record.SessionID,
 			EventType:     record.EventType,
 			Event:         record.Event,
-			HasEvent:      record.Event.Type != "",
+			HasEvent:      true,
 		}); err != nil {
 			return eventlog.NewCorruptionError(path, item.Line, recordNo, "", err)
 		}
@@ -767,11 +846,7 @@ func decodeTurnChange(value any) (protocol.TurnChangeEvent, bool) {
 
 func replaySessionEventsAfter(path, sessionID string, afterSeq int64) ([]protocol.Event, error) {
 	var events []protocol.Event
-	validator := eventlog.NewRecordValidator(eventlog.RecordValidatorOptions{
-		SchemaVersion:   gatewaySessionSchemaVersion,
-		ScopeName:       "session_id",
-		ExpectedScopeID: sessionID,
-	})
+	validator := newSessionEventRecordValidator(sessionID)
 	lifecycle := eventlog.NewLifecycleValidator()
 	err := eventlog.ReplayJSONL[sessionEventRecord](path, eventlog.JSONLOptions{MissingOK: true}, func(item eventlog.JSONLRecord[sessionEventRecord]) error {
 		record := item.Value
@@ -782,7 +857,7 @@ func replaySessionEventsAfter(path, sessionID string, afterSeq int64) ([]protoco
 			ScopeID:       record.SessionID,
 			EventType:     record.EventType,
 			Event:         record.Event,
-			HasEvent:      record.Event.Type != "",
+			HasEvent:      true,
 		}); err != nil {
 			return eventlog.NewCorruptionError(path, item.Line, recordNo, "", err)
 		}
@@ -800,6 +875,16 @@ func replaySessionEventsAfter(path, sessionID string, afterSeq int64) ([]protoco
 		return events, err
 	}
 	return events, nil
+}
+
+func newSessionEventRecordValidator(sessionID string) *eventlog.RecordValidator {
+	return eventlog.NewRecordValidator(eventlog.RecordValidatorOptions{
+		SchemaVersion:    gatewaySessionSchemaVersion,
+		ScopeName:        "session_id",
+		ExpectedScopeID:  sessionID,
+		ValidateEnvelope: true,
+		RequireEnvelope:  true,
+	})
 }
 
 func readSessionManifest(path string) (sessionManifest, error) {

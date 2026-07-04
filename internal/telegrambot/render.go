@@ -182,7 +182,7 @@ func (r *Renderer) Apply(event protocol.Event) []RenderEvent {
 		if !presentation.CompactProgress {
 			return nil
 		}
-		errText := fmt.Sprint(event.Data)
+		errText := redactTelegramText(fmt.Sprint(event.Data))
 		if errText != "" && errText != previousError {
 			return []RenderEvent{{Kind: "error", Title: "Error", Body: errText}}
 		}
@@ -247,7 +247,7 @@ func (r *Renderer) applySnapshot(snapshot projector.Snapshot) {
 	r.HelperModelAPI = snapshot.HelperModelAPITokens
 	r.HelperAPICalls = snapshot.HelperAPICalls
 	r.HelperCostUSD = snapshot.HelperCostUSD
-	r.LastError = snapshot.LastError
+	r.LastError = redactTelegramText(snapshot.LastError)
 	r.Done = snapshot.RunState == projector.RunStateCompleted
 }
 
@@ -292,7 +292,7 @@ func (r *Renderer) finalContent() string {
 		return content
 	}
 	if errText := strings.TrimSpace(r.LastError); errText != "" {
-		return "Error: " + errText
+		return "Error: " + redactTelegramText(errText)
 	}
 	return "Working..."
 }
@@ -392,7 +392,7 @@ func ToolMessageHTML(event RenderEvent) string {
 	if title == "" {
 		title = "Tool"
 	}
-	return trimTelegram("<b>" + esc(title) + "</b>\n" + esc(event.Body))
+	return trimTelegram("<b>" + esc(redactTelegramText(title)) + "</b>\n" + esc(redactTelegramText(event.Body)))
 }
 
 type ToolProgress struct {
@@ -421,7 +421,7 @@ func (p *ToolProgress) Add(event RenderEvent) bool {
 		return false
 	}
 	prefix := "•"
-	line := strings.TrimSpace(prefix + " " + event.Body)
+	line := strings.TrimSpace(prefix + " " + redactTelegramText(event.Body))
 	if line == "" {
 		return false
 	}
@@ -551,7 +551,7 @@ func toolResultSummary(snapshot projector.Snapshot, data any) (string, string) {
 	if !ok {
 		return "", ""
 	}
-	return summary.Key, summary.Line
+	return summary.Key, redactTelegramText(summary.Line)
 }
 
 func telegramToolBase(item projector.ToolItem) string {
@@ -575,9 +575,11 @@ func toolFailureSummary(event protocol.Event) (string, string) {
 			result.Name = "tool"
 		}
 		result.IsError = true
-		return toolrender.ResultKeyAndLine(result, "", toolrender.StyleTelegram)
+		key, line := toolrender.ResultKeyAndLine(result, "", toolrender.StyleTelegram)
+		return key, redactTelegramText(line)
 	}
-	return toolLifecycleFailureSummary(event)
+	key, line := toolLifecycleFailureSummary(event)
+	return key, redactTelegramText(line)
 }
 
 func toolResultHasFailureDetails(result protocol.ToolResult) bool {

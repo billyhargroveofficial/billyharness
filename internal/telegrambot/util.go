@@ -56,14 +56,7 @@ func sleep(ctx context.Context, d time.Duration) {
 }
 
 func gatewaySessionMissing(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, gatewayclient.ErrSessionNotFound) {
-		return true
-	}
-	text := strings.ToLower(err.Error())
-	return (strings.Contains(text, "gateway run http 404") || strings.Contains(text, "gateway events http 404")) && strings.Contains(text, "session not found")
+	return errors.Is(err, gatewayclient.ErrSessionNotFound)
 }
 
 func durationSince(start, mark time.Time) string {

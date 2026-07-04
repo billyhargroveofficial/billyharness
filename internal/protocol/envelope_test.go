@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -135,6 +136,27 @@ func TestValidateEventEnvelopeAllowsLegacyAndRejectsMissingIDs(t *testing.T) {
 	})
 	if err := ValidateEventEnvelope(event); err == nil {
 		t.Fatal("expected missing call_id/attempt_id error")
+	}
+}
+
+func TestValidateEventEnvelopeRejectsUnknownV1Values(t *testing.T) {
+	base := Event{
+		SchemaVersion: EventSchemaVersion,
+		Seq:           1,
+		Source:        EventSourceAgent,
+		TS:            time.Unix(10, 0).UTC().Format(time.RFC3339Nano),
+		RunID:         "run-1",
+		Type:          EventRunStarted,
+	}
+	unknownType := base
+	unknownType.Type = EventType("custom.unknown")
+	if err := ValidateEventEnvelope(unknownType); err == nil || !strings.Contains(err.Error(), "unsupported event type") {
+		t.Fatalf("unknown type error = %v", err)
+	}
+	unknownSource := base
+	unknownSource.Source = EventSource("mystery")
+	if err := ValidateEventEnvelope(unknownSource); err == nil || !strings.Contains(err.Error(), "unsupported source") {
+		t.Fatalf("unknown source error = %v", err)
 	}
 }
 

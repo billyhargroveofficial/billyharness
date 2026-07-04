@@ -168,6 +168,8 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 	s.status.PID = 0
 	s.status.NextRetryAt = nil
 	s.status.RetryBackoffMS = 0
+	s.status.CatalogState = mcpCatalogStateDisconnected
+	s.status.Diagnostics = nil
 	if reconnect {
 		s.status.RetryCount++
 	}
@@ -202,6 +204,9 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 	if err != nil {
 		s.recordFailureLocked(mcpStateFailed, err, reconnect)
 		catalogChanged := s.clearCatalogLocked()
+		if mcpCatalogErrorIsToolsList(err) {
+			s.recordCatalogFetchFailureLocked(err)
+		}
 		status := cloneStatus(s.status)
 		s.mu.Unlock()
 		s.publishStatus(status)
@@ -223,6 +228,8 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 	s.status.Connected = true
 	s.status.State = state
 	s.status.ToolCount = len(specs)
+	s.status.CatalogState = mcpCatalogHealthyState(len(specs))
+	s.status.Diagnostics = nil
 	s.status.PID = client.pid()
 	if !client.startedAt.IsZero() {
 		startedAt := client.startedAt
@@ -264,8 +271,23 @@ func (s *managedServer) callTool(ctx context.Context, name string, args json.Raw
 func (s *managedServer) handleNotification(method string, _ json.RawMessage) {
 	switch method {
 	case "notifications/tools/list_changed", "tools/list_changed":
+		s.markCatalogStale()
 		go s.refreshCatalogFromNotification()
 	}
+}
+
+func (s *managedServer) markCatalogStale() {
+	s.mu.Lock()
+	if s.closed || !s.status.Connected {
+		s.mu.Unlock()
+		return
+	}
+	s.status.CatalogState = mcpCatalogStateCatalogStale
+	s.status.Diagnostics = []StatusDiagnostic{statusDiagnostic("catalog_stale", "warning", "MCP tools/list_changed notification received; catalog refresh pending")}
+	status := cloneStatus(s.status)
+	s.mu.Unlock()
+	s.publishStatus(status)
+	s.publishCatalogChanged()
 }
 
 func (s *managedServer) refreshCatalogFromNotification() {
@@ -293,6 +315,15 @@ func (s *managedServer) refreshCatalog(ctx context.Context) error {
 
 	specs, err := client.listTools(ctx)
 	if err != nil {
+		s.mu.Lock()
+		if s.client == client {
+			s.recordCatalogFetchFailureLocked(err)
+			status := cloneStatus(s.status)
+			s.mu.Unlock()
+			s.publishStatus(status)
+		} else {
+			s.mu.Unlock()
+		}
 		if !client.connected.Load() {
 			s.mu.Lock()
 			status, changed, catalogChanged := s.absorbClientLocked()
@@ -328,6 +359,13 @@ func (s *managedServer) refreshCatalog(ctx context.Context) error {
 	s.specs = append([]protocol.ToolSpec(nil), specs...)
 	s.prompts = clonePrompts(prompts)
 	s.status.ToolCount = len(specs)
+	if err != nil {
+		s.status.CatalogState = mcpCatalogStateDegraded
+		s.status.Diagnostics = []StatusDiagnostic{statusDiagnostic("prompts_fetch_failed", "warning", redactServerError(s.server, err))}
+	} else {
+		s.status.CatalogState = mcpCatalogHealthyState(len(specs))
+		s.status.Diagnostics = nil
+	}
 	s.status.LastEventAt = timePtr(time.Now().UTC())
 	status := cloneStatus(s.status)
 	s.mu.Unlock()
@@ -384,6 +422,8 @@ func (s *managedServer) close() {
 	s.status.Error = ""
 	s.status.NextRetryAt = nil
 	s.status.RetryBackoffMS = 0
+	s.status.CatalogState = mcpCatalogStateDisconnected
+	s.status.Diagnostics = nil
 	status := cloneStatus(s.status)
 	s.mu.Unlock()
 	s.publishStatus(status)
@@ -402,6 +442,9 @@ func (s *managedServer) recordStaticError(err error) {
 func (s *managedServer) recordStaticErrorState(state string, err error) {
 	s.mu.Lock()
 	s.recordFailureLocked(state, err, false)
+	if state == mcpStateUnsupported {
+		s.status.CatalogState = mcpCatalogStateUnsupported
+	}
 	status := cloneStatus(s.status)
 	s.mu.Unlock()
 	s.publishStatus(status)
@@ -417,6 +460,8 @@ func (s *managedServer) recordFailureLocked(state string, err error, retryable b
 	s.status.LastErrorAt = timePtr(now)
 	s.status.LastEventAt = timePtr(now)
 	s.status.StderrTail = ""
+	s.status.CatalogState = mcpCatalogStateDisconnected
+	s.status.Diagnostics = nil
 	if s.client != nil {
 		s.status.StderrTail = s.client.stderrTail()
 	}
@@ -434,6 +479,11 @@ func (s *managedServer) clearCatalogLocked() bool {
 	s.prompts = nil
 	s.instructions = ""
 	s.status.ToolCount = 0
+	if !s.status.Enabled {
+		s.status.CatalogState = mcpCatalogStateDisabled
+	} else if !s.status.Connected {
+		s.status.CatalogState = mcpCatalogStateDisconnected
+	}
 	return changed
 }
 
@@ -472,6 +522,22 @@ func (s *managedServer) absorbClientLocked() (ServerStatus, bool, bool) {
 	catalogChanged := s.clearCatalogLocked()
 	after := cloneStatus(s.status)
 	return after, mcpStatusChanged(before, after), catalogChanged
+}
+
+func (s *managedServer) recordCatalogFetchFailureLocked(err error) {
+	s.status.CatalogState = mcpCatalogStateToolsFetchFailed
+	s.status.Diagnostics = []StatusDiagnostic{statusDiagnostic("tools_fetch_failed", "error", redactServerError(s.server, err))}
+}
+
+func mcpCatalogHealthyState(toolCount int) string {
+	if toolCount == 0 {
+		return mcpCatalogStateConnectedNoTools
+	}
+	return mcpCatalogStateReady
+}
+
+func mcpCatalogErrorIsToolsList(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "tools/list")
 }
 
 func (s *managedServer) publishStatus(status ServerStatus) {

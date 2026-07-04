@@ -56,10 +56,11 @@ type mcpServerSettingsSnapshot struct {
 }
 
 type mcpSettingsHashSnapshot struct {
-	Enabled        bool                        `json:"enabled"`
-	ConfigFiles    []string                    `json:"config_files,omitempty"`
-	AllowedServers []string                    `json:"allowed_servers,omitempty"`
-	Servers        []mcpServerSettingsSnapshot `json:"servers,omitempty"`
+	Enabled                   bool                        `json:"enabled"`
+	ConfigFiles               []string                    `json:"config_files,omitempty"`
+	AllowedServers            []string                    `json:"allowed_servers,omitempty"`
+	PromoteServerInstructions bool                        `json:"promote_server_instructions,omitempty"`
+	Servers                   []mcpServerSettingsSnapshot `json:"servers,omitempty"`
 }
 
 func (r *Registry) Snapshot(ctx context.Context) ToolSet {
@@ -89,6 +90,7 @@ func (r *Registry) SnapshotWithToolPolicy(ctx context.Context, policy config.Too
 	snapshot.mcpTools = cloneToolMap(r.mcpTools)
 	snapshot.mcpCatalog = cloneMCPCatalogState(r.mcpCatalog)
 	snapshot.instructions = append([]string(nil), r.instructions...)
+	snapshot.mcpServerInstructions = append([]string(nil), r.mcpServerInstructions...)
 	r.mcpMu.RUnlock()
 	snapshot.mcpStatuses = cloneMCPStatuses(r.MCPStatuses())
 	snapshot.mcpCatalog.Kind = "dynamic_mcp_catalog"
@@ -117,6 +119,7 @@ func (s ToolSet) Call(ctx context.Context, call protocol.ToolCall) (Result, erro
 	if s.registry == nil {
 		return errorResult("tool_registry_unavailable", "tool registry unavailable"), nil
 	}
+	ctx = contextWithToolPolicy(ctx, s.registry.toolPolicy)
 	return s.registry.Call(ctx, call)
 }
 
@@ -177,6 +180,7 @@ func cloneMCPStatuses(in []mcpclient.ServerStatus) []mcpclient.ServerStatus {
 	out := make([]mcpclient.ServerStatus, len(in))
 	for i, status := range in {
 		out[i] = status
+		out[i].Diagnostics = append([]mcpclient.StatusDiagnostic(nil), status.Diagnostics...)
 		out[i].StartedAt = cloneTimePtr(status.StartedAt)
 		out[i].LastConnectedAt = cloneTimePtr(status.LastConnectedAt)
 		out[i].LastEventAt = cloneTimePtr(status.LastEventAt)
@@ -260,9 +264,10 @@ func (r *Registry) mcpSnapshotHash() string {
 
 func mcpSettingsSnapshot(settings config.MCPSettings) mcpSettingsHashSnapshot {
 	payload := mcpSettingsHashSnapshot{
-		Enabled:        settings.Enabled,
-		ConfigFiles:    append([]string(nil), settings.ConfigFiles...),
-		AllowedServers: append([]string(nil), settings.AllowedServers...),
+		Enabled:                   settings.Enabled,
+		ConfigFiles:               append([]string(nil), settings.ConfigFiles...),
+		AllowedServers:            append([]string(nil), settings.AllowedServers...),
+		PromoteServerInstructions: settings.PromoteServerInstructions,
 	}
 	for i := range payload.ConfigFiles {
 		payload.ConfigFiles[i] = filepath.Clean(payload.ConfigFiles[i])

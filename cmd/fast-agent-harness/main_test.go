@@ -279,6 +279,46 @@ func TestConfigInspectSurfacesProvenanceLabels(t *testing.T) {
 	}
 }
 
+func TestRunOnceRejectsInvalidRuntimeConfigEvenWithMock(t *testing.T) {
+	isolateRuntimeConfig(t)
+	t.Setenv("FAST_AGENT_MAX_TOOL_ROUNDS", "not-an-int")
+
+	err := runOnce([]string{"-mock", "hello"})
+	if err == nil {
+		t.Fatal("run -mock accepted invalid runtime config")
+	}
+	for _, want := range []string{"invalid runtime config", "max_tool_rounds", "FAST_AGENT_MAX_TOOL_ROUNDS"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("run strict error missing %q: %v", want, err)
+		}
+	}
+}
+
+func TestRunOnceFailsClosedWhenProviderAuthMissing(t *testing.T) {
+	isolateRuntimeConfig(t)
+
+	err := runOnce([]string{"hello"})
+	if err == nil {
+		t.Fatal("run accepted missing provider auth")
+	}
+	if !strings.Contains(err.Error(), "missing API key env var DEEPSEEK_API_KEY") {
+		t.Fatalf("missing auth error = %v", err)
+	}
+}
+
+func TestDoctorRejectsInvalidRuntimeConfig(t *testing.T) {
+	isolateRuntimeConfig(t)
+	t.Setenv("FAST_AGENT_MAX_TOOL_ROUNDS", "not-an-int")
+
+	err := doctorCmd([]string{"-build=false", "-services=false", "-gateway=false"})
+	if err == nil {
+		t.Fatal("doctor accepted invalid runtime config")
+	}
+	if !strings.Contains(err.Error(), "invalid runtime config") || !strings.Contains(err.Error(), "FAST_AGENT_MAX_TOOL_ROUNDS") {
+		t.Fatalf("doctor strict error = %v", err)
+	}
+}
+
 func TestConfigMCPMigrateCommandPrintsRedactedSuggestions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mcp.json")
 	if err := os.WriteFile(path, []byte(`{
@@ -321,6 +361,16 @@ func TestConfigMCPMigrateCommandPrintsRedactedSuggestions(t *testing.T) {
 	if len(report.Servers) != 1 || report.Servers[0].Name != "github" || strings.Contains(out.String(), "ghp-cli-secret") {
 		t.Fatalf("json report = %s", out.String())
 	}
+}
+
+func isolateRuntimeConfig(t *testing.T) {
+	t.Helper()
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	t.Setenv("BILLYHARNESS_DOTENV_HOME_ONLY", "true")
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	t.Setenv("CODEX_ACCESS_TOKEN", "")
+	t.Setenv("CODEX_CHATGPT_ACCOUNT_ID", "")
 }
 
 func TestMemoryCommandAddAndList(t *testing.T) {
@@ -433,7 +483,7 @@ func TestSessionsCommandListsAndInspectsStore(t *testing.T) {
 	if err := sessionsCommand([]string{"inspect", "-dir", storeDir, created.ID}, &inspectOut); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"offline replay: true", "config_snapshot exists=true", "model_provider_snapshot exists=true", "mcp_snapshot exists=true"} {
+	for _, want := range []string{"offline replay: true", "validation: valid=true", "terminal: state=completed", "projector: parity=true", "config_snapshot exists=true", "model_provider_snapshot exists=true", "mcp_snapshot exists=true"} {
 		if !strings.Contains(inspectOut.String(), want) {
 			t.Fatalf("inspect output missing %q:\n%s", want, inspectOut.String())
 		}
@@ -449,6 +499,12 @@ func TestSessionsCommandListsAndInspectsStore(t *testing.T) {
 	}
 	if inspection.SessionID != created.ID || !inspection.OfflineReplayReady || inspection.Events.Records == 0 {
 		t.Fatalf("inspection = %#v", inspection)
+	}
+	if !inspection.Events.Validation.Valid || !inspection.Events.Validation.EnvelopeValid || !inspection.Events.Validation.SequenceValid || !inspection.Events.Validation.LifecycleValid {
+		t.Fatalf("inspection validation = %#v", inspection.Events.Validation)
+	}
+	if inspection.Events.Terminal.State != "completed" || !inspection.Events.Projector.ParityOK {
+		t.Fatalf("inspection debug reducer = terminal:%#v projector:%#v", inspection.Events.Terminal, inspection.Events.Projector)
 	}
 
 	var contextOut bytes.Buffer

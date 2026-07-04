@@ -24,12 +24,19 @@ const (
 	LegacyGatewayAuthTokenEnv = gatewaybase.LegacyGatewayAuthTokenEnv
 )
 
-var ErrSessionNotFound = errors.New("gateway session not found")
+var (
+	ErrSessionNotFound     = errors.New("gateway session not found")
+	ErrSessionCorrupt      = errors.New("gateway session corrupt")
+	ErrSessionReplayFailed = errors.New("gateway session replay failed")
+	ErrNoSessionStore      = errors.New("gateway session history unavailable")
+)
 
 type Client struct {
 	BaseURL string
 	Client  *http.Client
 }
+
+type sessionOwnerContextKey struct{}
 
 type RunResult struct {
 	EventCount    int
@@ -72,6 +79,23 @@ func New(baseURL string) *Client {
 	}
 }
 
+func WithSessionOwner(ctx context.Context, owner gatewayapi.SessionOwner) context.Context {
+	owner = normalizeSessionOwner(owner)
+	if owner == (gatewayapi.SessionOwner{}) {
+		return ctx
+	}
+	return context.WithValue(ctx, sessionOwnerContextKey{}, owner)
+}
+
+func SessionOwnerFromContext(ctx context.Context) (gatewayapi.SessionOwner, bool) {
+	owner, ok := ctx.Value(sessionOwnerContextKey{}).(gatewayapi.SessionOwner)
+	if !ok {
+		return gatewayapi.SessionOwner{}, false
+	}
+	owner = normalizeSessionOwner(owner)
+	return owner, owner != (gatewayapi.SessionOwner{})
+}
+
 func (e *StatusError) Error() string {
 	if e == nil {
 		return ""
@@ -84,7 +108,22 @@ func (e *StatusError) Error() string {
 }
 
 func (e *StatusError) Is(target error) bool {
-	return target == ErrSessionNotFound && e != nil && e.StatusCode == http.StatusNotFound && strings.Contains(e.Path, "/v1/sessions/")
+	if e == nil {
+		return false
+	}
+	body := strings.ToLower(e.Body)
+	switch target {
+	case ErrSessionNotFound:
+		return e.StatusCode == http.StatusNotFound && strings.Contains(e.Path, "/v1/sessions/")
+	case ErrSessionCorrupt:
+		return e.StatusCode == http.StatusConflict && strings.Contains(body, "corrupt session")
+	case ErrSessionReplayFailed:
+		return e.StatusCode >= http.StatusInternalServerError && strings.Contains(body, "session event replay failed")
+	case ErrNoSessionStore:
+		return e.StatusCode == http.StatusConflict && strings.Contains(body, "no session store")
+	default:
+		return false
+	}
 }
 
 func (e *RunFailedError) Error() string {
@@ -376,9 +415,39 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (*htt
 		if body != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
+		if owner, ok := SessionOwnerFromContext(ctx); ok {
+			setSessionOwnerHeaders(req, owner)
+		}
 		SetAuthHeaderFromEnv(req)
 		return req, nil
 	})
+}
+
+func setSessionOwnerHeaders(req *http.Request, owner gatewayapi.SessionOwner) {
+	owner = normalizeSessionOwner(owner)
+	if owner.ClientType != "" {
+		req.Header.Set(gatewayapi.HeaderSessionClientType, owner.ClientType)
+	}
+	if owner.TelegramChatID != 0 {
+		req.Header.Set(gatewayapi.HeaderSessionTelegramChatID, fmt.Sprintf("%d", owner.TelegramChatID))
+	}
+	if owner.TelegramThreadID != 0 {
+		req.Header.Set(gatewayapi.HeaderSessionTelegramThreadID, fmt.Sprintf("%d", owner.TelegramThreadID))
+	}
+	if owner.TelegramUserID != 0 {
+		req.Header.Set(gatewayapi.HeaderSessionTelegramUserID, fmt.Sprintf("%d", owner.TelegramUserID))
+	}
+	if owner.TUIChatID != "" {
+		req.Header.Set(gatewayapi.HeaderSessionTUIChatID, owner.TUIChatID)
+	}
+}
+
+func normalizeSessionOwner(owner gatewayapi.SessionOwner) gatewayapi.SessionOwner {
+	owner.ClientType = strings.ToLower(strings.TrimSpace(owner.ClientType))
+	owner.TUIChatID = strings.TrimSpace(owner.TUIChatID)
+	owner.Profile = strings.TrimSpace(owner.Profile)
+	owner.Model = strings.TrimSpace(owner.Model)
+	return owner
 }
 
 func (c *Client) client() *http.Client {
@@ -424,6 +493,9 @@ func FormatSessionContext(resp gatewayapi.SessionContextResponse) string {
 		if compaction.Seq > 0 {
 			label += fmt.Sprintf(" seq=%d", compaction.Seq)
 		}
+		if compaction.ContextEpoch > 0 {
+			label += fmt.Sprintf(" epoch=%d", compaction.ContextEpoch)
+		}
 		fmt.Fprintf(&b, "last compaction: %s", label)
 		if compaction.Strategy != "" {
 			fmt.Fprintf(&b, " strategy=%s", compaction.Strategy)
@@ -433,6 +505,9 @@ func FormatSessionContext(resp gatewayapi.SessionContextResponse) string {
 		}
 		if compaction.Reason != "" {
 			fmt.Fprintf(&b, " reason=%s", compaction.Reason)
+		}
+		if compaction.PostHistoryHash != "" {
+			fmt.Fprintf(&b, " post_hash=%s", shortContextHash(compaction.PostHistoryHash))
 		}
 		b.WriteByte('\n')
 	}
@@ -444,6 +519,12 @@ func FormatSessionContext(resp gatewayapi.SessionContextResponse) string {
 	}
 	if promptText := formatContextPrompt(resp.Prompt); promptText != "" {
 		b.WriteString(promptText)
+	}
+	if memoryText := formatContextMemory(resp.Memory); memoryText != "" {
+		b.WriteString(memoryText)
+	}
+	if diagnosticsText := formatContextDiagnostics(resp.Diagnostics); diagnosticsText != "" {
+		b.WriteString(diagnosticsText)
 	}
 	if resp.OutputRefs.Count > 0 || resp.OutputRefs.LargeInlineCount > 0 {
 		fmt.Fprintf(&b, "output refs: %d", resp.OutputRefs.Count)
@@ -661,6 +742,108 @@ func contextPromptEmpty(prompt gatewayapi.ContextPrompt) bool {
 		len(prompt.Sections) == 0 &&
 		prompt.CacheStatus == "" &&
 		prompt.CacheReason == ""
+}
+
+func formatContextMemory(memory gatewayapi.ContextMemory) string {
+	if contextMemoryEmpty(memory) {
+		return ""
+	}
+	var parts []string
+	if memory.Status != "" {
+		parts = append(parts, "status="+memory.Status)
+	}
+	if memory.Policy != "" {
+		parts = append(parts, "policy="+memory.Policy)
+	}
+	if memory.LockedHash != "" {
+		parts = append(parts, "locked="+shortContextHash(memory.LockedHash))
+	}
+	if memory.CurrentHash != "" {
+		parts = append(parts, "current="+shortContextHash(memory.CurrentHash))
+	}
+	if memory.CurrentEntries > 0 {
+		parts = append(parts, fmt.Sprintf("entries=%d", memory.CurrentEntries))
+	}
+	if memory.CurrentRoots > 0 {
+		parts = append(parts, fmt.Sprintf("roots=%d", memory.CurrentRoots))
+	}
+	if memory.CurrentWarnings > 0 {
+		parts = append(parts, fmt.Sprintf("warnings=%d", memory.CurrentWarnings))
+	}
+	if memory.CurrentCapped {
+		parts = append(parts, "capped=true")
+	}
+	if memory.CurrentError != "" {
+		parts = append(parts, "error="+memory.CurrentError)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "memory: " + strings.Join(parts, " ") + "\n"
+}
+
+func contextMemoryEmpty(memory gatewayapi.ContextMemory) bool {
+	return memory == (gatewayapi.ContextMemory{})
+}
+
+func formatContextDiagnostics(diagnostics gatewayapi.ContextDiagnostics) string {
+	if contextDiagnosticsEmpty(diagnostics) {
+		return ""
+	}
+	var parts []string
+	if diagnostics.CurrentEpoch > 0 {
+		parts = append(parts, fmt.Sprintf("epoch=%d", diagnostics.CurrentEpoch))
+	}
+	if diagnostics.CompactionEvents > 0 {
+		parts = append(parts, fmt.Sprintf("compactions=%d", diagnostics.CompactionEvents))
+	}
+	if diagnostics.ThresholdEvents > 0 {
+		parts = append(parts, fmt.Sprintf("thresholds=%d", diagnostics.ThresholdEvents))
+	}
+	if diagnostics.ToolCallEvents > 0 {
+		parts = append(parts, fmt.Sprintf("tools=%d", diagnostics.ToolCallEvents))
+	}
+	if diagnostics.HelperModelCalls > 0 {
+		parts = append(parts, fmt.Sprintf("helper_calls=%d", diagnostics.HelperModelCalls))
+	}
+	if diagnostics.ProtectedPrefixTokens > 0 {
+		parts = append(parts, "protected="+compactContextNumber(diagnostics.ProtectedPrefixTokens))
+	}
+	if diagnostics.BodyTokens > 0 {
+		parts = append(parts, "body="+compactContextNumber(diagnostics.BodyTokens))
+	}
+	if diagnostics.WindowRemainingTokens != 0 {
+		parts = append(parts, "window_remaining="+compactContextNumber(diagnostics.WindowRemainingTokens))
+	}
+	if diagnostics.CompactMarginTokens != 0 {
+		parts = append(parts, "compact_margin="+compactContextNumber(diagnostics.CompactMarginTokens))
+	}
+	if diagnostics.MemoryContextHash != "" {
+		parts = append(parts, "memory_hash="+shortContextHash(diagnostics.MemoryContextHash))
+	}
+	if diagnostics.ProjectContextHash != "" {
+		parts = append(parts, "project_hash="+shortContextHash(diagnostics.ProjectContextHash))
+	}
+	if diagnostics.AgentsInstructionsHash != "" {
+		parts = append(parts, "agents_hash="+shortContextHash(diagnostics.AgentsInstructionsHash))
+	}
+	if diagnostics.MCPInstructionsHash != "" {
+		parts = append(parts, "mcp_hash="+shortContextHash(diagnostics.MCPInstructionsHash))
+	}
+	if diagnostics.PromptInventoryHash != "" {
+		parts = append(parts, "prompt_hash="+shortContextHash(diagnostics.PromptInventoryHash))
+	}
+	if diagnostics.LastCompactionHistoryHash != "" {
+		parts = append(parts, "post_hash="+shortContextHash(diagnostics.LastCompactionHistoryHash))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "diagnostics: " + strings.Join(parts, " ") + "\n"
+}
+
+func contextDiagnosticsEmpty(diagnostics gatewayapi.ContextDiagnostics) bool {
+	return diagnostics == (gatewayapi.ContextDiagnostics{})
 }
 
 func firstNonEmpty(values ...string) string {

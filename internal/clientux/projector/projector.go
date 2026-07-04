@@ -77,6 +77,8 @@ type ToolItem struct {
 
 type ContextThreshold struct {
 	Percent             int
+	ContextEpoch        int
+	ThresholdKey        string
 	EstimatedTokens     int64
 	ContextWindowTokens int64
 	ThresholdTokens     int64
@@ -197,6 +199,8 @@ func (p *Projector) Apply(event protocol.Event) Snapshot {
 		if threshold, ok := decodeData[protocol.ContextThresholdEvent](event.Data); ok {
 			p.snapshot.ContextThresholds = append(p.snapshot.ContextThresholds, ContextThreshold{
 				Percent:             threshold.Percent,
+				ContextEpoch:        threshold.ContextEpoch,
+				ThresholdKey:        threshold.ThresholdKey,
 				EstimatedTokens:     threshold.EstimatedTokens,
 				ContextWindowTokens: threshold.ContextWindowTokens,
 				ThresholdTokens:     threshold.ThresholdTokens,

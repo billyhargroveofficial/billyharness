@@ -465,6 +465,8 @@ func TestMCPGatewayListsServerStatusesAndValidatesStdioCalls(t *testing.T) {
 		`"name": "fake"`,
 		`"connected": true`,
 		`"state": "connected"`,
+		`"transport_state": "connected"`,
+		`"catalog_state": "ready"`,
 		`"tool_count": 1`,
 		`"mcp__fake__echo"`,
 		`"namespace": "mcp.fake"`,
@@ -477,6 +479,7 @@ func TestMCPGatewayListsServerStatusesAndValidatesStdioCalls(t *testing.T) {
 		`"includes_dynamic_mcp_tools": false`,
 		`"mcp_catalog"`,
 		`"kind": "dynamic_mcp_catalog"`,
+		`"state": "ready"`,
 		`"model_visible": false`,
 	} {
 		if !strings.Contains(list.Content, want) {
@@ -486,6 +489,7 @@ func TestMCPGatewayListsServerStatusesAndValidatesStdioCalls(t *testing.T) {
 	if list.Metadata["model_visible_tool_catalog_kind"] != "static_gateway_tools" ||
 		list.Metadata["model_visible_includes_dynamic_mcp_tools"] != false ||
 		list.Metadata["mcp_catalog_kind"] != "dynamic_mcp_catalog" ||
+		list.Metadata["mcp_catalog_state"] != "ready" ||
 		list.Metadata["mcp_catalog_model_visible"] != false {
 		t.Fatalf("mcp_list_tools metadata missing catalog clarity: %#v", list.Metadata)
 	}
@@ -812,7 +816,7 @@ func TestRegistrySubscribesToMCPCatalogChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"model_visible_tools"`, `"kind": "static_gateway_tools"`, `"mcp_catalog"`, `"kind": "dynamic_mcp_catalog"`, `"model_visible": false`, `"version":`, `"stale": false`, `"tool_count": 1`} {
+	for _, want := range []string{`"model_visible_tools"`, `"kind": "static_gateway_tools"`, `"mcp_catalog"`, `"kind": "dynamic_mcp_catalog"`, `"state": "ready"`, `"model_visible": false`, `"version":`, `"stale": false`, `"tool_count": 1`} {
 		if !strings.Contains(search.Content, want) {
 			t.Fatalf("tool_search missing catalog field %q:\n%s", want, search.Content)
 		}
@@ -821,6 +825,7 @@ func TestRegistrySubscribesToMCPCatalogChanges(t *testing.T) {
 		search.Metadata["mcp_catalog_tool_count"] != 1 ||
 		search.Metadata["mcp_catalog_stale"] != false ||
 		search.Metadata["mcp_catalog_kind"] != "dynamic_mcp_catalog" ||
+		search.Metadata["mcp_catalog_state"] != "ready" ||
 		search.Metadata["mcp_catalog_model_visible"] != false ||
 		search.Metadata["model_visible_tool_catalog_kind"] != "static_gateway_tools" ||
 		search.Metadata["model_visible_includes_dynamic_mcp_tools"] != false {

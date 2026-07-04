@@ -139,6 +139,44 @@ func TestContextCompactionOverrideAboveWindowIsClampedToDerived(t *testing.T) {
 	}
 }
 
+func TestResolveStrictRejectsInvalidTypedValue(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	t.Setenv("FAST_AGENT_MAX_TOOL_ROUNDS", "not-an-int")
+
+	resolved, err := ResolveStrict()
+	if err == nil {
+		t.Fatal("ResolveStrict accepted invalid typed value")
+	}
+	text := err.Error()
+	for _, want := range []string{"invalid runtime config", "max_tool_rounds", "FAST_AGENT_MAX_TOOL_ROUNDS"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("strict error missing %q: %v", want, err)
+		}
+	}
+	if value, ok := resolved.Value("max_tool_rounds"); !ok || value.Error == "" {
+		t.Fatalf("resolved invalid value missing error detail: %#v ok=%v", value, ok)
+	}
+}
+
+func TestResolveStrictRejectsMalformedHomeConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("max_tool_rounds = [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ResolveStrict()
+	if err == nil {
+		t.Fatal("ResolveStrict accepted malformed config TOML")
+	}
+	text := err.Error()
+	if !strings.Contains(text, "resolve runtime config") || !strings.Contains(text, "config.toml") {
+		t.Fatalf("strict TOML error = %v", err)
+	}
+}
+
 func TestProjectContextMaxBytesEnvOverride(t *testing.T) {
 	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
 	t.Setenv("FAST_AGENT_PROJECT_CONTEXT_MAX_BYTES", "1234")

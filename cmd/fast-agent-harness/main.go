@@ -40,6 +40,8 @@ func run() error {
 		return benchCmd(os.Args[2:])
 	case "sessions", "session":
 		return sessionsCmd(os.Args[2:])
+	case "inspect-session":
+		return sessionsInspectCommand(os.Args[2:], os.Stdout)
 	case "memory":
 		return memoryCmd(os.Args[2:])
 	case "commands", "command":
@@ -48,6 +50,8 @@ func run() error {
 		return printTools()
 	case "doctor", "health":
 		return doctorCmd(os.Args[2:])
+	case "incident":
+		return incidentCmd(os.Args[2:])
 	case "hygiene":
 		return hygieneCmd(os.Args[2:])
 	default:
@@ -73,6 +77,7 @@ func usage() {
 	fmt.Println("  config mcp-migrate [-file FILE] [-json]")
 	fmt.Println("  sessions list [-dir DIR] [-json]")
 	fmt.Println("  sessions inspect [-dir DIR] [-json] SESSION_ID")
+	fmt.Println("  inspect-session [-dir DIR] [-json] SESSION_ID")
 	fmt.Println("  sessions context [-dir DIR] [-json] SESSION_ID")
 	fmt.Println("  sessions export [-dir DIR] [-mode raw|rich] [-json] SESSION_ID")
 	fmt.Println("  sessions index rebuild|show|delete [-dir DIR] [-json]")
@@ -84,6 +89,7 @@ func usage() {
 	fmt.Println("  bench terminal-bench export -tasks tasks.jsonl -out tb-dataset")
 	fmt.Println("  bench terminal-bench import -dataset tb-dataset [-out tasks.jsonl]")
 	fmt.Println("  tools")
-	fmt.Println("  doctor|health [-json] [-strict] [-build=true] [-services=true] [-gateway=true]")
+	fmt.Println("  doctor|health [-deep] [-json] [-strict] [-build=true] [-services=true] [-gateway=true]")
+	fmt.Println("  incident collect -session SESSION_ID -out DIR [-dir SESSION_DIR] [-repo DIR] [-logs=true] [-mcp=true] [-json]")
 	fmt.Println("  hygiene [-json] [-strict] [-repo DIR]")
 }

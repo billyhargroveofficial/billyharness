@@ -497,6 +497,61 @@ func TestTelegramDuplicateCompletedAdmissionAcksWithoutRun(t *testing.T) {
 	}
 }
 
+func TestTelegramStartupReconcilesAbandonedPendingInput(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "telegram-state.json")
+	key := userChatKey(123, 0, 1001)
+	if err := (Store{Path: statePath}).Save(State{
+		Offset: 47,
+		Chats: map[string]ChatState{
+			key: {
+				SessionID:       "session-1",
+				PendingInputID:  "telegram-update-46",
+				PendingUpdateID: 46,
+				UpdatedAt:       time.Now().UTC(),
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	harness := newTelegramAdmissionHarness()
+	bot := newAdmissionTestBot(t, statePath, harness)
+
+	if chat := bot.chatState(key); chat.PendingInputID != "" || chat.PendingUpdateID != 0 {
+		t.Fatalf("bot pending input after reconciliation = %#v", chat)
+	}
+	state := loadTelegramState(t, statePath)
+	if chat := state.Chats[key]; chat.PendingInputID != "" || chat.PendingUpdateID != 0 || state.Offset != 47 {
+		t.Fatalf("stored state after reconciliation = %#v offset=%d", chat, state.Offset)
+	}
+	records := readTelegramAdmissionRecords(t, newTelegramAdmissionStore(statePath).path)
+	if len(records) != 1 || records[0].Kind != "abandoned" || records[0].InputID != "telegram-update-46" || records[0].Reason != "abandoned_after_restart" {
+		t.Fatalf("abandoned admission record = %#v", records)
+	}
+}
+
+func TestTelegramAdmissionRequiresPendingStatePersistenceBeforeAckOrRun(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "telegram-state.json")
+	harness := newTelegramAdmissionHarness()
+	bot := newAdmissionTestBot(t, statePath, harness)
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, []byte("block"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bot.store.Path = filepath.Join(blocker, "telegram-state.json")
+
+	bot.handlePolledUpdate(context.Background(), telegramTextUpdate(44, "persist before run"))
+
+	_ = receive(t, harness.admitted, "admission")
+	select {
+	case run := <-harness.ran:
+		t.Fatalf("run started before pending input was durable: %#v", run)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if got := bot.nextOffset(); got != 0 {
+		t.Fatalf("offset advanced after failed state save: %d", got)
+	}
+}
+
 func TestTelegramPendingQuestionMessageAnswersWithoutAdmissionOrRun(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "telegram-state.json")
 	if err := (Store{Path: statePath}).Save(State{Chats: map[string]ChatState{

@@ -69,6 +69,19 @@ func TestClientRejectsLocalhostAndRFC1918Targets(t *testing.T) {
 	}
 }
 
+func TestBackendDefaultHTTPClientRejectsPrivateBaseURL(t *testing.T) {
+	client := NewTavilyClient(BackendClientOptions{
+		BaseURL:    "http://127.0.0.1:1",
+		APIKey:     "tvly-test",
+		MaxRetries: -1,
+	})
+
+	_, err := client.Search(context.Background(), SearchRequest{Query: "agent docs", Limit: 1})
+	if err == nil || !strings.Contains(err.Error(), "non-public IP") {
+		t.Fatalf("expected private backend base URL rejection, got %v", err)
+	}
+}
+
 func TestClientFetchesNormalPublicHost(t *testing.T) {
 	resolver := &scriptedResolver{answers: [][]net.IPAddr{
 		ipAddrs("93.184.216.34"),

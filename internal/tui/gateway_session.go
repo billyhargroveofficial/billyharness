@@ -83,7 +83,12 @@ func (m Model) replayGatewayEventsCmd(fallbackCreate bool) tea.Cmd {
 		defer resp.Body.Close()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			return replayEventsMsg{err: fmt.Errorf("gateway HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(limited))), fallbackCreate: fallbackCreate}
+			return replayEventsMsg{err: &gatewayclient.StatusError{
+				Method:     http.MethodGet,
+				Path:       path,
+				StatusCode: resp.StatusCode,
+				Body:       string(limited),
+			}, fallbackCreate: fallbackCreate}
 		}
 		dec := json.NewDecoder(resp.Body)
 		var events []protocol.Event
@@ -293,7 +298,8 @@ func formatTurnChangeApply(label string, out gatewayapi.SessionUndoResponse) str
 func (m Model) runGateway(prompt string, refs []protocol.AttachmentRef, metadata ...map[string]string) {
 	runReq := m.gatewayRunRequestWithAttachments(prompt, refs, metadata...)
 	client := &gatewayclient.Client{BaseURL: m.gatewayURL, Client: http.DefaultClient}
-	result, err := client.RunSessionResult(context.Background(), m.sessionID, runReq, func(event protocol.Event) {
+	ctx := m.gatewayScopedContext(context.Background())
+	result, err := client.RunSessionResult(ctx, m.sessionID, runReq, func(event protocol.Event) {
 		m.events <- streamEventMsg{event: event}
 	})
 	needsReplay := result.StreamGaps > 0
@@ -306,7 +312,7 @@ func (m Model) runGateway(prompt string, refs []protocol.AttachmentRef, metadata
 		needsReplay = true
 	}
 	if needsReplay {
-		if replayErr := client.ReplaySessionEvents(context.Background(), m.sessionID, result.LastSeq, func(event protocol.Event) {
+		if replayErr := client.ReplaySessionEvents(ctx, m.sessionID, result.LastSeq, func(event protocol.Event) {
 			m.events <- streamEventMsg{event: event}
 		}); replayErr != nil {
 			m.events <- runDoneMsg{err: replayErr}
@@ -363,5 +369,14 @@ func (m Model) gatewayJSON(method, path string, body []byte, out any) error {
 }
 
 func (m Model) gatewayRequest(ctx context.Context, client *http.Client, method, path string, body []byte) (*http.Response, error) {
-	return (&gatewayclient.Client{BaseURL: m.gatewayURL, Client: client}).Do(ctx, method, path, body)
+	return (&gatewayclient.Client{BaseURL: m.gatewayURL, Client: client}).Do(m.gatewayScopedContext(ctx), method, path, body)
+}
+
+func (m Model) gatewayScopedContext(ctx context.Context) context.Context {
+	return gatewayclient.WithSessionOwner(ctx, gatewayapi.SessionOwner{
+		ClientType: "tui",
+		TUIChatID:  m.localChatID,
+		Profile:    m.currentProfile(),
+		Model:      m.currentModel(),
+	})
 }

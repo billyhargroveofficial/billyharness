@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -39,8 +40,30 @@ func TestFormatSessionCombinesMessagesAndEvents(t *testing.T) {
 	}
 	events := []protocol.Event{
 		{
-			Type: protocol.EventToolOutputRefCreated,
+			Type:   protocol.EventToolCallRequested,
+			CallID: "call-shell",
+			Data: protocol.ToolCall{
+				ID:        "call-shell",
+				Name:      "shell_exec",
+				Arguments: json.RawMessage(`{"cmd":"go test ./..."}`),
+			},
+		},
+		{
+			Type:   protocol.EventToolCallProgress,
+			CallID: "call-shell",
+			Data: protocol.ToolProgressEvent{
+				CallID:  "call-shell",
+				Name:    "shell_exec",
+				Phase:   "running",
+				Status:  "running",
+				Message: "downloaded bytes",
+			},
+		},
+		{
+			Type:   protocol.EventToolOutputRefCreated,
+			CallID: "call-shell",
 			Data: protocol.ToolOutputRefEvent{
+				CallID:    "call-shell",
 				Name:      "shell_exec",
 				OutputRef: "tool-output/shell.txt",
 				Compact: &protocol.ToolCompact{
@@ -50,10 +73,19 @@ func TestFormatSessionCombinesMessagesAndEvents(t *testing.T) {
 				},
 			},
 		},
+		{
+			Type:   protocol.EventToolCallFinished,
+			CallID: "call-shell",
+			Data: protocol.ToolResult{
+				CallID:  "call-shell",
+				Name:    "shell_exec",
+				Content: "done running tests",
+			},
+		},
 	}
 
 	raw := FormatSession(messages, events, ExportModeRaw)
-	if !strings.Contains(raw, "inspect me") || !strings.Contains(raw, "done") || !strings.Contains(raw, "tool-output/shell.txt") {
+	if !strings.Contains(raw, "inspect me") || !strings.Contains(raw, "done") || !strings.Contains(raw, "ref shell.txt") || !strings.Contains(raw, "Tool running shell_exec running") {
 		t.Fatalf("raw session transcript = %q", raw)
 	}
 	if strings.Contains(raw, "EVENTS") {
@@ -61,9 +93,14 @@ func TestFormatSessionCombinesMessagesAndEvents(t *testing.T) {
 	}
 
 	rich := FormatSession(messages, events, ExportModeRich)
-	for _, want := range []string{"USER\ninspect me", "ASSISTANT\ndone", "EVENTS", "shell_exec", "shell.txt"} {
+	for _, want := range []string{"USER\ninspect me", "ASSISTANT\ndone", "EVENTS", "shell_exec", "done running tests"} {
 		if !strings.Contains(rich, want) {
 			t.Fatalf("rich session transcript missing %q: %q", want, rich)
+		}
+	}
+	for _, notWant := range []string{"Tool running shell_exec running", "ref shell.txt"} {
+		if strings.Contains(rich, notWant) {
+			t.Fatalf("rich session transcript leaked low-level lifecycle %q: %q", notWant, rich)
 		}
 	}
 }

@@ -33,6 +33,40 @@ func TestStatusErrorMatchesSessionNotFound(t *testing.T) {
 	}
 }
 
+func TestStatusErrorMatchesReplayErrorClasses(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    *StatusError
+		target error
+	}{
+		{
+			name:   "corrupt session",
+			err:    &StatusError{Method: http.MethodGet, Path: "/v1/sessions/session-1/events", StatusCode: http.StatusConflict, Body: `{"error":"corrupt session event history: bad seq"}`},
+			target: ErrSessionCorrupt,
+		},
+		{
+			name:   "no session store",
+			err:    &StatusError{Method: http.MethodGet, Path: "/v1/sessions/session-1/events", StatusCode: http.StatusConflict, Body: `{"error":"session history unavailable: no session store"}`},
+			target: ErrNoSessionStore,
+		},
+		{
+			name:   "replay failed",
+			err:    &StatusError{Method: http.MethodGet, Path: "/v1/sessions/session-1/events", StatusCode: http.StatusInternalServerError, Body: `{"error":"session event replay failed: disk unavailable"}`},
+			target: ErrSessionReplayFailed,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !errors.Is(tt.err, tt.target) {
+				t.Fatalf("StatusError %v should match %v", tt.err, tt.target)
+			}
+			if errors.Is(tt.err, ErrSessionNotFound) {
+				t.Fatalf("replay error should not match ErrSessionNotFound: %v", tt.err)
+			}
+		})
+	}
+}
+
 func TestFormatSessionContextLabelsExplicitContextWindowOverride(t *testing.T) {
 	text := FormatSessionContext(gatewayapi.SessionContextResponse{
 		ID:                  "session-1",
@@ -128,6 +162,41 @@ func TestCreateSessionWithOwnerSendsOwnerMetadata(t *testing.T) {
 	}
 	if got.Profile != "billy" || got.Owner != owner {
 		t.Fatalf("request = %#v, want owner %#v", got, owner)
+	}
+}
+
+func TestContextSessionOwnerSendsScopeHeaders(t *testing.T) {
+	var got http.Header
+	server := testkit.NewRouteServer(t, testkit.Route{
+		Method: http.MethodGet,
+		Path:   "/v1/sessions/session-1/status",
+		Handler: func(w http.ResponseWriter, r *http.Request) {
+			got = r.Header.Clone()
+			testkit.WriteJSON(t, w, gatewayapi.SessionStatus{ID: "session-1"})
+		},
+	})
+
+	owner := gatewayapi.SessionOwner{
+		ClientType:       "telegram",
+		TelegramChatID:   123,
+		TelegramThreadID: 7,
+		TelegramUserID:   1001,
+		TUIChatID:        "local-tui",
+	}
+	ctx := WithSessionOwner(context.Background(), owner)
+	if _, err := New(server.URL).SessionStatus(ctx, "session-1"); err != nil {
+		t.Fatal(err)
+	}
+	for header, want := range map[string]string{
+		gatewayapi.HeaderSessionClientType:       "telegram",
+		gatewayapi.HeaderSessionTelegramChatID:   "123",
+		gatewayapi.HeaderSessionTelegramThreadID: "7",
+		gatewayapi.HeaderSessionTelegramUserID:   "1001",
+		gatewayapi.HeaderSessionTUIChatID:        "local-tui",
+	} {
+		if got.Get(header) != want {
+			t.Fatalf("%s = %q, want %q", header, got.Get(header), want)
+		}
 	}
 }
 

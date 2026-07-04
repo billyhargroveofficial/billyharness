@@ -49,7 +49,7 @@ func (r *Registry) handleDiagnosticsRun(ctx context.Context, args json.RawMessag
 	if cwd == "" {
 		cwd = "."
 	}
-	safeCWD, err := r.safePath(cwd)
+	safeCWD, err := r.safePath(ctx, cwd)
 	if err != nil {
 		return Result{}, err
 	}

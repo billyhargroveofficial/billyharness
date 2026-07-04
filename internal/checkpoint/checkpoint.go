@@ -640,25 +640,92 @@ func restoreOne(file FilePatch, useAfter bool) error {
 	}
 	switch target.Kind {
 	case KindDir:
-		if err := os.MkdirAll(file.Path, fs.FileMode(target.Mode)); err != nil {
-			return err
-		}
-		return os.Chmod(file.Path, fs.FileMode(target.Mode))
+		return restoreDirectory(file.Path, fs.FileMode(target.Mode))
 	case KindFile:
 		bytes, err := base64.StdEncoding.DecodeString(target.ContentBase64)
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(file.Path), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(file.Path, bytes, fs.FileMode(target.Mode)); err != nil {
-			return err
-		}
-		return os.Chmod(file.Path, fs.FileMode(target.Mode))
+		return atomicRestoreFile(file.Path, bytes, fs.FileMode(target.Mode))
 	default:
 		return fmt.Errorf("%s: unsupported restore kind %q", displayPath(file), target.Kind)
 	}
+}
+
+func restoreDirectory(path string, mode fs.FileMode) error {
+	if mode == 0 {
+		mode = 0o755
+	}
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to restore directory through symlink %s", path)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(path, mode); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to restore directory through symlink %s", path)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("refusing to restore directory through non-directory %s", path)
+	}
+	return os.Chmod(path, mode)
+}
+
+func atomicRestoreFile(path string, content []byte, mode fs.FileMode) error {
+	if mode == 0 {
+		mode = 0o644
+	}
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to restore file through symlink %s", path)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("refusing to restore file through non-regular path %s", path)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to restore file through symlink directory %s", dir)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("refusing to restore file through non-directory parent %s", dir)
+	}
+	base := filepath.Base(path)
+	tmp, err := os.CreateTemp(dir, "."+base+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 func derefState(state *FileState) FileState {

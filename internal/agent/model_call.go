@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -107,6 +108,20 @@ func (a *Agent) runModelCallStep(ctx context.Context, hookRunner *runtimehooks.R
 		}})
 		return result
 	}
+	if err := validateExecutableToolCalls(calls); err != nil {
+		result.Err = err
+		emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
+			TurnID:     input.TurnID,
+			StepID:     stepID,
+			Round:      input.Round,
+			Kind:       protocol.StepKindModelCall,
+			Status:     protocol.StepStatusFailed,
+			Name:       a.modelID(),
+			DurationMS: durationMS(started),
+			Error:      err.Error(),
+		}})
+		return result
+	}
 	result.ToolCalls = calls
 	modelMetadata := map[string]any{
 		"content_chars":   len(stream.Content),
@@ -130,6 +145,21 @@ func (a *Agent) runModelCallStep(ctx context.Context, hookRunner *runtimehooks.R
 		Metadata:   modelMetadata,
 	}})
 	return result
+}
+
+func validateExecutableToolCalls(calls []protocol.ToolCall) error {
+	seen := map[string]int{}
+	for i, call := range calls {
+		id := strings.TrimSpace(call.ID)
+		if id == "" {
+			continue
+		}
+		if previous, ok := seen[id]; ok {
+			return fmt.Errorf("duplicate tool call id %q at indexes %d and %d", id, previous, i)
+		}
+		seen[id] = i
+	}
+	return nil
 }
 
 func (a *Agent) emitModelCallStepFailed(input modelCallStepInput, stepID string, base map[string]any, started time.Time, stream modelCallStreamResult, err error, emit func(protocol.Event)) {

@@ -40,17 +40,17 @@ type telegramAdmissionRecord struct {
 	Duplicate       bool      `json:"duplicate,omitempty"`
 }
 
-func newTelegramAdmissionStore(statePath string) telegramAdmissionStore {
+func newTelegramAdmissionStore(statePath string) *telegramAdmissionStore {
 	statePath = strings.TrimSpace(statePath)
 	if statePath == "" {
-		return telegramAdmissionStore{}
+		return &telegramAdmissionStore{}
 	}
 	dir := filepath.Dir(statePath)
 	base := strings.TrimSuffix(filepath.Base(statePath), filepath.Ext(statePath))
 	if base == "" || base == "." || base == string(filepath.Separator) {
 		base = "telegram-state"
 	}
-	return telegramAdmissionStore{path: filepath.Join(dir, base+".admissions.jsonl")}
+	return &telegramAdmissionStore{path: filepath.Join(dir, base+".admissions.jsonl")}
 }
 
 func (s *telegramAdmissionStore) RecordIgnored(update Update, reason string) error {
@@ -95,6 +95,23 @@ func (s *telegramAdmissionStore) RecordAdmitted(updateID int, msg Message, sessi
 		AttachmentCount: attachmentCount,
 		GatewayState:    resp.State,
 		Duplicate:       resp.Duplicate,
+	}
+	return s.append(record)
+}
+
+func (s *telegramAdmissionStore) RecordAbandoned(key string, state ChatState, reason string) error {
+	if s == nil || strings.TrimSpace(s.path) == "" {
+		return nil
+	}
+	record := telegramAdmissionRecord{
+		SchemaVersion: telegramAdmissionSchemaVersion,
+		Timestamp:     time.Now().UTC(),
+		Kind:          "abandoned",
+		UpdateID:      state.PendingUpdateID,
+		Key:           strings.TrimSpace(key),
+		Reason:        strings.TrimSpace(reason),
+		SessionID:     state.SessionID,
+		InputID:       state.PendingInputID,
 	}
 	return s.append(record)
 }

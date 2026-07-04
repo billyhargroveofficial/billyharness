@@ -40,15 +40,16 @@ func (r *Registry) handleFSFindFiles(ctx context.Context, args json.RawMessage) 
 	if in.Offset < 0 {
 		in.Offset = 0
 	}
-	if _, err := r.safePath(in.Path); err != nil {
+	if _, err := r.safePath(ctx, in.Path); err != nil {
 		return Result{}, err
 	}
+	policy := r.toolPolicyForContext(ctx)
 	resolver := r.fileResolver
 	if resolver == nil {
 		resolver = filesearch.NewResolver(filesearch.DefaultCacheTTL)
 	}
 	result, err := resolver.Find(ctx, filesearch.Options{
-		Roots:  r.toolPolicy.WorkspaceRoots,
+		Roots:  policy.WorkspaceRoots,
 		Path:   in.Path,
 		Query:  in.Query,
 		Limit:  in.Limit,

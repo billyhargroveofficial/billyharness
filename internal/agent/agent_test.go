@@ -287,6 +287,90 @@ func TestRunMessagesTurnsInvalidToolArgumentsIntoToolError(t *testing.T) {
 	}
 }
 
+func TestRunMessagesRejectsDuplicateToolCallIDsBeforeExecution(t *testing.T) {
+	cfg := config.Default()
+	cfg.MaxToolRounds = 2
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventContent, Text: "before duplicate"},
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_dup", ToolName: "time_now", ArgsDelta: `{}`},
+			{Kind: provider.EventToolCallDelta, ToolIndex: 1, ToolID: "call_dup", ToolName: "time_now", ArgsDelta: `{}`},
+			{Kind: provider.EventDone},
+		},
+	}}
+	a := New(cfg, prov, tools.NewRegistry(cfg))
+	var events []protocol.Event
+	_, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "bad duplicate"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	if err == nil || !strings.Contains(err.Error(), `duplicate tool call id "call_dup"`) {
+		t.Fatalf("err = %v", err)
+	}
+	if sawEvent(events, protocol.EventToolCallRequested) || sawEvent(events, protocol.EventToolCallStarted) {
+		t.Fatalf("duplicate call should fail before tool request/start: %#v", events)
+	}
+	if !sawEvent(events, protocol.EventRunFailed) {
+		t.Fatalf("run.failed missing: %#v", events)
+	}
+	if got := assistantDeltaText(events); got != "before duplicate" {
+		t.Fatalf("assistant delta text = %q", got)
+	}
+}
+
+func TestRunMessagesRejectsDuplicateParallelToolCallIDsBeforeExecution(t *testing.T) {
+	cfg := config.Default()
+	cfg.MaxToolRounds = 2
+	cfg.MaxParallelTools = 2
+	registry := tools.NewRegistry(cfg)
+	for _, name := range []string{"read_a", "read_b"} {
+		name := name
+		if err := registry.Register(tools.Tool{
+			Spec: protocol.ToolSpec{
+				Name:        name,
+				Description: "Read-only duplicate ID test tool.",
+				Parameters:  json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+				Risk:        protocol.RiskReadOnly,
+			},
+			Handler: func(context.Context, json.RawMessage) (tools.Result, error) {
+				return tools.Result{Content: name}, nil
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventContent, Text: "parallel preface"},
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_dup", ToolName: "read_a", ArgsDelta: `{}`},
+			{Kind: provider.EventToolCallDelta, ToolIndex: 1, ToolID: "call_dup", ToolName: "read_b", ArgsDelta: `{}`},
+			{Kind: provider.EventDone},
+		},
+	}}
+	a := New(cfg, prov, registry)
+	var events []protocol.Event
+	_, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "bad duplicate parallel"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	if err == nil || !strings.Contains(err.Error(), `duplicate tool call id "call_dup"`) {
+		t.Fatalf("err = %v", err)
+	}
+	if sawEvent(events, protocol.EventToolCallRequested) || sawEvent(events, protocol.EventToolCallStarted) {
+		t.Fatalf("duplicate parallel call should fail before tool request/start: %#v", events)
+	}
+	if !sawEvent(events, protocol.EventRunFailed) {
+		t.Fatalf("run.failed missing: %#v", events)
+	}
+	if got := assistantDeltaText(events); got != "parallel preface" {
+		t.Fatalf("assistant delta text = %q", got)
+	}
+}
+
 func TestRunMessagesTurnsToolSchemaErrorsIntoRecoverableToolError(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Default()
@@ -728,6 +812,16 @@ func sawEvent(events []protocol.Event, typ protocol.EventType) bool {
 		}
 	}
 	return false
+}
+
+func assistantDeltaText(events []protocol.Event) string {
+	var out strings.Builder
+	for _, event := range events {
+		if event.Type == protocol.EventAssistantDelta {
+			out.WriteString(fmt.Sprint(event.Data))
+		}
+	}
+	return out.String()
 }
 
 func assertAgentLifecycleValid(t *testing.T, events []protocol.Event) {

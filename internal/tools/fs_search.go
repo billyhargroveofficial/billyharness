@@ -126,12 +126,12 @@ func (r *Registry) handleFSGrep(ctx context.Context, args json.RawMessage) (Resu
 		result := errorResult("fs_grep_invalid_regex", err.Error())
 		return result, err
 	}
-	base, err := r.safePath(in.Path)
+	base, err := r.safePath(ctx, in.Path)
 	if err != nil {
 		return Result{}, err
 	}
 	var stats fsSearchStats
-	files, err := r.collectSearchFiles(base, in.Include, &stats)
+	files, err := r.collectSearchFiles(ctx, base, in.Include, &stats)
 	if err != nil {
 		return Result{}, err
 	}
@@ -220,7 +220,7 @@ func (r *Registry) handleFSGlob(ctx context.Context, args json.RawMessage) (Resu
 	if in.Offset < 0 {
 		in.Offset = 0
 	}
-	base, err := r.safePath(in.Path)
+	base, err := r.safePath(ctx, in.Path)
 	if err != nil {
 		return Result{}, err
 	}
@@ -396,18 +396,18 @@ func walkFSGrepFiles(ctx context.Context, files []fsSearchFile, re *regexp.Regex
 	return nil
 }
 
-func (r *Registry) collectSearchFiles(base, include string, stats *fsSearchStats) ([]fsSearchFile, error) {
+func (r *Registry) collectSearchFiles(ctx context.Context, base, include string, stats *fsSearchStats) ([]fsSearchFile, error) {
 	info, err := os.Stat(base)
 	if err != nil {
 		return nil, err
 	}
 	var files []fsSearchFile
 	addFile := func(path string, info os.FileInfo) {
-		rel := r.displayRelPath(path)
+		rel := r.displayRelPath(ctx, path)
 		if include != "" && !fsGlobPatternMatches(include, rel, false) {
 			return
 		}
-		if _, err := r.safePath(path); err != nil {
+		if _, err := r.safePath(ctx, path); err != nil {
 			stats.FilesSkippedOutside++
 			return
 		}
@@ -461,7 +461,7 @@ func (r *Registry) collectGlobEntries(ctx context.Context, base string, matcher 
 			}
 			return nil
 		}
-		if _, err := r.safePath(path); err != nil {
+		if _, err := r.safePath(ctx, path); err != nil {
 			stats.FilesSkippedOutside++
 			if d.IsDir() {
 				return filepath.SkipDir
@@ -479,7 +479,7 @@ func (r *Registry) collectGlobEntries(ctx context.Context, base string, matcher 
 		if typ != "both" && typ != kind {
 			return nil
 		}
-		rel := r.displayRelPath(path)
+		rel := r.displayRelPath(ctx, path)
 		if !matcher.MatchString(rel) {
 			return nil
 		}
@@ -619,12 +619,13 @@ func fsGlobToRegexp(pattern string) string {
 	return b.String()
 }
 
-func (r *Registry) displayRelPath(path string) string {
+func (r *Registry) displayRelPath(ctx context.Context, path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return filepath.ToSlash(path)
 	}
-	for _, root := range r.toolPolicy.WorkspaceRoots {
+	policy := r.toolPolicyForContext(ctx)
+	for _, root := range policy.WorkspaceRoots {
 		if root == "" {
 			continue
 		}

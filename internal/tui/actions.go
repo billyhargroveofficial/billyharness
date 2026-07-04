@@ -93,12 +93,26 @@ func actionRegistry() []actionSpec {
 			},
 		},
 		{
-			id:       "status.show",
-			title:    "Show Status",
-			category: "session",
-			slash:    "/status",
-			summary:  "show current session details",
-			run: func(m *Model, _ string) (bool, tea.Cmd) {
+			id:        "status.show",
+			title:     "Show Status",
+			category:  "session",
+			slash:     "/status",
+			slashArgs: "[debug]",
+			summary:   "show current session details",
+			args: func(Model) []slashArg {
+				return []slashArg{{"debug", "show redacted TUI runtime snapshot"}}
+			},
+			run: func(m *Model, arg string) (bool, tea.Cmd) {
+				switch strings.TrimSpace(arg) {
+				case "":
+				case "debug":
+					m.addInfoBlock("STATUS DEBUG", m.debugStatusText())
+					m.status = "status debug shown"
+					return true, nil
+				default:
+					m.status = "unknown status view " + arg
+					return false, nil
+				}
 				m.addInfoBlock("STATUS", m.statusText())
 				m.status = "status shown"
 				return true, nil
@@ -493,6 +507,23 @@ func actionRegistry() []actionSpec {
 			},
 			run: func(m *Model, arg string) (bool, tea.Cmd) {
 				return m.handleCopyCommand(arg)
+			},
+		},
+		{
+			id:        "transcript.export",
+			title:     "Export Transcript",
+			category:  "ui",
+			slash:     "/export",
+			slashArgs: "raw|rich [path]",
+			summary:   "write or show transcript export",
+			args: func(Model) []slashArg {
+				return []slashArg{
+					{"rich", "export compact rich transcript"},
+					{"raw", "export raw transcript"},
+				}
+			},
+			run: func(m *Model, arg string) (bool, tea.Cmd) {
+				return m.handleExportCommand(arg)
 			},
 		},
 		{

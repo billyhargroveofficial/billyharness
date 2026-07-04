@@ -230,6 +230,17 @@ func TestReplayEventsAuditsToolOutputRefs(t *testing.T) {
 	writer := NewEventWriter("run-refs", &out)
 	events := []protocol.Event{
 		{
+			Type:   protocol.EventToolCallRequested,
+			CallID: "call-valid",
+			Data:   protocol.ToolCall{ID: "call-valid", Name: "fs_read_file"},
+		},
+		{
+			Type:      protocol.EventToolCallStarted,
+			CallID:    "call-valid",
+			AttemptID: "turn-001:tool-call-001:attempt-001",
+			Data:      "fs_read_file",
+		},
+		{
 			Type: protocol.EventToolOutputRefCreated,
 			Data: protocol.ToolOutputRefEvent{
 				CallID:          "call-valid",
@@ -241,6 +252,17 @@ func TestReplayEventsAuditsToolOutputRefs(t *testing.T) {
 				OutputRefSHA256: hex.EncodeToString(sum[:]),
 				Truncated:       true,
 			},
+		},
+		{
+			Type:   protocol.EventToolCallRequested,
+			CallID: "call-missing",
+			Data:   protocol.ToolCall{ID: "call-missing", Name: "mcp_call"},
+		},
+		{
+			Type:      protocol.EventToolCallStarted,
+			CallID:    "call-missing",
+			AttemptID: "turn-001:tool-call-002:attempt-001",
+			Data:      "mcp_call",
 		},
 		{
 			Type: protocol.EventToolOutputRefCreated,

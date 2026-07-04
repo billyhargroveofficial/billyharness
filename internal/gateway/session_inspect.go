@@ -14,6 +14,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/clientux"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/eventlog"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
@@ -92,6 +93,9 @@ type StoredSessionEventsInspection struct {
 	Records               int                                 `json:"records,omitempty"`
 	LastSeq               int64                               `json:"last_seq,omitempty"`
 	LastEvent             string                              `json:"last_event,omitempty"`
+	Validation            StoredSessionEventValidation        `json:"validation"`
+	Terminal              StoredSessionTerminalInspection     `json:"terminal"`
+	Projector             StoredSessionProjectorInspection    `json:"projector"`
 	OutputRefs            int                                 `json:"output_refs,omitempty"`
 	OutputRefsVerified    bool                                `json:"output_refs_verified,omitempty"`
 	OutputRefBytes        int64                               `json:"output_ref_bytes,omitempty"`
@@ -103,6 +107,55 @@ type StoredSessionEventsInspection struct {
 	RedoAvailable         bool                                `json:"redo_available,omitempty"`
 	RedoChangeID          string                              `json:"redo_change_id,omitempty"`
 }
+
+type StoredSessionEventValidation struct {
+	Valid                bool   `json:"valid"`
+	EnvelopeValid        bool   `json:"envelope_valid"`
+	SequenceValid        bool   `json:"sequence_valid"`
+	LifecycleValid       bool   `json:"lifecycle_valid"`
+	SequenceGaps         int    `json:"sequence_gaps,omitempty"`
+	DuplicateSeqs        int    `json:"duplicate_seqs,omitempty"`
+	UnmatchedProgress    int    `json:"unmatched_progress,omitempty"`
+	UnmatchedOutputRefs  int    `json:"unmatched_output_refs,omitempty"`
+	UnmatchedPermissions int    `json:"unmatched_permissions,omitempty"`
+	CorruptionKind       string `json:"corruption_kind,omitempty"`
+	Line                 int    `json:"line,omitempty"`
+	RecordNo             int64  `json:"record_no,omitempty"`
+	Error                string `json:"error,omitempty"`
+}
+
+type StoredSessionTerminalInspection struct {
+	State     string `json:"state"`
+	Event     string `json:"event,omitempty"`
+	RunID     string `json:"run_id,omitempty"`
+	Seq       int64  `json:"seq,omitempty"`
+	LastError string `json:"last_error,omitempty"`
+}
+
+type StoredSessionProjectorInspection struct {
+	ParityOK           bool                          `json:"parity_ok"`
+	LastSeq            int64                         `json:"last_seq,omitempty"`
+	SnapshotLastSeq    int64                         `json:"snapshot_last_seq,omitempty"`
+	RunState           string                        `json:"run_state,omitempty"`
+	TranscriptEvents   int                           `json:"transcript_events,omitempty"`
+	ToolCallsRaw       int                           `json:"tool_calls_raw,omitempty"`
+	ToolCallsProjected int                           `json:"tool_calls_projected,omitempty"`
+	AssistantBytes     int                           `json:"assistant_bytes,omitempty"`
+	ReasoningBytes     int                           `json:"reasoning_bytes,omitempty"`
+	SeqGap             *StoredSessionProjectorSeqGap `json:"seq_gap,omitempty"`
+}
+
+type StoredSessionProjectorSeqGap struct {
+	AfterSeq int64 `json:"after_seq"`
+	GotSeq   int64 `json:"got_seq"`
+}
+
+const (
+	storedSessionRunStateIdle      = "idle"
+	storedSessionRunStateRunning   = "running"
+	storedSessionRunStateCompleted = "completed"
+	storedSessionRunStateFailed    = "failed"
+)
 
 type StoredSessionOutputRefWarning struct {
 	Seq            int64  `json:"seq,omitempty"`
@@ -243,14 +296,17 @@ func InspectStoredSession(dir, id string) (StoredSessionInspection, error) {
 	eventsPath := filepath.Join(sessionDir, sessionFileName(manifest.EventsJSONL, sessionEventsJSONLName))
 	events, err := replaySessionEventsAfter(eventsPath, cleanID, 0)
 	if err != nil {
-		return out, err
-	}
-	out.Events = inspectSessionEvents(eventsPath, events)
-	for _, warning := range out.Events.OutputRefWarnings {
-		out.Warnings = append(out.Warnings, formatStoredOutputRefWarning(warning))
+		out.Events = inspectSessionEvents(eventsPath, nil)
+		out.Events.Validation = storedSessionEventValidationFromError(dir, err)
+		out.Warnings = append(out.Warnings, "event replay invalid: "+out.Events.Validation.Error)
+	} else {
+		out.Events = inspectSessionEvents(eventsPath, events)
+		for _, warning := range out.Events.OutputRefWarnings {
+			out.Warnings = append(out.Warnings, formatStoredOutputRefWarning(warning))
+		}
 	}
 	out.MessageCount = len(history.messages)
-	out.OfflineReplayReady = out.History.Exists && out.History.Records > 0
+	out.OfflineReplayReady = out.History.Exists && out.History.Records > 0 && out.Events.Validation.Valid
 	if !hasExistingFile(out.Files, "config_snapshot") {
 		out.Warnings = append(out.Warnings, "config snapshot missing")
 	}
@@ -282,14 +338,72 @@ func StoredSessionContext(dir, id string, limits config.RuntimeLimits) (gatewaya
 		return gatewayapi.SessionContextResponse{}, err
 	}
 	var warnings []string
+	limits, snapshotWarnings := storedSessionRuntimeLimits(sessionDir, manifest.ConfigSnapshotJSON, limits)
+	warnings = append(warnings, snapshotWarnings...)
 	events, err := replaySessionEventsAfter(filepath.Join(sessionDir, sessionFileName(manifest.EventsJSONL, sessionEventsJSONLName)), cleanID, 0)
 	if err != nil {
 		warnings = append(warnings, "event replay unavailable: "+err.Error())
 	}
 	return clientux.BuildContextResponseWithOptions(limits, cleanID, history.messages, clientux.ContextReportOptions{
+		Memory:   lockedMemoryContextStatus(history.messages),
 		Events:   events,
 		Warnings: warnings,
 	}), nil
+}
+
+func storedSessionRuntimeLimits(sessionDir string, configSnapshotJSON string, fallback config.RuntimeLimits) (config.RuntimeLimits, []string) {
+	name := sessionFileName(configSnapshotJSON, sessionConfigSnapshotName)
+	path := filepath.Join(sessionDir, name)
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return fallback, []string{"config snapshot unavailable: " + err.Error()}
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return fallback, []string{"config snapshot invalid: " + err.Error()}
+	}
+	limits := fallback
+	if value, ok := int64FromSnapshot(raw["context_window_tokens"]); ok {
+		limits.ContextWindowTokens = value
+	}
+	if value, ok := int64FromSnapshot(raw["context_compact_tokens"]); ok {
+		limits.ContextCompactTokens = int(value)
+	}
+	if value, ok := int64FromSnapshot(raw["context_compact_keep"]); ok {
+		limits.ContextCompactKeep = int(value)
+	}
+	if value, ok := int64FromSnapshot(raw["context_compact_max_chars"]); ok {
+		limits.ContextCompactMaxChars = int(value)
+	}
+	if value, ok := raw["context_window_source"].(string); ok {
+		limits.ContextWindowSource = strings.TrimSpace(value)
+	}
+	if value, ok := raw["context_compact_source"].(string); ok {
+		limits.ContextCompactSource = strings.TrimSpace(value)
+	}
+	if value, ok := raw["context_compact_strategy"].(string); ok {
+		limits.ContextCompactStrategy = strings.TrimSpace(value)
+	}
+	if value, ok := raw["context_compact_summary_provider"].(string); ok {
+		limits.ContextCompactSummaryProvider = strings.TrimSpace(value)
+	}
+	if value, ok := raw["context_compact_summary_model"].(string); ok {
+		limits.ContextCompactSummaryModel = strings.TrimSpace(value)
+	}
+	return limits, nil
+}
+
+func int64FromSnapshot(value any) (int64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return int64(v), true
+	case int64:
+		return v, true
+	case int:
+		return int64(v), true
+	default:
+		return 0, false
+	}
 }
 
 func inspectLegacyStoredSession(dir, id string) (StoredSessionInspection, error) {
@@ -323,6 +437,7 @@ func inspectLegacyStoredSession(dir, id string) (StoredSessionInspection, error)
 		LastKind:     "legacy.snapshot",
 		MessageCount: len(record.Messages),
 	}
+	out.Events = inspectSessionEvents("", nil)
 	out.Manifest = StoredSessionManifest{
 		SessionID:    id,
 		CreatedAt:    record.Created,
@@ -349,10 +464,33 @@ func inspectSessionEvents(path string, events []protocol.Event) StoredSessionEve
 		Path:       path,
 		Exists:     fileExists(path),
 		Records:    len(events),
+		Validation: storedSessionEventValidationOK(),
+		Terminal:   StoredSessionTerminalInspection{State: storedSessionRunStateIdle},
 		EventTypes: map[string]int{},
 	}
 	var redoChangeID string
+	seenSeq := map[int64]struct{}{}
+	lastSeq := int64(0)
+	requestedCalls := map[string]struct{}{}
+	startedAttempts := map[string]struct{}{}
+	terminalAttempts := map[string]struct{}{}
 	for _, event := range events {
+		if event.Seq > 0 {
+			if _, ok := seenSeq[event.Seq]; ok {
+				out.Validation.DuplicateSeqs++
+				out.Validation.SequenceValid = false
+				out.Validation.Valid = false
+			}
+			seenSeq[event.Seq] = struct{}{}
+			if lastSeq > 0 && event.Seq > lastSeq+1 {
+				out.Validation.SequenceGaps++
+				out.Validation.SequenceValid = false
+				out.Validation.Valid = false
+			}
+			if event.Seq > lastSeq {
+				lastSeq = event.Seq
+			}
+		}
 		if event.Seq > out.LastSeq {
 			out.LastSeq = event.Seq
 			out.LastEvent = string(event.Type)
@@ -360,6 +498,15 @@ func inspectSessionEvents(path string, events []protocol.Event) StoredSessionEve
 		if event.Type != "" {
 			out.EventTypes[string(event.Type)]++
 		}
+		switch event.Type {
+		case protocol.EventRunStarted:
+			out.Terminal = StoredSessionTerminalInspection{State: storedSessionRunStateRunning, Event: string(event.Type), RunID: event.RunID, Seq: event.Seq}
+		case protocol.EventRunCompleted:
+			out.Terminal = StoredSessionTerminalInspection{State: storedSessionRunStateCompleted, Event: string(event.Type), RunID: event.RunID, Seq: event.Seq}
+		case protocol.EventRunFailed:
+			out.Terminal = StoredSessionTerminalInspection{State: storedSessionRunStateFailed, Event: string(event.Type), RunID: event.RunID, Seq: event.Seq, LastError: fmt.Sprint(event.Data)}
+		}
+		inspectSessionLifecycleReferences(&out, event, requestedCalls, startedAttempts, terminalAttempts)
 		if event.Type == protocol.EventToolOutputRefCreated {
 			ref := outputRefFromEvent(event)
 			out.OutputRefs++
@@ -396,11 +543,222 @@ func inspectSessionEvents(path string, events []protocol.Event) StoredSessionEve
 		out.RedoAvailable = true
 		out.RedoChangeID = redoChangeID
 	}
+	if out.Validation.UnmatchedProgress > 0 || out.Validation.UnmatchedOutputRefs > 0 || out.Validation.UnmatchedPermissions > 0 {
+		out.Validation.LifecycleValid = false
+		out.Validation.Valid = false
+	}
+	out.Projector = inspectSessionProjector(events, out.LastSeq)
 	out.OutputRefsVerified = out.OutputRefs > 0 && out.MissingOutputRefs == 0 && out.OutputRefHashMismatch == 0
 	if len(out.EventTypes) == 0 {
 		out.EventTypes = nil
 	}
 	return out
+}
+
+func storedSessionEventValidationOK() StoredSessionEventValidation {
+	return StoredSessionEventValidation{
+		Valid:          true,
+		EnvelopeValid:  true,
+		SequenceValid:  true,
+		LifecycleValid: true,
+	}
+}
+
+func storedSessionEventValidationFromError(storeDir string, err error) StoredSessionEventValidation {
+	out := storedSessionEventValidationOK()
+	out.Valid = false
+	out.Error = sanitizeSessionStoreLoadError(storeDir, err.Error())
+	var corrupt *eventlog.CorruptionError
+	if errors.As(err, &corrupt) {
+		out.CorruptionKind = corrupt.Kind
+		out.Line = corrupt.Line
+		out.RecordNo = corrupt.RecordNo
+		if corrupt.Err != nil {
+			out.Error = sanitizeSessionStoreLoadError(storeDir, corrupt.Err.Error())
+		}
+	}
+	combined := strings.ToLower(out.CorruptionKind + " " + out.Error)
+	switch {
+	case strings.Contains(combined, "lifecycle"):
+		out.LifecycleValid = false
+	case strings.Contains(combined, "sequence") || strings.Contains(combined, "seq"):
+		out.SequenceValid = false
+	default:
+		out.EnvelopeValid = false
+	}
+	return out
+}
+
+func inspectSessionLifecycleReferences(out *StoredSessionEventsInspection, event protocol.Event, requestedCalls, startedAttempts, terminalAttempts map[string]struct{}) {
+	callID := inspectEventCallID(event)
+	attemptID := inspectEventAttemptID(event)
+	switch event.Type {
+	case protocol.EventToolCallRequested:
+		if callID != "" {
+			requestedCalls[callID] = struct{}{}
+		}
+	case protocol.EventToolCallStarted:
+		if callID != "" {
+			requestedCalls[callID] = struct{}{}
+		}
+		if attemptID != "" {
+			startedAttempts[attemptID] = struct{}{}
+		}
+	case protocol.EventToolCallFinished, protocol.EventToolCallFailed, protocol.EventToolCallAborted:
+		if attemptID != "" {
+			terminalAttempts[attemptID] = struct{}{}
+		}
+	case protocol.EventToolCallProgress:
+		if !inspectKnownCallOrAttempt(callID, attemptID, requestedCalls, startedAttempts) && !inspectTerminalCleanupProgress(event) {
+			out.Validation.UnmatchedProgress++
+		}
+	case protocol.EventToolOutputRefCreated:
+		if !inspectKnownCallOrAttempt(callID, attemptID, requestedCalls, startedAttempts) {
+			out.Validation.UnmatchedOutputRefs++
+		}
+	case protocol.EventToolPermissionRequested, protocol.EventToolPermissionDecided:
+		if !inspectKnownCallOrAttempt(callID, attemptID, requestedCalls, startedAttempts) {
+			out.Validation.UnmatchedPermissions++
+		}
+	}
+	if attemptID != "" {
+		if _, ok := terminalAttempts[attemptID]; ok && event.Type == protocol.EventToolCallProgress && !inspectTerminalCleanupProgress(event) {
+			out.Validation.UnmatchedProgress++
+		}
+	}
+}
+
+func inspectKnownCallOrAttempt(callID, attemptID string, requestedCalls, startedAttempts map[string]struct{}) bool {
+	if callID != "" {
+		if _, ok := requestedCalls[callID]; ok {
+			return true
+		}
+	}
+	if attemptID != "" {
+		if _, ok := startedAttempts[attemptID]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func inspectTerminalCleanupProgress(event protocol.Event) bool {
+	phase := strings.ToLower(strings.TrimSpace(inspectEventDataString(event, "phase")))
+	switch phase {
+	case "attempt_finished", "cancel_abort", "retry_decision", "finalize":
+		return true
+	default:
+		return false
+	}
+}
+
+func inspectSessionProjector(events []protocol.Event, lastSeq int64) StoredSessionProjectorInspection {
+	transcriptEvents := 0
+	rawToolCalls := 0
+	projectedToolCalls := 0
+	var assistant strings.Builder
+	var reasoning strings.Builder
+	runState := storedSessionRunStateIdle
+	var snapshotLastSeq int64
+	var seqGap *StoredSessionProjectorSeqGap
+	for _, event := range events {
+		if storedSessionTranscriptEvent(event.Type) {
+			transcriptEvents++
+		}
+		if event.Seq > 0 {
+			if snapshotLastSeq > 0 && event.Seq > snapshotLastSeq+1 && seqGap == nil {
+				seqGap = &StoredSessionProjectorSeqGap{AfterSeq: snapshotLastSeq, GotSeq: event.Seq}
+			}
+			if event.Seq > snapshotLastSeq {
+				snapshotLastSeq = event.Seq
+			}
+		}
+		switch event.Type {
+		case protocol.EventRunStarted:
+			runState = storedSessionRunStateRunning
+		case protocol.EventRunCompleted:
+			runState = storedSessionRunStateCompleted
+		case protocol.EventRunFailed:
+			runState = storedSessionRunStateFailed
+		case protocol.EventAssistantDelta:
+			assistant.WriteString(fmt.Sprint(event.Data))
+		case protocol.EventAssistantReasoning:
+			reasoning.WriteString(fmt.Sprint(event.Data))
+		case protocol.EventToolCallRequested:
+			rawToolCalls++
+			projectedToolCalls++
+		}
+	}
+	out := StoredSessionProjectorInspection{
+		LastSeq:            lastSeq,
+		SnapshotLastSeq:    snapshotLastSeq,
+		RunState:           runState,
+		TranscriptEvents:   transcriptEvents,
+		ToolCallsRaw:       rawToolCalls,
+		ToolCallsProjected: projectedToolCalls,
+		AssistantBytes:     assistant.Len(),
+		ReasoningBytes:     reasoning.Len(),
+		SeqGap:             seqGap,
+	}
+	out.ParityOK = out.LastSeq == out.SnapshotLastSeq && out.ToolCallsRaw == out.ToolCallsProjected && out.SeqGap == nil
+	return out
+}
+
+func storedSessionTranscriptEvent(eventType protocol.EventType) bool {
+	switch eventType {
+	case protocol.EventRunStarted,
+		protocol.EventRunCompleted,
+		protocol.EventRunFailed,
+		protocol.EventAssistantReasoning,
+		protocol.EventAssistantDelta,
+		protocol.EventToolAudit,
+		protocol.EventToolCallRequested,
+		protocol.EventToolCallFinished,
+		protocol.EventToolCallFailed,
+		protocol.EventToolCallAborted,
+		protocol.EventStepStarted,
+		protocol.EventStepCompleted,
+		protocol.EventContextCompacted,
+		protocol.EventContextThreshold,
+		protocol.EventTurnChangeRecorded,
+		protocol.EventTurnChangeReverted,
+		protocol.EventUserInputRequested,
+		protocol.EventUserInputAnswered,
+		protocol.EventUserInputRejected:
+		return true
+	default:
+		return false
+	}
+}
+
+func inspectEventCallID(event protocol.Event) string {
+	if strings.TrimSpace(event.CallID) != "" {
+		return strings.TrimSpace(event.CallID)
+	}
+	return inspectEventDataString(event, "call_id")
+}
+
+func inspectEventAttemptID(event protocol.Event) string {
+	if strings.TrimSpace(event.AttemptID) != "" {
+		return strings.TrimSpace(event.AttemptID)
+	}
+	return inspectEventDataString(event, "attempt_id")
+}
+
+func inspectEventDataString(event protocol.Event, key string) string {
+	if strings.TrimSpace(key) == "" || event.Data == nil {
+		return ""
+	}
+	body, err := json.Marshal(event.Data)
+	if err != nil {
+		return ""
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return ""
+	}
+	value, _ := raw[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func inspectOutputRefEvent(event protocol.Event, ref outputRefEventData) (StoredSessionOutputRefWarning, int64, bool) {

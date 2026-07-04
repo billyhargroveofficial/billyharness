@@ -474,14 +474,16 @@ func mcpSnapshotHash(settings config.MCPSettings) string {
 		ToolsOff  []string `json:"disabled_tools,omitempty"`
 	}
 	payload := struct {
-		Enabled        bool             `json:"enabled"`
-		ConfigFiles    []string         `json:"config_files,omitempty"`
-		AllowedServers []string         `json:"allowed_servers,omitempty"`
-		Servers        []serverSnapshot `json:"servers,omitempty"`
+		Enabled                   bool             `json:"enabled"`
+		ConfigFiles               []string         `json:"config_files,omitempty"`
+		AllowedServers            []string         `json:"allowed_servers,omitempty"`
+		PromoteServerInstructions bool             `json:"promote_server_instructions,omitempty"`
+		Servers                   []serverSnapshot `json:"servers,omitempty"`
 	}{
-		Enabled:        settings.Enabled,
-		ConfigFiles:    append([]string(nil), settings.ConfigFiles...),
-		AllowedServers: append([]string(nil), settings.AllowedServers...),
+		Enabled:                   settings.Enabled,
+		ConfigFiles:               append([]string(nil), settings.ConfigFiles...),
+		AllowedServers:            append([]string(nil), settings.AllowedServers...),
+		PromoteServerInstructions: settings.PromoteServerInstructions,
 	}
 	for i := range payload.ConfigFiles {
 		payload.ConfigFiles[i] = filepath.Clean(payload.ConfigFiles[i])

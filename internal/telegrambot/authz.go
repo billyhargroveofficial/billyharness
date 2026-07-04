@@ -19,8 +19,15 @@ func (b *Bot) allowed(msg Message) bool {
 	if b.opts.AllowedChatIDs[msg.Chat.ID] {
 		return true
 	}
-	if msg.From != nil && b.opts.AllowedUserIDs[msg.From.ID] {
+	if msg.From != nil && b.opts.AllowedUserIDs[msg.From.ID] && (telegramPrivateChat(msg) || b.opts.AllowUserInGroups) {
 		return true
 	}
 	return false
+}
+
+func telegramPrivateChat(msg Message) bool {
+	if msg.Chat.Type == "private" {
+		return true
+	}
+	return msg.From != nil && msg.Chat.ID == msg.From.ID
 }

@@ -11,12 +11,13 @@ type Prompt = mcpclient.Prompt
 type PromptArgument = mcpclient.PromptArgument
 
 type Response struct {
-	Source      string                   `json:"source,omitempty"`
-	ConfigFiles []string                 `json:"config_files"`
-	Allowed     []string                 `json:"allowed"`
-	Enabled     bool                     `json:"enabled"`
-	Servers     []mcpclient.ServerStatus `json:"servers"`
-	Prompts     []mcpclient.Prompt       `json:"prompts,omitempty"`
+	Source       string                   `json:"source,omitempty"`
+	ConfigFiles  []string                 `json:"config_files"`
+	Allowed      []string                 `json:"allowed"`
+	Enabled      bool                     `json:"enabled"`
+	Servers      []mcpclient.ServerStatus `json:"servers"`
+	Prompts      []mcpclient.Prompt       `json:"prompts,omitempty"`
+	Instructions []string                 `json:"instructions,omitempty"`
 }
 
 func Format(status Response) string {
@@ -38,6 +39,9 @@ func Format(status Response) string {
 		"allowed: " + allowed,
 		"native: web_search, web_fetch, web_extract, web_crawl",
 	}
+	if len(status.Instructions) > 0 {
+		lines = append(lines, fmt.Sprintf("server instructions: %d metadata-only", len(status.Instructions)))
+	}
 	if !status.Enabled {
 		lines = append(lines, "mcp: disabled")
 		return strings.Join(lines, "\n")
@@ -49,6 +53,12 @@ func Format(status Response) string {
 	lines = append(lines, "")
 	for _, server := range status.Servers {
 		line := fmt.Sprintf("%-18s %-13s %-15s tools:%d", server.Name, serverState(server), server.Transport, server.ToolCount)
+		if strings.TrimSpace(server.TransportState) != "" {
+			line += " transport:" + strings.TrimSpace(server.TransportState)
+		}
+		if strings.TrimSpace(server.CatalogState) != "" {
+			line += " catalog:" + strings.TrimSpace(server.CatalogState)
+		}
 		if server.Command != "" {
 			line += " command:" + oneLine(server.Command, 80)
 		}
@@ -96,6 +106,22 @@ func Format(status Response) string {
 		}
 		if server.StderrTail != "" {
 			line += "\n  stderr: " + oneLine(server.StderrTail, 180)
+		}
+		for _, diag := range server.Diagnostics {
+			code := strings.TrimSpace(diag.Code)
+			if code == "" {
+				code = "diagnostic"
+			}
+			severity := strings.TrimSpace(diag.Severity)
+			if severity != "" {
+				severity = "/" + severity
+			}
+			message := strings.TrimSpace(diag.Message)
+			if message != "" {
+				line += "\n  diagnostic " + code + severity + ": " + oneLine(message, 180)
+			} else {
+				line += "\n  diagnostic " + code + severity
+			}
 		}
 		lines = append(lines, line)
 	}

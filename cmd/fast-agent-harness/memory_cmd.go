@@ -5,7 +5,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/memory"
 )
 
@@ -17,7 +16,11 @@ func memoryCmd(args []string) error {
 			return nil
 		}
 	}
-	out, err := memory.RunCommand(config.Default().InstructionSettings(), strings.Join(args, " "))
+	cfg, err := resolveRuntimeConfig()
+	if err != nil {
+		return err
+	}
+	out, err := memory.RunCommand(cfg.InstructionSettings(), strings.Join(args, " "))
 	if err != nil {
 		return err
 	}

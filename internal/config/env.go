@@ -7,6 +7,17 @@ import (
 	"strings"
 )
 
+const (
+	EnvValueSourceEnvironment = "env"
+	EnvValueSourceDotenv      = "dotenv"
+)
+
+type EnvValueSource struct {
+	Kind string
+	Key  string
+	Path string
+}
+
 func env(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
@@ -65,13 +76,26 @@ func envListDefault(key string, fallback []string) []string {
 }
 
 func LookupEnvOrDotenv(key string) (string, bool) {
+	value, _, ok := LookupEnvOrDotenvSource(key)
+	return value, ok
+}
+
+func LookupEnvOrDotenvSource(key string) (string, EnvValueSource, bool) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", EnvValueSource{}, false
+	}
 	if value, ok := os.LookupEnv(key); ok {
 		if strings.TrimSpace(value) != "" {
-			return value, true
+			return value, EnvValueSource{Kind: EnvValueSourceEnvironment, Key: key}, true
 		}
 	}
-	value := dotenvValue(key)
-	return value, value != ""
+	for _, path := range findDotenvFiles() {
+		if value, ok := dotenvValueFromFile(path, key); ok && strings.TrimSpace(value) != "" {
+			return value, EnvValueSource{Kind: EnvValueSourceDotenv, Key: key, Path: path}, true
+		}
+	}
+	return "", EnvValueSource{}, false
 }
 
 func LookupEnvDotenvOrFiles(key string, extraFiles []string) (string, string, bool) {

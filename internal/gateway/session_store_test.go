@@ -2,24 +2,20 @@ package gateway
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	clientprojector "github.com/billyhargroveofficial/billyharness/internal/clientux/projector"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
-	"github.com/billyhargroveofficial/billyharness/internal/eventlog"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
@@ -248,11 +244,215 @@ func TestGatewaySessionStoreRestoresSessionAfterRestart(t *testing.T) {
 	}
 }
 
+func TestStoredSessionContextReconstructsCompactionEpochs(t *testing.T) {
+	cfg := config.Default()
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	store := newSessionStore(storeDir)
+	session := newGatewaySession("compaction-epochs", time.Now().UTC(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "hello"},
+	})
+	if err := store.Save(session); err != nil {
+		t.Fatal(err)
+	}
+	runID := gatewaySessionRunID(session.ID, 1)
+	for _, event := range []protocol.Event{
+		{Type: protocol.EventRunStarted, RunID: runID, Data: map[string]any{"run_id": runID, "status": "started"}},
+		{Type: protocol.EventContextCompacted, RunID: runID, Data: map[string]any{
+			"compaction_id":           "compact-1",
+			"context_epoch":           1,
+			"before_estimated_tokens": 1000,
+			"after_estimated_tokens":  600,
+			"post_history_hash":       "post-1",
+		}},
+		{Type: protocol.EventContextCompacted, RunID: runID, Data: map[string]any{
+			"compaction_id":           "compact-2",
+			"context_epoch":           2,
+			"before_estimated_tokens": 900,
+			"after_estimated_tokens":  500,
+			"post_history_hash":       "post-2",
+		}},
+		{Type: protocol.EventRunCompleted, RunID: runID},
+	} {
+		if _, err := store.AppendEvent(session, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resp, err := StoredSessionContext(storeDir, session.ID, cfg.RuntimeLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.LastCompaction == nil ||
+		resp.LastCompaction.CompactionID != "compact-2" ||
+		resp.LastCompaction.ContextEpoch != 2 ||
+		resp.LastCompaction.PostHistoryHash != "post-2" {
+		t.Fatalf("last compaction = %#v warnings=%v", resp.LastCompaction, resp.Warnings)
+	}
+}
+
+func TestSessionStoreLoadAllSurfacesCorruptSessions(t *testing.T) {
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	goodSession := newGatewaySession("good-session", time.Now().UTC(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "hello"},
+	})
+	store := newSessionStore(storeDir)
+	if err := store.Save(goodSession); err != nil {
+		t.Fatal(err)
+	}
+	corruptID := "corrupt-session"
+	writeCorruptStoredSessionHistory(t, storeDir, corruptID)
+
+	loaded, diagnostics, err := newSessionStore(storeDir).LoadAllWithDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || loaded[0].ID != goodSession.ID {
+		t.Fatalf("loaded sessions = %#v", loaded)
+	}
+	if !diagnostics.Enabled || diagnostics.LoadedCount != 1 || diagnostics.ErrorCount != 1 || diagnostics.CorruptCount != 1 {
+		t.Fatalf("diagnostics = %#v", diagnostics)
+	}
+	got := diagnostics.Errors[0]
+	if got.SessionID != corruptID || got.SessionIDHash != hashSessionIDForDiagnostics(corruptID) || !got.Corrupt {
+		t.Fatalf("load error identity = %#v", got)
+	}
+	if got.Entry != corruptID || got.EntryType != "session_dir" || got.Line != 1 || got.RecordNo != 1 {
+		t.Fatalf("load error metadata = %#v", got)
+	}
+	if strings.Contains(got.Error, storeDir) {
+		t.Fatalf("load error leaked store path: %#v", got)
+	}
+}
+
+func TestGatewayHealthSurfacesStartupSessionStoreCorruption(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	goodSession := newGatewaySession("good-session", time.Now().UTC(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "hello"},
+	})
+	store := newSessionStore(storeDir)
+	if err := store.Save(goodSession); err != nil {
+		t.Fatal(err)
+	}
+	corruptID := "corrupt-session"
+	writeCorruptStoredSessionHistory(t, storeDir, corruptID)
+
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+	list := httptest.NewRecorder()
+	server.Handler().ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/v1/sessions", nil))
+	if list.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", list.Code, list.Body.String())
+	}
+	var listed SessionListResponse
+	if err := json.Unmarshal(list.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Sessions) != 1 || listed.Sessions[0].ID != goodSession.ID {
+		t.Fatalf("listed sessions = %#v", listed.Sessions)
+	}
+
+	health := httptest.NewRecorder()
+	server.Handler().ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if health.Code != http.StatusOK {
+		t.Fatalf("health status = %d body=%s", health.Code, health.Body.String())
+	}
+	var got HealthResponse
+	if err := json.Unmarshal(health.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.SessionStore == nil || got.SessionStore.LoadedCount != 1 || got.SessionStore.ErrorCount != 1 || got.SessionStore.CorruptCount != 1 {
+		t.Fatalf("health session store = %#v", got.SessionStore)
+	}
+	if len(got.SessionStore.Errors) != 1 || got.SessionStore.Errors[0].SessionID != corruptID {
+		t.Fatalf("health errors = %#v", got.SessionStore.Errors)
+	}
+	if strings.Contains(health.Body.String(), storeDir) {
+		t.Fatalf("health leaked store path: %s", health.Body.String())
+	}
+}
+
+func TestInspectStoredSessionReportsEventValidationFailure(t *testing.T) {
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	session := newGatewaySession("inspect-corrupt-events", time.Now().UTC(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "hello"},
+	})
+	store := newSessionStore(storeDir)
+	if err := store.Save(session); err != nil {
+		t.Fatal(err)
+	}
+	record := sessionEventRecord{
+		SchemaVersion: gatewaySessionSchemaVersion,
+		Seq:           1,
+		SessionID:     session.ID,
+		EventType:     string(protocol.EventAssistantDelta),
+		Event: protocol.Event{
+			Seq:  1,
+			Type: protocol.EventAssistantDelta,
+			Data: "provider payload sk-inspect-secret",
+		},
+	}
+	body, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventsPath := filepath.Join(storeDir, session.ID, sessionEventsJSONLName)
+	if err := os.WriteFile(eventsPath, append(body, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	inspection, err := InspectStoredSession(storeDir, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.OfflineReplayReady || inspection.Events.Validation.Valid || inspection.Events.Validation.EnvelopeValid {
+		t.Fatalf("inspection validation = %#v offline=%t", inspection.Events.Validation, inspection.OfflineReplayReady)
+	}
+	if inspection.Events.Validation.Line != 1 || inspection.Events.Validation.RecordNo != 1 || inspection.Events.Validation.Error == "" {
+		t.Fatalf("inspection validation metadata = %#v", inspection.Events.Validation)
+	}
+	body, err = json.Marshal(inspection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "sk-inspect-secret") {
+		t.Fatalf("inspection leaked raw provider payload: %s", body)
+	}
+	if len(inspection.Warnings) == 0 || !strings.Contains(inspection.Warnings[0], "event replay invalid") {
+		t.Fatalf("warnings = %#v", inspection.Warnings)
+	}
+}
+
+func writeCorruptStoredSessionHistory(t *testing.T, storeDir, sessionID string) {
+	t.Helper()
+	sessionDir := filepath.Join(storeDir, sessionID)
+	manifest := sessionManifest{
+		SchemaVersion: gatewaySessionSchemaVersion,
+		SessionID:     sessionID,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+		HistoryJSONL:  sessionHistoryJSONLName,
+		EventsJSONL:   sessionEventsJSONLName,
+		InputsJSONL:   sessionInputsJSONLName,
+		SnapshotJSON:  sessionID + ".json",
+	}
+	if err := writeSessionManifest(filepath.Join(sessionDir, sessionManifestName), manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, sessionHistoryJSONLName), []byte("{not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSessionStoreRedoStateClearsOnNewTurnChange(t *testing.T) {
 	store := newSessionStore(t.TempDir())
 	session := newGatewaySession("redo-state", time.Now().UTC(), []protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
-	changeA := protocol.TurnChangeEvent{ChangeID: "change-a", Status: "recorded", FileCount: 1, Modified: 1, Reversible: true}
-	changeB := protocol.TurnChangeEvent{ChangeID: "change-b", Status: "recorded", FileCount: 1, Added: 1, Reversible: true}
+	changeA := protocol.TurnChangeEvent{ChangeID: "change-a", RunID: "run-1", TurnID: "turn-1", Status: "recorded", FileCount: 1, Modified: 1, Reversible: true}
+	changeB := protocol.TurnChangeEvent{ChangeID: "change-b", RunID: "run-1", TurnID: "turn-1", Status: "recorded", FileCount: 1, Added: 1, Reversible: true}
 	if _, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventTurnChangeRecorded, Data: changeA}); err != nil {
 		t.Fatal(err)
 	}
@@ -545,502 +745,6 @@ func projectContextMessages(messages []protocol.Message) []protocol.Message {
 	return out
 }
 
-func TestGatewaySessionInputAdmissionDurableAndIdempotent(t *testing.T) {
-	cfg := config.Default()
-	cfg.Provider = "mock"
-	cfg.Model = "mock"
-	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
-	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
-
-	create := httptest.NewRecorder()
-	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", nil))
-	if create.Code != http.StatusCreated {
-		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
-	}
-	var created struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
-		t.Fatal(err)
-	}
-
-	admitBody := `{"input_id":"input-1","prompt":"hello","client_id":"test-client"}`
-	admit := httptest.NewRecorder()
-	server.Handler().ServeHTTP(admit, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/inputs", strings.NewReader(admitBody)))
-	if admit.Code != http.StatusCreated {
-		t.Fatalf("admit status = %d body=%s", admit.Code, admit.Body.String())
-	}
-	var admitted gatewayapi.SessionInputResponse
-	if err := json.Unmarshal(admit.Body.Bytes(), &admitted); err != nil {
-		t.Fatal(err)
-	}
-	if admitted.InputID != "input-1" || admitted.State != sessionInputAdmitted || admitted.Duplicate {
-		t.Fatalf("admitted = %#v", admitted)
-	}
-	inputsPath := filepath.Join(storeDir, created.ID, sessionInputsJSONLName)
-	assertPerm(t, inputsPath, 0o600)
-	records := readSessionInputRecords(t, inputsPath)
-	if len(records) != 1 || records[0].Kind != sessionInputAdmitted || records[0].Prompt != "hello" || records[0].BodySHA256 == "" {
-		t.Fatalf("input records = %#v", records)
-	}
-
-	duplicate := httptest.NewRecorder()
-	server.Handler().ServeHTTP(duplicate, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/inputs", strings.NewReader(admitBody)))
-	if duplicate.Code != http.StatusOK {
-		t.Fatalf("duplicate status = %d body=%s", duplicate.Code, duplicate.Body.String())
-	}
-	var dupResp gatewayapi.SessionInputResponse
-	if err := json.Unmarshal(duplicate.Body.Bytes(), &dupResp); err != nil {
-		t.Fatal(err)
-	}
-	if !dupResp.Duplicate || dupResp.State != sessionInputAdmitted || dupResp.Seq != 1 {
-		t.Fatalf("duplicate response = %#v", dupResp)
-	}
-
-	restarted := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
-	duplicateAfterRestart := httptest.NewRecorder()
-	restarted.Handler().ServeHTTP(duplicateAfterRestart, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/inputs", strings.NewReader(admitBody)))
-	if duplicateAfterRestart.Code != http.StatusOK {
-		t.Fatalf("duplicate after restart status = %d body=%s", duplicateAfterRestart.Code, duplicateAfterRestart.Body.String())
-	}
-	var restartResp gatewayapi.SessionInputResponse
-	if err := json.Unmarshal(duplicateAfterRestart.Body.Bytes(), &restartResp); err != nil {
-		t.Fatal(err)
-	}
-	if !restartResp.Duplicate || restartResp.State != sessionInputAdmitted {
-		t.Fatalf("restart duplicate response = %#v", restartResp)
-	}
-
-	conflict := httptest.NewRecorder()
-	restarted.Handler().ServeHTTP(conflict, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/inputs", strings.NewReader(`{"input_id":"input-1","prompt":"different"}`)))
-	if conflict.Code != http.StatusConflict {
-		t.Fatalf("conflict status = %d body=%s", conflict.Code, conflict.Body.String())
-	}
-}
-
-func TestGatewaySessionRunReusesPreAdmittedTelegramInput(t *testing.T) {
-	cfg := config.Default()
-	cfg.Provider = "mock"
-	cfg.Model = "mock"
-	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
-	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
-
-	create := httptest.NewRecorder()
-	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", nil))
-	if create.Code != http.StatusCreated {
-		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
-	}
-	var created struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
-		t.Fatal(err)
-	}
-
-	body := `{"input_id":"telegram-update-42","prompt":"describe image","interrupt_policy":"interrupt","client_id":"telegram:123:u1001","client_type":"telegram","metadata":{"chat_id":"123","message_id":"7","update_id":"42","user_id":"1001"}}`
-	admit := httptest.NewRecorder()
-	server.Handler().ServeHTTP(admit, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/inputs", strings.NewReader(body)))
-	if admit.Code != http.StatusCreated {
-		t.Fatalf("admit status = %d body=%s", admit.Code, admit.Body.String())
-	}
-
-	run := httptest.NewRecorder()
-	server.Handler().ServeHTTP(run, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/run", strings.NewReader(body)))
-	if run.Code != http.StatusOK {
-		t.Fatalf("run status = %d body=%s", run.Code, run.Body.String())
-	}
-	inputsPath := filepath.Join(storeDir, created.ID, sessionInputsJSONLName)
-	records := readSessionInputRecords(t, inputsPath)
-	if len(records) != 3 {
-		t.Fatalf("input record count = %d records=%#v", len(records), records)
-	}
-	if records[0].Kind != sessionInputAdmitted || records[1].Kind != sessionInputPromoted || records[2].Kind != sessionInputCompleted {
-		t.Fatalf("input record kinds = %#v", records)
-	}
-	if records[0].Request.ClientType != "telegram" || records[0].Request.Metadata["update_id"] != "42" {
-		t.Fatalf("admitted request = %#v", records[0].Request)
-	}
-}
-
-func TestGatewaySessionRunRecordsInputPromotionAndCompletion(t *testing.T) {
-	cfg := config.Default()
-	cfg.Provider = "mock"
-	cfg.Model = "mock"
-	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
-	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
-
-	create := httptest.NewRecorder()
-	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", nil))
-	if create.Code != http.StatusCreated {
-		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
-	}
-	var created struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
-		t.Fatal(err)
-	}
-	run := httptest.NewRecorder()
-	server.Handler().ServeHTTP(run, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/run", strings.NewReader(`{"input_id":"run-input-1","prompt":"record input"}`)))
-	if run.Code != http.StatusOK {
-		t.Fatalf("run status = %d body=%s", run.Code, run.Body.String())
-	}
-	inputsPath := filepath.Join(storeDir, created.ID, sessionInputsJSONLName)
-	records := readSessionInputRecords(t, inputsPath)
-	if len(records) != 3 {
-		t.Fatalf("input record count = %d records=%#v", len(records), records)
-	}
-	if records[0].Kind != sessionInputAdmitted || records[1].Kind != sessionInputPromoted || records[2].Kind != sessionInputCompleted {
-		t.Fatalf("input record kinds = %#v", records)
-	}
-	if records[1].RunSeq != 1 || records[2].RunSeq != 1 || records[2].TerminalStatus != "completed" {
-		t.Fatalf("input promotion/completion = %#v", records)
-	}
-}
-
-func TestGatewaySessionInputsMarkPromotedIncompleteAmbiguousOnRestart(t *testing.T) {
-	cfg := config.Default()
-	cfg.Provider = "mock"
-	cfg.Model = "mock"
-	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
-	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
-
-	create := httptest.NewRecorder()
-	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", nil))
-	if create.Code != http.StatusCreated {
-		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
-	}
-	var created struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
-		t.Fatal(err)
-	}
-	session, ok := server.session(created.ID)
-	if !ok {
-		t.Fatal("created session missing from server")
-	}
-	admitted, err := server.store.AdmitInput(session, gatewayapi.SessionInputRequest{InputID: "ambiguous-input", Prompt: "maybe"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := server.store.PromoteInput(session, admitted.InputID, 1); err != nil {
-		t.Fatal(err)
-	}
-	inputsPath := filepath.Join(storeDir, created.ID, sessionInputsJSONLName)
-	before, err := replaySessionInputs(inputsPath, created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state := before.inputs["ambiguous-input"]; state.State != sessionInputPromoted {
-		t.Fatalf("state before restart = %#v", state)
-	}
-
-	_ = NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
-	after, err := replaySessionInputs(inputsPath, created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state := after.inputs["ambiguous-input"]
-	if state.State != sessionInputAmbiguous || state.TerminalStatus != "ambiguous_after_restart" {
-		t.Fatalf("state after restart = %#v", state)
-	}
-}
-
-func TestGatewaySessionEventsReplayAfterSeqAcrossRestart(t *testing.T) {
-	cfg := config.Default()
-	cfg.Provider = "mock"
-	cfg.Model = "mock"
-	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
-	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
-
-	create := httptest.NewRecorder()
-	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", nil))
-	if create.Code != http.StatusCreated {
-		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
-	}
-	var created struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
-		t.Fatal(err)
-	}
-	run := httptest.NewRecorder()
-	server.Handler().ServeHTTP(run, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/run", bytes.NewBufferString(`{"prompt":"replay me"}`)))
-	if run.Code != http.StatusOK {
-		t.Fatalf("run status = %d body=%s", run.Code, run.Body.String())
-	}
-
-	stored := readSessionEventRecords(t, filepath.Join(storeDir, created.ID, sessionEventsJSONLName))
-	if len(stored) < 3 {
-		t.Fatalf("stored events too short: %#v", stored)
-	}
-	afterSeq := stored[0].Seq
-
-	restarted := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
-	httpServer := httptest.NewServer(restarted.Handler())
-	defer httpServer.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, httpServer.URL+"/v1/sessions/"+created.ID+"/events?after_seq="+strconv.FormatInt(afterSeq, 10)+"&follow=false", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("events status = %d body=%s", resp.StatusCode, body)
-	}
-	dec := json.NewDecoder(resp.Body)
-	for i := 1; i < len(stored); i++ {
-		var got protocol.Event
-		if err := dec.Decode(&got); err != nil {
-			t.Fatalf("decode replay event %d: %v", i, err)
-		}
-		want := stored[i].Event
-		if got.Seq <= afterSeq || got.Seq != want.Seq || got.Type != want.Type {
-			t.Fatalf("replayed event %d = seq %d type %s, want seq %d type %s after %d", i, got.Seq, got.Type, want.Seq, want.Type, afterSeq)
-		}
-	}
-	var extra protocol.Event
-	if err := dec.Decode(&extra); err != io.EOF {
-		t.Fatalf("one-shot replay decode after stored events = %v event=%#v, want EOF", err, extra)
-	}
-}
-
-func TestGatewaySessionEventsReplayRejectsLifecycleViolation(t *testing.T) {
-	path := filepath.Join(t.TempDir(), sessionEventsJSONLName)
-	records := []sessionEventRecord{
-		{
-			SchemaVersion: gatewaySessionSchemaVersion,
-			Seq:           1,
-			SessionID:     "session-1",
-			EventType:     string(protocol.EventRunStarted),
-			Event: protocol.Event{
-				Type:  protocol.EventRunStarted,
-				RunID: "run-1",
-			},
-		},
-		{
-			SchemaVersion: gatewaySessionSchemaVersion,
-			Seq:           2,
-			SessionID:     "session-1",
-			EventType:     string(protocol.EventToolCallFinished),
-			Event: protocol.Event{
-				Type:      protocol.EventToolCallFinished,
-				RunID:     "run-1",
-				CallID:    "call-1",
-				AttemptID: "attempt-1",
-				Data: protocol.ToolResult{
-					CallID:  "call-1",
-					Content: "ok",
-					Metadata: map[string]any{
-						"attempt_id": "attempt-1",
-					},
-				},
-			},
-		},
-	}
-	var body bytes.Buffer
-	enc := json.NewEncoder(&body)
-	for _, record := range records {
-		if err := enc.Encode(record); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(path, body.Bytes(), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := replaySessionEventsAfter(path, "session-1", 0)
-	if err == nil || !strings.Contains(err.Error(), "matching call_id") {
-		t.Fatalf("expected lifecycle call_id error, got %v", err)
-	}
-	var corrupt *eventlog.CorruptionError
-	if !errors.As(err, &corrupt) {
-		t.Fatalf("error %T does not expose CorruptionError", err)
-	}
-	if corrupt.Path != path || corrupt.Line != 2 || corrupt.RecordNo != 2 || corrupt.Kind != "lifecycle" {
-		t.Fatalf("corruption error = %#v", corrupt)
-	}
-}
-
-func TestGatewaySessionEventsReplayRejectsDuplicateTerminalRun(t *testing.T) {
-	path := filepath.Join(t.TempDir(), sessionEventsJSONLName)
-	records := []sessionEventRecord{
-		{
-			SchemaVersion: gatewaySessionSchemaVersion,
-			Seq:           1,
-			SessionID:     "session-1",
-			EventType:     string(protocol.EventRunStarted),
-			Event:         protocol.Event{Type: protocol.EventRunStarted, RunID: "run-1"},
-		},
-		{
-			SchemaVersion: gatewaySessionSchemaVersion,
-			Seq:           2,
-			SessionID:     "session-1",
-			EventType:     string(protocol.EventRunCompleted),
-			Event:         protocol.Event{Type: protocol.EventRunCompleted, RunID: "run-1"},
-		},
-		{
-			SchemaVersion: gatewaySessionSchemaVersion,
-			Seq:           3,
-			SessionID:     "session-1",
-			EventType:     string(protocol.EventRunFailed),
-			Event:         protocol.Event{Type: protocol.EventRunFailed, RunID: "run-1", Data: "late failure"},
-		},
-	}
-	var body bytes.Buffer
-	enc := json.NewEncoder(&body)
-	for _, record := range records {
-		if err := enc.Encode(record); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(path, body.Bytes(), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := replaySessionEventsAfter(path, "session-1", 0)
-	if err == nil || !strings.Contains(err.Error(), "duplicate terminal run event") {
-		t.Fatalf("expected duplicate terminal error, got %v", err)
-	}
-	var corrupt *eventlog.CorruptionError
-	if !errors.As(err, &corrupt) {
-		t.Fatalf("error %T does not expose CorruptionError", err)
-	}
-	if corrupt.Path != path || corrupt.Line != 3 || corrupt.RecordNo != 3 || corrupt.Kind != "lifecycle" {
-		t.Fatalf("corruption error = %#v", corrupt)
-	}
-}
-
-func readSessionInputRecords(t *testing.T, path string) []sessionInputRecord {
-	t.Helper()
-	file, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer file.Close()
-	var records []sessionInputRecord
-	dec := json.NewDecoder(file)
-	for {
-		var record sessionInputRecord
-		if err := dec.Decode(&record); err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			t.Fatal(err)
-		}
-		records = append(records, record)
-	}
-	return records
-}
-
-func TestInspectStoredSessionReturnsStructuredEventCorruption(t *testing.T) {
-	root := t.TempDir()
-	sessionID := "session-1"
-	sessionDir := filepath.Join(root, sessionID)
-	now := time.Unix(10, 0).UTC()
-	if err := writeSessionManifest(filepath.Join(sessionDir, sessionManifestName), sessionManifest{
-		SchemaVersion: gatewaySessionSchemaVersion,
-		SessionID:     sessionID,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-		HistoryJSONL:  sessionHistoryJSONLName,
-		EventsJSONL:   sessionEventsJSONLName,
-		SnapshotJSON:  sessionID + ".json",
-		MessageCount:  1,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := eventlog.AppendJSONL(filepath.Join(sessionDir, sessionHistoryJSONLName), sessionHistoryRecord{
-		SchemaVersion: gatewaySessionSchemaVersion,
-		Seq:           1,
-		SessionID:     sessionID,
-		Timestamp:     now,
-		Kind:          sessionHistoryCreated,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-		MessageCount:  1,
-		Messages:      []protocol.Message{{Role: protocol.RoleUser, Content: "hello"}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	eventsPath := filepath.Join(sessionDir, sessionEventsJSONLName)
-	for _, record := range []sessionEventRecord{
-		{
-			SchemaVersion: gatewaySessionSchemaVersion,
-			Seq:           1,
-			SessionID:     sessionID,
-			EventType:     string(protocol.EventRunStarted),
-			Event:         protocol.Event{Type: protocol.EventRunStarted, RunID: "run-1"},
-		},
-		{
-			SchemaVersion: gatewaySessionSchemaVersion,
-			Seq:           2,
-			SessionID:     sessionID,
-			EventType:     string(protocol.EventToolCallFinished),
-			Event: protocol.Event{
-				Type:      protocol.EventToolCallFinished,
-				RunID:     "run-1",
-				CallID:    "call-1",
-				AttemptID: "attempt-1",
-			},
-		},
-	} {
-		if err := eventlog.AppendJSONL(eventsPath, record); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	_, err := InspectStoredSession(root, sessionID)
-	if err == nil || !strings.Contains(err.Error(), "matching call_id") {
-		t.Fatalf("expected lifecycle call_id error, got %v", err)
-	}
-	var corrupt *eventlog.CorruptionError
-	if !errors.As(err, &corrupt) {
-		t.Fatalf("error %T does not expose CorruptionError", err)
-	}
-	if corrupt.Path != eventsPath || corrupt.Line != 2 || corrupt.RecordNo != 2 || corrupt.Kind != "lifecycle" {
-		t.Fatalf("corruption error = %#v", corrupt)
-	}
-}
-
-func TestGatewaySessionEventsRejectsInvalidAfterSeq(t *testing.T) {
-	cfg := config.Default()
-	cfg.Provider = "mock"
-	cfg.Model = "mock"
-	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
-
-	create := httptest.NewRecorder()
-	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", nil))
-	if create.Code != http.StatusCreated {
-		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
-	}
-	var created struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
-		t.Fatal(err)
-	}
-
-	rec := httptest.NewRecorder()
-	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID+"/events?after_seq=not-a-number", nil))
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "after_seq") {
-		t.Fatalf("response = %d %s", rec.Code, rec.Body.String())
-	}
-
-	rec = httptest.NewRecorder()
-	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID+"/events?follow=maybe", nil))
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "follow") {
-		t.Fatalf("follow response = %d %s", rec.Code, rec.Body.String())
-	}
-}
-
 func TestGatewaySessionInspectorVerifiesOutputRefs(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"
@@ -1064,7 +768,13 @@ func TestGatewaySessionInspectorVerifiesOutputRefs(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(body)
-	session.publish(protocol.Event{Type: protocol.EventToolOutputRefCreated, Data: map[string]any{
+	if _, err := session.publish(protocol.Event{Type: protocol.EventToolCallRequested, RunID: "run-1", CallID: "call-1", Data: protocol.ToolCall{ID: "call-1", Name: "big_output"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.publish(protocol.Event{Type: protocol.EventToolCallStarted, RunID: "run-1", CallID: "call-1", AttemptID: "turn-001:tool-call-001:attempt-001", Data: "big_output"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.publish(protocol.Event{Type: protocol.EventToolOutputRefCreated, RunID: "run-1", Data: map[string]any{
 		"call_id":                "call-1",
 		"name":                   "big_output",
 		"attempt_id":             "turn-001:tool-call-001:attempt-001",
@@ -1075,7 +785,9 @@ func TestGatewaySessionInspectorVerifiesOutputRefs(t *testing.T) {
 		"output_ref_permissions": "0600",
 		"output_ref_plaintext":   true,
 		"truncated":              true,
-	}})
+	}}); err != nil {
+		t.Fatal(err)
+	}
 
 	inspection, err := InspectStoredSession(storeDir, session.ID)
 	if err != nil {
@@ -1146,7 +858,13 @@ func TestStoredSessionResumeKeepsLargeOutputRefPreviewAndWarnsMissingArtifact(t 
 	if err := store.Save(session); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventToolOutputRefCreated, Data: protocol.ToolOutputRefEvent{
+	if _, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventToolCallRequested, RunID: "run-1", CallID: "call-fs", Data: protocol.ToolCall{ID: "call-fs", Name: "fs_read_file"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventToolCallStarted, RunID: "run-1", CallID: "call-fs", AttemptID: "turn-001:tool-call-001:attempt-001", Data: "fs_read_file"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventToolOutputRefCreated, RunID: "run-1", Data: protocol.ToolOutputRefEvent{
 		CallID:               "call-fs",
 		Name:                 "fs_read_file",
 		AttemptID:            "turn-001:tool-call-001:attempt-001",

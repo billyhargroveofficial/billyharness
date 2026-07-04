@@ -23,7 +23,10 @@ import (
 )
 
 func tuiCmd(args []string) error {
-	cfg := config.Default()
+	cfg, err := resolveRuntimeConfig()
+	if err != nil {
+		return err
+	}
 	fs := flag.NewFlagSet("tui", flag.ExitOnError)
 	gatewayURL := fs.String("gateway", "", "gateway base URL override; auto-discovered when omitted")
 	model := fs.String("model", "", "initial model: deepseek-v4-flash or deepseek-v4-pro")
@@ -53,6 +56,7 @@ func tuiCmd(args []string) error {
 		*gatewayURL = normalizeGatewayURL(*gatewayURL)
 	}
 	return tui.Run(tui.Options{
+		Config:        &cfg,
 		GatewayURL:    *gatewayURL,
 		GatewayNotice: gatewayNotice,
 		Model:         *model,
@@ -65,7 +69,10 @@ func tuiCmd(args []string) error {
 }
 
 func telegramCmd(args []string) error {
-	cfg := config.Default()
+	cfg, err := resolveRuntimeConfig()
+	if err != nil {
+		return err
+	}
 	fs := flag.NewFlagSet("telegram", flag.ExitOnError)
 	gatewayURL := fs.String("gateway", "", "gateway base URL override; auto-discovered when omitted")
 	token := fs.String("token", "", "Telegram bot token; defaults to TELEGRAM_BOT_TOKEN from env or .env")
@@ -77,6 +84,7 @@ func telegramCmd(args []string) error {
 	statePath := fs.String("state", telegrambot.DefaultStatePath(), "Telegram gateway state JSON path")
 	allowedRaw := fs.String("allow-chat", lookupEnvAny("BILLYHARNESS_TELEGRAM_ALLOWED_CHAT_IDS", "TELEGRAM_ALLOWED_CHAT_IDS"), "comma-separated allowed Telegram chat IDs")
 	allowedUsersRaw := fs.String("allow-user", lookupEnvAny("BILLYHARNESS_TELEGRAM_ALLOWED_USER_IDS", "TELEGRAM_ALLOWED_USER_IDS"), "comma-separated allowed Telegram user IDs")
+	allowUserGroups := fs.Bool("allow-user-groups", envBoolAnyDefault(false, "BILLYHARNESS_TELEGRAM_ALLOW_USER_GROUPS", "TELEGRAM_ALLOW_USER_GROUPS"), "allow -allow-user IDs to authorize messages outside private chats; unsafe")
 	requireAllowlist := fs.Bool("require-allowlist", envBoolAnyDefault(false, "BILLYHARNESS_TELEGRAM_REQUIRE_ALLOWLIST", "TELEGRAM_REQUIRE_ALLOWLIST"), "reject chats not listed in -allow-chat")
 	allowAllChats := fs.Bool("allow-all-chats", envBoolAnyDefault(false, "BILLYHARNESS_TELEGRAM_ALLOW_ALL_CHATS", "TELEGRAM_ALLOW_ALL_CHATS"), "allow every Telegram chat; unsafe for live bots")
 	sendEnabled := fs.Bool("send-enabled", envBoolAnyDefault(true, "BILLYHARNESS_TELEGRAM_SEND_ENABLED", "TELEGRAM_SEND_ENABLED"), "actually send Telegram messages")
@@ -139,6 +147,7 @@ func telegramCmd(args []string) error {
 		EditInterval:         time.Duration(*editIntervalMS) * time.Millisecond,
 		AllowedChatIDs:       allowed,
 		AllowedUserIDs:       allowedUsers,
+		AllowUserInGroups:    *allowUserGroups,
 		AllowAllChats:        *allowAllChats,
 		SendEnabled:          *sendEnabled,
 		DryRunDefault:        *dryRun,
@@ -269,19 +278,23 @@ func serve(args []string) error {
 	mock := fs.Bool("mock", false, "use mock provider")
 	model := fs.String("model", "", "model override")
 	addr := fs.String("addr", "", "listen address")
-	authToken := fs.String("auth-token", "", "gateway bearer token for non-loopback clients; defaults to BILLYHARNESS_GATEWAY_AUTH_TOKEN")
+	authToken := fs.String("auth-token", "", "gateway bearer token for mutating routes; defaults to BILLYHARNESS_GATEWAY_AUTH_TOKEN")
+	devAllowLoopbackMutationNoAuth := fs.Bool("dev-allow-unauthenticated-loopback-mutations", false, "development only: allow loopback mutating routes without a bearer token")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg := config.Default()
+	var overrides []config.ResolveOverride
 	if *mock {
-		cfg.Provider = "mock"
-		cfg.Model = "mock"
+		overrides = append(overrides,
+			config.ResolveOverride{Key: "provider", Value: "mock", Source: config.SourceCLI, SourceKey: "-mock"},
+			config.ResolveOverride{Key: "model", Value: "mock", Source: config.SourceCLI, SourceKey: "-mock"},
+		)
 	}
-	if *model != "" {
-		cfg.Model = *model
+	overrides = appendStringOverride(overrides, "model", *model, "-model")
+	cfg, err := resolveRuntimeConfig(overrides...)
+	if err != nil {
+		return err
 	}
-	cfg.ApplyModelProviderDefaults()
 	if *addr == "" {
 		*addr = cfg.GatewayAddr
 	}
@@ -295,8 +308,8 @@ func serve(args []string) error {
 	}
 	defer listener.Close()
 	authRequired := gateway.RequiresAuthForAddr(listener.Addr().String())
-	if authRequired && *authToken == "" {
-		return fmt.Errorf("gateway auth token required for non-loopback listen address %q; set %s or use -addr 127.0.0.1:8765 for local-only access", *addr, gateway.GatewayAuthTokenEnv)
+	if *authToken == "" && (authRequired || !*devAllowLoopbackMutationNoAuth) {
+		return fmt.Errorf("gateway auth token required for mutating routes on listen address %q; set %s or pass -dev-allow-unauthenticated-loopback-mutations for loopback-only development", *addr, gateway.GatewayAuthTokenEnv)
 	}
 	ctx, stop := processContext()
 	defer stop()
@@ -306,13 +319,17 @@ func serve(args []string) error {
 	}
 	defer registry.Close()
 	server := gateway.NewServerWithOptionsFromSettings(gateway.ServerSettingsFromConfig(cfg), provider.Mock{}, registry, gateway.ServerOptions{
-		AuthToken:       *authToken,
-		SessionStoreDir: gateway.DefaultSessionStoreDir(),
+		AuthToken:                                *authToken,
+		SessionStoreDir:                          gateway.DefaultSessionStoreDir(),
+		RequireMutationAuth:                      true,
+		DevAllowUnauthenticatedLoopbackMutations: *devAllowLoopbackMutationNoAuth,
 	})
 	listenURL := normalizeGatewayURL(listener.Addr().String())
 	status := "fast-agent-harness gateway listening on " + listenURL
-	if authRequired {
-		status += "; bearer auth required for non-loopback clients"
+	if *authToken != "" {
+		status += "; bearer auth required for mutating routes"
+	} else if *devAllowLoopbackMutationNoAuth {
+		status += "; unauthenticated loopback mutations enabled for development"
 	}
 	fmt.Fprintln(os.Stderr, status)
 	if err := server.Serve(ctx, listener); errors.Is(err, context.Canceled) {
@@ -331,7 +348,10 @@ func mcp(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg := config.Default()
+	cfg, err := resolveRuntimeConfig()
+	if err != nil {
+		return err
+	}
 	registry := newToolRegistryNoMCP(cfg)
 	server := mcpserver.New(registry)
 	return server.Serve(context.Background(), os.Stdin, os.Stdout)

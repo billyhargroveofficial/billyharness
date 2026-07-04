@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"fmt"
+
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
@@ -12,6 +14,7 @@ func emitContextThresholdEvents(
 	limits config.RuntimeLimits,
 	round int,
 	stage string,
+	contextEpoch int,
 	emitted map[int]bool,
 	emit func(protocol.Event),
 ) {
@@ -42,6 +45,8 @@ func emitContextThresholdEvents(
 			Type: protocol.EventContextThreshold,
 			Data: protocol.ContextThresholdEvent{
 				Percent:             percent,
+				ContextEpoch:        contextEpoch,
+				ThresholdKey:        fmt.Sprintf("epoch:%d/%d", contextEpoch, percent),
 				EstimatedTokens:     estimated,
 				ContextWindowTokens: limits.ContextWindowTokens,
 				ThresholdTokens:     threshold,

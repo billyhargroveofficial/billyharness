@@ -31,9 +31,9 @@ func (r *Registry) PolicyDecision(name string) PolicyDecision {
 	if !ok {
 		return PolicyDecision{
 			Name:     name,
-			Decision: "allow",
-			Source:   "auto",
-			Reason:   "unknown_tool_checked_at_execution",
+			Decision: "deny",
+			Source:   "registry",
+			Reason:   "unknown_tool",
 		}
 	}
 	return r.policyDecisionForRisk(name, risk)
@@ -116,6 +116,11 @@ func DangerousToolDisabledMessage() string {
 
 func PolicyDeniedMessage(decision PolicyDecision) string {
 	switch decision.Reason {
+	case "unknown_tool":
+		if decision.Name == "" {
+			return "unknown tool"
+		}
+		return "unknown tool " + decision.Name
 	case "plan_mode_read_only":
 		return "tool disabled in plan mode; switch access_mode out of plan to use write/execute/external tools"
 	case "guarded_mode_dangerous_tools_disabled":

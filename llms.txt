@@ -1,0 +1,90 @@
+# billyharness
+
+> Fast solo-owner Go agent harness with gateway, TUI, Telegram adapter, JSONL
+> replay, compact native tools, lazy MCP, and Codex/DeepSeek provider paths.
+> Read AGENTS.md first. `docs/` is architecture-only; active implementation
+> state lives in `loop-develop/current-todo`.
+
+## Start Here
+
+- [Agent instructions](AGENTS.md): project rules, verification, docs policy,
+  and workflow routing.
+- [README](README.md): project overview and basic usage.
+- [Loop workflow](loop-develop/README.md): current/history TODO rules.
+
+## Agent Rules
+
+- [Agent rules index](.agents/rules/README.md): detailed read triggers.
+- [Documentation rule](.agents/rules/documentation.md): how agents read, write,
+  and verify documentation.
+- [Stop hook docguard](.agents/rules/stop-hook-docguard.md): installed
+  project-local Codex `Stop` hook behavior for fast documentation drift checks.
+
+## Architecture Canon
+
+- [Docs index](docs/README.md): architecture docs only.
+- [Architecture map](docs/architecture.md): package ownership, guarded imports,
+  and file-size budgets.
+- [Gateway and sessions](docs/architecture/gateway-and-sessions.md): gateway
+  HTTP/session routes, durable store, replay/follow semantics, and
+  gateway-client authority boundaries.
+- [Security and trust model](docs/architecture/security-model.md): gateway and
+  browser trust, bearer auth, Telegram allowlists, MCP untrusted input, tool
+  policy, workspace boundaries, secret redaction, and public-web protections.
+- [Runtime event system](docs/architecture/runtime-event-system.md):
+  source-of-truth event model, JSONL replay, lifecycle validation, runtime IDs,
+  output refs, and compaction/context events.
+- [TUI and client UX architecture](docs/architecture/tui-and-clientux.md):
+  TUI event projection, transcript cells, rendering, selection/copy, saved
+  sessions, and local runtime adapter boundaries.
+- [Config/provider/context architecture](docs/architecture/config-provider-context.md):
+  config provenance, runtime overrides, providers/auth, model capabilities,
+  instructions, memory, skills, and context accounting.
+- [Tools, MCP, webtools, and rendering boundaries](docs/architecture/tools-mcp-and-policy.md):
+  native tool registry, tool policy, lazy MCP, public web access, output refs,
+  and client rendering boundaries.
+- [Telegram and operator surfaces](docs/architecture/telegram-and-operator-surfaces.md):
+  Telegram adapter, gateway-client boundary, owner scope, rendering,
+  attachments, command flow, and operator/security constraints.
+- [Documentation system](docs/documentation-system.md): documentation hierarchy,
+  source-of-truth rules, generated-doc markers, and drift prevention.
+- [ADR index](docs/adr/README.md): decision-record rules and template.
+
+## Machine Indexes
+
+- [Docs manifest](agent-index/docs-manifest.json): metadata, trust level,
+  freshness hints, and read triggers.
+- [Agent index README](agent-index/README.md): generated/manual index policy.
+- [Generated reference strategy](agent-index/generated/reference-plan.md):
+  future docsgen outputs, generated markers, temp-dir diff checks, source globs,
+  and docguard coverage.
+- [Generated repo map](agent-index/generated/repo-map.md): compact package
+  orientation map for agents.
+
+## Coverage Note
+
+This map is initial and not exhaustive. Generated CLI/API/config/protocol/tool
+references are planned in
+[agent-index/generated/reference-plan.md](agent-index/generated/reference-plan.md)
+but are not implemented yet; use source code for exact surfaces. `ops/` has
+seed runbooks, while live unit files, environment, logs, and host state still
+need production inspection before being treated as verified.
+
+## Operations Runbooks
+
+- [Operations index](ops/README.md): production and diagnostics runbook lane
+  outside architecture docs.
+- [Doctor and diagnostics](ops/doctor-and-diagnostics.md): doctor, config,
+  gateway readiness, MCP, session diagnostic commands, and incident bundles.
+- [Production services](ops/production-services.md): production entrypoint,
+  service names, readiness checks, restart flow, and redaction cautions.
+
+## Optional
+
+- [Research routing](docs/research/README.md): cleanup policy and
+  canonical-vs-historical labels for legacy research.
+- [Codex research roadmap](docs/codex-research-roadmap.md): legacy historical
+  source material; still contains old `Active Backlog` language and is not the
+  current backlog.
+- [Competitive architecture analysis](docs/competitive-architecture-analysis.md):
+  clean-room competitor source material and design pressure, not current truth.

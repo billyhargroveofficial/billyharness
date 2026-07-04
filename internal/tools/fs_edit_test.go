@@ -127,6 +127,37 @@ func TestFSEditFileFailuresDoNotMutateFile(t *testing.T) {
 	}
 }
 
+func TestFSEditRejectsSymlinkTarget(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "real.txt")
+	if err := os.WriteFile(target, []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.AutoApproveDangerous = true
+	registry := NewRegistry(cfg)
+
+	_, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "fs_edit_file",
+		Arguments: rawArgs(map[string]any{"path": "link.txt", "edits": []map[string]any{{"old_string": "hello", "new_string": "hi"}}}),
+	})
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink edit rejection, got %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "hello\n" {
+		t.Fatalf("symlink target mutated: %q", got)
+	}
+}
+
 func TestFSEditFilePolicyAndParallelMetadata(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "note.txt")

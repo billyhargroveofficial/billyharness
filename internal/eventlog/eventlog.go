@@ -1,6 +1,7 @@
 package eventlog
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -21,6 +22,7 @@ type RecordValidatorOptions struct {
 	ScopeName        string
 	ExpectedScopeID  string
 	ValidateEnvelope bool
+	RequireEnvelope  bool
 }
 
 type RecordValidator struct {
@@ -28,6 +30,7 @@ type RecordValidator struct {
 	scopeName        string
 	expectedScopeID  string
 	validateEnvelope bool
+	requireEnvelope  bool
 	nextSeq          int64
 	firstSeq         int64
 	lastSeq          int64
@@ -40,6 +43,7 @@ func NewRecordValidator(opts RecordValidatorOptions) *RecordValidator {
 		scopeName:        strings.TrimSpace(opts.ScopeName),
 		expectedScopeID:  strings.TrimSpace(opts.ExpectedScopeID),
 		validateEnvelope: opts.ValidateEnvelope,
+		requireEnvelope:  opts.RequireEnvelope,
 		nextSeq:          1,
 	}
 }
@@ -93,6 +97,12 @@ func (v *RecordValidator) Validate(record Record) error {
 	if record.EventType != "" && record.HasEvent && record.Event.Type != "" && record.EventType != string(record.Event.Type) {
 		return fmt.Errorf("event_type = %q, event.type = %q", record.EventType, record.Event.Type)
 	}
+	if record.HasEvent && record.Event.Seq != 0 && record.Event.Seq != record.Seq {
+		return fmt.Errorf("event seq = %d, record seq = %d", record.Event.Seq, record.Seq)
+	}
+	if v.requireEnvelope && record.HasEvent && record.Event.SchemaVersion == 0 {
+		return fmt.Errorf("missing event schema_version")
+	}
 	if v.validateEnvelope && record.HasEvent {
 		if err := ValidateEnvelope(record.Event); err != nil {
 			return fmt.Errorf("invalid event envelope: %w", err)
@@ -137,6 +147,7 @@ type LifecycleValidator struct {
 	calls            map[string]struct{}
 	attempts         map[string]struct{}
 	terminalAttempts map[string]protocol.EventType
+	userInputs       map[string]struct{}
 }
 
 type stepState struct {
@@ -231,7 +242,29 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 		if callID == "" {
 			return fmt.Errorf("%s missing call_id", event.Type)
 		}
-		v.calls[callKey(runID, callID)] = struct{}{}
+		key := callKey(runID, callID)
+		if _, ok := v.calls[key]; ok {
+			return fmt.Errorf("duplicate %s for call_id %q", event.Type, callID)
+		}
+		v.calls[key] = struct{}{}
+	case protocol.EventToolPermissionRequested, protocol.EventToolPermissionDecided, protocol.EventToolAudit:
+		if err := v.requireKnownCall(event.Type, runID, callID); err != nil {
+			return err
+		}
+	case protocol.EventToolCallProgress:
+		if err := v.requireKnownCall(event.Type, runID, callID); err != nil {
+			return err
+		}
+		phase := lifecycleDataString(event.Data, "phase")
+		if attemptID != "" {
+			key := attemptKey(runID, attemptID)
+			if previous, ok := v.terminalAttempts[key]; ok && !allowedPostTerminalProgressPhase(phase) {
+				return fmt.Errorf("%s after terminal tool attempt %q: got phase %q after %s", event.Type, attemptID, phase, previous)
+			}
+			if _, ok := v.attempts[key]; !ok && phase != "attempt_started" {
+				return fmt.Errorf("%s without matching attempt_id %q", event.Type, attemptID)
+			}
+		}
 	case protocol.EventToolCallStarted:
 		if callID == "" {
 			return fmt.Errorf("%s missing call_id", event.Type)
@@ -241,6 +274,10 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 		}
 		if attemptID == "" {
 			return fmt.Errorf("%s missing attempt_id", event.Type)
+		}
+		key := attemptKey(runID, attemptID)
+		if previous, ok := v.terminalAttempts[key]; ok {
+			return fmt.Errorf("%s after terminal tool attempt %q: got start after %s", event.Type, attemptID, previous)
 		}
 		v.attempts[attemptKey(runID, attemptID)] = struct{}{}
 	case protocol.EventToolCallFinished, protocol.EventToolCallFailed, protocol.EventToolCallAborted:
@@ -261,8 +298,166 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 			return fmt.Errorf("duplicate terminal tool attempt event for %q: got %s after %s", attemptID, event.Type, previous)
 		}
 		v.terminalAttempts[key] = event.Type
+	case protocol.EventToolOutputRefCreated:
+		if err := v.requireKnownCall(event.Type, runID, callID); err != nil {
+			return err
+		}
+		if err := v.requireKnownAttempt(event.Type, runID, attemptID); err != nil {
+			return err
+		}
+	case protocol.EventUserInputRequested:
+		if err := v.requireKnownCall(event.Type, runID, callID); err != nil {
+			return err
+		}
+		if err := v.requireKnownAttempt(event.Type, runID, attemptID); err != nil {
+			return err
+		}
+		if requestID := lifecycleDataString(event.Data, "request_id"); requestID != "" {
+			v.userInputs[userInputKey(runID, requestID)] = struct{}{}
+		}
+	case protocol.EventUserInputAnswered, protocol.EventUserInputRejected:
+		if err := v.requireKnownCall(event.Type, runID, callID); err != nil {
+			return err
+		}
+		if err := v.requireKnownAttempt(event.Type, runID, attemptID); err != nil {
+			return err
+		}
+		if requestID := lifecycleDataString(event.Data, "request_id"); requestID != "" {
+			if _, ok := v.userInputs[userInputKey(runID, requestID)]; !ok {
+				return fmt.Errorf("%s without matching user_input.requested %q", event.Type, requestID)
+			}
+		}
+	case protocol.EventHookStarted, protocol.EventHookFinished, protocol.EventHookFailed:
+		if callID != "" {
+			if err := v.requireKnownCall(event.Type, runID, callID); err != nil {
+				return err
+			}
+		}
+		if attemptID != "" {
+			if err := v.requireKnownAttempt(event.Type, runID, attemptID); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+func (v *LifecycleValidator) requireKnownCall(eventType protocol.EventType, runID, callID string) error {
+	if callID == "" {
+		return fmt.Errorf("%s missing call_id", eventType)
+	}
+	if _, ok := v.calls[callKey(runID, callID)]; !ok {
+		return fmt.Errorf("%s without matching call_id %q", eventType, callID)
+	}
+	return nil
+}
+
+func (v *LifecycleValidator) requireKnownAttempt(eventType protocol.EventType, runID, attemptID string) error {
+	if attemptID == "" {
+		return fmt.Errorf("%s missing attempt_id", eventType)
+	}
+	if _, ok := v.attempts[attemptKey(runID, attemptID)]; !ok {
+		return fmt.Errorf("%s without matching attempt_id %q", eventType, attemptID)
+	}
+	return nil
+}
+
+func allowedPostTerminalProgressPhase(phase string) bool {
+	switch phase {
+	case "attempt_finished", "cancel_abort", "retry_decision", "finalize":
+		return true
+	default:
+		return false
+	}
+}
+
+func lifecycleDataString(value any, key string) string {
+	switch data := value.(type) {
+	case protocol.ToolProgressEvent:
+		return lifecycleToolProgressString(data, key)
+	case *protocol.ToolProgressEvent:
+		if data == nil {
+			return ""
+		}
+		return lifecycleToolProgressString(*data, key)
+	case protocol.UserInputRequestEvent:
+		return lifecycleUserInputRequestString(data, key)
+	case *protocol.UserInputRequestEvent:
+		if data == nil {
+			return ""
+		}
+		return lifecycleUserInputRequestString(*data, key)
+	case protocol.UserInputAnswerEvent:
+		return lifecycleUserInputAnswerString(data, key)
+	case *protocol.UserInputAnswerEvent:
+		if data == nil {
+			return ""
+		}
+		return lifecycleUserInputAnswerString(*data, key)
+	case protocol.UserInputRejectEvent:
+		return lifecycleUserInputRejectString(data, key)
+	case *protocol.UserInputRejectEvent:
+		if data == nil {
+			return ""
+		}
+		return lifecycleUserInputRejectString(*data, key)
+	case map[string]any:
+		if s, ok := data[key].(string); ok {
+			return strings.TrimSpace(s)
+		}
+	case json.RawMessage:
+		return lifecycleRawDataString(data, key)
+	case []byte:
+		return lifecycleRawDataString(json.RawMessage(data), key)
+	}
+	return ""
+}
+
+func lifecycleToolProgressString(progress protocol.ToolProgressEvent, key string) string {
+	switch key {
+	case "phase":
+		return strings.TrimSpace(progress.Phase)
+	default:
+		return ""
+	}
+}
+
+func lifecycleUserInputRequestString(input protocol.UserInputRequestEvent, key string) string {
+	switch key {
+	case "request_id":
+		return strings.TrimSpace(input.RequestID)
+	default:
+		return ""
+	}
+}
+
+func lifecycleUserInputAnswerString(input protocol.UserInputAnswerEvent, key string) string {
+	switch key {
+	case "request_id":
+		return strings.TrimSpace(input.RequestID)
+	default:
+		return ""
+	}
+}
+
+func lifecycleUserInputRejectString(input protocol.UserInputRejectEvent, key string) string {
+	switch key {
+	case "request_id":
+		return strings.TrimSpace(input.RequestID)
+	default:
+		return ""
+	}
+}
+
+func lifecycleRawDataString(raw json.RawMessage, key string) string {
+	var data map[string]any
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return ""
+	}
+	if s, ok := data[key].(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return ""
 }
 
 func (v *LifecycleValidator) ensure() {
@@ -293,6 +488,9 @@ func (v *LifecycleValidator) ensure() {
 	if v.terminalAttempts == nil {
 		v.terminalAttempts = map[string]protocol.EventType{}
 	}
+	if v.userInputs == nil {
+		v.userInputs = map[string]struct{}{}
+	}
 }
 
 func turnKey(runID, turnID string) string {
@@ -309,4 +507,8 @@ func callKey(runID, callID string) string {
 
 func attemptKey(runID, attemptID string) string {
 	return runID + "\x00" + attemptID
+}
+
+func userInputKey(runID, requestID string) string {
+	return runID + "\x00" + requestID
 }

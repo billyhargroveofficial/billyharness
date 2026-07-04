@@ -56,6 +56,27 @@ func TestLookupEnvOrDotenvFallsBackToBillyharnessHome(t *testing.T) {
 	}
 }
 
+func TestLookupEnvOrDotenvSourceReportsProvenance(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	t.Setenv("BILLYHARNESS_DOTENV_HOME_ONLY", "")
+	envPath := filepath.Join(root, ".env")
+	if err := os.WriteFile(envPath, []byte("SOURCED_ENV=dotenv-value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, source, ok := LookupEnvOrDotenvSource("SOURCED_ENV")
+	if !ok || got != "dotenv-value" || source.Kind != EnvValueSourceDotenv || source.Key != "SOURCED_ENV" || source.Path != envPath {
+		t.Fatalf("dotenv source = value:%q source:%#v ok:%v", got, source, ok)
+	}
+	t.Setenv("SOURCED_ENV", "env-value")
+	got, source, ok = LookupEnvOrDotenvSource("SOURCED_ENV")
+	if !ok || got != "env-value" || source.Kind != EnvValueSourceEnvironment || source.Key != "SOURCED_ENV" || source.Path != "" {
+		t.Fatalf("environment source = value:%q source:%#v ok:%v", got, source, ok)
+	}
+}
+
 func TestLookupEnvOrDotenvPrefersBillyharnessHomeOverCWD(t *testing.T) {
 	root := t.TempDir()
 	billyHome := filepath.Join(root, "billyhome")

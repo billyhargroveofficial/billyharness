@@ -436,10 +436,25 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, orchestrator *tool
 		wg.Wait()
 		close(done)
 	}()
+	completedChildren := 0
+	failedChildren := 0
+	abortedChildren := 0
 	for result := range done {
 		results[result.Index] = result
+		if result.Result.IsError {
+			failedChildren++
+			if result.Result.ErrorCode == "tool_aborted" {
+				abortedChildren++
+			}
+		} else {
+			completedChildren++
+		}
 		emitToolStepCompleted(emit, turnID, round, result, true, batchID, batchSize, limit)
 		orchestrator.EmitAttemptFinished(result)
+	}
+	batchStatus := protocol.StepStatusCompleted
+	if failedChildren > 0 {
+		batchStatus = protocol.StepStatusCompletedWithErrors
 	}
 	emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
 		TurnID:        turnID,
@@ -447,12 +462,17 @@ func (a *Agent) executeParallelToolBatch(ctx context.Context, orchestrator *tool
 		Round:         round,
 		Index:         start,
 		Kind:          protocol.StepKindToolBatch,
-		Status:        protocol.StepStatusCompleted,
+		Status:        batchStatus,
 		BatchID:       batchID,
 		BatchSize:     batchSize,
 		Parallel:      true,
 		ParallelLimit: limit,
 		DurationMS:    durationMS(batchStarted),
+		Metadata: map[string]any{
+			"completed_children": completedChildren,
+			"failed_children":    failedChildren,
+			"aborted_children":   abortedChildren,
+		},
 	}})
 }
 

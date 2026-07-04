@@ -50,10 +50,18 @@ func TestRunMessagesCompactsBeforeProviderCall(t *testing.T) {
 		compactEvent["compacted_messages"] == nil ||
 		compactEvent["keep_messages"] == nil ||
 		compactEvent["max_summary_chars"] == nil ||
+		compactEvent["context_epoch"] == nil ||
+		compactEvent["input_span_hash"] == nil ||
+		compactEvent["replacement_hash"] == nil ||
+		compactEvent["pre_history_hash"] == nil ||
+		compactEvent["post_history_hash"] == nil ||
 		compactEvent["protected_prefix"] == nil ||
 		compactEvent["compacted_chars"] == nil ||
 		compactEvent["compacted_estimated_tokens"] == nil {
 		t.Fatalf("compaction event missing structured fields: %#v", compactEvent)
+	}
+	if compactEvent["context_epoch"] != float64(1) || compactEvent["previous_context_epoch"] != nil {
+		t.Fatalf("compaction event epoch = %#v previous=%#v", compactEvent["context_epoch"], compactEvent["previous_context_epoch"])
 	}
 	if compactEvent["reason"] != "prompt_tokens_at_or_above_threshold" || compactEvent["trigger_source"] != "estimated_messages" {
 		t.Fatalf("compaction event missing reason/source: %#v", compactEvent)
@@ -127,10 +135,10 @@ func TestEmitContextThresholdEventsOncePerRun(t *testing.T) {
 		{Role: protocol.RoleSystem, Content: "system"},
 		{Role: protocol.RoleUser, Content: strings.Repeat("x", 2200)},
 	}
-	emitContextThresholdEvents(messages, cfg.RuntimeLimits(), 2, "after_tool_results", emitted, func(event protocol.Event) {
+	emitContextThresholdEvents(messages, cfg.RuntimeLimits(), 2, "after_tool_results", 0, emitted, func(event protocol.Event) {
 		events = append(events, event)
 	})
-	emitContextThresholdEvents(messages, cfg.RuntimeLimits(), 3, "before_turn", emitted, func(event protocol.Event) {
+	emitContextThresholdEvents(messages, cfg.RuntimeLimits(), 3, "before_turn", 0, emitted, func(event protocol.Event) {
 		events = append(events, event)
 	})
 	if len(events) != 1 {
@@ -140,12 +148,41 @@ func TestEmitContextThresholdEventsOncePerRun(t *testing.T) {
 	if events[0].Type != protocol.EventContextThreshold ||
 		int(data["percent"].(float64)) != 50 ||
 		int64(data["context_window_tokens"].(float64)) != 1000 ||
+		data["threshold_key"] != "epoch:0/50" ||
 		data["stage"] != "after_tool_results" ||
 		int(data["round"].(float64)) != 2 {
 		t.Fatalf("threshold event = %#v data=%#v", events[0], data)
 	}
 	if emitted[50] != true || emitted[70] || emitted[85] || emitted[95] {
 		t.Fatalf("emitted thresholds = %#v", emitted)
+	}
+}
+
+func TestEmitContextThresholdEventsCanResetPerContextEpoch(t *testing.T) {
+	cfg := config.Default()
+	cfg.ContextWindowTokens = 1000
+	messages := []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: strings.Repeat("x", 2200)},
+	}
+	var events []protocol.Event
+	emitted := map[int]bool{}
+	emitContextThresholdEvents(messages, cfg.RuntimeLimits(), 1, "before_turn", 0, emitted, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	emitContextThresholdEvents(messages, cfg.RuntimeLimits(), 1, "after_tool_results", 0, emitted, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	emitted = map[int]bool{}
+	emitContextThresholdEvents(messages, cfg.RuntimeLimits(), 2, "after_compaction", 1, emitted, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	if len(events) != 2 {
+		t.Fatalf("threshold events = %d, want one per epoch: %#v", len(events), events)
+	}
+	data := eventDataMap(events[1])
+	if data["threshold_key"] != "epoch:1/50" || int(data["context_epoch"].(float64)) != 1 {
+		t.Fatalf("epoch threshold event = %#v", data)
 	}
 }
 

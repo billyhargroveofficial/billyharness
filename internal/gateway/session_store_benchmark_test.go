@@ -178,25 +178,33 @@ func writeGatewayBenchmarkEventFixture(store *sessionStore, session *Session, co
 	}()
 	writer := bufio.NewWriterSize(file, 1<<20)
 	encoder := json.NewEncoder(writer)
-	for i := 0; i < count; i++ {
+	start := 0
+	if count >= 2 && event(0).Type == protocol.EventToolOutputRefCreated {
+		for _, prelude := range []protocol.Event{
+			{
+				Type:   protocol.EventToolCallRequested,
+				CallID: benchmarkOutputRefCallID,
+				Data:   protocol.ToolCall{ID: benchmarkOutputRefCallID, Name: "web_fetch"},
+			},
+			{
+				Type:      protocol.EventToolCallStarted,
+				CallID:    benchmarkOutputRefCallID,
+				AttemptID: benchmarkOutputRefAttemptID,
+				Data:      "web_fetch",
+			},
+		} {
+			seq := int64(start + 1)
+			ts := created.Add(time.Duration(start) * time.Microsecond)
+			if err := encodeGatewayBenchmarkEventRecord(encoder, id, seq, ts, prelude); err != nil {
+				return err
+			}
+			start++
+		}
+	}
+	for i := start; i < count; i++ {
 		seq := int64(i + 1)
 		ts := created.Add(time.Duration(i) * time.Microsecond)
-		storedEvent := protocol.EnrichEvent(event(i), protocol.EventEnvelope{
-			Seq:    seq,
-			Source: protocol.EventSourceGateway,
-			RunID:  gatewaySessionRunID(id, 0),
-			TS:     ts.Format(time.RFC3339Nano),
-		})
-		storedEvent.Seq = seq
-		record := sessionEventRecord{
-			SchemaVersion: gatewaySessionSchemaVersion,
-			Seq:           seq,
-			SessionID:     id,
-			Timestamp:     ts,
-			EventType:     string(storedEvent.Type),
-			Event:         storedEvent,
-		}
-		if err := encoder.Encode(record); err != nil {
+		if err := encodeGatewayBenchmarkEventRecord(encoder, id, seq, ts, event(i)); err != nil {
 			return err
 		}
 	}
@@ -209,24 +217,47 @@ func writeGatewayBenchmarkEventFixture(store *sessionStore, session *Session, co
 	return file.Chmod(0o600)
 }
 
+func encodeGatewayBenchmarkEventRecord(encoder *json.Encoder, sessionID string, seq int64, ts time.Time, event protocol.Event) error {
+	storedEvent := protocol.EnrichEvent(event, protocol.EventEnvelope{
+		Seq:    seq,
+		Source: protocol.EventSourceGateway,
+		RunID:  gatewaySessionRunID(sessionID, 1),
+		TS:     ts.Format(time.RFC3339Nano),
+	})
+	storedEvent.Seq = seq
+	record := sessionEventRecord{
+		SchemaVersion: gatewaySessionSchemaVersion,
+		Seq:           seq,
+		SessionID:     sessionID,
+		Timestamp:     ts,
+		EventType:     string(storedEvent.Type),
+		Event:         storedEvent,
+	}
+	return encoder.Encode(record)
+}
+
 func benchmarkDeltaEvent(i int) protocol.Event {
-	return protocol.Event{Type: protocol.EventAssistantDelta, Data: fmt.Sprintf("delta-%06d", i)}
+	return protocol.Event{Type: protocol.EventAssistantDelta, TurnID: "turn-bench", StepID: "turn-bench:model-call-001", Data: fmt.Sprintf("delta-%06d", i)}
 }
 
 func benchmarkCoalescedDeltaEvent(i int) protocol.Event {
-	return protocol.Event{Type: protocol.EventAssistantDelta, Data: strings.Repeat(fmt.Sprintf("delta-%06d ", i), 200)}
+	return protocol.Event{Type: protocol.EventAssistantDelta, TurnID: "turn-bench", StepID: "turn-bench:model-call-001", Data: strings.Repeat(fmt.Sprintf("delta-%06d ", i), 200)}
 }
 
+const (
+	benchmarkOutputRefCallID    = "call-output-ref-bench"
+	benchmarkOutputRefAttemptID = "call-output-ref-bench:attempt-001"
+)
+
 func benchmarkOutputRefEvent(i int) protocol.Event {
-	callID := fmt.Sprintf("call-%06d", i)
 	return protocol.Event{
 		Type:      protocol.EventToolOutputRefCreated,
-		CallID:    callID,
-		AttemptID: callID + ":attempt-001",
+		CallID:    benchmarkOutputRefCallID,
+		AttemptID: benchmarkOutputRefAttemptID,
 		Data: protocol.ToolOutputRefEvent{
-			CallID:               callID,
+			CallID:               benchmarkOutputRefCallID,
 			Name:                 "web_fetch",
-			AttemptID:            callID + ":attempt-001",
+			AttemptID:            benchmarkOutputRefAttemptID,
 			OutputRef:            fmt.Sprintf("/tmp/billyharness/tool-output/ref-%06d.txt", i),
 			OutputRefID:          fmt.Sprintf("ref-%06d.txt", i),
 			OutputRefBytes:       int64(64*1024 + i%1024),

@@ -82,7 +82,7 @@ func (r *Registry) handleShellExec(ctx context.Context, args json.RawMessage) (R
 	if err != nil {
 		return Result{}, err
 	}
-	cwd, err := r.safePath(in.CWD)
+	cwd, err := r.safePath(ctx, in.CWD)
 	if err != nil {
 		return Result{}, err
 	}
