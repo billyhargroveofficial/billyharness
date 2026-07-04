@@ -1,7 +1,11 @@
 # 003 TODO - Security, Integrity, And Debuggability Hardening
 
-Status: current
+Status: completed/verified
 Created: 2026-07-03
+Completed: 2026-07-04
+Archived: 2026-07-04 in `loop-develop/history`
+Closeout commit: 937255863e6a8b80564d754312dd6a378481b55b
+Closeout push state: present on `origin/main` as of 2026-07-04
 Owner loop: native Codex implementation loop
 
 ## Request
@@ -2006,6 +2010,14 @@ Append implementation evidence here as work progresses.
   - Final status: completed and verified; moved from
     `loop-develop/current-todo` to `loop-develop/history` by the main
     verification chat.
+  - Historical metadata follow-up for P1.19:
+    - Header status corrected from `current` to `completed/verified`.
+    - Closeout commit
+      `937255863e6a8b80564d754312dd6a378481b55b` is present on
+      `origin/main` as of 2026-07-04; current observed `origin/main` tip was
+      `11bfc85a2ab9c3aaaba066540c15c3a9131ab407`.
+    - No remaining blocker for keeping this file in
+      `loop-develop/history`.
 
 ## Copy-Ready Codex Goal Prompt
 
