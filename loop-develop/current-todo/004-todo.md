@@ -2049,6 +2049,39 @@ Billy asks for final verification.
   turn-time; operators should use a higher `BENCHTIME` such as `5x` or more
   for meaningful investigations.
 
+### 2026-07-04 - P1.15 deterministic coverage for runtime blind spots
+
+- Completed P1.15 slice. Added deterministic tests for gateway base URL/auth/
+  readiness helpers, service metadata ownership/copy semantics, gatewayclient
+  list/get/input-completion/undo/redo/error helpers, service-command env/helper
+  dispatch, CLI help/unknown dispatch, and checkpoint `Load` plus
+  `RedoWithOptions` delete restore behavior.
+- Coverage movement on the named blind spots: `internal/gatewaybase` moved from
+  `0.0%` to `78.1%`; `internal/serviceops` moved from `0.0%` to `100.0%`;
+  `internal/gatewayclient` moved from `45.9%` to `52.7%`;
+  `cmd/fast-agent-harness` moved from `52.9%` to `55.5%`;
+  `internal/checkpoint` moved from `66.0%` to `67.7%`. Existing
+  `internal/tui/runtimeclient` coverage stayed at `50.0%`, with its current
+  deterministic delegation/error tests still passing.
+- Checked docs routing: `llms.txt`, `.agents/rules/README.md`,
+  `docs/README.md`, and `docs/documentation-system.md`. No durable docs changed
+  because this slice adds test coverage only; it does not change runtime
+  behavior, package boundaries, public APIs, config, gateway routes, or
+  security semantics.
+- Verification passed:
+  `go test -count=1 ./internal/gatewaybase ./internal/serviceops ./internal/gatewayclient ./internal/tui/runtimeclient ./internal/checkpoint ./cmd/fast-agent-harness`;
+  `go test -coverprofile=/tmp/billyharness-coverage-after.out ./...`;
+  `go tool cover -func=/tmp/billyharness-coverage-after.out | tail -n 20`;
+  `go test -count=1 ./...`;
+  `git diff --check`.
+- Commit: `c3a51b9 Add deterministic coverage for runtime blind spots`
+  (`c3a51b9bbdfcc3dc88b046132f7c8df5ddcd6d14`).
+- Push: `origin/main` updated from `beb17c7` to `c3a51b9`.
+- Blockers/residual risk: total coverage is now `73.7%`, but remaining low
+  areas still include web summary helpers, public web URL wrappers, and broader
+  CLI command front doors such as bench/incident/tool dispatch. This slice kept
+  tests deterministic and avoided live TUI/Telegram/gateway process startup.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
