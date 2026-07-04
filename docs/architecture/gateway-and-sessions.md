@@ -1,10 +1,9 @@
 # Gateway and Sessions Architecture
 
 Status note: this document is written against the current worktree on
-2026-07-03. The worktree already contains uncommitted gateway/security/client
-changes. In particular, mutation-auth hardening and session-owner header
-scoping are current worktree behavior, not something to assume is already in a
-clean release commit.
+2026-07-04. Mutation-auth hardening, session-owner header scoping,
+stored-session projector inspection, and fail-closed persistence behavior are
+current worktree contracts, not assumptions from older releases.
 
 Code anchors:
 
@@ -122,6 +121,18 @@ The gateway layer adds HTTP identity, event delivery, durability, and status:
    observes/persists/publishes run events, saves the resulting transcript, and
    completes the input record with a terminal status.
 
+Run persistence is fail-closed around durable event truth. Event append failures
+stop the run stream with a non-durable `run.failed` surface and mark in-memory
+status as `persistence_failed`. If event append succeeds but the final session
+snapshot save fails after a visible run transition, the stream emits a
+non-durable `session.status` with `last_event=persistence_failed`, marks the
+input completion as failed, and returns that persistence error from the run
+closure. When `interrupt` cancels an active run before starting a replacement,
+the gateway must save the interrupted session state before the replacement run
+continues; save failure aborts the replacement stream. `POST
+/v1/sessions/{id}/cancel` likewise returns an error instead of claiming
+`cancelled=true` when the post-cancel session save fails.
+
 `POST /v1/sessions/{id}/inputs` is intentionally separate from run execution.
 It gives clients a durable idempotency point before a run is promoted.
 
@@ -197,6 +208,15 @@ back, `internal/checkpoint` rechecks that every restored path is inside the
 configured workspace roots and that existing symlink ancestry does not escape
 those roots. Tampered, moved, symlinked, non-regular, out-of-root, or conflicting
 patches fail before workspace mutation.
+
+After a successful checkpoint restore, the gateway must append the corresponding
+durable event before returning success: `turn.change_reverted` for undo and
+`turn.change_recorded` with status `redone` for redo. If that append fails after
+files were restored, the route immediately applies the opposite checkpoint
+operation as rollback and returns HTTP 500. The event log therefore never claims
+an undo/redo happened unless the workspace mutation is also represented in
+durable replay; if rollback itself fails, the response reports both the rollback
+failure and the original persistence failure.
 
 ## Replay and Live Streams
 

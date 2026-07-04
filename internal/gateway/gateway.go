@@ -797,12 +797,21 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 				emit(observed)
 			}
 		})
+		hadPersistenceErr := false
 		if persistErr := getPersistenceErr(); persistErr != nil {
 			err = persistErr
+			hadPersistenceErr = true
 		}
-		if !errors.Is(err, sessionpkg.ErrBusy) {
+		if !hadPersistenceErr && !errors.Is(err, sessionpkg.ErrBusy) {
 			if saveErr := s.saveSession(session); saveErr != nil {
-				log.Printf("gateway session save failed id=%s: %v", session.ID, saveErr)
+				persistErr := fmt.Errorf("session save failed after run: %w", saveErr)
+				session.markPersistenceFailure(persistErr)
+				emit(protocol.Event{Type: protocol.EventSessionStatus, Data: session.Status()})
+				if err == nil {
+					err = persistErr
+				} else {
+					err = errors.Join(err, persistErr)
+				}
 			}
 		}
 		terminalStatus := "completed"
@@ -935,7 +944,7 @@ func (s *Server) applySessionInterruptPolicy(ctx context.Context, session *Sessi
 	interrupted, err := session.interruptActiveRunAndWait(waitCtx, "interrupted by newer session run")
 	if interrupted {
 		if saveErr := s.saveSession(session); saveErr != nil {
-			log.Printf("gateway session save failed id=%s after interrupt: %v", session.ID, saveErr)
+			return fmt.Errorf("session save failed after interrupt: %w", saveErr)
 		}
 	}
 	if err != nil {
@@ -1033,7 +1042,8 @@ func (s *Server) handleSessionCancel(w http.ResponseWriter, r *http.Request) {
 	cancelled, err := session.interruptActiveRunAndWait(waitCtx, "cancelled by session cancel endpoint")
 	if cancelled {
 		if saveErr := s.saveSession(session); saveErr != nil {
-			log.Printf("gateway session save failed id=%s after cancel: %v", session.ID, saveErr)
+			writeError(w, http.StatusInternalServerError, "session save failed after cancel: "+saveErr.Error())
+			return
 		}
 	}
 	if err != nil {
@@ -1131,7 +1141,11 @@ func (s *Server) handleSessionUndo(w http.ResponseWriter, r *http.Request) {
 		AttemptID: change.AttemptID,
 		Data:      change,
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "session event persistence failed: "+err.Error())
+		if _, rollbackErr := checkpoint.RedoWithOptions(record, restoreOpts); rollbackErr != nil {
+			writeError(w, http.StatusInternalServerError, "session event persistence failed after checkpoint restore; rollback failed: "+rollbackErr.Error()+"; original persistence error: "+err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "session event persistence failed after checkpoint restore; restore rolled back: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, gatewayapi.SessionUndoResponse{
@@ -1199,7 +1213,11 @@ func (s *Server) handleSessionRedo(w http.ResponseWriter, r *http.Request) {
 		AttemptID: change.AttemptID,
 		Data:      change,
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "session event persistence failed: "+err.Error())
+		if _, rollbackErr := checkpoint.RestoreWithOptions(record, restoreOpts); rollbackErr != nil {
+			writeError(w, http.StatusInternalServerError, "session event persistence failed after checkpoint redo; rollback failed: "+rollbackErr.Error()+"; original persistence error: "+err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "session event persistence failed after checkpoint redo; redo rolled back: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, gatewayapi.SessionUndoResponse{

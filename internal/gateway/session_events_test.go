@@ -397,6 +397,65 @@ func TestGatewaySessionUndoRejectsTamperedPatchArtifact(t *testing.T) {
 	}
 }
 
+func TestGatewaySessionUndoRollsBackRestoreWhenEventPersistenceFails(t *testing.T) {
+	server, storeDir, sessionID, path := gatewayCheckpointSessionForTest(t)
+	preview := postGatewayJSON[gatewayapi.SessionUndoResponse](t, server, "/v1/sessions/"+sessionID+"/undo", `{"preview":true}`, http.StatusOK)
+	session, ok := server.session(sessionID)
+	if !ok {
+		t.Fatal("created session missing")
+	}
+	failSessionEventOnce(t, server, session, protocol.EventTurnChangeReverted)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+sessionID+"/undo", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "restore rolled back") {
+		t.Fatalf("undo status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := readFileString(t, path); got != "agent\n" {
+		t.Fatalf("failed undo should roll workspace back to agent state, got %q", got)
+	}
+	inspection, err := InspectStoredSession(storeDir, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedInspectionHasTurnChangeStatus(inspection, preview.ChangeID, "reverted") || inspection.Events.RedoAvailable {
+		t.Fatalf("failed undo should not persist revert: %#v", inspection.Events)
+	}
+}
+
+func TestGatewaySessionRedoRollsBackRestoreWhenEventPersistenceFails(t *testing.T) {
+	server, storeDir, sessionID, path := gatewayCheckpointSessionForTest(t)
+	undo := postGatewayJSON[gatewayapi.SessionUndoResponse](t, server, "/v1/sessions/"+sessionID+"/undo", `{}`, http.StatusOK)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("undo should remove file before redo test, stat err=%v", err)
+	}
+	session, ok := server.session(sessionID)
+	if !ok {
+		t.Fatal("created session missing")
+	}
+	failSessionEventOnce(t, server, session, protocol.EventTurnChangeRecorded)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+sessionID+"/redo", nil)
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "redo rolled back") {
+		t.Fatalf("redo status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("failed redo should roll workspace back to undone state, stat err=%v", err)
+	}
+	inspection, err := InspectStoredSession(storeDir, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inspection.Events.RedoAvailable || inspection.Events.RedoChangeID != undo.ChangeID ||
+		storedInspectionHasTurnChangeStatus(inspection, undo.ChangeID, "redone") {
+		t.Fatalf("failed redo should preserve redo availability: %#v", inspection.Events)
+	}
+}
+
 func TestGatewaySessionUndoDeniedDuringActiveRun(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"
@@ -426,6 +485,163 @@ func TestGatewaySessionUndoDeniedDuringActiveRun(t *testing.T) {
 	session.Thread.Cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("run err = %v", err)
+	}
+}
+
+func TestGatewaySessionRunReportsSaveFailureAfterVisibleRun(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+	sessionID := createGatewaySessionForTest(t, server)
+	forceLegacySnapshotWriteFailure(t, storeDir, sessionID)
+
+	events := runGatewaySessionForTest(t, server, sessionID, `{"prompt":"save failure"}`)
+	var sawCompleted, sawPersistenceStatus bool
+	for _, event := range events {
+		switch event.Type {
+		case protocol.EventRunCompleted:
+			sawCompleted = true
+		case protocol.EventSessionStatus:
+			status := eventStatus(t, event)
+			if status.LastEvent == "persistence_failed" && strings.Contains(status.LastError, "session save failed after run") {
+				sawPersistenceStatus = true
+			}
+		}
+	}
+	if !sawCompleted || !sawPersistenceStatus {
+		t.Fatalf("events missing completed=%v persistence_status=%v: %#v", sawCompleted, sawPersistenceStatus, events)
+	}
+	session, ok := server.session(sessionID)
+	if !ok {
+		t.Fatal("created session missing")
+	}
+	status := session.Status()
+	if status.LastEvent != "persistence_failed" || !strings.Contains(status.LastError, "session save failed after run") {
+		t.Fatalf("status = %#v", status)
+	}
+}
+
+func TestGatewaySessionRunInterruptReturnsSaveFailureBeforeReplacement(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+	sessionID := createGatewaySessionForTest(t, server)
+	session, ok := server.session(sessionID)
+	if !ok {
+		t.Fatal("created session missing")
+	}
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Thread.Run(context.Background(), sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
+			emit(protocol.Event{Type: protocol.EventRunStarted, RunID: "run-old"})
+			close(started)
+			<-ctx.Done()
+			return messages, ctx.Err()
+		}), "old prompt", func(event protocol.Event) {
+			if event.Type == protocol.EventRunStarted {
+				if err := session.beginRunStatus(RunRequest{Provider: "mock", Model: "mock"}); err != nil {
+					t.Errorf("begin status: %v", err)
+					return
+				}
+			}
+			if _, _, err := session.observeRunEvent(event); err != nil {
+				t.Errorf("observe event: %v", err)
+			}
+		})
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first session run did not start")
+	}
+	forceLegacySnapshotWriteFailure(t, storeDir, sessionID)
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+sessionID+"/run", strings.NewReader(`{"prompt":"new prompt","interrupt_policy":"interrupt"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("stream status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	events := readProtocolEvents(t, rec.Body)
+	var sawFailure bool
+	for _, event := range events {
+		if event.Type == protocol.EventAssistantDelta && strings.Contains(fmt.Sprint(event.Data), "new prompt") {
+			t.Fatalf("replacement run should not start after interrupt save failure: %#v", events)
+		}
+		if event.Type == protocol.EventRunFailed && strings.Contains(fmt.Sprint(event.Data), "session save failed after interrupt") {
+			sawFailure = true
+		}
+	}
+	if !sawFailure {
+		t.Fatalf("stream missing interrupt save failure: %#v", events)
+	}
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("first run err = %v", err)
+	}
+}
+
+func TestGatewaySessionCancelReturnsSaveFailureAfterCancellation(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+	sessionID := createGatewaySessionForTest(t, server)
+	session, ok := server.session(sessionID)
+	if !ok {
+		t.Fatal("created session missing")
+	}
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Thread.Run(context.Background(), sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
+			emit(protocol.Event{Type: protocol.EventRunStarted, RunID: "run-cancel"})
+			close(started)
+			<-ctx.Done()
+			return messages, ctx.Err()
+		}), "wait", func(event protocol.Event) {
+			if event.Type == protocol.EventRunStarted {
+				if err := session.beginRunStatus(RunRequest{Provider: "mock", Model: "mock"}); err != nil {
+					t.Errorf("begin status: %v", err)
+					return
+				}
+			}
+			if _, _, err := session.observeRunEvent(event); err != nil {
+				t.Errorf("observe event: %v", err)
+			}
+		})
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("session run did not start")
+	}
+	forceLegacySnapshotWriteFailure(t, storeDir, sessionID)
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+sessionID+"/cancel", nil))
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "session save failed after cancel") {
+		t.Fatalf("cancel status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("run err = %v", err)
+	}
+	replayed, err := server.store.ReplayEventsAfter(sessionID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawCancelFailure bool
+	for _, event := range replayed {
+		if event.Type == protocol.EventRunFailed && fmt.Sprint(event.Data) == "cancelled by session cancel endpoint" {
+			sawCancelFailure = true
+		}
+	}
+	if !sawCancelFailure {
+		t.Fatalf("stored events missing cancel failure: %#v", replayed)
 	}
 }
 
@@ -683,4 +899,60 @@ func storedInspectionHasTurnChangeStatus(inspection StoredSessionInspection, cha
 		}
 	}
 	return false
+}
+
+func gatewayCheckpointSessionForTest(t *testing.T) (*Server, string, string, string) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.WorkspaceRoots = []string{root}
+	cfg.AutoApproveDangerous = true
+	cfg.MaxToolRounds = 2
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	prov := &gatewayScriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_write", ToolName: "fs_write_file", ArgsDelta: `{"path":"out.txt","content":"agent\n"}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "done"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	registry := tools.NewRegistry(cfg)
+	server := NewServerWithOptions(cfg, provider.Mock{}, registry, ServerOptions{SessionStoreDir: storeDir})
+	sessionID := createGatewaySessionForTest(t, server)
+	runGatewaySessionAgentForTest(t, server, sessionID, agentpkg.New(cfg, prov, registry), "write")
+	path := filepath.Join(root, "out.txt")
+	if got := readFileString(t, path); got != "agent\n" {
+		t.Fatalf("written file = %q", got)
+	}
+	return server, storeDir, sessionID, path
+}
+
+func failSessionEventOnce(t *testing.T, server *Server, session *Session, failType protocol.EventType) {
+	t.Helper()
+	var failed bool
+	session.eventRecorder = func(event protocol.Event) (protocol.Event, error) {
+		if event.Type == failType && !failed {
+			failed = true
+			return event, fmt.Errorf("injected append failure for %s", event.Type)
+		}
+		return server.store.AppendEvent(session, event)
+	}
+}
+
+func forceLegacySnapshotWriteFailure(t *testing.T, storeDir, sessionID string) {
+	t.Helper()
+	path := filepath.Join(storeDir, sessionID+".json")
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
 }
