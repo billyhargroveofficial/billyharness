@@ -13,6 +13,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
+	"github.com/billyhargroveofficial/billyharness/internal/secrets"
 	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
 	tuitranscript "github.com/billyhargroveofficial/billyharness/internal/tui/transcript"
 )
@@ -164,11 +165,9 @@ func sessionsExportCommand(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	text := tuitranscript.FormatSession(data.Messages, data.Events, mode)
+	text := secrets.Redact(tuitranscript.FormatSession(data.Messages, data.Events, mode))
 	if *jsonOut {
-		enc := json.NewEncoder(out)
-		enc.SetIndent("", "  ")
-		return enc.Encode(struct {
+		body, err := secrets.RedactJSONIndent(struct {
 			Mode       string                          `json:"mode"`
 			Text       string                          `json:"text"`
 			Transcript gateway.StoredSessionTranscript `json:"transcript"`
@@ -176,7 +175,13 @@ func sessionsExportCommand(args []string, out io.Writer) error {
 			Mode:       mode,
 			Text:       text,
 			Transcript: data,
-		})
+		}, "", "  ")
+		if err != nil {
+			return err
+		}
+		body = append(body, '\n')
+		_, err = out.Write(body)
+		return err
 	}
 	if text != "" {
 		fmt.Fprintln(out, text)

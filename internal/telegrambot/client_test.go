@@ -139,7 +139,7 @@ func TestClientTransportErrorRedactsBotToken(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected transport error")
 	}
-	if strings.Contains(err.Error(), token) || !strings.Contains(err.Error(), "<redacted>") {
+	if strings.Contains(err.Error(), token) || !strings.Contains(err.Error(), "[redacted]") {
 		t.Fatalf("token was not redacted: %v", err)
 	}
 }

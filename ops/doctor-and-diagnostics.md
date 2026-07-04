@@ -1,6 +1,6 @@
 # Doctor And Diagnostics
 
-Last verified: 2026-07-03. Command shapes here were checked against
+Last verified: 2026-07-04. Command shapes here were checked against
 `README.md`, `go run ./cmd/fast-agent-harness help`,
 `go run ./cmd/fast-agent-harness doctor -h`, and the current
 `cmd/fast-agent-harness` and `internal/gateway` sources.
@@ -10,11 +10,13 @@ Billyharness checkout without making architecture claims.
 
 ## Redaction
 
-`doctor`, `config inspect`, `incident collect`, and `/v1/auth/status` are
-designed to report paths, provider/model state, credential presence, and
-session diagnostics without returning obvious secret values. Still review output
-before sharing it. Paths can reveal usernames and deployment layout, and dirty
-git status can include sensitive filenames.
+`doctor`, `config inspect`, `sessions export`, `incident collect`, and
+`/v1/auth/status` are designed to report paths, provider/model state,
+credential presence, transcripts, and session diagnostics without returning
+obvious secret values. Still review output before sharing it. Paths can reveal
+usernames and deployment layout, dirty git status can include sensitive
+filenames, and redaction is a leak-reduction layer rather than proof that user
+content is safe to disclose.
 
 Never share raw `$BILLYHARNESS_HOME/.env`,
 `$BILLYHARNESS_HOME/auth/credentials.json`,
@@ -155,6 +157,10 @@ Export transcript text:
 ./bin/fast-agent-harness sessions export -mode rich SESSION_ID
 ./bin/fast-agent-harness sessions export -mode raw SESSION_ID
 ```
+
+Both text and `-json` transcript exports pass through the shared local redactor
+before printing. The persisted session JSONL remains the durable replay truth;
+operator-facing exports are presentation artifacts.
 
 Build or inspect the diagnostics index:
 

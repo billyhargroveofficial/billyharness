@@ -327,17 +327,21 @@ Secret handling is layered:
   use `SanitizedValues` and `SanitizedConfig`.
 - Gateway JSON and NDJSON responses pass through `marshalRedactedJSON` in
   [internal/gateway/response.go](../../internal/gateway/response.go), which
-  recursively redacts JSON string values with `internal/secrets.Redact`.
+  delegates recursive JSON redaction to `internal/secrets`.
 - Providers redact API tokens and OAuth tokens from HTTP error bodies.
 - Hooks, MCP status/errors, Telegram client errors, Telegram auth-command save
-  failures, and Telegram outbound delivery/rendered run errors have targeted
-  redaction paths.
+  failures, Telegram outbound delivery/rendered run errors, transcript export,
+  and incident bundle artifacts use the shared `internal/secrets` redactor.
 
 `internal/secrets.Redact` is pattern and environment based. It handles common
-bearer headers, token/api-key/password fields, DeepSeek-style `sk-...` keys,
-GitHub tokens, Yandex tokens, JWTs, and image data URLs. It also replaces
-secret-looking environment values whose variable names contain token, secret,
-password, api_key, or apikey.
+bearer and proxy-auth headers, cookie and API-key headers, credential-bearing
+URLs, secret query parameters, token/api-key/password fields, common provider
+and GitHub tokens, Telegram bot-token URLs, MCP-style secret argv flags, JWTs,
+Yandex tokens, and image data URLs. It also replaces secret-looking environment
+values whose variable names contain token, secret, password, api_key, or
+apikey. Structured helpers redact JSON strings, JSON object keys, URL
+credentials, and secret-looking argv pairs without changing the durable event
+log as the replay source of truth.
 
 Redaction is a leak-reduction boundary, not a guarantee that secrets never
 exist. Secrets still exist in local files, environment variables, provider

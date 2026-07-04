@@ -3,7 +3,6 @@ package gateway
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync/atomic"
@@ -136,37 +135,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func marshalRedactedJSON(value any) ([]byte, error) {
-	body, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	var decoded any
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		return nil, err
-	}
-	redactJSONStrings(decoded)
-	return json.Marshal(decoded)
-}
-
-func redactJSONStrings(value any) {
-	switch v := value.(type) {
-	case map[string]any:
-		for key, item := range v {
-			if text, ok := item.(string); ok {
-				v[key] = secrets.Redact(text)
-				continue
-			}
-			redactJSONStrings(item)
-		}
-	case []any:
-		for i, item := range v {
-			if text, ok := item.(string); ok {
-				v[i] = secrets.Redact(text)
-				continue
-			}
-			redactJSONStrings(item)
-		}
-	}
+	return secrets.RedactJSON(value)
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

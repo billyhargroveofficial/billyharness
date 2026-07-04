@@ -100,6 +100,45 @@ func TestIncidentCollectWritesRedactedBundle(t *testing.T) {
 	}
 }
 
+func TestSessionsExportRedactsTranscriptSurfaces(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("FAST_AGENT_PROVIDER", "mock")
+	t.Setenv("FAST_AGENT_MODEL", "mock")
+	resolved, err := config.ResolveStrict()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := resolved.Config
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.MCPEnabled = false
+	storeDir := gateway.DefaultSessionStoreDir()
+	sessionID := createIncidentTestSession(t, cfg, storeDir)
+
+	var rawExport bytes.Buffer
+	if err := sessionsCommand([]string{"export", "-dir", storeDir, "-mode", "raw", sessionID}, &rawExport); err != nil {
+		t.Fatal(err)
+	}
+	assertIncidentRedacted(t, "raw export", rawExport.String())
+	if !strings.Contains(rawExport.String(), "[redacted]") {
+		t.Fatalf("raw export missing redaction marker:\n%s", rawExport.String())
+	}
+
+	var jsonExport bytes.Buffer
+	if err := sessionsCommand([]string{"export", "-dir", storeDir, "-mode", "rich", "-json", sessionID}, &jsonExport); err != nil {
+		t.Fatal(err)
+	}
+	assertIncidentRedacted(t, "json export", jsonExport.String())
+	if !json.Valid(jsonExport.Bytes()) {
+		t.Fatalf("json export invalid:\n%s", jsonExport.String())
+	}
+	if !strings.Contains(jsonExport.String(), "[redacted]") {
+		t.Fatalf("json export missing redaction marker:\n%s", jsonExport.String())
+	}
+}
+
 func createIncidentTestSession(t *testing.T, cfg config.Config, storeDir string) string {
 	t.Helper()
 	server := gateway.NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), gateway.ServerOptions{SessionStoreDir: storeDir})

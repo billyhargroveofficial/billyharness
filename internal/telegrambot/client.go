@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/billyhargroveofficial/billyharness/internal/secrets"
 )
 
 type BotError struct {
@@ -122,7 +124,7 @@ func (c *Client) DownloadFile(ctx context.Context, filePath string, maxBytes int
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, BotError{Code: resp.StatusCode, Description: strings.TrimSpace(string(body))}
+		return nil, BotError{Code: resp.StatusCode, Description: secrets.Redact(strings.TrimSpace(string(body)), c.token)}
 	}
 	if maxBytes > 0 && int64(len(body)) > maxBytes {
 		return nil, fmt.Errorf("telegram file %q exceeds max size %d", filePath, maxBytes)
@@ -270,7 +272,7 @@ func (c *Client) post(ctx context.Context, chatID int64, method string, payload 
 	if !envelope.OK || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return BotError{
 			Code:        firstNonZero(envelope.ErrorCode, resp.StatusCode),
-			Description: envelope.Description,
+			Description: secrets.Redact(envelope.Description, c.token),
 			RetryAfter:  time.Duration(envelope.Parameters.RetryAfter) * time.Second,
 		}
 	}
@@ -359,7 +361,7 @@ func redactTelegramError(err error, token string) error {
 	if token == "" {
 		return err
 	}
-	text := strings.ReplaceAll(err.Error(), token, "<redacted>")
+	text := secrets.Redact(err.Error(), token)
 	if text == err.Error() {
 		return err
 	}

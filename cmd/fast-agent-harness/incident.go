@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -58,12 +57,6 @@ type incidentBundleFile struct {
 	Optional  bool   `json:"optional,omitempty"`
 	Generated bool   `json:"generated,omitempty"`
 }
-
-var (
-	incidentURLCredentialPattern = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)([^/\s@]+@)`)
-	incidentURLSecretQuery       = regexp.MustCompile(`(?i)([?&](?:access_token|refresh_token|id_token|token|api[_-]?key|apikey|secret|password)=)[^&\\\s"'<>]+`)
-	incidentHeaderSecretPattern  = regexp.MustCompile(`(?im)(^|\\[rn]|\r?\n)(\s*(?:authorization|proxy-authorization|x-api-key|api-key|cookie|set-cookie)\s*[:=]\s*)[^\\\r\n]+`)
-)
 
 func incidentCmd(args []string) error {
 	return incidentCommand(args, os.Stdout, osDoctorRunner{})
@@ -291,7 +284,7 @@ type incidentBundleWriter struct {
 }
 
 func (w incidentBundleWriter) writeJSON(rel, kind string, value any) error {
-	body, err := json.MarshalIndent(value, "", "  ")
+	body, err := secrets.RedactJSONIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -413,12 +406,7 @@ All generated text artifacts are passed through local redaction before they are 
 }
 
 func redactIncidentText(text string) string {
-	out := incidentURLCredentialPattern.ReplaceAllString(text, `${1}redacted:redacted@`)
-	out = incidentURLSecretQuery.ReplaceAllString(out, `${1}[redacted]`)
-	out = incidentHeaderSecretPattern.ReplaceAllString(out, `${1}${2}[redacted]`)
-	out = secrets.Redact(out)
-	out = incidentHeaderSecretPattern.ReplaceAllString(out, `${1}${2}[redacted]`)
-	return out
+	return secrets.Redact(text)
 }
 
 func cleanIncidentBundleRelPath(rel string) (string, error) {

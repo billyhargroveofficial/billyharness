@@ -109,10 +109,13 @@ editing are gated in [delivery.go](../../internal/telegrambot/delivery.go), so
 tests can exercise flows without external Telegram writes.
 
 Before any Telegram send, edit, progress edit, rich markdown send/edit, or
-dry-run log leaves the adapter, [redaction.go](../../internal/telegrambot/redaction.go)
-sanitizes credential URLs, secret query parameters, header-like credentials,
-and shared `internal/secrets` patterns. Renderer error paths also store
-redacted run and tool failure text before final delivery.
+dry-run log leaves the adapter,
+[redaction.go](../../internal/telegrambot/redaction.go) passes text through
+the shared `internal/secrets` redactor. That shared redactor covers credential
+URLs, secret query parameters, header-like credentials, Telegram bot-token
+URLs, provider keys, and MCP-style secret argv flags. Renderer error paths also
+store redacted run and tool failure text before final delivery. Telegram Bot
+API transport errors redact the bot token before errors are returned or logged.
 
 Secret-bearing auth commands have an additional guard. `/auth deepseek ...`
 is accepted only in a private owner chat. It calls Telegram delete before

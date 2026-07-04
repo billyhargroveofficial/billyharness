@@ -418,6 +418,7 @@
       "read_when": [
         "changing Telegram adapter behavior",
         "changing Telegram command flows",
+        "changing Telegram redaction behavior",
         "changing Telegram rendering or attachments",
         "changing gateway owner scope as used by Telegram",
         "changing operator-facing Telegram status surfaces"
@@ -447,7 +448,7 @@
       "owner": "billy",
       "source_of_truth": true,
       "generated": false,
-      "last_reviewed": "2026-07-03",
+      "last_reviewed": "2026-07-04",
       "trust_level": "hand_curated",
       "read_when": [
         "changing documentation hierarchy",
@@ -747,7 +748,7 @@
       "owner": "billy",
       "source_of_truth": true,
       "generated": false,
-      "last_reviewed": "2026-07-03",
+      "last_reviewed": "2026-07-04",
       "trust_level": "hand_curated_from_code_help_and_readme",
       "read_when": [
         "running doctor or health checks",

@@ -1,7 +1,6 @@
 package mcpclient
 
 import (
-	"net/url"
 	"strings"
 	"time"
 
@@ -14,7 +13,7 @@ func cloneStatus(status ServerStatus) ServerStatus {
 	out.TransportState = normalizeTransportState(out)
 	out.CatalogState = normalizeCatalogState(out)
 	out.Diagnostics = cloneStatusDiagnostics(out.Diagnostics)
-	out.URL = redactURLCredentials(out.URL)
+	out.URL = secrets.RedactURL(out.URL)
 	out.LastError = secrets.Redact(out.LastError)
 	out.StderrTail = secrets.Redact(out.StderrTail)
 	out.Error = secrets.Redact(out.Error)
@@ -113,23 +112,6 @@ func normalizeCatalogState(status ServerStatus) string {
 		return mcpCatalogStateConnectedNoTools
 	}
 	return mcpCatalogStateReady
-}
-
-func redactURLCredentials(rawURL string) string {
-	rawURL = strings.TrimSpace(rawURL)
-	if rawURL == "" {
-		return ""
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil || u.User == nil {
-		return rawURL
-	}
-	if _, hasPassword := u.User.Password(); hasPassword {
-		u.User = url.UserPassword("redacted", "redacted")
-	} else {
-		u.User = url.User("redacted")
-	}
-	return u.String()
 }
 
 func cloneCatalogChange(change CatalogChange) CatalogChange {
