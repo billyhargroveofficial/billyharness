@@ -1542,6 +1542,42 @@ Billy asks for final verification.
   replayed for this slice; proof is focused synthetic legacy/v1 tests, shared
   canonical fixture replay, package/full-suite verification, and rebuild.
 
+### 2026-07-04 - P0.9 real stored-session projector parity inspection
+
+- Completed P0.9 slice. Stored-session inspection now replays decoded events
+  through the shared `internal/clientux/projector` reducer instead of deriving
+  "projected" counters from the same raw loop. The inspection surface reports
+  `session_id`, `seq_range`, `last_event_id`, `projection_hash`, and explicit
+  mismatch reasons when raw lifecycle/tool-call counts diverge from projector
+  state.
+- Added gateway coverage for the real projector path plus shared canonical
+  edge fixtures (`stream_gap`, `parallel_cancellation`, `late_output_ref`), so
+  gateway stored-session inspection exercises the same protocol edge catalog as
+  client projector and trace replay tests.
+- Updated durable docs because stored-session inspection output and gateway
+  package boundaries changed:
+  `docs/architecture/gateway-and-sessions.md`,
+  `docs/architecture.md`, and `agent-index/docs-manifest.json`.
+- Verification passed before commit:
+  `go test -count=1 ./internal/clientux/projector ./internal/gateway ./internal/tui`;
+  `go test -count=1 ./internal/architecture`;
+  `jq . agent-index/docs-manifest.json`;
+  `git diff --check`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Verification note: the first architecture verification failed because the new
+  gateway inspection dependency on `internal/clientux/projector` was not yet
+  represented in `docs/architecture.md`; the package-boundary doc and manifest
+  were updated, then architecture, focused, full-suite, diff-check, and build
+  verification all passed.
+- Commit: `8d63674 Use real projector in session inspection`
+  (`8d636745c895aad727b090c64ebc794d334f89f3`).
+- Push: `origin/main` updated from `13c0b66` to `8d63674`.
+- Blockers/residual risk: no live production session corpus was inspected for
+  this slice; proof is focused projector/gateway/TUI tests, canonical fixture
+  coverage, package/full-suite verification, docs-boundary verification, and
+  rebuild.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
