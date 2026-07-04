@@ -2180,6 +2180,32 @@ Billy asks for final verification.
   package decomposition. Gateway session/run admission and persistence code
   still need future smaller-contract extraction.
 
+### 2026-07-04 - P2.2 tool discovery search split
+
+- Completed a narrow P2.2 slice. Moved the `tool_search` registration,
+  `searchTools`, and `discoveryCandidates` into
+  `internal/tools/tool_discovery.go`, keeping the discovery contract next to the
+  `internal/tools/discovery` adapter and leaving tool execution behavior
+  unchanged.
+- `internal/tools/tools.go` dropped from 1557 LOC to 1448 LOC, and strict
+  hygiene no longer reports it as a large source-file exception.
+- Updated `docs/architecture.md` by removing the stale
+  `internal/tools/tools.go` file-size exception. Package ownership/import
+  boundaries did not change.
+- Verification passed:
+  `gofmt -w internal/tools/tools.go internal/tools/tool_discovery.go`;
+  `go test -count=1 ./internal/tools ./internal/eventlog ./internal/clientux/projector ./internal/architecture`;
+  `go run ./cmd/fast-agent-harness hygiene -repo /Users/billy/repos/billyharness -strict`;
+  `git diff --check`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `14bf61b Extract tool discovery search`
+  (`14bf61bd3489a5a49563178962b4368abf16ca08`).
+- Push: `origin/main` updated from `1694218` to `14bf61b`.
+- Blockers/residual risk: this is a file-level split only. Native registry,
+  MCP gateway handlers, output-ref settlement, and display/policy laws remain
+  candidates for smaller future contracts.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
