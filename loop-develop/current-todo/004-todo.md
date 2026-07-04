@@ -2268,6 +2268,25 @@ Billy asks for final verification.
 - Push: `origin/main` updated from `47a0537` to `c497b6f`.
 - Blockers/residual risk: no automatic `--rebuild-if-missing` flag yet; query commands still fail closed with a rebuild hint when diagnostics index is missing.
 
+### 2026-07-04 - P2.6 guarded production deploy and rollback workflow
+
+- Completed P2.6. Added `scripts/production-deploy.sh` with explicit `deploy` and `rollback` subcommands, required `--yes`, tracked-worktree dirty check, source-checkout rebuild model, pre/post fact capture, managed service restarts, strict doctor gate, and `/health` plus `/ready` probes.
+- The script embeds build provenance with `-ldflags` (`version`, full commit, UTC build time), writes `build-provenance.txt` plus a manifest under `${BILLYHARNESS_DEPLOY_LOG_DIR:-/var/log/billyharness/deploy}`, and prints the rollback command for the previous commit.
+- Doctor now surfaces build provenance as structured JSON fields (`build_commit`, `build_time`) and a text `build:` line, so deploy evidence can prove which binary is running instead of relying on static `version=0.1.0` alone.
+- Updated durable ops docs because production deploy/rollback and doctor output semantics changed: `README.md`, `ops/README.md`, `ops/doctor-and-diagnostics.md`, `ops/production-services.md`, and `agent-index/docs-manifest.json`. Checked architecture docs/package-boundary routing via `go test -count=1 ./internal/architecture`; no architecture doc change was needed because this is an operator workflow and build metadata surface, not a package-boundary or gateway contract change.
+- Verification passed:
+  `gofmt -w cmd/fast-agent-harness/main.go cmd/fast-agent-harness/doctor.go cmd/fast-agent-harness/doctor_test.go cmd/fast-agent-harness/main_test.go`;
+  `bash -n scripts/production-deploy.sh`;
+  `scripts/production-deploy.sh --help`;
+  `go test -count=1 ./cmd/fast-agent-harness ./internal/architecture`;
+  `git diff --check`;
+  `go test -count=1 ./...`;
+  `go build -trimpath -buildvcs=false -ldflags "-X main.version=0.1.0+verify -X main.buildCommit=verifycommit -X main.buildTime=2026-07-04T00:00:00Z" -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`;
+  `BILLYHARNESS_HOME="$(mktemp -d)" FAST_AGENT_ENV_FILE= /tmp/billyharness-verify/fast-agent-harness doctor -build=false -services=false -gateway=false` showed `version: 0.1.0+verify` and `build: commit=verifycommit built_at=2026-07-04T00:00:00Z`.
+- Commit: `2576430 Add guarded production deploy workflow` (`2576430a9f39be4441a8f05fdc590917cf31eb49`).
+- Push: `origin/main` updated from `0a3d86a` to `2576430`.
+- Blockers/residual risk: the deploy script was not executed against the live production host in this slice. A real deploy still needs to run from `/root/billyharness` and preserve the generated evidence directory from the production host.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
