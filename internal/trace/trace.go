@@ -131,7 +131,7 @@ func (w *EventWriter) Record(taskID string, event protocol.Event) (EventRecord, 
 	if w.sanitize != nil {
 		value = w.sanitize(event)
 	}
-	payloadRefs, err := w.writePayloads(event, value)
+	payloadRefs, err := w.writePayloads(seq, event, value)
 	if err != nil {
 		return EventRecord{}, err
 	}
@@ -160,7 +160,7 @@ func (w *EventWriter) Record(taskID string, event protocol.Event) (EventRecord, 
 	return record, nil
 }
 
-func (w *EventWriter) writePayloads(event protocol.Event, value any) ([]PayloadRef, error) {
+func (w *EventWriter) writePayloads(seq int64, event protocol.Event, value any) ([]PayloadRef, error) {
 	if w.payloadDir == "" || w.payloadPolicy == nil || !w.payloadPolicy(event) {
 		return nil, nil
 	}
@@ -173,7 +173,7 @@ func (w *EventWriter) writePayloads(event protocol.Event, value any) ([]PayloadR
 		return nil, err
 	}
 	sum := sha256.Sum256(bytes)
-	name := fmt.Sprintf("%06d.json", w.seq)
+	name := fmt.Sprintf("%06d.json", seq)
 	path := filepath.Join(w.payloadDir, name)
 	if err := os.WriteFile(path, bytes, 0o600); err != nil {
 		return nil, err
@@ -182,7 +182,7 @@ func (w *EventWriter) writePayloads(event protocol.Event, value any) ([]PayloadR
 		return nil, err
 	}
 	return []PayloadRef{{
-		PayloadID: fmt.Sprintf("payload:%d", w.seq),
+		PayloadID: fmt.Sprintf("payload:%d", seq),
 		Kind:      "protocol_event",
 		Path:      path,
 		SHA256:    hex.EncodeToString(sum[:]),
@@ -229,12 +229,18 @@ func WriteManifest(path string, manifest Manifest) error {
 
 type ReplaySummary struct {
 	RunID                  string                       `json:"run_id"`
+	ReplayMode             string                       `json:"replay_mode"`
 	Records                int                          `json:"records"`
 	FirstSeq               int64                        `json:"first_seq,omitempty"`
 	LastSeq                int64                        `json:"last_seq,omitempty"`
 	PayloadRefs            int                          `json:"payload_refs,omitempty"`
 	PayloadBytes           int64                        `json:"payload_bytes,omitempty"`
 	EventTypes             map[string]int               `json:"event_types"`
+	RawEventTypes          map[string]int               `json:"raw_event_types,omitempty"`
+	ValidatedEventTypes    map[string]int               `json:"validated_event_types,omitempty"`
+	LegacyEventTypes       map[string]int               `json:"legacy_event_types,omitempty"`
+	ValidatedV1Records     int                          `json:"validated_v1_records,omitempty"`
+	LegacyRecords          int                          `json:"legacy_records,omitempty"`
 	Tasks                  map[string]int               `json:"tasks"`
 	RunStarted             int                          `json:"run_started,omitempty"`
 	RunCompleted           int                          `json:"run_completed,omitempty"`
@@ -342,9 +348,13 @@ type ReplayTimelineItem struct {
 
 func ReplayEvents(path string) (ReplaySummary, error) {
 	summary := ReplaySummary{
-		EventTypes:        map[string]int{},
-		Tasks:             map[string]int{},
-		HelperUsageByKind: map[string]ReplayHelperUsage{},
+		ReplayMode:          "strict_v1",
+		EventTypes:          map[string]int{},
+		RawEventTypes:       map[string]int{},
+		ValidatedEventTypes: map[string]int{},
+		LegacyEventTypes:    map[string]int{},
+		Tasks:               map[string]int{},
+		HelperUsageByKind:   map[string]ReplayHelperUsage{},
 	}
 	validator := eventlog.NewRecordValidator(eventlog.RecordValidatorOptions{
 		SchemaVersion:    CurrentManifestVersion,
@@ -377,7 +387,23 @@ func ReplayEvents(path string) (ReplaySummary, error) {
 		summary.LastSeq = record.Seq
 		summary.Records++
 		if record.EventType != "" {
-			summary.EventTypes[record.EventType]++
+			summary.RawEventTypes[record.EventType]++
+		}
+		validatedV1 := ok && event.SchemaVersion == protocol.EventSchemaVersion
+		acceptedEventType := replaySummaryEventType(record, event, validatedV1)
+		if acceptedEventType != "" {
+			summary.EventTypes[acceptedEventType]++
+		}
+		if validatedV1 {
+			summary.ValidatedV1Records++
+			if event.Type != "" {
+				summary.ValidatedEventTypes[string(event.Type)]++
+			}
+		} else {
+			summary.LegacyRecords++
+			if record.EventType != "" {
+				summary.LegacyEventTypes[record.EventType]++
+			}
 		}
 		if record.TaskID != "" {
 			summary.Tasks[record.TaskID]++
@@ -388,18 +414,30 @@ func ReplayEvents(path string) (ReplaySummary, error) {
 			return eventlog.NewCorruptionError(path, item.Line, item.RecordNo, "", err)
 		}
 		summary.PayloadBytes += bytes
-		if ok {
+		if validatedV1 {
 			if err := lifecycle.Observe(event); err != nil {
 				return eventlog.NewCorruptionError(path, item.Line, item.RecordNo, "lifecycle", err)
 			}
 		}
-		if err := summary.observe(record, event, ok); err != nil {
+		if err := summary.observe(record, event, ok, validatedV1); err != nil {
 			return eventlog.NewCorruptionError(path, item.Line, item.RecordNo, "", err)
 		}
 		return nil
 	})
 	if err != nil {
 		return summary, err
+	}
+	if summary.LegacyRecords > 0 {
+		summary.ReplayMode = "strict_v1_with_legacy_records"
+	}
+	if len(summary.RawEventTypes) == 0 {
+		summary.RawEventTypes = nil
+	}
+	if len(summary.ValidatedEventTypes) == 0 {
+		summary.ValidatedEventTypes = nil
+	}
+	if len(summary.LegacyEventTypes) == 0 {
+		summary.LegacyEventTypes = nil
 	}
 	return summary, nil
 }
@@ -457,7 +495,14 @@ func resolvePayloadPath(eventsPath, payloadPath string) string {
 	return filepath.Join(filepath.Dir(eventsPath), payloadPath)
 }
 
-func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEvent bool) error {
+func replaySummaryEventType(record EventRecord, event protocol.Event, validatedV1 bool) string {
+	if validatedV1 && event.Type != "" {
+		return string(event.Type)
+	}
+	return strings.TrimSpace(record.EventType)
+}
+
+func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEvent bool, validatedV1 bool) error {
 	if hasEvent {
 		s.addProfileHash(firstString(event.ProfileHash, record.ProfileHash))
 		if err := s.appendTimeline(record, event); err != nil {
@@ -466,7 +511,7 @@ func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEve
 	} else {
 		s.addProfileHash(record.ProfileHash)
 	}
-	switch protocol.EventType(record.EventType) {
+	switch protocol.EventType(replaySummaryEventType(record, event, validatedV1)) {
 	case protocol.EventRunStarted:
 		s.RunStarted++
 	case protocol.EventRunCompleted:
@@ -476,6 +521,15 @@ func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEve
 	case protocol.EventTurnStarted:
 		s.TurnsStarted++
 	case protocol.EventTurnCompleted:
+		if !validatedV1 {
+			s.TurnsCompleted++
+			if hasEvent {
+				if turn, err := turnFromEvent(record.Event); err == nil && turn.Status == protocol.TurnStatusFailed {
+					s.TurnsFailed++
+				}
+			}
+			return nil
+		}
 		turn, err := turnFromEvent(record.Event)
 		if err != nil {
 			return err
@@ -485,6 +539,15 @@ func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEve
 			s.TurnsFailed++
 		}
 	case protocol.EventStepStarted:
+		if !validatedV1 {
+			s.StepsStarted++
+			if hasEvent {
+				if step, err := stepFromEvent(record.Event); err == nil && step.Kind == protocol.StepKindToolBatch && step.Parallel {
+					s.ParallelBatches++
+				}
+			}
+			return nil
+		}
 		step, err := stepFromEvent(record.Event)
 		if err != nil {
 			return err
@@ -494,6 +557,15 @@ func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEve
 			s.ParallelBatches++
 		}
 	case protocol.EventStepCompleted:
+		if !validatedV1 {
+			s.StepsCompleted++
+			if hasEvent {
+				if step, err := stepFromEvent(record.Event); err == nil && step.Status == protocol.StepStatusFailed {
+					s.StepsFailed++
+				}
+			}
+			return nil
+		}
 		step, err := stepFromEvent(record.Event)
 		if err != nil {
 			return err
@@ -517,8 +589,10 @@ func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEve
 	case protocol.EventModelCallStarted:
 		s.ModelCallsStarted++
 		s.usage.Reset()
-		if err := s.observePromptDiagnostics(event); err != nil {
-			return err
+		if validatedV1 {
+			if err := s.observePromptDiagnostics(event); err != nil {
+				return err
+			}
 		}
 	case protocol.EventModelCallFinished:
 		s.ModelCallsFinished++
@@ -533,12 +607,19 @@ func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEve
 	case protocol.EventToolCallAborted:
 		s.ToolCallsAborted++
 	case protocol.EventToolOutputRefCreated:
+		if !validatedV1 && !hasEvent {
+			s.OutputRefs++
+			return nil
+		}
 		s.observeOutputRef(event)
 	case protocol.EventContextThreshold:
 		s.ContextThresholds++
 	case protocol.EventContextCompacted:
 		s.ContextCompactions++
 	case protocol.EventProviderUsageUpdate:
+		if !validatedV1 {
+			return nil
+		}
 		usage, err := usageFromEvent(record.Event)
 		if err != nil {
 			return err
@@ -549,6 +630,9 @@ func (s *ReplaySummary) observe(record EventRecord, event protocol.Event, hasEve
 		s.CacheHitTokens += delta.CacheHitTokens
 		s.CacheMissTokens += delta.CacheMissTokens
 	case protocol.EventProviderHelperUsage:
+		if !validatedV1 {
+			return nil
+		}
 		usage, err := helperUsageFromEvent(record.Event)
 		if err != nil {
 			return err

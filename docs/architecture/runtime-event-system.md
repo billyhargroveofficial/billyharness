@@ -178,7 +178,10 @@ Trace replay in [internal/trace/trace.go](../../internal/trace/trace.go) runs
 both `RecordValidator` and `LifecycleValidator` before it builds counters or
 timeline rows. `trace.EventWriter` uses the same envelope/lifecycle checks
 before encoding a record and leaves the writer sequence unchanged when
-validation fails. Benchmark verification in
+validation fails. `ReplaySummary` exposes `replay_mode`, `raw_event_types`,
+`validated_event_types`, `legacy_event_types`, `validated_v1_records`, and
+`legacy_records` so JSON consumers can distinguish strict v1 replay truth from
+explicitly accepted legacy/raw records. Benchmark verification in
 [internal/bench/bench.go](../../internal/bench/bench.go) treats finished,
 failed, and aborted tool attempts as terminal outcomes.
 

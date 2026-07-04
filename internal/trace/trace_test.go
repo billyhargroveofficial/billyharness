@@ -77,6 +77,9 @@ func TestEventWriterRecordsContiguousEventsAndPayloadRefs(t *testing.T) {
 	if summary.RunStarted != 1 || summary.ToolCallsStarted != 1 || summary.ToolCallsFinished != 1 {
 		t.Fatalf("event counters = %#v", summary)
 	}
+	if summary.ReplayMode != "strict_v1" || summary.ValidatedV1Records != 4 || summary.LegacyRecords != 0 {
+		t.Fatalf("replay mode counters = %#v", summary)
+	}
 
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	var fourth EventRecord
@@ -85,6 +88,9 @@ func TestEventWriterRecordsContiguousEventsAndPayloadRefs(t *testing.T) {
 	}
 	if len(fourth.PayloadRefs) != 1 {
 		t.Fatalf("payload refs = %#v", fourth.PayloadRefs)
+	}
+	if fourth.PayloadRefs[0].PayloadID != "payload:4" || filepath.Base(fourth.PayloadRefs[0].Path) != "000004.json" {
+		t.Fatalf("payload ref identity = %#v", fourth.PayloadRefs[0])
 	}
 	if _, err := os.Stat(fourth.PayloadRefs[0].Path); err != nil {
 		t.Fatal(err)
@@ -523,6 +529,9 @@ func TestGoldenTraceReplayCanonicalAgentLoop(t *testing.T) {
 	if summary.RunID != "run-golden-agent-loop" || summary.Records != 39 || summary.FirstSeq != 1 || summary.LastSeq != 39 {
 		t.Fatalf("summary identity = %#v", summary)
 	}
+	if summary.ReplayMode != "strict_v1" || summary.ValidatedV1Records != 39 || summary.LegacyRecords != 0 {
+		t.Fatalf("summary replay mode = %#v", summary)
+	}
 	if summary.RunStarted != 1 || summary.RunCompleted != 1 || summary.RunFailed != 0 ||
 		summary.TurnsStarted != 2 || summary.TurnsCompleted != 2 || summary.TurnsFailed != 0 ||
 		summary.StepsStarted != 5 || summary.StepsCompleted != 5 || summary.StepsFailed != 0 ||
@@ -586,6 +595,44 @@ func TestGoldenRunBundleIncludesReplayInputs(t *testing.T) {
 	records := testkit.ReadTraceRecords(t, filepath.Join(filepath.Dir(testkit.CanonicalAgentLoopBundlePath(t)), bundle.Trace))
 	if len(records) != 39 || records[len(records)-1].Seq != 39 {
 		t.Fatalf("bundle trace records = %d last=%#v", len(records), records[len(records)-1])
+	}
+}
+
+func TestReplayEventsSeparatesValidatedV1AndLegacyCounts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	data := strings.Join([]string{
+		`{"schema_version":1,"seq":1,"run_id":"run-1","event_type":"run.started","event":{"schema_version":1,"seq":1,"source":"bench","ts":"2026-07-04T00:00:01Z","run_id":"run-1","type":"run.started"}}`,
+		`{"schema_version":1,"seq":2,"run_id":"run-1","event_type":"run.completed","event":{"type":"run.completed"}}`,
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	summary, err := ReplayEvents(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.ReplayMode != "strict_v1_with_legacy_records" || summary.ValidatedV1Records != 1 || summary.LegacyRecords != 1 {
+		t.Fatalf("summary replay mode = %#v", summary)
+	}
+	if summary.RunStarted != 1 || summary.RunCompleted != 1 {
+		t.Fatalf("summary counters = %#v", summary)
+	}
+	if summary.RawEventTypes[string(protocol.EventRunStarted)] != 1 ||
+		summary.RawEventTypes[string(protocol.EventRunCompleted)] != 1 ||
+		summary.ValidatedEventTypes[string(protocol.EventRunStarted)] != 1 ||
+		summary.LegacyEventTypes[string(protocol.EventRunCompleted)] != 1 {
+		t.Fatalf("event type partitions raw=%#v validated=%#v legacy=%#v", summary.RawEventTypes, summary.ValidatedEventTypes, summary.LegacyEventTypes)
+	}
+	body, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"raw_event_types", "validated_event_types", "legacy_event_types"} {
+		if !strings.Contains(string(body), key) {
+			t.Fatalf("summary JSON missing %s: %s", key, body)
+		}
 	}
 }
 
@@ -712,6 +759,43 @@ func writeUncheckedTraceEvents(t *testing.T, path, runID string, events []protoc
 	}
 }
 
+func writeCanonicalTraceFixture(t *testing.T, fixture testkit.GoldenEdgeCaseFixture) string {
+	t.Helper()
+	runID := ""
+	events := make([]protocol.Event, 0, len(fixture.Events))
+	for i, body := range fixture.Events {
+		var event protocol.Event
+		if err := json.Unmarshal(body, &event); err != nil {
+			t.Fatalf("decode canonical fixture %s event %d: %v", fixture.Name, i, err)
+		}
+		if runID == "" && strings.TrimSpace(event.RunID) != "" {
+			runID = event.RunID
+		}
+		events = append(events, event)
+	}
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	for i, event := range events {
+		seq := event.Seq
+		if seq == 0 {
+			seq = int64(i + 1)
+		}
+		record := EventRecord{
+			SchemaVersion: CurrentManifestVersion,
+			Seq:           seq,
+			RunID:         runID,
+			TaskID:        fixture.Name,
+			Timestamp:     time.Unix(10, 0).UTC(),
+			EventType:     string(event.Type),
+			Event:         event,
+		}
+		if err := enc.Encode(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return writeTraceBytes(t, out.Bytes())
+}
+
 func writeTraceBytes(t *testing.T, body []byte) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "events.jsonl")
@@ -809,6 +893,31 @@ func TestReplayEventsRejectsInvalidNewEventEnvelope(t *testing.T) {
 	_, err := ReplayEvents(path)
 	if err == nil || !strings.Contains(err.Error(), "missing call_id") {
 		t.Fatalf("expected missing call_id error, got %v", err)
+	}
+}
+
+func TestReplayEventsUsesCanonicalEdgeCaseFixtures(t *testing.T) {
+	catalog := testkit.ReadCanonicalEdgeCaseCatalog(t)
+	for _, fixture := range catalog.Fixtures {
+		t.Run(fixture.Name, func(t *testing.T) {
+			path := writeCanonicalTraceFixture(t, fixture)
+			summary, err := ReplayEvents(path)
+			if fixture.Valid {
+				if err != nil {
+					t.Fatalf("valid fixture should replay: %v", err)
+				}
+				if summary.ValidatedV1Records != summary.Records || summary.LegacyRecords != 0 {
+					t.Fatalf("valid fixture should be strict v1: %#v", summary)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("invalid fixture should fail, summary=%#v", summary)
+			}
+			if fixture.ExpectError != "" && !strings.Contains(err.Error(), fixture.ExpectError) {
+				t.Fatalf("error = %v, want %q", err, fixture.ExpectError)
+			}
+		})
 	}
 }
 
