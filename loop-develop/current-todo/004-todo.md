@@ -1578,6 +1578,51 @@ Billy asks for final verification.
   coverage, package/full-suite verification, docs-boundary verification, and
   rebuild.
 
+### 2026-07-04 - P0.10 fail-closed session persistence gaps
+
+- Completed P0.10 slice for session run, interrupt, cancel, undo, and redo
+  persistence ordering. Session run final-save failures now mark in-memory
+  status as `persistence_failed`, emit a non-durable `session.status` on the
+  stream when the event log itself is still healthy, and complete the admitted
+  input as failed. Interrupt-policy replacement runs now abort before starting
+  the replacement when saving the interrupted state fails. Cancel returns HTTP
+  500 instead of `cancelled=true` when post-cancel session save fails.
+- Undo/redo checkpoint routes now compensate when durable event append fails
+  after workspace restore. Failed undo append immediately redoes the checkpoint
+  to roll the workspace forward again; failed redo append immediately restores
+  the checkpoint back to the undone state. Both paths return HTTP 500 and leave
+  replay without a false `turn.change_reverted` / `redone` event.
+- Added injected persistence-failure coverage for final run save, interrupt
+  save before replacement, cancel save after cancellation, undo append rollback,
+  and redo append rollback.
+- Updated durable docs because gateway route behavior, session persistence
+  contracts, and undo/redo failure semantics changed:
+  `docs/architecture/gateway-and-sessions.md`. Checked
+  `docs/architecture/runtime-event-system.md` and `agent-index/docs-manifest.json`;
+  no manifest or runtime-event update was needed because no event names, envelope
+  semantics, or manifest routing changed.
+- Verification passed before commit:
+  `go test -count=1 ./internal/gateway`;
+  `go test -count=1 ./internal/architecture`;
+  `jq . agent-index/docs-manifest.json >/dev/null`;
+  `git diff --check`;
+  `go test -race -count=1 ./internal/gateway`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Verification note: the first focused gateway run exposed that final-save
+  reporting should not add a second persistence status when event append had
+  already failed. The run handler was tightened to skip final snapshot-save
+  reporting after an event persistence failure, then focused/race/full-suite/
+  diff-check/build verification passed.
+- Commit: `c6a316f Fail closed on session persistence gaps`
+  (`c6a316f074b103bb0e1a3a6c6e17eba2e07b6c99`).
+- Push: `origin/main` updated from `9f96e2a` to `c6a316f`.
+- Blockers/residual risk: no production gateway process or live session corpus
+  was exercised; proof is local injected failure tests, package/race/full-suite
+  verification, docs check, and rebuild. Gateway shutdown abort still logs
+  post-abort `saveSession` failure because there is no active HTTP caller to
+  return an error to in that path.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
