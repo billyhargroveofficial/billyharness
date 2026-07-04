@@ -1832,6 +1832,54 @@ Billy asks for final verification.
   proof is local focused/race/full-suite verification, architecture/docs
   checks, path parser coverage, and rebuild.
 
+### 2026-07-04 - P0.16 redacted production inventory and service metadata
+
+- Completed P0.16 slice. Live production was inspected over SSH at
+  `root@82.23.163.16` with remote-side redaction. The dated source-of-truth
+  inventory is `ops/production-inventory-2026-07-04.md`.
+- Captured host, checkout, binary, toolchain, systemd, process, gateway bind,
+  health, route-probe, env-file metadata, store-size, and doctor facts without
+  copying raw `.env`, auth JSON, MCP inline env, provider keys, Telegram
+  tokens, bearer tokens, or journal content.
+- Observed production checkout: `/root/billyharness` at commit
+  `ce3f2c943ee2a08672a858a701cafa0a9e4f62fc`, clean worktree. Binary:
+  `/root/billyharness/bin/fast-agent-harness`, SHA-256
+  `02c1e3cd06a928236c94bee80f7880a45147698e13fed4c2e1961d12cc72a654`.
+  Go: `/root/.local/go/bin/go`, `go1.26.4 linux/amd64`.
+- Observed services: `billyharness-gateway.service` and
+  `billyharness-telegram.service`, both active/running and enabled, running as
+  `root` from `/root/billyharness`, loading
+  `EnvironmentFile=-/root/billyharness/.env`, using
+  `FAST_AGENT_ENV_FILE=/root/billyharness/.env`, `Restart=always`,
+  `RestartSec=2`, journald output, and one live process each.
+- Observed gateway bind/readiness: listener on `127.0.0.1:8765`, `/health`
+  returned `200` with `{"model":"gpt-5.5","ok":true,"provider":"openai-codex"}`.
+  Local unauthenticated route probes on the production commit returned `200`
+  for `/v1/config`, `/v1/mcp`, `/v1/tools`, and `/v1/processes`; the inventory
+  explicitly notes that local `main` has later read-route hardening and these
+  status codes are observed production truth, not desired post-deploy policy.
+- Added `internal/serviceops` as the repo-owned service metadata source for
+  service names, subcommands, pid files, and unit paths. Doctor and gateway
+  readiness hints now use the shared metadata.
+- Updated durable ops/docs because production facts and package boundaries
+  changed: `ops/README.md`, `ops/production-services.md`,
+  `docs/architecture.md`, and `agent-index/docs-manifest.json`.
+- Verification passed before commit:
+  SSH live inventory/probe commands with redaction;
+  `go test -count=1 ./cmd/fast-agent-harness ./internal/gatewaybase ./internal/serviceops ./internal/architecture`;
+  `jq . agent-index/docs-manifest.json >/dev/null`;
+  `git diff --check`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`;
+  `go run ./cmd/fast-agent-harness doctor -build=false -services=false -gateway=false`.
+- Commit: `aa974b9 Capture production service inventory`
+  (`aa974b9c3d5b5e55e89fb1d47792df268cd802a0`).
+- Push: `origin/main` updated from `5bab0d4` to `aa974b9`.
+- Blockers/residual risk: production was inspected read-only and not restarted
+  or deployed; journal tails and raw secret-bearing files were intentionally not
+  copied. The inventory is a dated snapshot and must be refreshed after deploys
+  or service changes.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
