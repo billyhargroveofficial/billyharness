@@ -2131,6 +2131,30 @@ Billy asks for final verification.
   TODO metadata/evidence correction only, so no Go packages or durable
   behavior contracts changed.
 
+### 2026-07-04 - P1.21 historical research doc labeling
+
+- Completed P1.21 slice. Added first-screen historical banners to
+  `docs/codex-research-roadmap.md` and
+  `docs/competitive-architecture-analysis.md` so preserved research source
+  material no longer reads like current Billyharness truth or an implementation
+  checklist.
+- Tightened `docs/README.md` and `docs/research/README.md` routing language to
+  say the research files carry historical banners, preserve stale backlog
+  language intentionally, and require active work to be extracted into
+  `loop-develop/current-todo`.
+- Verification passed:
+  `rg -n "research|legacy|current truth|active work|loop-develop" docs/README.md docs/research/README.md`;
+  `sed -n '1,24p' docs/codex-research-roadmap.md`;
+  `sed -n '1,24p' docs/competitive-architecture-analysis.md`;
+  `git diff --check`.
+- Commit: `f33f434 Label legacy research docs as historical`
+  (`f33f434a605dd4632a7ef95b3750ef4f820d88c2`).
+- Push: `origin/main` updated from `16c6ae6` to `f33f434`.
+- Blockers/residual risk: none for the labeling slice. The legacy research
+  files still intentionally preserve old roadmap/backlog sections as source
+  material; future move/delete cleanup should update links and metadata in the
+  same change.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
