@@ -213,8 +213,8 @@
       "owner": "billy",
       "source_of_truth": true,
       "generated": false,
-      "last_reviewed": "2026-07-03",
-      "trust_level": "hand_curated_and_tested",
+      "last_reviewed": "2026-07-04",
+      "trust_level": "hand_curated_from_current_worktree",
       "read_when": [
         "changing package boundaries",
         "changing internal imports",

@@ -184,6 +184,10 @@ complete.
 Offline helpers in `session_export.go` and `session_inspect.go` load transcripts,
 list stored sessions, inspect manifests/files/event types/output refs/turn
 changes, and fall back to legacy snapshots when no session directory exists.
+Stored-session inspection feeds replayed events through the shared
+`internal/clientux/projector` path, compares raw lifecycle counts to the
+projected snapshot, and reports sequence range, last event identity, projection
+hash, and mismatch reasons when projector parity fails.
 
 Undo/redo restore is fail-closed at the gateway boundary. The gateway loads the
 checkpoint patch artifact through the `patch_output_ref` recorded on the

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/clientux"
+	clientprojector "github.com/billyhargroveofficial/billyharness/internal/clientux/projector"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/eventlog"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
@@ -134,6 +135,8 @@ type StoredSessionTerminalInspection struct {
 
 type StoredSessionProjectorInspection struct {
 	ParityOK           bool                          `json:"parity_ok"`
+	SessionID          string                        `json:"session_id,omitempty"`
+	SeqRange           string                        `json:"seq_range,omitempty"`
 	LastSeq            int64                         `json:"last_seq,omitempty"`
 	SnapshotLastSeq    int64                         `json:"snapshot_last_seq,omitempty"`
 	RunState           string                        `json:"run_state,omitempty"`
@@ -142,6 +145,9 @@ type StoredSessionProjectorInspection struct {
 	ToolCallsProjected int                           `json:"tool_calls_projected,omitempty"`
 	AssistantBytes     int                           `json:"assistant_bytes,omitempty"`
 	ReasoningBytes     int                           `json:"reasoning_bytes,omitempty"`
+	ProjectionHash     string                        `json:"projection_hash,omitempty"`
+	LastEventID        string                        `json:"last_event_id,omitempty"`
+	MismatchReasons    []string                      `json:"mismatch_reasons,omitempty"`
 	SeqGap             *StoredSessionProjectorSeqGap `json:"seq_gap,omitempty"`
 }
 
@@ -296,11 +302,11 @@ func InspectStoredSession(dir, id string) (StoredSessionInspection, error) {
 	eventsPath := filepath.Join(sessionDir, sessionFileName(manifest.EventsJSONL, sessionEventsJSONLName))
 	events, err := replaySessionEventsAfter(eventsPath, cleanID, 0)
 	if err != nil {
-		out.Events = inspectSessionEvents(eventsPath, nil)
+		out.Events = inspectSessionEvents(cleanID, eventsPath, nil)
 		out.Events.Validation = storedSessionEventValidationFromError(dir, err)
 		out.Warnings = append(out.Warnings, "event replay invalid: "+out.Events.Validation.Error)
 	} else {
-		out.Events = inspectSessionEvents(eventsPath, events)
+		out.Events = inspectSessionEvents(cleanID, eventsPath, events)
 		for _, warning := range out.Events.OutputRefWarnings {
 			out.Warnings = append(out.Warnings, formatStoredOutputRefWarning(warning))
 		}
@@ -437,7 +443,7 @@ func inspectLegacyStoredSession(dir, id string) (StoredSessionInspection, error)
 		LastKind:     "legacy.snapshot",
 		MessageCount: len(record.Messages),
 	}
-	out.Events = inspectSessionEvents("", nil)
+	out.Events = inspectSessionEvents(id, "", nil)
 	out.Manifest = StoredSessionManifest{
 		SessionID:    id,
 		CreatedAt:    record.Created,
@@ -459,7 +465,7 @@ func inspectStoredSessionFile(name, path string) StoredSessionFile {
 	return file
 }
 
-func inspectSessionEvents(path string, events []protocol.Event) StoredSessionEventsInspection {
+func inspectSessionEvents(sessionID, path string, events []protocol.Event) StoredSessionEventsInspection {
 	out := StoredSessionEventsInspection{
 		Path:       path,
 		Exists:     fileExists(path),
@@ -547,7 +553,7 @@ func inspectSessionEvents(path string, events []protocol.Event) StoredSessionEve
 		out.Validation.LifecycleValid = false
 		out.Validation.Valid = false
 	}
-	out.Projector = inspectSessionProjector(events, out.LastSeq)
+	out.Projector = inspectSessionProjector(sessionID, events, out.LastSeq)
 	out.OutputRefsVerified = out.OutputRefs > 0 && out.MissingOutputRefs == 0 && out.OutputRefHashMismatch == 0
 	if len(out.EventTypes) == 0 {
 		out.EventTypes = nil
@@ -652,56 +658,129 @@ func inspectTerminalCleanupProgress(event protocol.Event) bool {
 	}
 }
 
-func inspectSessionProjector(events []protocol.Event, lastSeq int64) StoredSessionProjectorInspection {
+func inspectSessionProjector(sessionID string, events []protocol.Event, lastSeq int64) StoredSessionProjectorInspection {
 	transcriptEvents := 0
 	rawToolCalls := 0
-	projectedToolCalls := 0
-	var assistant strings.Builder
-	var reasoning strings.Builder
-	runState := storedSessionRunStateIdle
-	var snapshotLastSeq int64
-	var seqGap *StoredSessionProjectorSeqGap
+	var firstSeq int64
+	var lastEvent protocol.Event
+	uxProjector := clientprojector.New()
+	snapshot := uxProjector.Snapshot()
 	for _, event := range events {
 		if storedSessionTranscriptEvent(event.Type) {
 			transcriptEvents++
 		}
 		if event.Seq > 0 {
-			if snapshotLastSeq > 0 && event.Seq > snapshotLastSeq+1 && seqGap == nil {
-				seqGap = &StoredSessionProjectorSeqGap{AfterSeq: snapshotLastSeq, GotSeq: event.Seq}
+			if firstSeq == 0 || event.Seq < firstSeq {
+				firstSeq = event.Seq
 			}
-			if event.Seq > snapshotLastSeq {
-				snapshotLastSeq = event.Seq
+			if event.Seq >= lastEvent.Seq {
+				lastEvent = event
 			}
 		}
-		switch event.Type {
-		case protocol.EventRunStarted:
-			runState = storedSessionRunStateRunning
-		case protocol.EventRunCompleted:
-			runState = storedSessionRunStateCompleted
-		case protocol.EventRunFailed:
-			runState = storedSessionRunStateFailed
-		case protocol.EventAssistantDelta:
-			assistant.WriteString(fmt.Sprint(event.Data))
-		case protocol.EventAssistantReasoning:
-			reasoning.WriteString(fmt.Sprint(event.Data))
-		case protocol.EventToolCallRequested:
+		if event.Type == protocol.EventToolCallRequested {
 			rawToolCalls++
-			projectedToolCalls++
 		}
+		snapshot = uxProjector.Apply(event)
 	}
 	out := StoredSessionProjectorInspection{
 		LastSeq:            lastSeq,
-		SnapshotLastSeq:    snapshotLastSeq,
-		RunState:           runState,
+		SessionID:          strings.TrimSpace(sessionID),
+		SeqRange:           storedSessionProjectorSeqRange(firstSeq, lastSeq),
+		SnapshotLastSeq:    snapshot.LastSeq,
+		RunState:           storedSessionProjectorRunState(snapshot.RunState),
 		TranscriptEvents:   transcriptEvents,
 		ToolCallsRaw:       rawToolCalls,
-		ToolCallsProjected: projectedToolCalls,
-		AssistantBytes:     assistant.Len(),
-		ReasoningBytes:     reasoning.Len(),
-		SeqGap:             seqGap,
+		ToolCallsProjected: snapshot.ToolCalls,
+		AssistantBytes:     len(snapshot.AssistantText),
+		ReasoningBytes:     len(snapshot.ReasoningText),
+		ProjectionHash:     storedSessionProjectorHash(snapshot),
+		LastEventID:        storedSessionProjectorEventID(lastEvent),
+		SeqGap:             storedSessionProjectorSeqGap(snapshot.SeqGap),
 	}
-	out.ParityOK = out.LastSeq == out.SnapshotLastSeq && out.ToolCallsRaw == out.ToolCallsProjected && out.SeqGap == nil
+	if out.LastSeq != out.SnapshotLastSeq {
+		out.MismatchReasons = append(out.MismatchReasons, fmt.Sprintf("last_seq=%d snapshot_last_seq=%d", out.LastSeq, out.SnapshotLastSeq))
+	}
+	if out.ToolCallsRaw != out.ToolCallsProjected {
+		out.MismatchReasons = append(out.MismatchReasons, fmt.Sprintf("tool_calls_raw=%d tool_calls_projected=%d", out.ToolCallsRaw, out.ToolCallsProjected))
+	}
+	if out.SeqGap != nil {
+		out.MismatchReasons = append(out.MismatchReasons, fmt.Sprintf("sequence_gap_after=%d got=%d", out.SeqGap.AfterSeq, out.SeqGap.GotSeq))
+	}
+	out.ParityOK = len(out.MismatchReasons) == 0
 	return out
+}
+
+func storedSessionProjectorRunState(state clientprojector.RunState) string {
+	switch state {
+	case clientprojector.RunStateRunning:
+		return storedSessionRunStateRunning
+	case clientprojector.RunStateCompleted:
+		return storedSessionRunStateCompleted
+	case clientprojector.RunStateFailed:
+		return storedSessionRunStateFailed
+	default:
+		return storedSessionRunStateIdle
+	}
+}
+
+func storedSessionProjectorSeqGap(gap *clientprojector.EventSeqGap) *StoredSessionProjectorSeqGap {
+	if gap == nil {
+		return nil
+	}
+	return &StoredSessionProjectorSeqGap{AfterSeq: gap.AfterSeq, GotSeq: gap.GotSeq}
+}
+
+func storedSessionProjectorSeqRange(firstSeq, lastSeq int64) string {
+	if firstSeq == 0 && lastSeq == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d-%d", firstSeq, lastSeq)
+}
+
+func storedSessionProjectorEventID(event protocol.Event) string {
+	if event.Seq == 0 && event.Type == "" {
+		return ""
+	}
+	parts := []string{fmt.Sprintf("seq=%d", event.Seq), "type=" + string(event.Type)}
+	for _, item := range []struct {
+		name  string
+		value string
+	}{
+		{name: "run_id", value: event.RunID},
+		{name: "turn_id", value: event.TurnID},
+		{name: "step_id", value: event.StepID},
+		{name: "call_id", value: event.CallID},
+		{name: "attempt_id", value: event.AttemptID},
+	} {
+		if strings.TrimSpace(item.value) == "" {
+			continue
+		}
+		parts = append(parts, item.name+"="+strings.TrimSpace(item.value))
+	}
+	return strings.Join(parts, " ")
+}
+
+func storedSessionProjectorHash(snapshot clientprojector.Snapshot) string {
+	body, err := json.Marshal(struct {
+		RunState       clientprojector.RunState `json:"run_state"`
+		LastSeq        int64                    `json:"last_seq"`
+		ToolCalls      int                      `json:"tool_calls"`
+		AssistantBytes int                      `json:"assistant_bytes"`
+		ReasoningBytes int                      `json:"reasoning_bytes"`
+		ErrorCount     int                      `json:"error_count"`
+	}{
+		RunState:       snapshot.RunState,
+		LastSeq:        snapshot.LastSeq,
+		ToolCalls:      snapshot.ToolCalls,
+		AssistantBytes: len(snapshot.AssistantText),
+		ReasoningBytes: len(snapshot.ReasoningText),
+		ErrorCount:     len(snapshot.Errors),
+	})
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
 }
 
 func storedSessionTranscriptEvent(eventType protocol.EventType) bool {

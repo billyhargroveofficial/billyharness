@@ -19,6 +19,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
+	"github.com/billyhargroveofficial/billyharness/internal/testkit"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
@@ -771,6 +772,22 @@ func TestStoredSessionDiagnosticsIndexUsageCumulativeMatchesProjector(t *testing
 		usage.ReasoningTokens != snapshot.ReasoningTokens {
 		t.Fatalf("usage row %#v does not match projector snapshot %#v", usage, snapshot)
 	}
+	projectorInspectionResult, err := InspectStoredSession(storeDir, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectorInspection := projectorInspectionResult.Events.Projector
+	if !projectorInspection.ParityOK ||
+		projectorInspection.SessionID != sessionID ||
+		projectorInspection.SeqRange != "1-16" ||
+		projectorInspection.LastSeq != int64(len(storedEvents)) ||
+		projectorInspection.SnapshotLastSeq != snapshot.LastSeq ||
+		projectorInspection.ToolCallsRaw != 1 ||
+		projectorInspection.ToolCallsProjected != snapshot.ToolCalls ||
+		projectorInspection.ProjectionHash == "" ||
+		!strings.Contains(projectorInspection.LastEventID, "type=run.completed") {
+		t.Fatalf("projector inspection = %#v snapshot=%#v", projectorInspection, snapshot)
+	}
 	readBack, err := ReadStoredSessionDiagnosticsIndex(storeDir)
 	if err != nil {
 		t.Fatal(err)
@@ -905,6 +922,64 @@ func TestGatewaySessionInspectorVerifiesOutputRefs(t *testing.T) {
 		mismatchInspection.Events.OutputRefWarnings[0].Reason != "size_mismatch" {
 		t.Fatalf("mismatched ref inspection = %#v", mismatchInspection.Events)
 	}
+}
+
+func TestGatewaySessionInspectionUsesCanonicalProjectorFixtures(t *testing.T) {
+	catalog := testkit.ReadCanonicalEdgeCaseCatalog(t)
+	covered := map[string]bool{
+		"stream_gap":            false,
+		"parallel_cancellation": false,
+		"late_output_ref":       false,
+	}
+	for _, fixture := range catalog.Fixtures {
+		if _, ok := covered[fixture.Name]; !ok {
+			continue
+		}
+		covered[fixture.Name] = true
+		events := decodeGatewayCanonicalFixtureEvents(t, fixture)
+		lastSeq := int64(0)
+		for _, event := range events {
+			if event.Seq > lastSeq {
+				lastSeq = event.Seq
+			}
+		}
+		inspection := inspectSessionProjector("fixture-"+fixture.Name, events, lastSeq)
+		if inspection.ProjectionHash == "" || inspection.SessionID != "fixture-"+fixture.Name {
+			t.Fatalf("%s projector identity = %#v", fixture.Name, inspection)
+		}
+		switch fixture.Name {
+		case "stream_gap":
+			if inspection.ParityOK || inspection.SeqGap == nil || len(inspection.MismatchReasons) == 0 {
+				t.Fatalf("stream gap should report projector mismatch: %#v", inspection)
+			}
+		case "parallel_cancellation":
+			if !inspection.ParityOK || inspection.RunState != storedSessionRunStateFailed || inspection.ToolCallsRaw != 2 || inspection.ToolCallsProjected != 2 {
+				t.Fatalf("parallel cancellation projector inspection = %#v", inspection)
+			}
+		case "late_output_ref":
+			if !inspection.ParityOK || inspection.RunState != storedSessionRunStateCompleted || inspection.ToolCallsRaw != 1 || inspection.ToolCallsProjected != 1 {
+				t.Fatalf("late output ref projector inspection = %#v", inspection)
+			}
+		}
+	}
+	for name, ok := range covered {
+		if !ok {
+			t.Fatalf("canonical projector fixture %q was not exercised", name)
+		}
+	}
+}
+
+func decodeGatewayCanonicalFixtureEvents(t *testing.T, fixture testkit.GoldenEdgeCaseFixture) []protocol.Event {
+	t.Helper()
+	events := make([]protocol.Event, 0, len(fixture.Events))
+	for i, body := range fixture.Events {
+		var event protocol.Event
+		if err := json.Unmarshal(body, &event); err != nil {
+			t.Fatalf("decode gateway fixture %s event %d: %v", fixture.Name, i, err)
+		}
+		events = append(events, event)
+	}
+	return events
 }
 
 func TestStoredSessionResumeKeepsLargeOutputRefPreviewAndWarnsMissingArtifact(t *testing.T) {
