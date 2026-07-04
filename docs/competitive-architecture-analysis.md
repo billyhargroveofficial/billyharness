@@ -1,5 +1,10 @@
 # Competitive Architecture Analysis
 
+Historical clean-room research note: this file is design pressure and source
+material, not current Billyharness truth or an implementation checklist. Verify
+durable rules against `docs/architecture.md`, `docs/architecture/`, and
+`docs/adr/`; put active work in `loop-develop/current-todo`.
+
 This document summarizes a clean-room comparison of Billyharness with Codex,
 OpenCode, and Claude Code. It extracts architecture ideas, contracts,
 invariants, UX patterns, and test strategies. It does not copy code.

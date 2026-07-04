@@ -1,5 +1,11 @@
 # Codex Research Roadmap
 
+Historical research note: this file is archived source material, not the
+current Billyharness backlog. The `Active Backlog` section below is legacy
+research output; use it only as design input after checking current canon in
+`docs/architecture.md`, `docs/architecture/`, and `docs/adr/`. Current
+actionable TODOs live in `loop-develop/current-todo`.
+
 This document records the Codex architecture research pass and turns it into a
 billyharness implementation plan. Active execution checklists now live under
 `loop-develop/current-todo`, and completed loop records live under

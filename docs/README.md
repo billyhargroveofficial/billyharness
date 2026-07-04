@@ -64,12 +64,13 @@ fields, or tool schemas, inspect the source until generated references exist.
 - [Research routing](research/README.md): canonical-vs-historical labels and
   cleanup policy for legacy research files.
 - [Codex research roadmap](codex-research-roadmap.md): legacy historical source
-  material only. It still contains `Active Backlog` P0/P1/P2 language; verify
-  against current canon and extract work into `loop-develop/current-todo`
-  before using it.
+  material only. It carries a historical banner and still contains legacy
+  `Active Backlog` P0/P1/P2 language; verify against current canon and extract
+  work into `loop-develop/current-todo` before using it.
 - [Competitive architecture analysis](competitive-architecture-analysis.md):
-  clean-room competitor source material and design pressure. Treat as
-  historical input, not current truth.
+  clean-room competitor source material and design pressure. It carries a
+  historical banner; treat it as input, not current truth or an implementation
+  checklist.
 
 ## Known Documentation Gaps
 

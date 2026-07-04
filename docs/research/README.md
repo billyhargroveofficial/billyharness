@@ -7,6 +7,8 @@ material. It is not architecture canon. Current architecture truth lives in
 
 Existing legacy research files still live at the top of `docs/` until a
 dedicated move/delete pass can update every link and metadata entry safely.
+They carry historical banners because some sections intentionally preserve
+stale roadmap or backlog language as source material.
 
 ## Historical Sources
 
@@ -15,7 +17,8 @@ dedicated move/delete pass can update every link and metadata entry safely.
   not treat it as the current implementation backlog.
 - [Competitive architecture analysis](../competitive-architecture-analysis.md):
   clean-room competitor source material and design pressure. Treat it as
-  historical input, not current Billyharness truth.
+  historical input, not current Billyharness truth or an implementation
+  checklist.
 
 ## Cleanup Policy
 
