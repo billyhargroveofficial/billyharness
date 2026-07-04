@@ -1747,6 +1747,48 @@ Billy asks for final verification.
   was inspected through the new route; proof is local route/client/CLI tests,
   race/full-suite verification, docs check, and rebuild.
 
+### 2026-07-04 - P0.14 redacted TUI/client debug snapshot
+
+- Completed P0.14 slice. `internal/clientux` now owns a frontend-neutral
+  `TUIDebugSnapshot` schema plus redaction/formatting helpers. The schema
+  captures local chat ID, hashed chat-title metadata, gateway session ID, last
+  gateway event sequence, runtime mode/settings, stream queue state, client UX
+  projector state, viewport and selection coordinates, transcript/export byte
+  counts and hashes, stale flags, block/cell counts, selected cell identity,
+  and diagnostic hints.
+- The TUI now gathers the snapshot in `internal/tui/debug_snapshot.go`.
+  `/debug` adds a redacted `DEBUG` info block, and the existing
+  `/status debug` compatibility path now renders the same structured snapshot
+  as `STATUS DEBUG`.
+- The debug surface avoids raw transcript/export/viewport/selection bodies.
+  User-visible content is represented as lengths and SHA-256 hashes; runtime
+  errors, projector errors, URLs, settings paths, bearer/API-token-like values,
+  and additional path/URL redaction inputs flow through `internal/secrets`.
+- Added focused coverage for shared snapshot redaction/formatting, `/debug`,
+  `/status debug`, command palette ordering, and wide/combining-character
+  selection debug state without selected text leakage.
+- Updated durable docs because the TUI/clientux debug contract and package
+  import boundary changed: `docs/architecture/tui-and-clientux.md`,
+  `docs/architecture.md`, and `agent-index/docs-manifest.json`. Checked
+  `docs/README.md`, `llms.txt`, `.agents/rules/README.md`, and
+  `.agents/rules/documentation.md`; no routing text changes were needed there.
+- Verification passed before commit:
+  `go test -count=1 ./internal/tui ./internal/clientux`;
+  `go test -count=1 ./internal/architecture`;
+  `go test -count=1 ./internal/tui ./internal/tui/transcript ./internal/tui/render ./internal/tui/selection ./internal/tui/runtimeclient ./internal/clientux ./internal/clientux/projector ./internal/toolrender`;
+  `go test -race -count=1 ./internal/tui ./internal/clientux`;
+  `jq . agent-index/docs-manifest.json >/dev/null`;
+  `git diff --check`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `350ff91 Add redacted TUI debug snapshot`
+  (`350ff912c5c00dfe99a908cbd7015cca71d14bb2`).
+- Push: `origin/main` updated from `85f8941` to `350ff91`.
+- Blockers/residual risk: no live operator incident was inspected through the
+  new command; proof is local TUI/clientux focused tests, wide/combining
+  selection coverage, architecture/docs checks, race/full-suite verification,
+  and rebuild.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
