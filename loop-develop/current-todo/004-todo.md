@@ -1,0 +1,1337 @@
+# 004 TODO - Production-Grade Agent Architecture, Stability, And Debuggability
+
+Status: current
+Created: 2026-07-04
+Owner loop: native Codex research loop
+
+## Request
+
+Run 12 native Codex subagents and review Billyharness against the standards of a
+serious agent project: architecture, stability, debugging, production
+operations, event traceability, replay, security, tool/MCP boundaries, tests,
+and documentation. Use internet research and clean-room comparison with local
+Codex, Claude Code, and OpenCode checkouts. Produce a large implementation TODO
+and a copy-ready Codex `/goal` prompt for a long loop-agent pass.
+
+This TODO is intentionally large. Work P0 first. Only start P1/P2 when P0 is
+green or when a smaller P1/P2 change is a direct prerequisite for a P0 fix.
+
+## Source Research Summary
+
+### Native Codex Subagents Launched
+
+All subagents were native Codex research workers. Competitor repositories were
+used only for clean-room architectural comparison: boundaries, event contracts,
+debug surfaces, test strategy, and UX patterns. Do not copy competitor source
+code into Billyharness.
+
+- Feynman: event log, trace replay, lifecycle validation, projector parity.
+- Nietzsche: gateway/session authority, undo/redo, run/cancel persistence.
+- Bohr: adversarial security pass across gateway, Telegram, MCP, checkpoints.
+- Hubble: native tools, web search, MCP schema/output settlement.
+- Harvey: long-running agent loop, streams, cancellation, input admission.
+- Hume: TUI/client UX debugging, transcript export, inspection commands.
+- Noether: Telegram adapter safety, owner model, restart/ack behavior.
+- Rawls: config, providers, dotenv persistence, runtime capability diagnostics.
+- Bacon: docs system, Stop hook docguard, manifest and history drift.
+- Descartes: production operations, deploy, doctor, incident recovery.
+- Pascal: CI, tests, fuzz, race, coverage, benchmarks, hygiene.
+- Hooke: macro architecture, package boundaries, gravity wells.
+
+### Local Verification Evidence
+
+Commands run during research:
+
+```sh
+git status --short
+git log -1 --oneline --decorate
+go test -coverprofile=/tmp/billyharness-004-cover.out ./...
+go run ./cmd/fast-agent-harness hygiene -repo /Users/billy/repos/billyharness -strict
+go test -count=1 ./internal/architecture
+go vet ./...
+git diff --check
+rg -n "TODO|FIXME|panic\\(|MustResolve|config\\.Default" --glob '*.go' --glob '*.md'
+```
+
+Observed state:
+
+- Branch: `main`.
+- Latest commit before this TODO: `9372558 Harden security diagnostics and docs loop`.
+- `origin/main...HEAD`: no ahead/behind at research start.
+- Full Go test suite passed.
+- Coverage: 73.4% total from `/tmp/billyharness-004-cover.out`.
+- Strict hygiene passed for tracked Go files.
+- Ignored runtime artifact observed: root `fast-agent-harness` binary, about
+  18.9 MiB. It is ignored, but `verify-local` should build outside repo root.
+- Architecture package test passed.
+- `go vet ./...` passed.
+- `git diff --check` passed before creating this TODO.
+- Current TODO directory was empty except `.gitkeep`; history contains
+  `001-todo.md`, `002-todo.md`, and `003-todo.md`.
+
+### Internet Research Signals
+
+Use these as design constraints, not copied implementation:
+
+- OpenAI Agents SDK:
+  https://developers.openai.com/api/docs/guides/agents
+  - Agents plan, call tools, collaborate, and keep enough state for multi-step
+    work.
+  - Use SDK-level patterns when the app owns orchestration, tool execution,
+    approvals, and state.
+  - Debugging and improvement should start from traces and evaluation loops.
+- LangGraph persistence:
+  https://docs.langchain.com/oss/python/langgraph/persistence
+  - Durable agents need thread-scoped checkpoints and cross-thread stores for
+    continuity, interruption recovery, failure recovery, time travel, and memory.
+- LangGraph time travel:
+  https://docs.langchain.com/oss/python/langgraph/use-time-travel
+  - Replay/fork should resume from a known checkpoint; work before the checkpoint
+    is already saved, work after the checkpoint re-executes.
+- OWASP LLM Top 10:
+  https://owasp.org/www-project-top-10-for-large-language-model-applications/
+  - Relevant risk buckets: prompt injection, insecure output handling,
+    sensitive information disclosure, insecure plugin design, excessive agency,
+    supply chain, and denial of service.
+- MCP Security Best Practices:
+  https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices
+  - Treat remote/local MCP servers as authority boundaries. Consent, SSRF
+    controls, least privilege, stdio restrictions, and audit trails matter.
+- OpenTelemetry GenAI observability:
+  https://opentelemetry.io/blog/2026/genai-observability/
+  - Agent observability should answer whether latency/failure came from the
+    model, a tool call, a retry loop, or streaming/runtime plumbing.
+
+### Clean-Room Competitor Signals
+
+Local checkouts inspected:
+
+- `/Users/billy/agent-research/codex`
+- `/Users/billy/agent-research/opencode-current`
+- `/Users/billy/agent-research/claude-code`
+
+High-level patterns worth matching:
+
+- Codex-style separation of protocol, core runtime, thread/session store,
+  sandboxing, hooks, skills, model providers, OTel, and UI/client layers.
+- OpenCode-style explicit agent modes, storage specs, scoped registries, and
+  durable session orientation.
+- Claude-style workflow-as-files and lifecycle hooks, with the warning that
+  hooks must be bounded and testable so they do not create infinite loops.
+- All serious systems need clear event contracts, replay/fork semantics,
+  inspectable state, and explicit permission boundaries.
+
+## Architecture Canon For This Loop
+
+- Durable JSONL events are the source of truth.
+- Live streams are progress/wake channels, not canonical history.
+- Replayers, projectors, exports, TUI, Telegram, and incident reports must
+  derive from the same validated event/replay contracts.
+- Gateway owns session identity, owner/scope checks, admission, persistence
+  ordering, and HTTP authority.
+- TUI and Telegram are clients of gateway authority, not separate policy owners.
+- MCP/tool descriptions, schemas, prompt text, and server metadata are untrusted
+  unless a local policy explicitly promotes them.
+- Security-sensitive failures must fail closed and leave redacted audit evidence.
+- Config diagnostics must describe the effective runtime binding, not just parse
+  a partial config shape.
+- Production must be inspectable by a single doctor/incident path before a human
+  starts grepping logs.
+- Active work stays in `loop-develop/current-todo`. Do not move this TODO to
+  history until Billy asks for final verification and the main chat verifies it.
+
+## P0 Milestone 1 - Fail-Closed Security And Authority
+
+Goal: close authority holes where browser-origin requests, Telegram users,
+remote MCP metadata, checkpoint artifacts, or permissive config can cause unsafe
+action or leak state.
+
+### P0.1 Protect gateway read routes from local-browser and DNS-rebinding leaks
+
+Finding: mutating routes have explicit checks, but GET/HEAD/OPTIONS read routes
+can still leak gateway state when the gateway trusts loopback too broadly. A
+local browser or DNS-rebinding page should not be able to read sessions,
+events, config status, MCP status, process summaries, or debug state.
+
+Target files:
+
+- `internal/gateway/gateway.go`
+- `internal/gateway/*auth*`
+- `internal/gateway/*http*`
+- `internal/config/*`
+- gateway route tests
+
+Checklist:
+
+- Inventory all `/v1/` read routes and mark which are safe unauthenticated.
+- Keep `/health` cheap and unauthenticated when safe.
+- Require bearer auth for state-bearing read routes when an auth token is
+  configured, including loopback callers.
+- Add Host and Origin checks for browser-reachable endpoints.
+- Add DNS rebinding tests: malicious Host, missing bearer, wrong bearer, correct
+  bearer, loopback dev-only exception if any.
+- Ensure rejections are redacted and observable.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/gateway
+go test -race -count=1 ./internal/gateway
+```
+
+### P0.2 Add Telegram operator/admin policy per command
+
+Finding: an allowlisted group can become an admin surface. Any member in an
+allowed chat may be able to run sensitive commands such as `/auth`, `/memory`,
+`/undo`, `/redo`, `/processes`, and `/config` unless command policy checks the
+actual operator user.
+
+Target files:
+
+- `internal/telegrambot/*`
+- `docs/architecture/telegram-and-operator-surfaces.md`
+- `.agents/rules/documentation.md` if recurring doc rules change
+
+Checklist:
+
+- Define command classes: public chat-safe, session-scoped, operator-only,
+  owner-only, secret-bearing.
+- Add `AllowedOperatorUserIDs` or equivalent runtime config.
+- Require private owner chat for secret-bearing commands by default.
+- Reject anonymous/userless group messages for operator-only commands unless an
+  explicit shared-mode policy says otherwise.
+- Make dry-run mode obey the same authorization boundaries for local mutations.
+- Add tests for group member, group admin/operator, private owner, anonymous
+  group sender, bot sender, and malformed sender.
+- Update Telegram architecture doc when semantics change.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/telegrambot
+go test -race -count=1 ./internal/telegrambot
+go test -count=1 ./...
+```
+
+### P0.3 Make secret-bearing Telegram auth fail closed
+
+Finding: Telegram dry-run deletion can make `/auth deepseek` look safe while the
+secret is still persisted. Deletion failure or dry-run deletion must not permit
+secret persistence in group contexts.
+
+Target files:
+
+- `internal/telegrambot/*auth*`
+- `internal/telegrambot/*runner*`
+- `internal/config/*`
+
+Checklist:
+
+- Tag secret-bearing commands centrally.
+- In non-private chats, require successful deletion before persistence, or ban
+  secret-bearing commands entirely.
+- In dry-run, simulate deletion failure for secret-bearing group commands unless
+  the command is private-owner safe.
+- Ensure all user-facing and log errors redact secrets.
+- Add tests proving no `.env`/auth store write happens after failed deletion.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/telegrambot
+rg -n "DEEPSEEK|auth deepseek|api[_-]?key" internal/telegrambot internal/config
+```
+
+### P0.4 Split MCP/tool agency risk beyond one coarse `RiskExternal`
+
+Finding: MCP calls are currently too coarse. Read-only MCP calls, network reads,
+filesystem writes, shell execution, and external mutations need different
+policy gates and audit messages.
+
+Target files:
+
+- `internal/tools/*`
+- `internal/mcp*`
+- `docs/architecture/tools-mcp-and-policy.md`
+- `docs/adr/0003-mcp-instructions-are-untrusted-metadata.md`
+
+Checklist:
+
+- Define tool risk classes: local-read, local-write, network-read,
+  network-write, execute, external-mutation, secret-access.
+- Preserve backward-compatible behavior for native safe tools.
+- For MCP tools, derive risk from server/tool allowlist policy, not from remote
+  description text alone.
+- Label remote MCP descriptions/schemas/instructions as untrusted in debug JSON
+  and model-facing output wrappers.
+- Require explicit allowlist or confirmation for side-effecting MCP tools.
+- Add malicious MCP tool description/schema tests.
+- Update docs/ADR only after code behavior is real.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/tools
+go test -race -count=1 ./internal/tools
+go test -count=1 ./...
+```
+
+### P0.5 Verify checkpoint restore artifacts at restore time
+
+Finding: undo/redo and checkpoint restore paths trust artifact paths/content too
+late. Restore must verify recorded hash, workspace root, and path constraints at
+the moment files are written back.
+
+Target files:
+
+- `internal/checkpoint*`
+- `internal/gateway/*checkpoint*`
+- `internal/eventlog/*`
+
+Checklist:
+
+- Record or locate SHA/root metadata for patch artifacts.
+- Before restore/redo, re-check artifact SHA, repo root, workspace root, and
+  symlink/path constraints.
+- Fail closed if artifact content or location drifted.
+- Emit redacted failure events that make replay explainable.
+- Add symlink, moved artifact, tampered artifact, and out-of-root tests.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/checkpoint ./internal/gateway
+go test -race -count=1 ./internal/checkpoint ./internal/gateway
+```
+
+### P0.6 Centralize redaction patterns for gateway and Telegram
+
+Finding: redaction coverage is scattered. Telegram URLs, URL userinfo, query
+secrets, provider keys, auth headers, and tool args need one shared redaction
+surface.
+
+Target files:
+
+- `internal/secrets/*`
+- `internal/gateway/*`
+- `internal/telegrambot/*`
+- `internal/tools/*`
+
+Checklist:
+
+- Move reusable redaction into `internal/secrets` if not already there.
+- Add URL userinfo and query-token redaction.
+- Use the same redactor in gateway errors, Telegram replies, transcript export,
+  incident bundles, and debug endpoints.
+- Add table tests with provider keys, bearer tokens, Telegram bot tokens, URLs,
+  Authorization headers, and MCP args.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/secrets ./internal/gateway ./internal/telegrambot
+```
+
+## P0 Milestone 2 - Durable Replay Truth And Persistence Ordering
+
+Goal: make every run/fork/undo/redo/replay/debug view explainable from durable
+events, with invalid events rejected before they become history.
+
+### P0.7 Validate protocol envelope and lifecycle before append
+
+Finding: gateway append paths can enrich/write before full envelope/lifecycle
+validation. Invalid events should not persist and then fail only during replay.
+
+Target files:
+
+- `internal/eventlog/*`
+- `internal/gateway/session*.go`
+- `internal/protocol/*`
+- `internal/trace/*`
+
+Checklist:
+
+- Find append paths that persist before strict validation.
+- Validate v1 nested envelopes before writing durable JSONL.
+- Preserve legacy import/replay mode explicitly where needed.
+- Bind `attempt_id` to `call_id` for tool lifecycle validation.
+- Add validation for run/turn/step/model lifecycle ordering.
+- Add tests for tool-result-before-call, attempt mismatch, turn without run,
+  open terminal state, malformed envelope, and legacy accepted mode.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/eventlog ./internal/gateway ./internal/trace
+go test -race -count=1 ./internal/eventlog ./internal/gateway
+```
+
+### P0.8 Make trace replay use the same strict event semantics as gateway replay
+
+Finding: trace replay and gateway replay do not enforce the same envelope
+semantics. Trace counters can be derived from outer event types while gateway
+requires nested v1 envelopes.
+
+Target files:
+
+- `internal/trace/trace.go`
+- `internal/gateway/session_inspect.go`
+- replay/trace tests
+
+Checklist:
+
+- Decide and document strict trace mode versus explicit legacy mode.
+- Make trace replay parse the canonical envelope and lifecycle fields.
+- Add JSON output that distinguishes raw legacy counts from validated v1 counts.
+- Add fixtures shared with gateway replay.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/trace ./internal/gateway
+```
+
+### P0.9 Replace fake projector parity with real reducer/projector parity
+
+Finding: current inspection increments raw/projected tool counters from the same
+event instead of running the actual `internal/clientux/projector` or TUI
+projector path.
+
+Target files:
+
+- `internal/gateway/session_inspect.go`
+- `internal/clientux/projector/*`
+- `internal/tui/*`
+- canonical fixtures
+
+Checklist:
+
+- Add a real inspection path that feeds events through the shared projector.
+- Compare raw lifecycle counts to projector-visible state.
+- Report mismatches with session id, seq range, event id, and projection hash.
+- Add one minimal protocol-edge fixture and one full agent-run canonical
+  fixture.
+- Use the fixture across gateway, TUI, Telegram/export, and trace inspection.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/clientux/projector ./internal/gateway ./internal/tui
+```
+
+### P0.10 Make undo/redo/run/cancel persistence fail closed
+
+Finding: undo/redo can mutate files before durable audit publication succeeds.
+Run and cancel can succeed to the caller while `saveSession` failure is only
+logged. Durable state must not be optional after externally visible action.
+
+Target files:
+
+- `internal/gateway/session*.go`
+- `internal/gateway/checkpoint*.go`
+- `internal/eventlog/*`
+
+Checklist:
+
+- Audit action order for undo, redo, run admission, run completion, cancel, and
+  fork.
+- Either persist before mutation when possible or add compensating rollback and
+  terminal failure events.
+- Return failure to clients when durable session save fails after a visible
+  state transition.
+- Add injected persistence failure tests for each path.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/gateway
+go test -race -count=1 ./internal/gateway
+```
+
+### P0.11 Harden admitted-input ledgers across gateway and Telegram
+
+Finding: corrupt `inputs.jsonl` can hide an otherwise loadable session, admitted
+inputs can be orphaned by preflight failure, and Telegram pending input ack
+state can be lost across restart.
+
+Target files:
+
+- `internal/gateway/input*.go`
+- `internal/gateway/session*.go`
+- `internal/telegrambot/*`
+
+Checklist:
+
+- Quarantine corrupt input ledger records instead of dropping the whole session
+  when the session event log is otherwise usable.
+- Mark preflight failures as terminal admitted-input states with replayable
+  failure evidence.
+- Compute concurrent run sequence under the run/admission lock.
+- Make Telegram startup reconcile pending inputs: either replay, terminally
+  fail, or re-ack with a durable gateway state.
+- Add restart tests for acked Telegram updates and pending gateway input ids.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/gateway ./internal/telegrambot
+go test -race -count=1 ./internal/gateway ./internal/telegrambot
+```
+
+### P0.12 Split snapshot readiness from replay readiness
+
+Finding: legacy snapshots can be marked offline replay ready without enough
+event stream material. A message snapshot is not the same as replayable event
+history.
+
+Target files:
+
+- `internal/gateway/session_import*`
+- `internal/gateway/session_inspect.go`
+- import/replay tests
+
+Checklist:
+
+- Introduce explicit readiness states such as `message_snapshot_ready` and
+  `event_replay_ready`.
+- Update inspect output and import messages.
+- Add tests for legacy snapshots, full event streams, and partial event streams.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/gateway
+```
+
+## P0 Milestone 3 - Operator Debuggability And Production Truth
+
+Goal: a bug report should become a small bundle of redacted facts, not a long
+manual archaeology session.
+
+### P0.13 Add live session inspect endpoint and CLI/client command
+
+Finding: inspection exists as internals, but operators need a supported live
+surface that returns redacted session health and replay status.
+
+Target files:
+
+- `internal/gateway/session_inspect.go`
+- `internal/gateway/gateway.go`
+- `internal/gatewayclient/*`
+- `internal/clientux/*`
+- CLI command wiring under `cmd/fast-agent-harness`
+
+Checklist:
+
+- Add or harden `GET /v1/sessions/{id}/inspect`.
+- Include session id, owner scope, seq range, lifecycle open/closed counts,
+  projector parity, output-ref status, input ledger status, and redacted errors.
+- Add gatewayclient method.
+- Add `sessions debug SESSION_ID` or equivalent CLI/client command.
+- Add JSON and human-readable output modes.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/gateway ./internal/gatewayclient ./internal/clientux
+go run ./cmd/fast-agent-harness sessions --help
+```
+
+### P0.14 Add a redacted "debug full" snapshot for TUI/client state
+
+Finding: TUI bugs need one command that explains local chat id, gateway session
+id, stream state, projector state, viewport/selection/export hints, and hashes
+without leaking secrets.
+
+Target files:
+
+- `internal/tui/*`
+- `internal/clientux/*`
+- `docs/architecture/tui-and-clientux.md`
+
+Checklist:
+
+- Design a compact debug snapshot schema.
+- Include gateway session id, local chat id, last seq, runtime mode, projector
+  state, stream queue, selection/viewport state, transcript hash, export target,
+  and stale/missing hints.
+- Redact all user/provider secrets.
+- Add command or hidden debug key path if appropriate.
+- Add tests for wide/combining characters in selection/debug state.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/tui ./internal/clientux
+```
+
+### P0.15 Promote transcript export into an incident-grade artifact
+
+Finding: transcript export exists, but needs metadata and warnings so it can be
+attached to issues without guessing source or replay quality.
+
+Target files:
+
+- `internal/tui/transcript_runtime.go`
+- `internal/clientux/*export*`
+- `docs/architecture/tui-and-clientux.md`
+
+Checklist:
+
+- Add export metadata header: source store, session id, seq range, model/profile,
+  runtime mode, export time, redaction mode, and warnings.
+- Support modes: messages, events, combined.
+- Quote paths and nested output refs safely.
+- Include warnings for partial replay, legacy snapshot, projector mismatch, and
+  stale diagnostics index.
+- Update docs if export behavior changes.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/tui ./internal/clientux
+```
+
+### P0.16 Capture production as a dated, redacted source of truth
+
+Finding: production runbooks still need verified facts from
+`root@82.23.163.16` before deploy/doctor semantics can be called solid.
+
+Target files:
+
+- `ops/` if present or create a small dated runbook there
+- `cmd/fast-agent-harness` doctor/service code
+- `internal/service*`
+- `docs/architecture/gateway-and-sessions.md` only if stable contract changes
+
+Checklist:
+
+- Inspect production over SSH when safe:
+  - `systemctl cat/show`;
+  - ExecStart;
+  - WorkingDirectory;
+  - EnvironmentFile;
+  - service user;
+  - restart policy;
+  - current commit;
+  - binary path and checksum;
+  - Go path/toolchain;
+  - `$BILLYHARNESS_HOME`;
+  - gateway bind/auth mode;
+  - log routing;
+  - `/health` result.
+- Store a dated redacted inventory under `ops/`, not `docs/`.
+- Centralize service names and managed unit definitions in repo-owned code or
+  data used by doctor/runbooks.
+- Keep secrets redacted.
+
+Verification:
+
+```sh
+git diff --check
+go test -count=1 ./...
+```
+
+### P0.17 Split liveness from readiness/deep doctor
+
+Finding: `/health` should stay cheap. A production-grade agent needs deeper
+readiness/doctor checks for config, auth, MCP/tool catalog, session store,
+binary provenance, and crash-loop symptoms.
+
+Target files:
+
+- `internal/gateway/*health*`
+- `internal/doctor*`
+- `cmd/fast-agent-harness`
+- `scripts/`
+
+Checklist:
+
+- Keep `/health` cheap and suitable for process liveness.
+- Add or harden `doctor`/readiness checks:
+  - effective config;
+  - auth configured when required;
+  - gateway bind address;
+  - MCP catalog/status;
+  - tool catalog;
+  - session store readability/writability;
+  - service unit metadata where applicable;
+  - recent journal crash-loop summary where applicable.
+- Add JSON output for automation.
+- Add production/local mode split.
+
+Verification:
+
+```sh
+go test -count=1 ./...
+go run ./cmd/fast-agent-harness doctor --help
+```
+
+## P1 Milestone 4 - Runtime, Tool, And Context Contracts
+
+### P1.1 Add a reusable defensive stream drain helper
+
+Finding: provider stream collectors can wedge when they drain events until close
+then wait on errors. Long runs need one helper that selects on events, errs, and
+context cancellation.
+
+Checklist:
+
+- Audit provider stream collectors and summary/compaction/web stream code.
+- Add helper with bounded shutdown semantics.
+- Add broken-provider tests: event channel never closes, err channel blocks,
+  context cancelled, error after partial events, and normal completion.
+- Replace `time.After` churn in long loops with reusable timers.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/agent ./internal/providers ./internal/tools
+go test -race -count=1 ./internal/agent ./internal/providers
+```
+
+### P1.2 Prevent dead HTTP/SSE clients from pinning handlers forever
+
+Finding: streaming handlers can wait unboundedly after a client disappears.
+
+Checklist:
+
+- Pass request context through stream writer loops.
+- Add bounded final drain.
+- Add tests with a client disconnect during active stream.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/gateway
+go test -race -count=1 ./internal/gateway
+```
+
+### P1.3 Fix effective dotenv persistence for provider credentials
+
+Finding: saved DeepSeek credentials can be invisible when `FAST_AGENT_ENV_FILE`
+is set because save path and effective load path diverge.
+
+Checklist:
+
+- Resolve the effective writable dotenv path.
+- If explicit env-file is read-only or unsupported for writes, fail loudly with
+  the active path.
+- Add tests for default home env, explicit env file, missing env file, read-only
+  env file, and no persisted key after failed write.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/config ./internal/gateway ./internal/telegrambot
+```
+
+### P1.4 Either implement profile instruction fragments or hide inert metadata
+
+Finding: profile instruction metadata is exposed but not routed into prompt
+loading. Inert knobs create false confidence.
+
+Checklist:
+
+- Decide: implement deterministic fragment loading or remove/hide fields.
+- If implementing, enforce safe paths, stable order, missing-file behavior, and
+  redacted diagnostics.
+- Add tests for fragment order, path traversal, missing file, and prompt output.
+- Update config/provider docs if behavior changes.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/config ./internal/agent
+```
+
+### P1.5 Make provider capability diagnostics use runtime binding
+
+Finding: diagnostics can reflect partial config rather than canonical runtime
+host/shared snapshot.
+
+Checklist:
+
+- Route capability diagnostics through the same runtime binding used by runs.
+- Add strict runtime doctor mode for unsupported MCP, missing env vars,
+  unavailable allowlisted servers, and provider/model mismatch.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/config ./internal/gateway ./internal/agent
+```
+
+### P1.6 Make native web search capability metadata honest
+
+Finding: web search output should explicitly report whether freshness and
+domain filters were enforced or only post-filtered/ignored.
+
+Checklist:
+
+- Add metadata fields for freshness support, domain enforcement, post-filtering,
+  skipped filters, and result count before/after filter when available.
+- Add tests for freshness, domain filter, unsupported filter, and redacted output.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/tools
+```
+
+### P1.7 Separate native strict schema validation from external MCP JSON Schema
+
+Finding: native strict schema rules can reject valid MCP JSON Schema keywords
+such as `pattern`, `minimum`, or `oneOf`.
+
+Checklist:
+
+- Define native schema subset separately from external MCP schema acceptance.
+- Preserve unsupported external schema metadata without crashing discovery.
+- Add tests for common MCP JSON Schema keywords.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/tools
+```
+
+### P1.8 Preserve MCP structured output metadata
+
+Finding: MCP structured output can be rendered to plain text and wrapped as a
+generic result, losing `structuredContent`, content types, server/tool metadata,
+and call ids.
+
+Checklist:
+
+- Preserve structured MCP output in event payloads and debug JSON.
+- Keep human transcript compact through projection, not by losing raw data.
+- Add tests for text, image/resource-like content, structured output, and errors.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/tools ./internal/eventlog ./internal/clientux/projector
+```
+
+### P1.9 Add output-ref settlement validation before terminal tool events
+
+Finding: tool lifecycle should not terminally succeed while output refs are
+unsettled, missing, or non-portable.
+
+Checklist:
+
+- Validate output refs before terminal tool events.
+- Prefer relative refs under session/trace bundle roots.
+- Add moved-bundle replay tests.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/tools ./internal/eventlog ./internal/trace
+```
+
+### P1.10 Choose and enforce a context epoch/drift model
+
+Finding: memory/AGENTS/MCP context can drift during long sessions. The system
+needs either session-locked context with visible drift warnings or a controlled
+refresh/reconcile model.
+
+Checklist:
+
+- Define context epoch fields: AGENTS hash, memory hash if available, MCP catalog
+  hash, config hash, docs index hash.
+- Record epoch at run admission.
+- Warn on drift before follow-up runs.
+- Do not silently mix incompatible context in replay/fork.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/gateway ./internal/agent ./internal/config
+```
+
+## P1 Milestone 5 - Verification Infrastructure
+
+### P1.11 Add tracked CI workflow for local gates
+
+Finding: there is no tracked workflow file for the checks Billy already runs
+locally.
+
+Checklist:
+
+- Add CI for:
+  - `git diff --check`;
+  - `go test ./...`;
+  - `go vet ./...`;
+  - focused race suite;
+  - strict hygiene;
+  - govulncheck;
+  - benchmark smoke if runtime is acceptable.
+- Add scheduled/manual full race job if PR runtime is too high.
+- Keep CI secrets-free and production-independent.
+
+Verification:
+
+```sh
+git diff --check
+go test -count=1 ./...
+```
+
+### P1.12 Make `verify-local` build outside the repo root
+
+Finding: `verify-local` can leave an ignored root `fast-agent-harness` binary.
+Ignored does not mean ideal for hygiene.
+
+Checklist:
+
+- Build into `/tmp/billyharness-verify/fast-agent-harness` or another temp dir.
+- Optionally make strict hygiene warn/fail on repo-root runtime artifacts unless
+  explicitly allowed.
+- Add script tests if there is a script test harness.
+
+Verification:
+
+```sh
+scripts/verify-local.sh --skip-bench
+test ! -f ./fast-agent-harness
+```
+
+### P1.13 Add fuzz/property targets for protocol and security-critical parsers
+
+Finding: there are no tracked `Fuzz*` targets.
+
+Checklist:
+
+- Seed fuzzers from canonical event fixtures.
+- Candidate fuzz targets:
+  - v1 envelope parsing;
+  - event lifecycle validation;
+  - session import;
+  - tool schema validation;
+  - redaction;
+  - URL normalization/security checks;
+  - checkpoint restore planning.
+
+Verification:
+
+```sh
+go test -run '^$' -fuzz=Fuzz -fuzztime=30s ./internal/eventlog ./internal/tools ./internal/secrets
+```
+
+### P1.14 Add benchmark baselines and regression gates
+
+Finding: bench smoke proves wiring but not regression. `BENCHTIME=1x` is useful
+for smoke only.
+
+Checklist:
+
+- Store host-keyed baseline artifacts outside generated docs.
+- Add benchstat comparison script.
+- Gate only large regressions to avoid noisy local failures.
+- Track alloc regressions for replay/projector/tool paths.
+
+Verification:
+
+```sh
+go test -bench=. -benchmem ./internal/bench ./internal/eventlog ./internal/clientux/projector
+```
+
+### P1.15 Raise coverage in blind spots with deterministic tests
+
+Current total coverage is good for a young solo project, but review identified
+low or zero-coverage zones worth hardening.
+
+Targets:
+
+- `internal/gatewaybase`
+- `internal/gatewayclient`
+- `internal/tui/runtimeclient`
+- CLI dispatch under `cmd/fast-agent-harness`
+- checkpoint restore helpers
+- service/doctor dispatch
+
+Verification:
+
+```sh
+go test -coverprofile=/tmp/billyharness-coverage-after.out ./...
+go tool cover -func=/tmp/billyharness-coverage-after.out | tail -n 20
+```
+
+### P1.16 Strengthen package-boundary tests beyond direct forbidden imports
+
+Checklist:
+
+- Add positive assertions for required imports/ownership.
+- Ensure cmd packages remain adapters.
+- Ensure testkit/fakeprovider packages are only imported by tests or explicit
+  internal test support.
+- Keep generated docs or package map in sync if boundaries change.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/architecture
+```
+
+## P1 Milestone 6 - Documentation And Docguard Hardening
+
+### P1.17 Fix Stop-hook docguard coverage gaps
+
+Finding: docguard can miss staged-only whitespace/active-work additions because
+some checks use plain `git diff`. Deletions may also be under-checked.
+
+Target files:
+
+- `.agents/rules/stop-hook-docguard.md`
+- hook implementation/config files under `.codex` or repo hook scripts if any
+- docguard tests if present
+
+Checklist:
+
+- Use `git diff --check HEAD --` for turn-end whitespace checks.
+- Scan added lines from `git diff HEAD --unified=0`.
+- Include deletion/rename cases where relevant.
+- Add focused hook tests for staged-only changes, unstaged changes, docs active
+  TODO language, loop-develop active TODO language, deletion, and rename.
+
+Verification:
+
+```sh
+git diff --check
+go test -count=1 ./...
+```
+
+### P1.18 Reconcile docs that still describe implemented hook/docguard as future
+
+Finding: docs disagree on Stop hook status. Some docs still say planned/future
+after the hook was installed and smoke-tested.
+
+Checklist:
+
+- Read:
+  - `docs/documentation-system.md`;
+  - `.agents/rules/README.md`;
+  - `.agents/rules/stop-hook-docguard.md`;
+  - `AGENTS.md`.
+- Update only durable status/routing facts.
+- Do not put active TODOs or smoke evidence in `docs/`.
+
+Verification:
+
+```sh
+rg -n "planned|future|not implemented|Stop hook|docguard" AGENTS.md .agents docs loop-develop
+git diff --check
+```
+
+### P1.19 Fix loop history metadata drift
+
+Finding: `loop-develop/history/003-todo.md` still opens with `Status: current`.
+History files should not look active.
+
+Checklist:
+
+- Update history metadata to completed/verified if evidence supports it.
+- Append final commit/push evidence if missing.
+- Do not rewrite the historical goal prompt except to label it historical if
+  needed.
+
+Verification:
+
+```sh
+sed -n '1,40p' loop-develop/history/003-todo.md
+git diff --check
+```
+
+### P1.20 Refresh manifest/source metadata or clarify semantics
+
+Finding: `agent-index/docs-manifest.json` source commit may be stale compared
+with current head, and generated repo map may be a manual seed.
+
+Checklist:
+
+- Decide whether `source_commit` means generation commit or current docs source.
+- Refresh manifest if tooling exists.
+- Otherwise rename/clarify semantics in metadata/docs.
+- Mark `agent-index/generated/repo-map.md` as generated only if it is actually
+  generated; otherwise make its seed/manual status explicit.
+
+Verification:
+
+```sh
+jq . agent-index/docs-manifest.json >/dev/null
+git diff --check
+```
+
+### P1.21 Keep README/docs research files clearly historical
+
+Finding: legacy research files can look like current instructions. Current
+architecture truth should route through docs indexes and architecture files.
+
+Checklist:
+
+- Ensure `docs/README.md` clearly labels legacy research.
+- Keep `docs/research/README.md` clear that active work belongs in
+  `loop-develop/current-todo`.
+- Do not delete source material unless stable rules are extracted and links are
+  updated.
+
+Verification:
+
+```sh
+rg -n "research|legacy|current truth|active work|loop-develop" docs/README.md docs/research/README.md
+git diff --check
+```
+
+## P2 Milestone 7 - Package Decomposition And Scale Control
+
+Goal: keep Billyharness small and inspectable as features accumulate.
+
+### P2.1 Reduce gateway gravity
+
+Finding: gateway is a gravity well. Files near hygiene limits are a warning:
+`internal/gateway/gateway.go` and adjacent session files should not become the
+only place where every policy lives.
+
+Checklist:
+
+- Split only around real contracts:
+  - route registration;
+  - session store;
+  - admission/input ledger;
+  - inspect/debug;
+  - auth/owner;
+  - checkpoint/undo.
+- Keep public API narrow.
+- Add package-boundary tests as packages split.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/gateway ./internal/architecture
+go run ./cmd/fast-agent-harness hygiene -repo /Users/billy/repos/billyharness -strict
+```
+
+### P2.2 Shrink tool runtime seams without hiding laws
+
+Finding: `internal/tools/tools.go` is near the source-file limit and centralizes
+native tools, MCP, policy, schemas, output refs, and display rules.
+
+Checklist:
+
+- Extract only when a contract is clear:
+  - schema validation;
+  - risk/policy;
+  - MCP adapter;
+  - native tool registry;
+  - output-ref settlement;
+  - display/projection helpers.
+- Add "tool laws" tests: start/result/error ordering, output-ref settlement,
+  redaction, risk policy, and replay.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/tools ./internal/eventlog ./internal/clientux/projector
+```
+
+### P2.3 Centralize compact tool display policy
+
+Finding: TUI, Telegram, exports, and debug views should share display policy
+while preserving raw evidence.
+
+Checklist:
+
+- Define compact display rules once.
+- Ensure Telegram/TUI/export use projector/display layer rather than custom
+  string truncation.
+- Keep raw event payload accessible in debug/incident surfaces.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/clientux ./internal/tui ./internal/telegrambot
+```
+
+### P2.4 Split client packages by behavior, not UI taste
+
+Checklist:
+
+- Keep gateway client, projector, transcript/export, TUI runtime, and Telegram
+  adapter boundaries explicit.
+- Do not duplicate owner/policy logic in clients.
+- Add shared tests from canonical fixtures.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/clientux ./internal/tui ./internal/telegrambot ./internal/gatewayclient
+```
+
+### P2.5 Build a rebuildable session search/index UX
+
+Checklist:
+
+- Make diagnostics index status visible: rows, build time, stale flag, missing
+  flag, last error.
+- Add `--rebuild-if-missing` or `--refresh` where useful.
+- Ensure index can be rebuilt from event source of truth.
+
+Verification:
+
+```sh
+go test -count=1 ./internal/gateway ./internal/clientux
+```
+
+### P2.6 Add production deploy/rollback scripts only after doctor is trustworthy
+
+Checklist:
+
+- Define deploy model: source checkout rebuild or release dir/symlink/archive.
+- Capture predeploy facts.
+- Restart service.
+- Run readiness/doctor gate.
+- Provide rollback commands.
+- Embed build provenance; avoid static-only `version=0.1.0` style.
+
+Verification:
+
+```sh
+git diff --check
+go test -count=1 ./...
+```
+
+## Global Verification For The Implementation Loop
+
+Run focused checks after each slice, then broader checks before the final
+commit/push of a slice.
+
+Minimum every-slice checks:
+
+```sh
+git diff --check
+go test -count=1 ./internal/architecture
+```
+
+When gateway/session/eventlog changes:
+
+```sh
+go test -count=1 ./internal/eventlog ./internal/gateway ./internal/trace
+go test -race -count=1 ./internal/eventlog ./internal/gateway
+```
+
+When tools/MCP/web changes:
+
+```sh
+go test -count=1 ./internal/tools ./internal/eventlog ./internal/clientux/projector
+go test -race -count=1 ./internal/tools
+```
+
+When Telegram changes:
+
+```sh
+go test -count=1 ./internal/telegrambot
+go test -race -count=1 ./internal/telegrambot
+```
+
+When TUI/client UX changes:
+
+```sh
+go test -count=1 ./internal/tui ./internal/clientux ./internal/gatewayclient
+```
+
+Before declaring the whole TODO done:
+
+```sh
+go test -count=1 ./...
+go vet ./...
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+go test -race -count=1 ./internal/eventlog ./internal/gateway ./internal/telegrambot ./internal/tools ./internal/tui ./internal/clientux/projector
+go run ./cmd/fast-agent-harness hygiene -repo /Users/billy/repos/billyharness -strict
+git diff --check
+```
+
+If runtime behavior changes, also rebuild:
+
+```sh
+go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness
+```
+
+## Evidence Log
+
+Implementation agent: append dated evidence here as work completes. Keep it
+short but concrete: command, result, commit hash, push state, and unresolved
+blockers. Do not move this TODO to history; the main chat will do that after
+Billy asks for final verification.
+
+## Copy-Ready Codex Goal Prompt
+
+```text
+/goal
+You are in /Users/billy/repos/billyharness.
+
+Read AGENTS.md first. Then read loop-develop/current-todo/004-todo.md. This is
+the active implementation TODO. Work it as a long reliability/security/debug
+hardening loop for Billyharness.
+
+Mission:
+Make Billyharness closer to a production-grade agent harness: fail-closed
+authority boundaries, replayable event truth, useful debugging/incident
+surfaces, safer Telegram/MCP/tool behavior, stronger config/runtime diagnostics,
+and better verification infrastructure.
+
+Rules:
+- Work P0 first. Do not spend serious time on P1/P2 until P0 is green, unless a
+  P1/P2 item is a direct prerequisite for a P0 fix.
+- Keep the durable event log as source of truth.
+- Do not copy competitor source code.
+- Do not move active TODOs, goal prompts, or evidence into docs/.
+- Update durable docs in the same change only when behavior/contracts actually
+  change.
+- If no docs change is needed for a code slice, say which docs you checked and
+  why they stayed unchanged.
+- Keep loop-develop/current-todo/004-todo.md updated with evidence as slices are
+  completed.
+- Do not move 004-todo.md to history; the main chat will verify and archive it.
+- Never leave unverified behavior described as current truth.
+
+Recommended execution order:
+1. Start with P0.1 gateway read-route auth/Host/Origin hardening.
+2. Then P0.2 and P0.3 Telegram operator/secret-bearing command boundaries.
+3. Then P0.4 MCP/tool risk split and untrusted metadata handling.
+4. Then P0.5/P0.6 checkpoint artifact verification and centralized redaction.
+5. Then P0.7 through P0.12 replay/lifecycle/persistence ordering.
+6. Then P0.13 through P0.17 operator debug and production truth.
+7. Only after P0 is green, continue into P1 verification/runtime/docguard work.
+
+After every completed task or coherent slice:
+1. Run focused verification for the touched packages.
+2. Run git diff --check.
+3. Update the Evidence Log in loop-develop/current-todo/004-todo.md.
+4. Stage the relevant files.
+5. Commit with a clear message.
+6. Push the branch to origin.
+
+Do not commit failing or unverified work. If a slice is too large, split it into
+smaller commits, each with its own verification evidence and push.
+
+Before saying the whole goal is complete, run:
+
+go test -count=1 ./...
+go vet ./...
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+go test -race -count=1 ./internal/eventlog ./internal/gateway ./internal/telegrambot ./internal/tools ./internal/tui ./internal/clientux/projector
+go run ./cmd/fast-agent-harness hygiene -repo /Users/billy/repos/billyharness -strict
+git diff --check
+
+If runtime behavior changed, also run:
+
+go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness
+
+Final response must include:
+- completed slices;
+- tests/commands run;
+- docs checked/updated;
+- commit hashes and push state;
+- remaining blockers or residual risk.
+```
