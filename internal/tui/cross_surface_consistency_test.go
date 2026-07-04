@@ -78,9 +78,10 @@ func goldenStatusTraceEvents() []protocol.Event {
 			CostUSD:  0.003,
 		}},
 		{Seq: 8, Type: protocol.EventToolCallFinished, CallID: "call-web", Data: protocol.ToolResult{
-			CallID:  "call-web",
-			Name:    "web_fetch",
-			Content: "compact web summary",
+			CallID:    "call-web",
+			Name:      "web_fetch",
+			Content:   "compact web summary",
+			OutputRef: "/tmp/web-fetch.txt",
 			Metadata: map[string]any{
 				"tool_summary_input_tokens":          int64(200),
 				"tool_summary_output_tokens":         int64(25),
@@ -139,6 +140,12 @@ func assertGoldenStatusSnapshot(t *testing.T, snapshot uxprojector.Snapshot) {
 		snapshot.HelperAPICalls != 1 || snapshot.HelperCostUSD != 0.003 {
 		t.Fatalf("projector helper usage drifted: %#v", snapshot)
 	}
+	web := snapshot.ToolsByCallID["call-web"]
+	if web.Status != "finished" || web.Compact == nil ||
+		web.Compact.OutputRef != "/tmp/web-fetch.txt" ||
+		web.Compact.Status != protocol.StepStatusCompleted {
+		t.Fatalf("projector output-ref tool drifted: %#v", web)
+	}
 	if len(snapshot.ContextThresholds) != 1 || snapshot.ContextThresholds[0].Percent != 60 ||
 		snapshot.ContextThresholds[0].Stage != "after_tool_results" {
 		t.Fatalf("projector context thresholds drifted: %#v", snapshot.ContextThresholds)
@@ -156,7 +163,7 @@ func assertTelegramGoldenStatus(t *testing.T, renderer *telegrambot.Renderer, pr
 		t.Fatalf("telegram renderer drifted: %#v", renderer)
 	}
 	progressText := telegramGoldenProgressText(progress)
-	for _, want := range []string{"web_fetch", "context 60%"} {
+	for _, want := range []string{"web_fetch", "ref web-fetch.txt", "context 60%"} {
 		if !strings.Contains(progressText, want) {
 			t.Fatalf("telegram progress missing %q:\n%s", want, progressText)
 		}
@@ -186,7 +193,7 @@ func assertTUIGoldenStatus(t *testing.T, model Model) {
 		}
 	}
 	transcriptText := tuiGoldenTranscriptText(model)
-	for _, want := range []string{"Before tool.", "After tool final answer.", "compact web summary", "CONTEXT"} {
+	for _, want := range []string{"Before tool.", "After tool final answer.", "compact web summary", "ref web-fetch.txt", "CONTEXT"} {
 		if !strings.Contains(transcriptText, want) {
 			t.Fatalf("tui transcript missing %q:\n%s", want, transcriptText)
 		}
@@ -204,7 +211,7 @@ func assertContextGoldenStatus(t *testing.T, resp gatewayapi.SessionContextRespo
 		resp.OutputRefs.Count != 1 {
 		t.Fatalf("context response usage drifted: %#v", resp.Usage)
 	}
-	for _, want := range []string{"active context:", "thresholds:", "activity: model_calls=1 tools=1", "provider usage: input=420 output=80 reasoning=12", "provider cache: hit=200 miss=220", "helper usage: websum=200", "sumapi=100", "helper API calls=1", "helper API cost=$0.003000", "output refs:"} {
+	for _, want := range []string{"active context:", "thresholds:", "activity: model_calls=1 tools=1", "provider usage: input=420 output=80 reasoning=12", "provider cache: hit=200 miss=220", "helper usage: websum=200", "sumapi=100", "helper API calls=1", "helper API cost=$0.003000", "output refs: 1"} {
 		if !strings.Contains(formatted, want) {
 			t.Fatalf("formatted context missing %q:\n%s", want, formatted)
 		}
