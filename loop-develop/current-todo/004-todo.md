@@ -2206,6 +2206,33 @@ Billy asks for final verification.
   MCP gateway handlers, output-ref settlement, and display/policy laws remain
   candidates for smaller future contracts.
 
+### 2026-07-04 - P2.3 shared output-ref evidence rendering
+
+- Completed a narrow P2.3 slice. Moved TUI transcript output-ref raw-copy
+  evidence formatting into `internal/toolrender.OutputRefRawCopy`, beside the
+  existing shared `OutputRefLine` display policy.
+- TUI transcript projection now reuses `toolrender.OutputRefRawCopy` and
+  `toolrender.DecodeOutputRef` instead of owning duplicate output-ref decode
+  and raw-copy helpers.
+- Added focused `toolrender` coverage proving output-ref raw copy preserves
+  tool name, full output ref, ref id, bytes, sha256, truncated state, preview,
+  and fallback behavior.
+- Updated `docs/architecture.md` so the `internal/toolrender` package
+  responsibility includes output-ref evidence lines. Import boundaries did not
+  change.
+- Verification passed:
+  `gofmt -w internal/toolrender/toolrender.go internal/toolrender/toolrender_test.go internal/tui/transcript/projector.go`;
+  `go test -count=1 ./internal/clientux ./internal/tui ./internal/telegrambot ./internal/toolrender ./internal/architecture`;
+  `git diff --check`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `c30e916 Centralize output ref rendering evidence`
+  (`c30e9162532c975197230d6bb491e6f3be12e1df`).
+- Push: `origin/main` updated from `730b451` to `c30e916`.
+- Blockers/residual risk: compact display policy is better centralized for
+  output-ref evidence, but broader progress/status summaries and TUI-local
+  batch grouping still have client-specific presentation code.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
