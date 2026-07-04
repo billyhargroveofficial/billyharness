@@ -2155,6 +2155,31 @@ Billy asks for final verification.
   material; future move/delete cleanup should update links and metadata in the
   same change.
 
+### 2026-07-04 - P2.1 gateway route/status handler split
+
+- Completed a narrow P2.1 slice. Moved gateway route registration into
+  `internal/gateway/routes.go` and the small health/readiness/auth/config/tool/
+  MCP/managed-process handlers into `internal/gateway/status_routes.go`, while
+  leaving session/run/persistence behavior in `gateway.go`.
+- `internal/gateway/gateway.go` dropped from 1505 LOC to 1362 LOC, and strict
+  hygiene no longer reports it as a large source-file exception.
+- Updated `docs/architecture.md` by removing the stale
+  `internal/gateway/gateway.go` file-size exception. Package ownership and
+  import boundaries did not change, so no package-map rule changed.
+- Verification passed:
+  `gofmt -w internal/gateway/gateway.go internal/gateway/routes.go internal/gateway/status_routes.go`;
+  `go test -count=1 ./internal/gateway ./internal/architecture`;
+  `git diff --check`;
+  `go run ./cmd/fast-agent-harness hygiene -repo /Users/billy/repos/billyharness -strict`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `caeb428 Split gateway route handlers`
+  (`caeb428462dc281780ce9c2d462692db1716e985`).
+- Push: `origin/main` updated from `1cd77e6` to `caeb428`.
+- Blockers/residual risk: this is a file-level split only, not a deeper
+  package decomposition. Gateway session/run admission and persistence code
+  still need future smaller-contract extraction.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
