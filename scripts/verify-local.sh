@@ -6,6 +6,8 @@ repo_root="$(CDPATH= cd -- "$script_dir/.." && pwd)"
 cd "$repo_root"
 
 go_bin="${GO_BIN:-go}"
+verify_out_dir="${BILLYHARNESS_VERIFY_OUT_DIR:-/tmp/billyharness-verify}"
+verify_bin="$verify_out_dir/fast-agent-harness"
 full_race=0
 skip_bench=0
 
@@ -21,7 +23,7 @@ Runs the local Billyharness verification gate:
   focused race packages
   optional full race with --full-race
   govulncheck
-  go build ./cmd/fast-agent-harness
+  go build -o ${BILLYHARNESS_VERIFY_OUT_DIR:-/tmp/billyharness-verify}/fast-agent-harness ./cmd/fast-agent-harness
   strict hygiene
   non-mutating benchmark smoke
 USAGE
@@ -85,7 +87,8 @@ else
 	summary+=("skip 0s full race tests (pass --full-race)")
 fi
 run_step "govulncheck" "$go_bin" run golang.org/x/vuln/cmd/govulncheck@latest ./...
-run_step "binary rebuild" "$go_bin" build ./cmd/fast-agent-harness
+run_step "prepare verify output dir" mkdir -p "$verify_out_dir"
+run_step "binary rebuild" "$go_bin" build -o "$verify_bin" ./cmd/fast-agent-harness
 run_step "strict hygiene" "$go_bin" run ./cmd/fast-agent-harness hygiene -repo "$repo_root" -strict
 if [[ "$skip_bench" -eq 1 ]]; then
 	summary+=("skip 0s bench smoke (--skip-bench)")
