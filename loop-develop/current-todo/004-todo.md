@@ -1707,6 +1707,46 @@ Billy asks for final verification.
   verification, synthetic legacy/partial/complete replay tests, docs check, and
   rebuild.
 
+### 2026-07-04 - P0.13 live session inspect endpoint and CLI debug surface
+
+- Completed P0.13 slice. Gateway now exposes
+  `GET /v1/sessions/{id}/inspect` behind normal session read authorization. The
+  route prefers durable store inspection and returns a warning rather than
+  claiming durable replay truth when a live session exists only in memory.
+- Stored-session inspection now includes owner scope, `inputs.jsonl` manifest
+  and file status, input-ledger validation/state counts, and lifecycle
+  open/closed counts for runs, turns, steps, and tool attempts. The existing
+  projector parity, seq range, output-ref status, readiness, and redacted error
+  surfaces are preserved.
+- Added `gatewayclient.SessionInspectRaw` and CLI
+  `sessions debug [-gateway URL] [-json] SESSION_ID` for live inspection. The
+  existing `sessions inspect [-dir DIR]` remains the offline store path, and
+  `sessions --help` now lists the live debug command.
+- Added coverage for the live gateway route, gatewayclient fetch method, CLI
+  human/JSON debug output, help output, input ledger status, lifecycle counts,
+  owner scope, and projector parity.
+- Updated durable docs because gateway route behavior, client/CLI surface, and
+  operator debug output changed: `docs/architecture/gateway-and-sessions.md`
+  and `ops/doctor-and-diagnostics.md`. Checked
+  `agent-index/docs-manifest.json`; no manifest edit was needed because both
+  affected docs already had `2026-07-04` review metadata and routing did not
+  change.
+- Verification passed before commit:
+  `go test -count=1 ./internal/gateway ./internal/gatewayclient ./internal/clientux ./cmd/fast-agent-harness`;
+  `go run ./cmd/fast-agent-harness sessions --help`;
+  `jq . agent-index/docs-manifest.json >/dev/null`;
+  `go test -count=1 ./internal/architecture`;
+  `git diff --check`;
+  `go test -race -count=1 ./internal/gateway ./internal/gatewayclient`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `7a5ea7f Add live session inspect surface`
+  (`7a5ea7f2b96730af8c33a463fb1d1653c99ed08d`).
+- Push: `origin/main` updated from `2e0b12e` to `7a5ea7f`.
+- Blockers/residual risk: no production gateway or historical session corpus
+  was inspected through the new route; proof is local route/client/CLI tests,
+  race/full-suite verification, docs check, and rebuild.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
