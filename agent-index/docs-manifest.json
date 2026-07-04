@@ -38,7 +38,7 @@
       "owner": "billy",
       "source_of_truth": true,
       "generated": false,
-      "last_reviewed": "2026-07-03",
+      "last_reviewed": "2026-07-04",
       "trust_level": "hand_curated",
       "read_when": [
         "needing the project overview or basic usage",
@@ -336,7 +336,7 @@
       "owner": "billy",
       "source_of_truth": true,
       "generated": false,
-      "last_reviewed": "2026-07-03",
+      "last_reviewed": "2026-07-04",
       "trust_level": "hand_curated_from_current_worktree",
       "read_when": [
         "changing gateway auth, mutation trust, or browser/loopback security",
@@ -777,7 +777,7 @@
       "owner": "billy",
       "source_of_truth": true,
       "generated": false,
-      "last_reviewed": "2026-07-03",
+      "last_reviewed": "2026-07-04",
       "trust_level": "hand_curated_from_code_help_and_readme",
       "read_when": [
         "operating production",

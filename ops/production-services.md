@@ -167,10 +167,16 @@ allowed user, or explicit `-allow-all-chats`. Treat `-allow-all-chats` as unsafe
 unless the operator intentionally wants the bot to respond everywhere the token
 has access.
 
+Sensitive commands such as `/config`, `/processes`, `/memory`, `/undo`, `/redo`,
+and `/auth` also require an identified operator user. Configure that with
+`-operator-user` or `BILLYHARNESS_TELEGRAM_OPERATOR_USER_IDS`; do not rely on
+group allowlisting as operator authority.
+
 Relevant flags checked from the command source include `-token`, `-bot-api-base`,
-`-allow-chat`, `-allow-user`, `-require-allowlist`, `-allow-all-chats`,
-`-send-enabled`, `-dry-run`, `-poll-timeout-sec`, `-edit-interval-ms`,
-`-model`, `-profile`, `-reasoning`, `-access-mode`, and `-max-rounds`.
+`-allow-chat`, `-allow-user`, `-operator-user`, `-require-allowlist`,
+`-allow-all-chats`, `-send-enabled`, `-dry-run`, `-poll-timeout-sec`,
+`-edit-interval-ms`, `-model`, `-profile`, `-reasoning`, `-access-mode`, and
+`-max-rounds`.
 
 ## Restart Triage
 

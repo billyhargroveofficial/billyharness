@@ -326,14 +326,15 @@ Telegram commands are:
 - `/status`: show chat settings and active runtime model when available.
 - `/model`, `/profile`, `/reasoning`, `/mode`, `/access`: update chat-level run
   defaults.
-- `/mcp`, `/config`, `/context`, `/processes`, `/toolview`, `/tools`: show
-  operator and runtime status views.
-- `/memory`: run the local memory management command surface for the active
-  profile.
-- `/diff`, `/undo`, `/redo`: preview and apply gateway session turn-change
-  restore operations.
-- `/auth`, `/auth deepseek ...`, `/auth codex`: inspect auth status, persist a
-  DeepSeek API key through the gateway, or import local Codex OAuth.
+- `/mcp`, `/config`, `/processes`: operator-only runtime status views.
+- `/context`, `/toolview`, `/tools`: session-scoped runtime views.
+- `/memory`: operator-only local memory management for the active profile.
+- `/diff`: preview the latest gateway session turn-change restore operation.
+- `/undo`, `/redo`: operator-only gateway session turn-change restore
+  operations.
+- `/auth`, `/auth deepseek ...`, `/auth codex`: owner-only auth status,
+  DeepSeek API-key persistence, or local Codex OAuth import. Secret-bearing
+  `/auth deepseek ...` requires private owner chat.
 - `/cancel`: cancel the current local/gateway run for the chat.
 
 Command policy is intentionally layered:

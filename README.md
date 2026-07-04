@@ -112,6 +112,9 @@ The TUI credential menu is available through `/auth`. It has two setup actions:
 - `/auth codex` imports an existing Codex CLI ChatGPT/OAuth login into
   `$BILLYHARNESS_HOME/auth/codex.json`.
 
+When exposed through Telegram, `/auth` is owner-only and secret-bearing
+`/auth deepseek ...` is accepted only in a private owner chat.
+
 The same actions are exposed through the gateway API:
 
 ```bash

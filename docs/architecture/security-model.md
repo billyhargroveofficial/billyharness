@@ -179,18 +179,20 @@ sending is enabled and dry-run is false, the CLI requires at least one allowed
 chat ID, one allowed user ID, or the explicit allow-all option. Runtime
 admission accepts a message only when `AllowAllChats` is set, the chat/user is
 allowlisted, or no allowlist is configured and `RequireAllowlist` is false.
+Admission allowlists are not operator authority. Operator-only commands require
+an identified non-bot sender in `AllowedOperatorUserIDs`, falling back to
+`AllowedUserIDs` only when no operator set is configured.
 
 Secret-bearing Telegram auth commands have extra safety in the current
 worktree. `/auth deepseek ...` in
 [internal/telegrambot/commands.go](../../internal/telegrambot/commands.go)
-must delete the source Telegram message before persisting the key; if Telegram
-does not provide a deletable message ID or deletion fails, the key is not
-saved. Save errors are redacted against the submitted key before being sent
-back to chat. `/auth codex` imports local Codex OAuth through the gateway and
-does not accept a token pasted into Telegram. In dry-run mode, delete is logged
-by [internal/telegrambot/delivery.go](../../internal/telegrambot/delivery.go)
-rather than sent to Telegram, so dry-run verifies control flow rather than
-real chat deletion.
+is accepted only in a private owner chat and must delete the source Telegram
+message before persisting the key; if Telegram does not provide a deletable
+message ID or deletion fails, the key is not saved. Save errors are redacted
+against the submitted key before being sent back to chat. Secret-bearing group
+commands are rejected before local persistence, including in dry-run mode.
+`/auth codex` imports local Codex OAuth through the gateway and does not accept
+a token pasted into Telegram.
 
 Telegram owner scope is attached from
 [internal/telegrambot/session_owner.go](../../internal/telegrambot/session_owner.go):

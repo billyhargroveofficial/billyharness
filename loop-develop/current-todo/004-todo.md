@@ -1299,8 +1299,9 @@ Billy asks for final verification.
   attempts.
 - Updated durable docs because Telegram command authorization, CLI/env
   configuration, and secret-bearing auth behavior changed:
-  `docs/architecture/telegram-and-operator-surfaces.md` and
-  `agent-index/docs-manifest.json`.
+  `docs/architecture/telegram-and-operator-surfaces.md`,
+  `docs/architecture/security-model.md`, `README.md`,
+  `ops/production-services.md`, and `agent-index/docs-manifest.json`.
 - Checked docs routing/index files for this slice: `llms.txt`,
   `.agents/rules/README.md`, `docs/README.md`, and
   `docs/documentation-system.md`. No changes were needed there because existing
@@ -1308,11 +1309,16 @@ Billy asks for final verification.
   document and active implementation evidence to this TODO.
 - Verification passed before commit:
   `go test -count=1 ./internal/telegrambot`;
+  `go test -race -count=1 ./internal/telegrambot`;
   `go test -count=1 ./internal/architecture`;
   `go test -count=1 ./...`;
   `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`;
   `git diff --check`.
-- Commit/push: recorded in the final response for this remediation slice.
+- Commit: `e117663 Harden Telegram operator command policy`.
+- Push: `origin/main` already points at `e117663`.
+- Blockers/residual risk: no live Telegram Bot API or production service probe
+  was run for this slice; current proof is unit/race/full-suite/rebuild plus
+  docs review.
 
 ## Copy-Ready Codex Goal Prompt
 
