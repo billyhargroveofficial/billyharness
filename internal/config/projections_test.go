@@ -235,14 +235,16 @@ func TestConfigProjectionsReturnDefensiveCopies(t *testing.T) {
 		MCPConfigFiles:      []string{"mcp.toml"},
 		MCPAllowedServers:   []string{"github"},
 		MCPServers: []MCPServer{{
-			Name:           "github",
-			Args:           []string{"serve"},
-			Env:            map[string]string{"TOKEN": "secret"},
-			EnvVars:        []string{"TOKEN"},
-			HTTPHeaders:    map[string]string{"Authorization": "Bearer token"},
-			EnvHTTPHeaders: map[string]string{"X-Token": "TOKEN"},
-			EnabledTools:   []string{"search"},
-			DisabledTools:  []string{"delete"},
+			Name:            "github",
+			Args:            []string{"serve"},
+			Env:             map[string]string{"TOKEN": "secret"},
+			EnvVars:         []string{"TOKEN"},
+			HTTPHeaders:     map[string]string{"Authorization": "Bearer token"},
+			EnvHTTPHeaders:  map[string]string{"X-Token": "TOKEN"},
+			EnabledTools:    []string{"search"},
+			DisabledTools:   []string{"delete"},
+			DefaultToolRisk: "network_read",
+			ToolRisks:       map[string]string{"delete": "external_mutation"},
 		}},
 	}
 
@@ -263,6 +265,7 @@ func TestConfigProjectionsReturnDefensiveCopies(t *testing.T) {
 	mcp.Servers[0].EnvHTTPHeaders["X-Token"] = "OTHER_TOKEN"
 	mcp.Servers[0].EnabledTools[0] = "other"
 	mcp.Servers[0].DisabledTools[0] = "other"
+	mcp.Servers[0].ToolRisks["delete"] = "local_read"
 
 	if cfg.WorkspaceRoots[0] != "/repo" || cfg.ProjectDocFallbacks[0] != "README.md" {
 		t.Fatalf("tool projection mutated config: %#v", cfg)
@@ -276,7 +279,9 @@ func TestConfigProjectionsReturnDefensiveCopies(t *testing.T) {
 		server.HTTPHeaders["Authorization"] != "Bearer token" ||
 		server.EnvHTTPHeaders["X-Token"] != "TOKEN" ||
 		server.EnabledTools[0] != "search" ||
-		server.DisabledTools[0] != "delete" {
+		server.DisabledTools[0] != "delete" ||
+		server.DefaultToolRisk != "network_read" ||
+		server.ToolRisks["delete"] != "external_mutation" {
 		t.Fatalf("MCP projection mutated config: %#v", cfg)
 	}
 }

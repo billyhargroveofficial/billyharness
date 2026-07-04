@@ -14,11 +14,17 @@ const (
 type Risk string
 
 const (
-	RiskReadOnly Risk = "read_only"
-	RiskNetwork  Risk = "network"
-	RiskWrite    Risk = "write"
-	RiskExecute  Risk = "execute"
-	RiskExternal Risk = "external"
+	RiskReadOnly         Risk = "read_only"
+	RiskNetwork          Risk = "network"
+	RiskWrite            Risk = "write"
+	RiskExecute          Risk = "execute"
+	RiskExternal         Risk = "external"
+	RiskLocalRead        Risk = "local_read"
+	RiskLocalWrite       Risk = "local_write"
+	RiskNetworkRead      Risk = "network_read"
+	RiskNetworkWrite     Risk = "network_write"
+	RiskExternalMutation Risk = "external_mutation"
+	RiskSecretAccess     Risk = "secret_access"
 )
 
 type Message struct {

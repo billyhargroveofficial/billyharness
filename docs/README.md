@@ -49,8 +49,8 @@ fields, or tool schemas, inspect the source until generated references exist.
 - [ADR 0002](adr/0002-gateway-owns-session-authority.md): the gateway owns
   session ownership, access checks, and client-scope authority.
 - [ADR 0003](adr/0003-mcp-instructions-are-untrusted-metadata.md): MCP
-  initialize instructions stay metadata-only unless operator policy promotes
-  them.
+  instructions and tool metadata stay untrusted unless local operator policy
+  promotes or classifies them.
 - [ADR 0006](adr/0006-telegram-is-a-gateway-client.md): Telegram is a scoped
   gateway client, not a gateway/runtime peer.
 - [ADR 0007](adr/0007-local-gateway-mutating-routes-require-explicit-trust.md):

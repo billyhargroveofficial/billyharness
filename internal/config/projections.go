@@ -300,6 +300,7 @@ func cloneMCPServers(in []MCPServer) []MCPServer {
 		server.EnvHTTPHeaders = cloneStringMap(server.EnvHTTPHeaders)
 		server.EnabledTools = cloneStrings(server.EnabledTools)
 		server.DisabledTools = cloneStrings(server.DisabledTools)
+		server.ToolRisks = cloneStringMap(server.ToolRisks)
 		out = append(out, server)
 	}
 	return out

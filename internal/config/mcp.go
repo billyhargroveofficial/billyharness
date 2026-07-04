@@ -28,6 +28,8 @@ type MCPServer struct {
 	Required                 bool
 	EnabledTools             []string
 	DisabledTools            []string
+	DefaultToolRisk          string
+	ToolRisks                map[string]string
 	DefaultToolsApprovalMode string
 }
 
@@ -51,6 +53,8 @@ type codexMCPServer struct {
 	Required                 bool              `toml:"required"`
 	EnabledTools             []string          `toml:"enabled_tools"`
 	DisabledTools            []string          `toml:"disabled_tools"`
+	DefaultToolRisk          string            `toml:"default_tool_risk"`
+	ToolRisks                map[string]string `toml:"tool_risks"`
 	DefaultToolsApprovalMode string            `toml:"default_tools_approval_mode"`
 }
 
@@ -259,13 +263,13 @@ func (s codexMCPServer) validate(name string) error {
 		if s.BearerTokenEnvVar != "" || len(s.HTTPHeaders) > 0 || len(s.EnvHTTPHeaders) > 0 {
 			return fmt.Errorf("mcp_servers.%s: HTTP fields are not supported for stdio transport", name)
 		}
-		return nil
+		return validateMCPToolRisks(name, s.DefaultToolRisk, s.ToolRisks)
 	}
 	if s.URL != "" {
 		if len(s.Args) > 0 || len(s.Env) > 0 || len(s.EnvVars) > 0 || s.CWD != "" {
 			return fmt.Errorf("mcp_servers.%s: stdio fields are not supported for streamable HTTP transport", name)
 		}
-		return nil
+		return validateMCPToolRisks(name, s.DefaultToolRisk, s.ToolRisks)
 	}
 	return fmt.Errorf("mcp_servers.%s: command or url required", name)
 }
@@ -301,6 +305,8 @@ func (s codexMCPServer) toConfig(name string) MCPServer {
 		Required:                 s.Required,
 		EnabledTools:             append([]string(nil), s.EnabledTools...),
 		DisabledTools:            append([]string(nil), s.DisabledTools...),
+		DefaultToolRisk:          normalizeMCPToolRisk(s.DefaultToolRisk),
+		ToolRisks:                normalizeMCPToolRiskMap(s.ToolRisks),
 		DefaultToolsApprovalMode: s.DefaultToolsApprovalMode,
 	}
 }
@@ -310,4 +316,64 @@ func (s codexMCPServer) unsupportedReason() string {
 		return ""
 	}
 	return "streamable HTTP MCP is not implemented in billyharness yet; use stdio MCP or remove the url server"
+}
+
+func validateMCPToolRisks(serverName, defaultRisk string, risks map[string]string) error {
+	if strings.TrimSpace(defaultRisk) != "" && normalizeMCPToolRisk(defaultRisk) == "" {
+		return fmt.Errorf("mcp_servers.%s: unsupported default_tool_risk %q", serverName, defaultRisk)
+	}
+	for tool, risk := range risks {
+		if strings.TrimSpace(tool) == "" {
+			return fmt.Errorf("mcp_servers.%s: tool_risks contains an empty tool name", serverName)
+		}
+		if normalizeMCPToolRisk(risk) == "" {
+			return fmt.Errorf("mcp_servers.%s: unsupported tool_risks.%s value %q", serverName, tool, risk)
+		}
+	}
+	return nil
+}
+
+func normalizeMCPToolRiskMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for tool, risk := range in {
+		tool = strings.TrimSpace(tool)
+		if tool == "" {
+			continue
+		}
+		if normalized := normalizeMCPToolRisk(risk); normalized != "" {
+			out[tool] = normalized
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func normalizeMCPToolRisk(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "-", "_")
+	switch value {
+	case "":
+		return ""
+	case "read", "readonly", "read_only", "local_read":
+		return "local_read"
+	case "network", "network_read", "net_read":
+		return "network_read"
+	case "write", "local_write":
+		return "local_write"
+	case "network_write", "net_write":
+		return "network_write"
+	case "exec", "execute":
+		return "execute"
+	case "external", "external_mutation", "mutation":
+		return "external_mutation"
+	case "secret", "secret_access", "secrets":
+		return "secret_access"
+	default:
+		return ""
+	}
 }

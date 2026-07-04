@@ -18,12 +18,14 @@ const (
 )
 
 type Candidate struct {
-	Spec      protocol.ToolSpec
-	Source    string
-	Namespace string
-	Server    string
-	CallTool  string
-	CallName  string
+	Spec          protocol.ToolSpec
+	Source        string
+	Namespace     string
+	Server        string
+	CallTool      string
+	CallName      string
+	RiskSource    string
+	MetadataTrust string
 }
 
 type Query struct {
@@ -50,8 +52,13 @@ type Item struct {
 	CallTool            string          `json:"call_tool"`
 	CallName            string          `json:"call_name,omitempty"`
 	Risk                protocol.Risk   `json:"risk,omitempty"`
+	RiskClass           protocol.Risk   `json:"risk_class,omitempty"`
+	RiskSource          string          `json:"risk_source,omitempty"`
+	MetadataTrust       string          `json:"metadata_trust,omitempty"`
+	DescriptionTrust    string          `json:"description_trust,omitempty"`
 	Description         string          `json:"description,omitempty"`
 	InputSchema         json.RawMessage `json:"input_schema,omitempty"`
+	InputSchemaTrust    string          `json:"input_schema_trust,omitempty"`
 	SchemaOmittedReason string          `json:"schema_omitted,omitempty"`
 }
 
@@ -147,7 +154,7 @@ func Search(candidates []Candidate, q Query) Results {
 		if namespaceFilter != "" && !NamespaceMatches(item, namespaceFilter) {
 			continue
 		}
-		if riskFilter != "" && candidate.Spec.Risk != riskFilter {
+		if riskFilter != "" && candidate.Spec.Risk != riskFilter && RiskClass(candidate.Spec.Risk) != RiskClass(riskFilter) {
 			continue
 		}
 		haystack := strings.ToLower(candidate.Spec.Name + " " + candidate.Spec.Description + " " + item.Server + " " + item.Namespace + " " + string(candidate.Spec.Risk) + " " + item.Source)
@@ -161,8 +168,15 @@ func Search(candidates []Candidate, q Query) Results {
 		}
 		item.Description = truncate(oneLine(candidate.Spec.Description), 240)
 		item.Risk = candidate.Spec.Risk
+		item.RiskClass = RiskClass(candidate.Spec.Risk)
+		item.RiskSource = candidate.RiskSource
+		item.MetadataTrust = candidate.MetadataTrust
+		item.DescriptionTrust = candidate.MetadataTrust
 		if q.IncludeSchema {
 			AddSchemaWithinBudget(&item, candidate.Spec.Parameters, &metrics)
+			if len(item.InputSchema) > 0 {
+				item.InputSchemaTrust = candidate.MetadataTrust
+			}
 		}
 		items = append(items, item)
 		metrics.Returned = len(items)
@@ -206,16 +220,41 @@ func NormalizeRiskFilter(value string) protocol.Risk {
 		return ""
 	case "read", "readonly", "read_only":
 		return protocol.RiskReadOnly
+	case "local_read":
+		return protocol.RiskLocalRead
 	case "network":
 		return protocol.RiskNetwork
+	case "network_read", "net_read":
+		return protocol.RiskNetworkRead
 	case "write":
 		return protocol.RiskWrite
+	case "local_write":
+		return protocol.RiskLocalWrite
+	case "network_write", "net_write":
+		return protocol.RiskNetworkWrite
 	case "exec", "execute":
 		return protocol.RiskExecute
 	case "external", "mcp":
 		return protocol.RiskExternal
+	case "external_mutation", "mutation":
+		return protocol.RiskExternalMutation
+	case "secret", "secret_access", "secrets":
+		return protocol.RiskSecretAccess
 	default:
 		return protocol.Risk(value)
+	}
+}
+
+func RiskClass(risk protocol.Risk) protocol.Risk {
+	switch risk {
+	case protocol.RiskReadOnly:
+		return protocol.RiskLocalRead
+	case protocol.RiskNetwork:
+		return protocol.RiskNetworkRead
+	case protocol.RiskWrite:
+		return protocol.RiskLocalWrite
+	default:
+		return risk
 	}
 }
 

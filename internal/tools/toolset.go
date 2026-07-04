@@ -38,21 +38,25 @@ type mcpStatusSnapshot struct {
 }
 
 type mcpToolSnapshot struct {
-	Name         string        `json:"name"`
-	Description  string        `json:"description,omitempty"`
-	Risk         protocol.Risk `json:"risk,omitempty"`
-	SchemaSHA256 string        `json:"schema_sha256,omitempty"`
+	Name          string        `json:"name"`
+	Description   string        `json:"description,omitempty"`
+	Risk          protocol.Risk `json:"risk,omitempty"`
+	RiskSource    string        `json:"risk_source,omitempty"`
+	MetadataTrust string        `json:"metadata_trust,omitempty"`
+	SchemaSHA256  string        `json:"schema_sha256,omitempty"`
 }
 
 type mcpServerSettingsSnapshot struct {
-	Name      string   `json:"name"`
-	Enabled   bool     `json:"enabled"`
-	Required  bool     `json:"required,omitempty"`
-	Transport string   `json:"transport,omitempty"`
-	Command   string   `json:"command,omitempty"`
-	URLSet    bool     `json:"url_set,omitempty"`
-	ToolsOn   []string `json:"enabled_tools,omitempty"`
-	ToolsOff  []string `json:"disabled_tools,omitempty"`
+	Name        string            `json:"name"`
+	Enabled     bool              `json:"enabled"`
+	Required    bool              `json:"required,omitempty"`
+	Transport   string            `json:"transport,omitempty"`
+	Command     string            `json:"command,omitempty"`
+	URLSet      bool              `json:"url_set,omitempty"`
+	ToolsOn     []string          `json:"enabled_tools,omitempty"`
+	ToolsOff    []string          `json:"disabled_tools,omitempty"`
+	DefaultRisk string            `json:"default_tool_risk,omitempty"`
+	ToolRisks   map[string]string `json:"tool_risks,omitempty"`
 }
 
 type mcpSettingsHashSnapshot struct {
@@ -171,6 +175,17 @@ func cloneTool(tool Tool) Tool {
 	return tool
 }
 
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
 func cloneMCPCatalogState(state mcpCatalogState) mcpCatalogState {
 	state.Collisions = append([]string(nil), state.Collisions...)
 	return state
@@ -233,10 +248,12 @@ func (r *Registry) mcpSnapshotHash() string {
 		tool := mcpTools[name]
 		hash := sha256.Sum256(tool.Spec.Parameters)
 		payload.Tools = append(payload.Tools, mcpToolSnapshot{
-			Name:         tool.Spec.Name,
-			Description:  tool.Spec.Description,
-			Risk:         tool.Spec.Risk,
-			SchemaSHA256: hex.EncodeToString(hash[:]),
+			Name:          tool.Spec.Name,
+			Description:   tool.Spec.Description,
+			Risk:          tool.Spec.Risk,
+			RiskSource:    tool.mcpPolicy.RiskSource,
+			MetadataTrust: tool.mcpPolicy.MetadataTrust,
+			SchemaSHA256:  hex.EncodeToString(hash[:]),
 		})
 	}
 	statuses := r.MCPStatuses()
@@ -281,17 +298,20 @@ func mcpSettingsSnapshot(settings config.MCPSettings) mcpSettingsHashSnapshot {
 		}
 		on := append([]string(nil), server.EnabledTools...)
 		off := append([]string(nil), server.DisabledTools...)
+		risks := cloneStringMap(server.ToolRisks)
 		sort.Strings(on)
 		sort.Strings(off)
 		payload.Servers = append(payload.Servers, mcpServerSettingsSnapshot{
-			Name:      server.Name,
-			Enabled:   server.Enabled,
-			Required:  server.Required,
-			Transport: transport,
-			Command:   filepath.Base(server.Command),
-			URLSet:    strings.TrimSpace(server.URL) != "",
-			ToolsOn:   on,
-			ToolsOff:  off,
+			Name:        server.Name,
+			Enabled:     server.Enabled,
+			Required:    server.Required,
+			Transport:   transport,
+			Command:     filepath.Base(server.Command),
+			URLSet:      strings.TrimSpace(server.URL) != "",
+			ToolsOn:     on,
+			ToolsOff:    off,
+			DefaultRisk: server.DefaultToolRisk,
+			ToolRisks:   risks,
 		})
 	}
 	sort.Slice(payload.Servers, func(i, j int) bool {

@@ -146,7 +146,17 @@ every model request.
 Use `tool_search` with `query`, `server`, `namespace`, `risk`, and capped
 `include_schema` when the model needs a specific native or MCP tool. Discovery
 responses include `model_visible_tools.kind=static_gateway_tools` and
-`mcp_catalog.kind=dynamic_mcp_catalog` to make the boundary explicit.
+`mcp_catalog.kind=dynamic_mcp_catalog` to make the boundary explicit. MCP
+descriptions, schemas, and initialize instructions are labeled as untrusted
+server metadata.
+
+MCP tool risk is local policy, not server self-attestation. Use
+`default_tool_risk` or `tool_risks = { tool = "network_read" }` in
+`$BILLYHARNESS_HOME/mcp.config.toml` to classify MCP tools as `local_read`,
+`local_write`, `network_read`, `network_write`, `execute`,
+`external_mutation`, or `secret_access`. Side-effecting MCP tools also require
+their original MCP tool name in `enabled_tools` before `mcp_call` will run
+them.
 
 ## Hooks
 

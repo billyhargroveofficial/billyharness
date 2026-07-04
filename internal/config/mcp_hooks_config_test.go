@@ -24,6 +24,8 @@ tool_timeout_sec = 2.0
 required = true
 enabled_tools = ["echo", "env"]
 disabled_tools = ["env"]
+default_tool_risk = "network-read"
+tool_risks = { echo = "local-read", env = "secret-access" }
 default_tools_approval_mode = "prompt"
 `), 0o600); err != nil {
 		t.Fatal(err)
@@ -51,6 +53,24 @@ default_tools_approval_mode = "prompt"
 	}
 	if !server.Required || strings.Join(server.EnabledTools, ",") != "echo,env" || strings.Join(server.DisabledTools, ",") != "env" {
 		t.Fatalf("filters = %#v", server)
+	}
+	if server.DefaultToolRisk != "network_read" || server.ToolRisks["echo"] != "local_read" || server.ToolRisks["env"] != "secret_access" {
+		t.Fatalf("tool risks = %#v", server)
+	}
+}
+
+func TestLoadMCPServersRejectsUnknownToolRisk(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "bad-risk.toml")
+	if err := os.WriteFile(path, []byte(`
+[mcp_servers.fake]
+command = "python3"
+tool_risks = { echo = "whatever_the_server_said" }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadMCPServers([]string{path}); err == nil || !strings.Contains(err.Error(), "unsupported tool_risks.echo value") {
+		t.Fatalf("expected unsupported tool risk error, got %v", err)
 	}
 }
 

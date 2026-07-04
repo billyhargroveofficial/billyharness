@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -55,8 +56,7 @@ func (r *Registry) policyDecisionForRisk(name string, risk protocol.Risk) Policy
 	}
 	switch decision.AccessMode {
 	case config.AccessModePlan:
-		switch risk {
-		case protocol.RiskWrite, protocol.RiskExecute, protocol.RiskExternal:
+		if !riskAllowedInPlanMode(risk) {
 			decision.RequiresApproval = true
 			decision.Decision = "deny"
 			decision.Source = "access_mode"
@@ -64,8 +64,7 @@ func (r *Registry) policyDecisionForRisk(name string, risk protocol.Risk) Policy
 			return decision
 		}
 	case config.AccessModeGuarded:
-		switch risk {
-		case protocol.RiskWrite, protocol.RiskExecute:
+		if riskDeniedInGuardedMode(risk) {
 			decision.RequiresApproval = true
 			decision.Decision = "deny"
 			decision.Source = "access_mode"
@@ -73,8 +72,8 @@ func (r *Registry) policyDecisionForRisk(name string, risk protocol.Risk) Policy
 			return decision
 		}
 	}
-	switch risk {
-	case protocol.RiskWrite, protocol.RiskExecute:
+	switch {
+	case riskRequiresDangerousApproval(risk):
 		decision.RequiresApproval = true
 		if r == nil || !r.toolPolicy.AutoApproveDangerous {
 			decision.Decision = "deny"
@@ -84,11 +83,55 @@ func (r *Registry) policyDecisionForRisk(name string, risk protocol.Risk) Policy
 		}
 		decision.Source = "config"
 		decision.Reason = "auto_approve_dangerous"
-	case protocol.RiskExternal:
+	case risk == protocol.RiskExternal:
 		decision.RequiresApproval = true
 		decision.Reason = "external_tool_allowed_by_existing_policy"
 	}
 	return decision
+}
+
+func riskAllowedInPlanMode(risk protocol.Risk) bool {
+	switch riskClass(risk) {
+	case protocol.RiskLocalRead, protocol.RiskNetworkRead:
+		return true
+	default:
+		return false
+	}
+}
+
+func riskDeniedInGuardedMode(risk protocol.Risk) bool {
+	switch riskClass(risk) {
+	case protocol.RiskLocalWrite, protocol.RiskNetworkWrite, protocol.RiskExecute, protocol.RiskExternalMutation, protocol.RiskSecretAccess:
+		return true
+	default:
+		return false
+	}
+}
+
+func riskRequiresDangerousApproval(risk protocol.Risk) bool {
+	switch riskClass(risk) {
+	case protocol.RiskLocalWrite, protocol.RiskNetworkWrite, protocol.RiskExecute, protocol.RiskExternalMutation, protocol.RiskSecretAccess:
+		return true
+	default:
+		return false
+	}
+}
+
+func riskClass(risk protocol.Risk) protocol.Risk {
+	switch risk {
+	case protocol.RiskReadOnly:
+		return protocol.RiskLocalRead
+	case protocol.RiskNetwork:
+		return protocol.RiskNetworkRead
+	case protocol.RiskWrite:
+		return protocol.RiskLocalWrite
+	case protocol.RiskLocalRead, protocol.RiskLocalWrite, protocol.RiskNetworkRead, protocol.RiskNetworkWrite, protocol.RiskExecute, protocol.RiskExternalMutation, protocol.RiskSecretAccess:
+		return risk
+	case protocol.RiskExternal:
+		return protocol.RiskExternal
+	default:
+		return risk
+	}
 }
 
 func (d PolicyDecision) Allowed() bool {
@@ -103,6 +146,9 @@ func (d PolicyDecision) Metadata() map[string]any {
 	}
 	if d.KnownRisk {
 		metadata["risk"] = d.Risk
+		if class := riskClass(d.Risk); class != "" && class != d.Risk {
+			metadata["risk_class"] = class
+		}
 	}
 	if d.AccessMode != "" {
 		metadata["access_mode"] = d.AccessMode
@@ -111,7 +157,7 @@ func (d PolicyDecision) Metadata() map[string]any {
 }
 
 func DangerousToolDisabledMessage() string {
-	return "tool disabled; set FAST_AGENT_AUTO_APPROVE_DANGEROUS=true or unset FAST_AGENT_AUTO_APPROVE_DANGEROUS to enable write/execute tools"
+	return "tool disabled; set FAST_AGENT_AUTO_APPROVE_DANGEROUS=true or unset FAST_AGENT_AUTO_APPROVE_DANGEROUS to enable write/execute/side-effecting tools"
 }
 
 func PolicyDeniedMessage(decision PolicyDecision) string {
@@ -124,7 +170,9 @@ func PolicyDeniedMessage(decision PolicyDecision) string {
 	case "plan_mode_read_only":
 		return "tool disabled in plan mode; switch access_mode out of plan to use write/execute/external tools"
 	case "guarded_mode_dangerous_tools_disabled":
-		return "tool disabled in guarded mode; switch access_mode=build to enable write/execute tools"
+		return "tool disabled in guarded mode; switch access_mode=build to enable write/execute/side-effecting tools"
+	case "mcp_side_effect_requires_allowlist":
+		return "MCP tool disabled; side-effecting MCP tools require enabled_tools allowlisting in MCP config"
 	default:
 		return DangerousToolDisabledMessage()
 	}
@@ -136,4 +184,52 @@ func (r *Registry) checkPolicy(tool Tool) (PolicyDecision, error) {
 		return decision, nil
 	}
 	return decision, errors.New(PolicyDeniedMessage(decision))
+}
+
+func (r *Registry) checkMCPTargetPolicy(tool Tool) (PolicyDecision, error) {
+	decision := r.policyDecisionForRisk(tool.Spec.Name, tool.Spec.Risk)
+	if decision.Allowed() && riskRequiresDangerousApproval(tool.Spec.Risk) && !tool.mcpPolicy.SideEffectAllowlisted {
+		decision.RequiresApproval = true
+		decision.Decision = "deny"
+		decision.Source = "mcp_config"
+		decision.Reason = "mcp_side_effect_requires_allowlist"
+	}
+	if decision.Allowed() {
+		return decision, nil
+	}
+	return decision, errors.New(PolicyDeniedMessage(decision))
+}
+
+func addMCPTargetPolicyMetadata(metadata map[string]any, tool Tool, decision PolicyDecision) map[string]any {
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	for key, value := range decision.Metadata() {
+		metadata[key] = value
+	}
+	if class := riskClass(tool.Spec.Risk); class != "" {
+		metadata["risk_class"] = class
+	}
+	if tool.mcpPolicy.ServerName != "" {
+		metadata["mcp_server"] = tool.mcpPolicy.ServerName
+	}
+	if tool.mcpPolicy.OriginalName != "" {
+		metadata["mcp_tool"] = tool.mcpPolicy.OriginalName
+	}
+	if tool.mcpPolicy.RiskSource != "" {
+		metadata["mcp_risk_source"] = tool.mcpPolicy.RiskSource
+	} else {
+		metadata["mcp_risk_source"] = "unclassified_mcp_catalog"
+	}
+	metadataTrust := tool.mcpPolicy.MetadataTrust
+	if metadataTrust == "" {
+		metadataTrust = mcpclient.MCPMetadataTrustUntrusted
+	}
+	metadata["mcp_metadata_trust"] = metadataTrust
+	metadata["mcp_description_trust"] = metadataTrust
+	metadata["mcp_input_schema_trust"] = metadataTrust
+	if riskRequiresDangerousApproval(tool.Spec.Risk) {
+		metadata["mcp_side_effect_allowlisted"] = tool.mcpPolicy.SideEffectAllowlisted
+	}
+	return metadata
 }

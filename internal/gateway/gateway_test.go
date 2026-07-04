@@ -945,7 +945,7 @@ func TestGatewayToolsExposeMCPRegistry(t *testing.T) {
 		!strings.Contains(rec.Body.String(), `"state":"connected"`) ||
 		!strings.Contains(rec.Body.String(), `"retry_count":0`) ||
 		!strings.Contains(rec.Body.String(), `"restart_count":0`) ||
-		!strings.Contains(rec.Body.String(), `"instructions":["fake: Use echo for gateway MCP status tests."]`) {
+		!strings.Contains(rec.Body.String(), `"instructions":["fake [trust=untrusted_mcp_server_metadata]: Use echo for gateway MCP status tests."]`) {
 		t.Fatalf("mcp body missing connected server status: %s", rec.Body.String())
 	}
 }

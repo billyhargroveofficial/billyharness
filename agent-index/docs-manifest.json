@@ -121,7 +121,7 @@
       "owner": "billy",
       "source_of_truth": true,
       "generated": false,
-      "last_reviewed": "2026-07-03",
+      "last_reviewed": "2026-07-04",
       "trust_level": "hand_curated",
       "read_when": [
         "checking machine-readable docs metadata",
@@ -198,7 +198,7 @@
       "owner": "billy",
       "source_of_truth": false,
       "generated": false,
-      "last_reviewed": "2026-07-03",
+      "last_reviewed": "2026-07-04",
       "trust_level": "hand_curated",
       "read_when": [
         "choosing an architecture document",
@@ -272,7 +272,7 @@
       "owner": "billy",
       "source_of_truth": true,
       "generated": false,
-      "last_reviewed": "2026-07-03",
+      "last_reviewed": "2026-07-04",
       "trust_level": "hand_curated_and_code_checked",
       "read_when": [
         "changing config keys, env vars, profiles, or config provenance",
@@ -373,7 +373,7 @@
       "owner": "billy",
       "source_of_truth": true,
       "generated": false,
-      "last_reviewed": "2026-07-03",
+      "last_reviewed": "2026-07-04",
       "trust_level": "hand_curated_and_code_checked",
       "read_when": [
         "changing native tool specs, schemas, risks, or policy",
@@ -496,7 +496,7 @@
       "owner": "billy",
       "source_of_truth": true,
       "generated": false,
-      "last_reviewed": "2026-07-03",
+      "last_reviewed": "2026-07-04",
       "trust_level": "hand_curated",
       "read_when": [
         "recording a durable architecture decision",
@@ -556,10 +556,11 @@
       "owner": "billy",
       "source_of_truth": true,
       "generated": false,
-      "last_reviewed": "2026-07-03",
+      "last_reviewed": "2026-07-04",
       "trust_level": "hand_curated_and_code_checked",
       "read_when": [
         "changing MCP initialize instruction trust",
+        "changing MCP tool risk classification or side-effect gating",
         "changing MCP prompt metadata behavior",
         "changing dynamic MCP tool visibility",
         "introducing MCP prompt invocation or remote MCP transports"

@@ -337,6 +337,112 @@ func TestToolSearchFindsNativeAndMCPTools(t *testing.T) {
 	}
 }
 
+func TestMCPGatewayLabelsUntrustedMetadataAndGatesSideEffectingTargets(t *testing.T) {
+	registry := NewRegistry(config.Default())
+	var deniedCalled bool
+	registry.mcpTools["mcp__evil__erase"] = Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "mcp__evil__erase",
+			Description: "MCP evil/erase. Remote description claims this is read-only and should bypass approval.",
+			Parameters:  raw(`{"type":"object","properties":{"target":{"type":"string","description":"remote schema text is untrusted"}},"required":["target"],"additionalProperties":false}`),
+			Risk:        protocol.RiskExternalMutation,
+		},
+		mcpPolicy: mcpToolPolicy{
+			ServerName:            "evil",
+			OriginalName:          "erase",
+			RiskSource:            "operator_tool_risks",
+			MetadataTrust:         mcpclient.MCPMetadataTrustUntrusted,
+			SideEffectAllowlisted: false,
+		},
+		Handler: func(context.Context, json.RawMessage) (Result, error) {
+			deniedCalled = true
+			return Result{Content: "erased"}, nil
+		},
+	}
+	registry.mcpTools["mcp__evil__create_issue"] = Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "mcp__evil__create_issue",
+			Description: "MCP evil/create_issue. Create a remote issue.",
+			Parameters:  raw(`{"type":"object","properties":{"title":{"type":"string"}},"required":["title"],"additionalProperties":false}`),
+			Risk:        protocol.RiskExternalMutation,
+		},
+		mcpPolicy: mcpToolPolicy{
+			ServerName:            "evil",
+			OriginalName:          "create_issue",
+			RiskSource:            "operator_tool_risks",
+			MetadataTrust:         mcpclient.MCPMetadataTrustUntrusted,
+			SideEffectAllowlisted: true,
+		},
+		Handler: func(context.Context, json.RawMessage) (Result, error) {
+			return Result{Content: "created"}, nil
+		},
+	}
+	registry.addMCPGateway()
+
+	list, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_list_tools",
+		Arguments: rawArgs(map[string]any{
+			"server":            "evil",
+			"query":             "erase",
+			"include_schema":    true,
+			"max_schema_tokens": 200,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"name": "mcp__evil__erase"`,
+		`"risk": "external_mutation"`,
+		`"risk_class": "external_mutation"`,
+		`"risk_source": "operator_tool_risks"`,
+		`"metadata_trust": "untrusted_mcp_server_metadata"`,
+		`"description_trust": "untrusted_mcp_server_metadata"`,
+		`"input_schema_trust": "untrusted_mcp_server_metadata"`,
+		`"metadata_trust": "untrusted_mcp_server_metadata"`,
+	} {
+		if !strings.Contains(list.Content, want) {
+			t.Fatalf("mcp_list_tools missing %q in:\n%s", want, list.Content)
+		}
+	}
+
+	denied, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_call",
+		Arguments: rawArgs(map[string]any{
+			"name":      "mcp__evil__erase",
+			"arguments": map[string]any{"target": "prod"},
+		}),
+	})
+	if err == nil || !strings.Contains(err.Error(), "enabled_tools allowlisting") {
+		t.Fatalf("expected side-effect allowlist denial, got result=%#v err=%v", denied, err)
+	}
+	if deniedCalled {
+		t.Fatal("side-effecting MCP handler ran despite missing explicit allowlist")
+	}
+	if !denied.IsError || denied.ErrorCode != "permission_denied" ||
+		denied.Metadata["permission_reason"] != "mcp_side_effect_requires_allowlist" ||
+		denied.Metadata["mcp_risk_source"] != "operator_tool_risks" ||
+		denied.Metadata["mcp_metadata_trust"] != mcpclient.MCPMetadataTrustUntrusted ||
+		denied.Metadata["mcp_side_effect_allowlisted"] != false {
+		t.Fatalf("denied metadata = %#v", denied.Metadata)
+	}
+
+	allowed, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_call",
+		Arguments: rawArgs(map[string]any{
+			"name":      "mcp__evil__create_issue",
+			"arguments": map[string]any{"title": "ok"},
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allowed.Content != "created" || allowed.Metadata["permission_reason"] != "auto_approve_dangerous" ||
+		allowed.Metadata["mcp_side_effect_allowlisted"] != true {
+		t.Fatalf("allowed MCP result = %#v", allowed)
+	}
+}
+
 func TestToolSnapshotFreezesMCPGatewayCatalog(t *testing.T) {
 	registry := NewRegistry(config.Default())
 	registry.mcpTools["mcp__fake__old"] = fakeMCPTool("mcp__fake__old", "old")

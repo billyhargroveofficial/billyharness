@@ -13,6 +13,10 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
+const (
+	MCPMetadataTrustUntrusted = "untrusted_mcp_server_metadata"
+)
+
 type serverCatalog struct {
 	runtime      *managedServer
 	server       config.MCPServer
@@ -36,7 +40,7 @@ func buildCatalog(catalogs []serverCatalog, promoteInstructions bool) ([]Externa
 	var promotedInstructions []string
 	for _, catalog := range catalogs {
 		if strings.TrimSpace(catalog.instructions) != "" {
-			instruction := fmt.Sprintf("%s: %s", catalog.server.Name, truncateText(catalog.instructions, 512))
+			instruction := fmt.Sprintf("%s [trust=%s]: %s", catalog.server.Name, MCPMetadataTrustUntrusted, truncateText(catalog.instructions, 512))
 			serverInstructions = append(serverInstructions, instruction)
 			if promoteInstructions {
 				promotedInstructions = append(promotedInstructions, fmt.Sprintf("%s [trust=operator_promoted_mcp_initialize_instructions]", instruction))
@@ -80,7 +84,8 @@ func buildCatalog(catalogs []serverCatalog, promoteInstructions bool) ([]Externa
 		spec := candidate.spec
 		spec.Name = candidate.externalName
 		spec.Description = strings.TrimSpace(fmt.Sprintf("MCP %s/%s. %s", candidate.server.Name, candidate.originalName, spec.Description))
-		spec.Risk = protocol.RiskExternal
+		risk, riskSource := mcpToolRisk(candidate.server, candidate.originalName)
+		spec.Risk = risk
 		toolTimeout := candidate.server.ToolTimeout
 		if toolTimeout <= 0 {
 			toolTimeout = 300 * time.Second
@@ -88,7 +93,12 @@ func buildCatalog(catalogs []serverCatalog, promoteInstructions bool) ([]Externa
 		runtime := candidate.runtime
 		originalName := candidate.originalName
 		tools = append(tools, ExternalTool{
-			Spec: spec,
+			Spec:                  spec,
+			ServerName:            candidate.server.Name,
+			OriginalName:          originalName,
+			RiskSource:            riskSource,
+			MetadataTrust:         MCPMetadataTrustUntrusted,
+			SideEffectAllowlisted: len(candidate.server.EnabledTools) > 0 && contains(candidate.server.EnabledTools, originalName),
 			Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
 				callCtx, cancel := context.WithTimeout(ctx, toolTimeout)
 				defer cancel()
@@ -97,6 +107,59 @@ func buildCatalog(catalogs []serverCatalog, promoteInstructions bool) ([]Externa
 		})
 	}
 	return tools, serverInstructions, promotedInstructions, collisions
+}
+
+func mcpToolRisk(server config.MCPServer, tool string) (protocol.Risk, string) {
+	if risk, ok := lookupMCPToolRisk(server.ToolRisks, tool); ok {
+		return risk, "operator_tool_risks"
+	}
+	if strings.TrimSpace(server.DefaultToolRisk) != "" {
+		if risk := normalizeMCPRisk(server.DefaultToolRisk); risk != "" {
+			return risk, "operator_default_tool_risk"
+		}
+	}
+	return protocol.RiskExternal, "unclassified_mcp_catalog"
+}
+
+func lookupMCPToolRisk(risks map[string]string, tool string) (protocol.Risk, bool) {
+	if len(risks) == 0 {
+		return "", false
+	}
+	if risk := normalizeMCPRisk(risks[tool]); risk != "" {
+		return risk, true
+	}
+	lowerTool := strings.ToLower(strings.TrimSpace(tool))
+	for key, value := range risks {
+		if strings.ToLower(strings.TrimSpace(key)) == lowerTool {
+			if risk := normalizeMCPRisk(value); risk != "" {
+				return risk, true
+			}
+		}
+	}
+	return "", false
+}
+
+func normalizeMCPRisk(value string) protocol.Risk {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "-", "_")
+	switch value {
+	case "read", "readonly", "read_only", "local_read":
+		return protocol.RiskLocalRead
+	case "network", "network_read", "net_read":
+		return protocol.RiskNetworkRead
+	case "write", "local_write":
+		return protocol.RiskLocalWrite
+	case "network_write", "net_write":
+		return protocol.RiskNetworkWrite
+	case "exec", "execute":
+		return protocol.RiskExecute
+	case "external", "external_mutation", "mutation":
+		return protocol.RiskExternalMutation
+	case "secret", "secret_access", "secrets":
+		return protocol.RiskSecretAccess
+	default:
+		return ""
+	}
 }
 
 func buildPromptCatalog(catalogs []serverCatalog) []Prompt {

@@ -54,9 +54,10 @@ type Result struct {
 }
 
 type Tool struct {
-	Spec     protocol.ToolSpec
-	Parallel ParallelMetadata
-	Handler  func(context.Context, json.RawMessage) (Result, error)
+	Spec      protocol.ToolSpec
+	Parallel  ParallelMetadata
+	mcpPolicy mcpToolPolicy
+	Handler   func(context.Context, json.RawMessage) (Result, error)
 }
 
 type ParallelMetadata struct {
@@ -66,6 +67,14 @@ type ParallelMetadata struct {
 	RateLimitKey               string `json:"rate_limit_key,omitempty"`
 	Cancellable                bool   `json:"cancellable,omitempty"`
 	MaxConcurrency             int    `json:"max_concurrency,omitempty"`
+}
+
+type mcpToolPolicy struct {
+	ServerName            string
+	OriginalName          string
+	RiskSource            string
+	MetadataTrust         string
+	SideEffectAllowlisted bool
 }
 
 const (
@@ -118,13 +127,14 @@ type RegistrySettings struct {
 }
 
 type mcpCatalogState struct {
-	Kind         string   `json:"kind"`
-	State        string   `json:"state,omitempty"`
-	Version      int64    `json:"version"`
-	ToolCount    int      `json:"tool_count"`
-	Stale        bool     `json:"stale"`
-	ModelVisible bool     `json:"model_visible"`
-	Collisions   []string `json:"collisions,omitempty"`
+	Kind          string   `json:"kind"`
+	State         string   `json:"state,omitempty"`
+	Version       int64    `json:"version"`
+	ToolCount     int      `json:"tool_count"`
+	Stale         bool     `json:"stale"`
+	ModelVisible  bool     `json:"model_visible"`
+	MetadataTrust string   `json:"metadata_trust,omitempty"`
+	Collisions    []string `json:"collisions,omitempty"`
 }
 
 type modelVisibleToolCatalog struct {
@@ -427,6 +437,13 @@ func (r *Registry) syncMCPToolsFromManager() {
 		handler := external.Handler
 		next[spec.Name] = Tool{
 			Spec: spec,
+			mcpPolicy: mcpToolPolicy{
+				ServerName:            external.ServerName,
+				OriginalName:          external.OriginalName,
+				RiskSource:            external.RiskSource,
+				MetadataTrust:         external.MetadataTrust,
+				SideEffectAllowlisted: external.SideEffectAllowlisted,
+			},
 			Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
 				content, err := handler(ctx, args)
 				return Result{Content: content}, err
@@ -438,13 +455,14 @@ func (r *Registry) syncMCPToolsFromManager() {
 	r.instructions = snapshot.Instructions
 	r.mcpServerInstructions = snapshot.ServerInstructions
 	r.mcpCatalog = mcpCatalogState{
-		Kind:         "dynamic_mcp_catalog",
-		State:        mcpCatalogReadyState(len(next), snapshot.Collisions),
-		Version:      snapshot.Version,
-		ToolCount:    len(next),
-		Stale:        false,
-		ModelVisible: false,
-		Collisions:   append([]string(nil), snapshot.Collisions...),
+		Kind:          "dynamic_mcp_catalog",
+		State:         mcpCatalogReadyState(len(next), snapshot.Collisions),
+		Version:       snapshot.Version,
+		ToolCount:     len(next),
+		Stale:         false,
+		ModelVisible:  false,
+		MetadataTrust: mcpCatalogMetadataTrust(next),
+		Collisions:    append([]string(nil), snapshot.Collisions...),
 	}
 	r.mcpPrompts = cloneMCPPrompts(snapshot.Prompts)
 	r.mcpMu.Unlock()
@@ -478,8 +496,23 @@ func (r *Registry) mcpCatalogSnapshot() mcpCatalogState {
 		state.State = "catalog_stale"
 	}
 	state.ModelVisible = false
+	if state.MetadataTrust == "" && state.ToolCount > 0 {
+		state.MetadataTrust = mcpclient.MCPMetadataTrustUntrusted
+	}
 	state.Collisions = append([]string(nil), state.Collisions...)
 	return state
+}
+
+func mcpCatalogMetadataTrust(tools map[string]Tool) string {
+	for _, tool := range tools {
+		if tool.mcpPolicy.MetadataTrust != "" {
+			return tool.mcpPolicy.MetadataTrust
+		}
+	}
+	if len(tools) > 0 {
+		return mcpclient.MCPMetadataTrustUntrusted
+	}
+	return ""
 }
 
 func mcpCatalogReadyState(toolCount int, collisions []string) string {
@@ -515,6 +548,9 @@ func addMCPCatalogMetadata(metadata map[string]any, state mcpCatalogState) map[s
 	metadata["mcp_catalog_tool_count"] = state.ToolCount
 	metadata["mcp_catalog_stale"] = state.Stale
 	metadata["mcp_catalog_model_visible"] = state.ModelVisible
+	if state.MetadataTrust != "" {
+		metadata["mcp_catalog_metadata_trust"] = state.MetadataTrust
+	}
 	if len(state.Collisions) > 0 {
 		metadata["mcp_catalog_collisions"] = append([]string(nil), state.Collisions...)
 	}
@@ -572,12 +608,7 @@ func toolVisibleForPolicy(spec protocol.ToolSpec, policy config.ToolPolicySettin
 	if config.NormalizeAccessMode(policy.AccessMode) != config.AccessModePlan {
 		return true
 	}
-	switch spec.Risk {
-	case protocol.RiskReadOnly, protocol.RiskNetwork:
-		return true
-	default:
-		return false
-	}
+	return riskAllowedInPlanMode(spec.Risk)
 }
 
 func (r *Registry) Call(ctx context.Context, call protocol.ToolCall) (Result, error) {
@@ -716,9 +747,9 @@ func defaultParallelMetadata(name string, risk protocol.Risk) ParallelMetadata {
 		return ParallelMetadata{Policy: ParallelPolicyUnknownExternal, RequiresExclusiveWorkspace: true, Cancellable: true, RateLimitKey: "mcp", MaxConcurrency: 1}
 	}
 	switch risk {
-	case protocol.RiskReadOnly:
+	case protocol.RiskReadOnly, protocol.RiskLocalRead:
 		return ParallelMetadata{Policy: ParallelPolicyReadOnly, Idempotent: true, Cancellable: true}
-	case protocol.RiskNetwork:
+	case protocol.RiskNetwork, protocol.RiskNetworkRead:
 		return ParallelMetadata{Policy: ParallelPolicyNetworkRateLimited, Idempotent: true, RateLimitKey: "network", Cancellable: true, MaxConcurrency: 2}
 	default:
 		return ParallelMetadata{Policy: ParallelPolicyExclusiveWorkspace, RequiresExclusiveWorkspace: true, Cancellable: true, MaxConcurrency: 1}
@@ -1078,13 +1109,23 @@ func (r *Registry) discoveryCandidates(includeNative, includeMCP bool) []discove
 		for _, name := range mcpNames {
 			tool := mcpTools[name]
 			serverName := discovery.MCPServerFromToolName(name)
+			riskSource := tool.mcpPolicy.RiskSource
+			if riskSource == "" {
+				riskSource = "unclassified_mcp_catalog"
+			}
+			metadataTrust := tool.mcpPolicy.MetadataTrust
+			if metadataTrust == "" {
+				metadataTrust = mcpclient.MCPMetadataTrustUntrusted
+			}
 			candidates = append(candidates, discovery.Candidate{
-				Spec:      tool.Spec,
-				Source:    discovery.SourceMCP,
-				Namespace: discovery.MCPNamespace(serverName),
-				Server:    serverName,
-				CallTool:  "mcp_call",
-				CallName:  tool.Spec.Name,
+				Spec:          tool.Spec,
+				Source:        discovery.SourceMCP,
+				Namespace:     discovery.MCPNamespace(serverName),
+				Server:        serverName,
+				CallTool:      "mcp_call",
+				CallName:      tool.Spec.Name,
+				RiskSource:    riskSource,
+				MetadataTrust: metadataTrust,
 			})
 		}
 	}
@@ -1265,8 +1306,13 @@ func (r *Registry) addMCPGateway() {
 				Server              string          `json:"server,omitempty"`
 				Namespace           string          `json:"namespace,omitempty"`
 				Risk                protocol.Risk   `json:"risk,omitempty"`
+				RiskClass           protocol.Risk   `json:"risk_class,omitempty"`
+				RiskSource          string          `json:"risk_source,omitempty"`
+				MetadataTrust       string          `json:"metadata_trust,omitempty"`
+				DescriptionTrust    string          `json:"description_trust,omitempty"`
 				Description         string          `json:"description,omitempty"`
 				InputSchema         json.RawMessage `json:"input_schema,omitempty"`
+				InputSchemaTrust    string          `json:"input_schema_trust,omitempty"`
 				SchemaOmittedReason string          `json:"schema_omitted,omitempty"`
 			}
 			type serverItem struct {
@@ -1305,8 +1351,13 @@ func (r *Registry) addMCPGateway() {
 					Server:              found.Server,
 					Namespace:           found.Namespace,
 					Risk:                found.Risk,
+					RiskClass:           found.RiskClass,
+					RiskSource:          found.RiskSource,
+					MetadataTrust:       found.MetadataTrust,
+					DescriptionTrust:    found.DescriptionTrust,
 					Description:         found.Description,
 					InputSchema:         found.InputSchema,
+					InputSchemaTrust:    found.InputSchemaTrust,
 					SchemaOmittedReason: found.SchemaOmittedReason,
 				})
 			}
@@ -1385,10 +1436,18 @@ func (r *Registry) addMCPGateway() {
 			if !ok {
 				return Result{}, fmt.Errorf("unknown MCP tool %s; call mcp_list_tools first", name)
 			}
+			decision, err := r.checkMCPTargetPolicy(tool)
+			if err != nil {
+				result := errorResult("permission_denied", err.Error())
+				result.Metadata = addMCPTargetPolicyMetadata(result.Metadata, tool, decision)
+				return result, err
+			}
 			if err := validateArgs(tool.Spec.Parameters, in.Arguments); err != nil {
 				return errorResult("validation_error", err.Error()), err
 			}
-			return tool.Handler(ctx, in.Arguments)
+			result, err := tool.Handler(ctx, in.Arguments)
+			result.Metadata = addMCPTargetPolicyMetadata(result.Metadata, tool, decision)
+			return result, err
 		},
 	})
 }

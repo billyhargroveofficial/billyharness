@@ -25,8 +25,8 @@ Never reuse a number.
 - [ADR 0002](0002-gateway-owns-session-authority.md): accepted; the gateway
   owns session ownership, access checks, and client-scope authority.
 - [ADR 0003](0003-mcp-instructions-are-untrusted-metadata.md): accepted; MCP
-  initialize instructions stay metadata-only unless operator policy promotes
-  them.
+  instructions and tool metadata stay untrusted unless local operator policy
+  promotes or classifies them.
 - [ADR 0006](0006-telegram-is-a-gateway-client.md): accepted; Telegram is a
   scoped gateway client, not a gateway/runtime peer.
 - [ADR 0007](0007-local-gateway-mutating-routes-require-explicit-trust.md):

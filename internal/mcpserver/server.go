@@ -160,9 +160,9 @@ func (s *Server) callTool(ctx context.Context, req request) response {
 
 func annotations(risk protocol.Risk) map[string]any {
 	return map[string]any{
-		"readOnlyHint":    risk == protocol.RiskReadOnly || risk == protocol.RiskNetwork,
-		"destructiveHint": risk == protocol.RiskWrite || risk == protocol.RiskExecute,
-		"openWorldHint":   risk == protocol.RiskNetwork || risk == protocol.RiskExternal,
+		"readOnlyHint":    risk == protocol.RiskReadOnly || risk == protocol.RiskNetwork || risk == protocol.RiskLocalRead || risk == protocol.RiskNetworkRead,
+		"destructiveHint": risk == protocol.RiskWrite || risk == protocol.RiskExecute || risk == protocol.RiskLocalWrite || risk == protocol.RiskNetworkWrite || risk == protocol.RiskExternalMutation || risk == protocol.RiskSecretAccess,
+		"openWorldHint":   risk == protocol.RiskNetwork || risk == protocol.RiskNetworkRead || risk == protocol.RiskNetworkWrite || risk == protocol.RiskExternal || risk == protocol.RiskExternalMutation,
 	}
 }
 

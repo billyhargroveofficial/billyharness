@@ -52,8 +52,13 @@ const (
 )
 
 type ExternalTool struct {
-	Spec    protocol.ToolSpec
-	Handler func(context.Context, json.RawMessage) (string, error)
+	Spec                  protocol.ToolSpec
+	ServerName            string
+	OriginalName          string
+	RiskSource            string
+	MetadataTrust         string
+	SideEffectAllowlisted bool
+	Handler               func(context.Context, json.RawMessage) (string, error)
 }
 
 type Prompt struct {

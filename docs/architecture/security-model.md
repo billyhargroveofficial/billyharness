@@ -5,20 +5,17 @@ trust boundaries. It consolidates the gateway, Telegram, tools, MCP, secrets,
 filesystem, and public-web rules that are spread across the implementation.
 It is not a checklist or runbook.
 
-Status note: reviewed against current worktree on 2026-07-03 at HEAD
-`b9df841`. The worktree already contains uncommitted security hardening. This
-document separates committed HEAD behavior from current dirty-worktree behavior
-where that difference matters.
+Status note: reviewed against current code paths on 2026-07-04. This document
+describes current behavior, not an implementation checklist.
 
 Primary code anchors:
 
 - [internal/gateway/gateway.go](../../internal/gateway/gateway.go): HTTP
   route ownership, session handlers, runtime override projection.
 - [internal/gateway/http_security.go](../../internal/gateway/http_security.go):
-  current worktree bearer, browser, mutation, host, content-type, and privilege
-  clamp checks.
+  bearer, browser, mutation, host, content-type, and privilege clamp checks.
 - [internal/gateway/session_authz.go](../../internal/gateway/session_authz.go):
-  current worktree session owner-header authorization.
+  session owner-header authorization.
 - [internal/gateway/response.go](../../internal/gateway/response.go):
   redacted JSON and NDJSON gateway responses.
 - [internal/gatewayapi/types.go](../../internal/gatewayapi/types.go) and
@@ -271,7 +268,7 @@ MCP servers are external processes or, in future, endpoints. Their tool
 descriptions, schemas, prompts, initialize instructions, stdout/stderr, and
 tool outputs are untrusted server content.
 
-Committed HEAD `b9df841` already has several MCP hardening properties:
+Current MCP hardening properties:
 
 - MCP config is loaded from `$BILLYHARNESS_HOME/mcp.config.toml` when enabled
   and no explicit server list is already present.
@@ -289,21 +286,25 @@ Committed HEAD `b9df841` already has several MCP hardening properties:
 - Optional startup failures remain visible in status; required failures fail
   manager initialization.
 - Enabled/disabled tool filters are applied before catalog publication.
+- MCP tool risk is local operator policy from `default_tool_risk` or
+  `tool_risks` in MCP config. Remote tool descriptions and schemas are
+  untrusted metadata and do not classify their own authority.
+- Side-effecting MCP risk classes (`local_write`, `network_write`, `execute`,
+  `external_mutation`, and `secret_access`) require the normal dangerous-tool
+  policy and an explicit `enabled_tools` allowlist entry for the original MCP
+  tool name before `mcp_call` executes the remote handler.
 - Sanitized MCP tool-name collisions fail catalog initialization.
 - Dynamic MCP tool specs are mirrored internally and reached through static
   gateway tools such as `tool_search`, `mcp_list_tools`, and `mcp_call`.
 
-The dirty worktree hardens MCP initialize instructions. In HEAD,
-`buildCatalog` placed server initialize instructions into the manager
-instruction path, and `Agent.withMCPInstructions` could inject those
-server-provided instructions into model context. In the current worktree,
+MCP initialize instructions are metadata-only by default.
 [internal/mcpclient/catalog.go](../../internal/mcpclient/catalog.go) separates
-`ServerInstructions` metadata from promoted `Instructions`.
+`ServerInstructions` metadata from promoted `Instructions`. Server instruction
+metadata is tagged with `trust=untrusted_mcp_server_metadata`.
 `Manager.Instructions()` is empty by default; initialize instructions enter
 model context only when `MCPPromoteServerInstructions` is enabled, and promoted
-text is tagged with
-`trust=operator_promoted_mcp_initialize_instructions`. That decision is
-recorded in
+text is tagged with `trust=operator_promoted_mcp_initialize_instructions`.
+That decision is recorded in
 [ADR 0003](../adr/0003-mcp-instructions-are-untrusted-metadata.md).
 
 MCP prompt catalogs are metadata only. They may appear in status and command

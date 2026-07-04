@@ -197,10 +197,12 @@ this order:
 4. Optional project context as a user message.
 5. Optional AGENTS-style instructions as a user message.
 
-MCP server instructions are injected later by `Agent.withMCPInstructions` when
-available, after the protected prefix and before ordinary conversation
-messages. Compaction treats the system prompt, profile, memory context, project
-context, AGENTS instructions, and MCP instructions as a protected prefix.
+Operator-promoted MCP server instructions are injected later by
+`Agent.withMCPInstructions` when `MCPPromoteServerInstructions` is enabled,
+after the protected prefix and before ordinary conversation messages.
+Unpromoted MCP server instructions remain metadata only. Compaction treats the
+system prompt, profile, memory context, project context, AGENTS instructions,
+and promoted MCP instructions as a protected prefix.
 
 `internal/instructions` loads global instructions from `$BILLYHARNESS_HOME` or
 `$CODEX_HOME`, then project instructions by walking from the git root to the

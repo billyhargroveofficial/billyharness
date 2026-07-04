@@ -2,9 +2,8 @@
 
 This document is the durable architecture map for Billyharness tool execution,
 MCP catalog handling, public web access, output references, and downstream tool
-rendering. It documents current behavior verified against code paths in the
-dirty current worktree on 2026-07-03. It does not describe a work plan or
-necessarily a clean release commit.
+rendering. It documents current behavior verified against code paths on
+2026-07-04.
 
 ## Source Map
 
@@ -62,20 +61,25 @@ full JSON Schema support.
 
 ## Policy Boundary
 
-Tool risk is one of `read_only`, `network`, `write`, `execute`, or `external`
-from `internal/protocol/types.go`.
+Tool risk values from `internal/protocol/types.go` include the legacy native
+values `read_only`, `network`, `write`, `execute`, and `external`, plus the
+more explicit classes `local_read`, `local_write`, `network_read`,
+`network_write`, `external_mutation`, and `secret_access`. Policy normalizes
+legacy values into the explicit classes for decisions while preserving old
+native tool specs for compatibility.
 
 `internal/tools/policy.go` is the central allow/deny decision point. Current
 policy behavior:
 
-- `access_mode=plan` denies and hides `write`, `execute`, and `external`.
-- `access_mode=guarded` denies `write` and `execute`, even if dangerous tools
-  are otherwise auto-approved.
+- `access_mode=plan` denies and hides anything outside local/network reads.
+- `access_mode=guarded` denies local writes, network writes, execute tools,
+  external mutations, and secret access, even if dangerous tools are otherwise
+  auto-approved.
 - `access_mode=build` allows the normal build-mode surface.
-- `write` and `execute` require `AutoApproveDangerous`; when disabled they
-  return a permission-denied result before handler execution.
-- `external` tools are marked as requiring approval metadata, but are allowed by
-  existing build/guarded policy unless plan mode blocks them.
+- Write/execute/side-effecting classes require `AutoApproveDangerous`; when
+  disabled they return a permission-denied result before handler execution.
+- Legacy `external` tools are still marked as requiring approval metadata and
+  remain allowed by build/guarded policy unless plan mode blocks them.
 
 Parallel metadata is separate from permission policy. `defaultParallelMetadata`
 in `internal/tools/tools.go` marks read-only tools as parallel-safe, web tools
@@ -106,6 +110,16 @@ Current behavior in `internal/mcpclient`:
 - Optional server startup failures stay visible in status and do not poison
   working servers. Required server failures fail manager initialization.
 - Server tool allow/deny lists are applied before catalog publication.
+- Local MCP config may set `default_tool_risk` or
+  `tool_risks = { tool_name = "network_read" }`. Supported MCP risk values are
+  `local_read`, `local_write`, `network_read`, `network_write`, `execute`,
+  `external_mutation`, and `secret_access`, with legacy aliases accepted during
+  config parsing. MCP risk comes from this local operator policy; server tool
+  descriptions and schemas do not get to classify themselves.
+- Side-effecting MCP tools require both the normal dangerous-tool policy and an
+  explicit `enabled_tools` entry for the original MCP tool name before
+  `mcp_call` invokes the remote handler. Missing allowlist entries fail closed
+  with permission metadata instead of calling the server.
 - MCP server status separates process/transport lifecycle from catalog
   lifecycle. `state` remains as a legacy compact lifecycle field, while
   `transport_state` reports connection/retry/failure state and
@@ -115,7 +129,8 @@ Current behavior in `internal/mcpclient`:
   records and are redacted before presentation.
 - MCP tool names are normalized to `mcp__<server>__<tool>`. Sanitized-name
   collisions fail catalog initialization instead of picking a winner.
-- `initialize` instructions are stored as `ServerInstructions` metadata.
+- `initialize` instructions are stored as `ServerInstructions` metadata and
+  tagged with `trust=untrusted_mcp_server_metadata`.
   `Manager.Instructions()` is empty by default. Instructions enter model
   context only when `MCPPromoteServerInstructions` is enabled, and promoted text
   is tagged with `trust=operator_promoted_mcp_initialize_instructions`.
@@ -143,11 +158,17 @@ Current lazy flow:
    `includes_dynamic_mcp_tools = false`, and
    `mcp_catalog.model_visible = false`. The dynamic catalog projection also
    includes `mcp_catalog.state`, which is `ready`, `empty`, `degraded`, or
-   `catalog_stale` depending on mirrored tool state and listener lag.
+   `catalog_stale` depending on mirrored tool state and listener lag. MCP tool
+   entries include `risk`, `risk_class`, `risk_source`,
+   `metadata_trust`, `description_trust`, and `input_schema_trust` when schema
+   text is returned.
 4. MCP search/list results return `call_tool: "mcp_call"` and the full
    `call_name`/`name` such as `mcp__github__search_repositories`.
-5. `mcp_call` looks up the full dynamic name in the current mirror, validates
-   the target MCP tool schema, and then calls the underlying server tool.
+5. `mcp_call` looks up the full dynamic name in the current mirror, checks the
+   target MCP tool risk policy, validates the target MCP tool schema, and then
+   calls the underlying server tool. Permission denials and successful calls
+   carry MCP target metadata such as server, original tool, risk source, and
+   metadata trust.
 
 `ToolSet.Snapshot()` freezes the tool view for a provider turn, including an
 MCP status/catalog hash from `internal/tools/toolset.go`. Live catalog changes
@@ -164,9 +185,10 @@ such as `fs`, `web`, `shell`, `mcp-gateway`, and `tool`. MCP namespaces are
 `mcp.<server>`.
 
 The search API supports query, MCP server, namespace, risk, limit, optional
-schema inclusion, and a schema token budget. Schemas are omitted once the budget
-is exceeded, and the response marks schema truncation in metrics. This keeps
-large MCP catalogs searchable without making their whole schema set
+schema inclusion, and a schema token budget. Risk filtering matches both exact
+legacy risk values and normalized risk classes. Schemas are omitted once the
+budget is exceeded, and the response marks schema truncation in metrics. This
+keeps large MCP catalogs searchable without making their whole schema set
 model-visible.
 
 ## Web Tools
