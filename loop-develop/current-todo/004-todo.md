@@ -1946,6 +1946,38 @@ Billy asks for final verification.
   exceptions rather than splits; the listed files still need the planned P1/P2
   decomposition to remove those exceptions.
 
+### 2026-07-04 - P1.11 tracked CI workflow and benchmark smoke repair
+
+- Completed P1.11 slice. Added `.github/workflows/ci.yml` with a secrets-free,
+  production-independent CI workflow for pushes and pull requests on `main`.
+  The normal `Local Gates` job runs checkout, Go setup from `go.mod`,
+  `git diff --check`, dependency metadata verification, `go vet ./...`,
+  `go test -count=1 ./...`, focused race tests, `govulncheck`, strict hygiene,
+  and benchmark smoke. A separate `Full Race` job runs
+  `go test -race -count=1 ./...` only on manual dispatch or the scheduled
+  weekly run.
+- Fixed gateway benchmark fixtures so benchmark smoke is compatible with the
+  stricter durable event lifecycle validator. Seeded benchmark JSONL now starts
+  runs/turns/model steps or tool calls before delta/output-ref events, and
+  AppendEvent benchmark paths stamp the benchmark run id explicitly.
+- Checked durable docs routing. No README/ops docs changed for this slice
+  because the workflow file is the tracked CI source of truth and existing
+  verification guidance already points agents to the local gate commands.
+- Verification passed:
+  `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/ci.yml")'`;
+  `git diff --check`;
+  `go vet ./...`;
+  `go test -count=1 ./...`;
+  `go test -race -count=1 ./internal/eventlog ./internal/gateway ./internal/telegrambot ./internal/tools ./internal/tui ./internal/clientux/projector`;
+  `go run golang.org/x/vuln/cmd/govulncheck@latest ./...`;
+  `go test -run '^$' -bench 'BenchmarkGatewaySessionJSONL' -benchtime=1x ./internal/gateway`;
+  `env GO_BIN=go scripts/bench-smoke.sh`.
+- Commit: `f4a1907 Add CI workflow for local gates`
+  (`f4a19076710e5c785dfd81d42263b1a7bb22989f`).
+- Push: `origin/main` updated from `8c10266` to `f4a1907`.
+- Blockers/residual risk: the workflow itself has not yet run on GitHub; proof
+  is local YAML parsing plus local execution of the same commands.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
