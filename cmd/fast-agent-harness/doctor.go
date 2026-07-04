@@ -38,6 +38,8 @@ type doctorOptions struct {
 
 type doctorReport struct {
 	Version           string              `json:"version"`
+	BuildCommit       string              `json:"build_commit"`
+	BuildTime         string              `json:"build_time"`
 	GeneratedAt       string              `json:"generated_at"`
 	Mode              string              `json:"mode"`
 	CWD               string              `json:"cwd"`
@@ -196,8 +198,11 @@ func collectDoctorReport(ctx context.Context, cfg config.Config, opts doctorOpti
 	}
 	cwd, _ := os.Getwd()
 	billyHome := config.BillyHomeDir()
+	build := currentBuildMetadata()
 	report := doctorReport{
-		Version:           version,
+		Version:           build.Version,
+		BuildCommit:       build.Commit,
+		BuildTime:         build.BuiltAt,
 		GeneratedAt:       time.Now().UTC().Format(time.RFC3339),
 		CWD:               cwd,
 		BillyHome:         billyHome,
@@ -964,6 +969,7 @@ func runDoctorCommand(ctx context.Context, runner doctorCommandRunner, dir strin
 func printDoctorReport(w io.Writer, report doctorReport) {
 	fmt.Fprintln(w, "billyharness doctor")
 	fmt.Fprintf(w, "version: %s\n", report.Version)
+	fmt.Fprintf(w, "build: commit=%s built_at=%s\n", report.BuildCommit, report.BuildTime)
 	fmt.Fprintf(w, "mode: %s\n", report.Mode)
 	fmt.Fprintf(w, "cwd: %s\n", report.CWD)
 	if report.RepoDir != "" {

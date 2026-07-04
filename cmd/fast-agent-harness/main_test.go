@@ -39,6 +39,23 @@ func TestRunHandlesHelpAndUnknownCommand(t *testing.T) {
 	}
 }
 
+func TestCurrentBuildMetadataUsesPackageVariables(t *testing.T) {
+	oldVersion, oldCommit, oldBuildTime := version, buildCommit, buildTime
+	t.Cleanup(func() {
+		version = oldVersion
+		buildCommit = oldCommit
+		buildTime = oldBuildTime
+	})
+	version = "test-version"
+	buildCommit = "test-commit"
+	buildTime = "2026-07-04T00:00:00Z"
+
+	got := currentBuildMetadata()
+	if got.Version != "test-version" || got.Commit != "test-commit" || got.BuiltAt != "2026-07-04T00:00:00Z" {
+		t.Fatalf("build metadata = %#v", got)
+	}
+}
+
 func TestGatewayRunSendsFullRunRequest(t *testing.T) {
 	var captured gateway.RunRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

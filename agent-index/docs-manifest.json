@@ -735,13 +735,15 @@
       "read_when": [
         "looking for production or diagnostics runbooks",
         "deciding where operator procedures belong",
-        "checking redaction rules for operational evidence"
+        "checking redaction rules for operational evidence",
+        "finding production deploy or rollback procedures"
       ],
       "related_code": [
         "README.md",
         "cmd/fast-agent-harness/main.go",
         "cmd/fast-agent-harness/doctor.go",
-        "cmd/fast-agent-harness/incident.go"
+        "cmd/fast-agent-harness/incident.go",
+        "scripts/production-deploy.sh"
       ]
     },
     {
@@ -790,7 +792,8 @@
         "operating production",
         "checking systemd service names",
         "restarting gateway or Telegram services",
-        "checking production readiness and deploy-time commands"
+        "checking production readiness and deploy-time commands",
+        "deploying or rolling back the production checkout"
       ],
       "related_code": [
         "README.md",
@@ -798,7 +801,8 @@
         "cmd/fast-agent-harness/service_cmd.go",
         "internal/gateway/readiness.go",
         "internal/gatewaybase/gatewaybase.go",
-        "internal/gateway/http_security.go"
+        "internal/gateway/http_security.go",
+        "scripts/production-deploy.sh"
       ],
       "required_tests": [
         "git diff --check",

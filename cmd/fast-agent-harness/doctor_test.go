@@ -89,6 +89,9 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	if report.Mode != "local" {
 		t.Fatalf("Mode = %q, want local", report.Mode)
 	}
+	if report.Version == "" || report.BuildCommit == "" || report.BuildTime == "" {
+		t.Fatalf("build metadata missing: version=%q commit=%q time=%q", report.Version, report.BuildCommit, report.BuildTime)
+	}
 	if report.BillyHome != filepath.Join(root, "home") {
 		t.Fatalf("BillyHome = %q", report.BillyHome)
 	}
@@ -155,7 +158,7 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	var buf bytes.Buffer
 	printDoctorReport(&buf, report)
 	out := buf.String()
-	for _, want := range []string{"billyharness doctor", "mode: local", "model=deepseek-v4-pro", "settings:", "runtime:", "strict_hygiene=ok", "tool_output=", "auth:", "cost_mode=metered", "auth status:", "credential=redacted", "checks:"} {
+	for _, want := range []string{"billyharness doctor", "build: commit=", "mode: local", "model=deepseek-v4-pro", "settings:", "runtime:", "strict_hygiene=ok", "tool_output=", "auth:", "cost_mode=metered", "auth status:", "credential=redacted", "checks:"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("formatted report missing %q:\n%s", want, out)
 		}

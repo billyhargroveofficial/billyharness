@@ -16,7 +16,8 @@ architecture canon only.
   config inspection, gateway readiness, MCP status, session diagnostics, and
   incident bundles.
 - [Production services](production-services.md): production entrypoint, service
-  names, readiness checks, restarts, and deployment-time cautions.
+  names, readiness checks, deploy/rollback script, restarts, and
+  deployment-time cautions.
 - [Production inventory - 2026-07-04](production-inventory-2026-07-04.md):
   dated redacted source of truth for the live host, unit files, binary,
   checkout, gateway binding, and doctor snapshot.

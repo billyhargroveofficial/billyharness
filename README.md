@@ -17,9 +17,10 @@ Work protocol for runtime changes:
 2. Add or update focused tests.
 3. Run the relevant package tests, then `/root/.local/go/bin/go test -count=1 ./...` for broad runtime changes.
 4. Run `GO_BIN=/root/.local/go/bin/go ./scripts/verify-deps.sh` when `go.mod` or `go.sum` changes.
-5. Rebuild with `/root/.local/go/bin/go build -buildvcs=false -o ./bin/fast-agent-harness ./cmd/fast-agent-harness` when CLI, gateway, agent, provider, tool, TUI, or Telegram code changes.
-6. Restart `billyharness-gateway.service` and `billyharness-telegram.service` when deployed runtime behavior changes.
-7. After verification, move completed TODOs to `loop-develop/history` preserving
+5. Rebuild locally with `go build -o ./bin/fast-agent-harness ./cmd/fast-agent-harness` when CLI, gateway, agent, provider, tool, TUI, or Telegram code changes.
+6. For production deploys, use `scripts/production-deploy.sh deploy --yes` so the binary carries commit/build-time provenance and the doctor/readiness gate runs before the deploy is accepted.
+7. Restart `billyharness-gateway.service` and `billyharness-telegram.service` when deployed runtime behavior changes outside the deploy script.
+8. After verification, move completed TODOs to `loop-develop/history` preserving
    their number.
 
 Project health:

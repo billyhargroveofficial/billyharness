@@ -58,14 +58,15 @@ Point doctor at an explicit checkout and allow slower checks:
 ```
 
 The current doctor implementation reports config/runtime paths, provider/model
-state, credential presence, gateway bind mode, native tool catalog state,
-gateway session storage readability/writability, tool-output storage, git
-status, a lightweight CLI build check, systemd service activity, duplicate
-gateway/telegram processes, pid-file staleness, gateway `/health` liveness, and
-gateway `/ready` readiness. It records `mode` in text and JSON output. `auto`
-mode resolves `/root/billyharness` as `production` and other checkouts as
-`local`; production mode also adds selected systemd unit metadata and recent
-journal crash/error signal summaries.
+state, credential presence, binary version, build commit, UTC build time,
+gateway bind mode, native tool catalog state, gateway session storage
+readability/writability, tool-output storage, git status, a lightweight CLI
+build check, systemd service activity, duplicate gateway/telegram processes,
+pid-file staleness, gateway `/health` liveness, and gateway `/ready` readiness.
+It records `mode` in text and JSON output. `auto` mode resolves
+`/root/billyharness` as `production` and other checkouts as `local`; production
+mode also adds selected systemd unit metadata and recent journal crash/error
+signal summaries.
 
 ## Incident Bundles
 

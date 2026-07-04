@@ -78,11 +78,45 @@ tokens, provider keys, or bearer tokens into tickets.
 
 ## Deploy-Time Checks
 
-For broad runtime changes, `README.md` lists this test and rebuild shape:
+The repo-owned production deploy model is a source checkout rebuild in-place on
+`/root/billyharness`. Use the guarded script for normal deploys:
+
+```sh
+scripts/production-deploy.sh deploy --yes
+```
+
+By default the script fetches `origin`, checks out `origin/main` by exact
+commit, runs `go test -count=1 ./...`, builds
+`./bin/fast-agent-harness` with commit and UTC build-time provenance embedded
+through `-ldflags`, restarts `billyharness-gateway.service` and
+`billyharness-telegram.service`, then gates on:
+
+```sh
+./bin/fast-agent-harness doctor -mode=production -strict
+curl -fsS http://127.0.0.1:8765/health
+curl -fsS http://127.0.0.1:8765/ready
+```
+
+The script writes predeploy/postdeploy facts, sanitized doctor JSON, build
+provenance, and a copy-ready rollback command under
+`${BILLYHARNESS_DEPLOY_LOG_DIR:-/var/log/billyharness/deploy}`. To deploy a
+specific ref:
+
+```sh
+scripts/production-deploy.sh deploy --yes --ref COMMIT_OR_REF
+```
+
+For manual broad runtime changes, `README.md` lists this test and rebuild
+shape. Prefer the script above when changing production:
 
 ```sh
 /root/.local/go/bin/go test -count=1 ./...
-/root/.local/go/bin/go build -buildvcs=false -o ./bin/fast-agent-harness ./cmd/fast-agent-harness
+build_commit="$(git rev-parse HEAD)"
+build_short="$(git rev-parse --short HEAD)"
+build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+/root/.local/go/bin/go build -trimpath -buildvcs=false \
+  -ldflags "-X main.version=0.1.0+$build_short -X main.buildCommit=$build_commit -X main.buildTime=$build_time" \
+  -o ./bin/fast-agent-harness ./cmd/fast-agent-harness
 ```
 
 When `go.mod` or `go.sum` changes, verify dependencies:
@@ -107,9 +141,19 @@ For machine-readable evidence:
 
 ## Rollback Pattern
 
-This repository does not define the production deploy mechanism or a release
-archive layout. Before changing production, record the current commit, binary
-path, service status, and doctor output:
+Use the deploy script's manifest first. It records the previous commit and a
+copy-ready command:
+
+```sh
+scripts/production-deploy.sh rollback --yes --to PREVIOUS_GOOD_COMMIT
+```
+
+Rollback uses the same source checkout rebuild model, embedded build
+provenance, service restart, strict doctor gate, and `/health` plus `/ready`
+probes as deploy.
+
+Before changing production manually, record the current commit, binary path,
+service status, and doctor output:
 
 ```sh
 git rev-parse HEAD
@@ -119,13 +163,19 @@ systemctl is-active billyharness-telegram.service
 ./bin/fast-agent-harness doctor -json
 ```
 
-For a source-level rollback on the production checkout, return to the previous
-known-good commit, rebuild the binary with the same Go path used during deploy,
-restart both managed services, and rerun doctor plus `/health` and `/ready`:
+For a manual source-level rollback on the production checkout, return to the
+previous known-good commit, rebuild the binary with the same Go path used
+during deploy, restart both managed services, and rerun doctor plus `/health`
+and `/ready`:
 
 ```sh
 git checkout PREVIOUS_GOOD_COMMIT
-/root/.local/go/bin/go build -buildvcs=false -o ./bin/fast-agent-harness ./cmd/fast-agent-harness
+build_commit="$(git rev-parse HEAD)"
+build_short="$(git rev-parse --short HEAD)"
+build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+/root/.local/go/bin/go build -trimpath -buildvcs=false \
+  -ldflags "-X main.version=0.1.0+$build_short -X main.buildCommit=$build_commit -X main.buildTime=$build_time" \
+  -o ./bin/fast-agent-harness ./cmd/fast-agent-harness
 systemctl restart billyharness-gateway.service
 systemctl restart billyharness-telegram.service
 ./bin/fast-agent-harness doctor -mode=production
