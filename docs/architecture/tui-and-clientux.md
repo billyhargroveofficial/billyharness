@@ -223,8 +223,18 @@ cells; `/copy code` extracts the last fenced code block from raw copy; and
 
 `internal/tui/transcript/export.go` is a formatter boundary. It can format
 cells, messages, events, or a message-plus-event session as raw or rich text.
-The current TUI uses these helpers for semantic transcript copy. It does not
-currently provide a separate TUI command that writes transcript exports to disk.
+Generated raw output-reference records quote path-like values such as
+`output_ref` and `preview` so incident artifacts do not contain ambiguous
+unquoted paths.
+
+The current TUI uses these helpers for semantic transcript copy and for
+`/export`. Semantic copy remains body-only. `/export` wraps the body in an
+incident-grade artifact header from `internal/clientux/transcript_export.go`.
+The header records source store, source mode (`cells`, `messages`, `events`,
+or `combined`), transcript mode, runtime mode, local/gateway session IDs, last
+known gateway sequence, sequence range, model/profile/access mode, export time,
+redaction mode, body hash/size, and warnings. TUI event exports are explicit
+about being projected client state rather than durable gateway JSONL replay.
 
 ## Client UX Metadata
 
@@ -300,6 +310,9 @@ Current hardening:
 - `internal/clientux/debug_snapshot.go` provides the redacted TUI debug
   snapshot used by `/debug` and `/status debug`; it reports hashes and state
   counters instead of raw transcript, selection, or export bodies.
+- `internal/clientux/transcript_export.go` provides the metadata header for
+  incident-grade transcript exports, while transcript body formatting remains
+  under `internal/tui/transcript`.
 - `internal/tui/transcript_render_test.go`,
   `internal/tui/cross_surface_consistency_test.go`,
   `internal/tui/presentation_policy_test.go`, and package tests under

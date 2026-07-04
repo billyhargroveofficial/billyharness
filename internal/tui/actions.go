@@ -526,12 +526,15 @@ func actionRegistry() []actionSpec {
 			title:     "Export Transcript",
 			category:  "ui",
 			slash:     "/export",
-			slashArgs: "raw|rich [path]",
-			summary:   "write or show transcript export",
+			slashArgs: "raw|rich [cells|messages|events|combined] [path]",
+			summary:   "write or show incident-grade transcript export",
 			args: func(Model) []slashArg {
 				return []slashArg{
-					{"rich", "export compact rich transcript"},
-					{"raw", "export raw transcript"},
+					{"rich", "export rich projected transcript artifact"},
+					{"raw", "export raw projected transcript artifact"},
+					{"messages", "export saved message transcript artifact"},
+					{"events", "export projected event transcript artifact"},
+					{"combined", "export messages plus projected events artifact"},
 				}
 			},
 			run: func(m *Model, arg string) (bool, tea.Cmd) {

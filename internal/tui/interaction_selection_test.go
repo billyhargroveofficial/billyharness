@@ -3,6 +3,7 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -194,9 +195,9 @@ func TestTranscriptSelectionClearsWhenToolViewHidesRenderedRows(t *testing.T) {
 func TestExportCommandWritesTranscriptToPath(t *testing.T) {
 	m := newTestModel(t)
 	m.addBlock("assistant", "ASSISTANT", "hello export")
-	path := filepath.Join(t.TempDir(), "Transcript.MD")
+	path := filepath.Join(t.TempDir(), "Transcript With Space.MD")
 
-	handled, cmd := m.handleSlashCommand("/export raw " + path)
+	handled, cmd := m.handleSlashCommand("/export raw events " + strconv.Quote(path))
 	if !handled || cmd != nil {
 		t.Fatalf("/export handled=%v cmd=%v, want handled without async command", handled, cmd)
 	}
@@ -204,11 +205,44 @@ func TestExportCommandWritesTranscriptToPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read export: %v", err)
 	}
-	if got := string(data); !strings.Contains(got, "hello export") {
-		t.Fatalf("export file missing transcript: %q", got)
+	got := string(data)
+	for _, want := range []string{
+		"# Billyharness Transcript Export",
+		`- source_mode: "events"`,
+		`- transcript_mode: "raw"`,
+		`- source_store: "tui.client_state.projected_events"`,
+		"body_unredacted",
+		"legacy_snapshot",
+		"events_projection",
+		"--- transcript ---",
+		"hello export",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("export file missing %q: %q", want, got)
+		}
 	}
 	if !strings.Contains(m.status, path) {
 		t.Fatalf("status should mention exact export path, got %q", m.status)
+	}
+}
+
+func TestExportCommandParserSupportsSourceAndQuotedPath(t *testing.T) {
+	opts, err := parseExportCommand(`mode=raw source=combined path="/tmp/export path.md"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Mode != "raw" || opts.Source != "combined" || opts.Path != "/tmp/export path.md" {
+		t.Fatalf("parsed opts = %#v", opts)
+	}
+	opts, err = parseExportCommand(`rich messages "/tmp/messages path.md"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Mode != "rich" || opts.Source != "messages" || opts.Path != "/tmp/messages path.md" {
+		t.Fatalf("parsed opts = %#v", opts)
+	}
+	if _, err := parseExportCommand(`raw "unterminated`); err == nil {
+		t.Fatal("unterminated quote should fail")
 	}
 }
 

@@ -317,8 +317,8 @@ var sharedActionDefinitions = []ActionDefinition{
 		Title:     "Export Transcript",
 		Category:  "ui",
 		Slash:     "/export",
-		SlashArgs: "raw|rich [path]",
-		Summary:   "write or show transcript export",
+		SlashArgs: "raw|rich [cells|messages|events|combined] [path]",
+		Summary:   "write or show incident-grade transcript export",
 	},
 	{
 		ID:              "chat.new",

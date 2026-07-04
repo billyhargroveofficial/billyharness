@@ -85,7 +85,11 @@ func TestFormatSessionCombinesMessagesAndEvents(t *testing.T) {
 	}
 
 	raw := FormatSession(messages, events, ExportModeRaw)
-	if !strings.Contains(raw, "inspect me") || !strings.Contains(raw, "done") || !strings.Contains(raw, "ref shell.txt") || !strings.Contains(raw, "Tool running shell_exec running") {
+	if !strings.Contains(raw, "inspect me") ||
+		!strings.Contains(raw, "done") ||
+		!strings.Contains(raw, `output_ref="tool-output/shell.txt"`) ||
+		!strings.Contains(raw, `preview="go test ./..."`) ||
+		!strings.Contains(raw, "Tool running shell_exec running") {
 		t.Fatalf("raw session transcript = %q", raw)
 	}
 	if strings.Contains(raw, "EVENTS") {

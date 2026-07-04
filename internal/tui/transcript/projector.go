@@ -3,6 +3,7 @@ package transcript
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -171,6 +172,7 @@ func (p *Projector) appendTextAt(i int, text string) {
 	if i < 0 || i >= len(p.cells) {
 		return
 	}
+	previousRaw := strings.TrimSpace(p.cells[i].RawCopy)
 	content := strings.TrimRight(p.cells[i].Content, "\n")
 	if strings.TrimSpace(content) == "" {
 		p.cells[i].Content = text
@@ -178,6 +180,9 @@ func (p *Projector) appendTextAt(i int, text string) {
 		p.cells[i].Content = content + "\n" + text
 	}
 	p.cells[i].RawCopy = p.cells[i].Content
+	if strings.Contains(previousRaw, "output_ref=") {
+		p.cells[i].RawCopy = previousRaw + "\n" + text
+	}
 	p.cells[i].Updated = time.Now().UTC()
 }
 
@@ -469,30 +474,34 @@ func outputRefRawCopy(event protocol.Event, fallback string) string {
 		name = strings.TrimSpace(ref.Compact.Name)
 	}
 	if name != "" {
-		parts = append(parts, "tool="+name)
+		parts = append(parts, "tool="+quoteRawCopyValue(name))
 	}
 	if ref.OutputRef != "" {
-		parts = append(parts, "output_ref="+ref.OutputRef)
+		parts = append(parts, "output_ref="+quoteRawCopyValue(ref.OutputRef))
 	}
 	if ref.OutputRefID != "" {
-		parts = append(parts, "output_ref_id="+ref.OutputRefID)
+		parts = append(parts, "output_ref_id="+quoteRawCopyValue(ref.OutputRefID))
 	}
 	if ref.OutputRefBytes > 0 {
 		parts = append(parts, fmt.Sprintf("bytes=%d", ref.OutputRefBytes))
 	}
 	if ref.OutputRefSHA256 != "" {
-		parts = append(parts, "sha256="+ref.OutputRefSHA256)
+		parts = append(parts, "sha256="+quoteRawCopyValue(ref.OutputRefSHA256))
 	}
 	if ref.Truncated {
 		parts = append(parts, "truncated=true")
 	}
 	if ref.Compact != nil && strings.TrimSpace(ref.Compact.Preview) != "" {
-		parts = append(parts, "preview="+strings.TrimSpace(ref.Compact.Preview))
+		parts = append(parts, "preview="+quoteRawCopyValue(strings.TrimSpace(ref.Compact.Preview)))
 	}
 	if len(parts) == 0 {
 		return fallback
 	}
 	return strings.Join(parts, " ")
+}
+
+func quoteRawCopyValue(value string) string {
+	return strconv.Quote(strings.TrimSpace(value))
 }
 
 func TurnChangeEventText(value any) string {
