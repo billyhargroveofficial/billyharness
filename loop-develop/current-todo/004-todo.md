@@ -1469,6 +1469,44 @@ Billy asks for final verification.
   content is safe to disclose. Durable session logs are intentionally left as
   replay truth; operator-facing exports are redacted presentation artifacts.
 
+### 2026-07-04 - P0.7 protocol envelope and lifecycle validation before append
+
+- Completed P0.7 slice. Gateway session event append now loads/replays current
+  event state, enriches the candidate event, validates the session record shape,
+  requires a v1 nested protocol envelope, advances a cloned lifecycle validator,
+  and only then appends `events.jsonl`. Rejected events do not consume durable
+  sequence numbers or leave partial JSONL records.
+- `internal/eventlog` lifecycle validation now enforces started run/turn/step
+  ordering for run, turn, step, model, assistant, provider-usage, context,
+  provider-helper, and tool events. Tool attempts are bound to their original
+  `call_id`, including `attempt_started` progress before `tool.call_started`,
+  and closed-artifact validation is available through
+  `ValidateClosedLifecycle` without forcing active session logs to be terminal.
+- Benchmark trace writing now shares the strict append posture: `trace.EventWriter`
+  validates envelope and lifecycle before encoding, preserves gapless sequence
+  numbers after rejected events, and replay still validates records and
+  lifecycle before building summaries. The canonical edge-case trace fixture was
+  updated to include valid run/turn/step ordering.
+- Updated durable docs because event persistence/replay contracts changed:
+  `docs/architecture/runtime-event-system.md`,
+  `docs/architecture/gateway-and-sessions.md`, and
+  `agent-index/docs-manifest.json`.
+- Verification passed before commit:
+  `go test -count=1 ./internal/eventlog ./internal/gateway ./internal/trace`;
+  `go test -count=1 ./internal/clientux/projector ./internal/trace ./internal/eventlog`;
+  `jq . agent-index/docs-manifest.json`;
+  `go test -count=1 ./internal/architecture`;
+  `git diff --check`;
+  `go test -race -count=1 ./internal/eventlog ./internal/gateway`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `e778d17 Validate event lifecycle before append`
+  (`e778d17cecbb148309c87063e17c18710b383455`).
+- Push: `origin/main` updated from `df9afb0` to `e778d17`.
+- Blockers/residual risk: no production gateway/session-store or benchmark
+  artifact replay probe was run for this slice; proof is local focused/race/
+  full-suite/build plus append-time rejection and replay-corruption tests.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
