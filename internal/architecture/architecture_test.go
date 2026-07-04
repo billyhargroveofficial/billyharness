@@ -14,6 +14,7 @@ import (
 )
 
 const internalPrefix = "github.com/billyhargroveofficial/billyharness/internal/"
+const cmdPrefix = "github.com/billyhargroveofficial/billyharness/cmd/"
 
 type goPackage struct {
 	ImportPath string
@@ -56,11 +57,109 @@ func TestInternalPackageBoundaries(t *testing.T) {
 	}
 }
 
+func TestRequiredInternalImports(t *testing.T) {
+	pkgs := internalPackages(t)
+	required := map[string][]string{
+		"gateway":           {"eventlog", "gatewayapi", "gatewaybase", "runtimehost"},
+		"gatewaybase":       {"serviceops"},
+		"gatewayclient":     {"gatewayapi", "gatewaybase"},
+		"runtimehost":       {"agent", "provider", "tools"},
+		"telegrambot":       {"gatewayapi", "gatewayclient"},
+		"tools":             {"tools/discovery", "webtools"},
+		"trace":             {"eventlog", "protocol"},
+		"tui":               {"gatewayapi", "gatewayclient", "tui/runtimeclient"},
+		"tui/runtimeclient": {"runtimehost"},
+	}
+	for name, imports := range required {
+		pkg, ok := pkgs[name]
+		if !ok {
+			t.Errorf("required import assertion references missing internal/%s", name)
+			continue
+		}
+		actual := importSet(pkg.Imports)
+		for _, requiredImport := range imports {
+			full := internalPrefix + requiredImport
+			if !actual[full] {
+				t.Errorf("internal/%s must directly import internal/%s to preserve the documented ownership boundary", name, requiredImport)
+			}
+		}
+	}
+}
+
+func TestCommandPackagesRemainAdapters(t *testing.T) {
+	allowed := map[string]bool{
+		"bench":           true,
+		"commandregistry": true,
+		"config":          true,
+		"credentials":     true,
+		"gateway":         true,
+		"gatewayapi":      true,
+		"gatewaybase":     true,
+		"gatewayclient":   true,
+		"mcpserver":       true,
+		"mcpstatus":       true,
+		"memory":          true,
+		"modelinfo":       true,
+		"promptcommands":  true,
+		"protocol":        true,
+		"provider":        true,
+		"runtimehost":     true,
+		"secrets":         true,
+		"serviceops":      true,
+		"session":         true,
+		"telegrambot":     true,
+		"tools":           true,
+		"tui":             true,
+		"tui/transcript":  true,
+	}
+	for _, pkg := range listPackages(t, "./cmd/...") {
+		if !strings.HasPrefix(pkg.ImportPath, cmdPrefix) {
+			continue
+		}
+		for _, imp := range pkg.Imports {
+			if !strings.HasPrefix(imp, internalPrefix) {
+				continue
+			}
+			short := strings.TrimPrefix(imp, internalPrefix)
+			if !allowed[short] {
+				t.Errorf("%s imports internal/%s; command packages are adapter front doors and this internal import must be reviewed", pkg.ImportPath, short)
+			}
+		}
+	}
+}
+
+func TestTestSupportPackagesStayOutOfRuntimeImports(t *testing.T) {
+	for _, pkg := range listPackages(t, "./...") {
+		if pkg.ImportPath == internalPrefix+"testkit" || pkg.ImportPath == internalPrefix+"testkit/fakeprovider" {
+			continue
+		}
+		for _, imp := range pkg.Imports {
+			if imp == internalPrefix+"testkit" || strings.HasPrefix(imp, internalPrefix+"testkit/") {
+				t.Errorf("%s imports %s from non-test code; testkit packages must stay in tests or explicit internal test support", pkg.ImportPath, imp)
+			}
+		}
+	}
+}
+
 func internalPackages(t *testing.T) map[string]goPackage {
+	t.Helper()
+	pkgs := map[string]goPackage{}
+	for _, pkg := range listPackages(t, "./internal/...") {
+		if !strings.HasPrefix(pkg.ImportPath, internalPrefix) {
+			continue
+		}
+		name := strings.TrimPrefix(pkg.ImportPath, internalPrefix)
+		pkgs[name] = pkg
+	}
+	return pkgs
+}
+
+func listPackages(t *testing.T, patterns ...string) []goPackage {
 	t.Helper()
 	root := repoRoot(t)
 	goBin := filepath.Join(runtime.GOROOT(), "bin", "go")
-	cmd := exec.Command(goBin, "list", "-json", "./internal/...")
+	args := append([]string{"list", "-json"}, patterns...)
+	cmd := exec.Command(goBin, args...)
 	cmd.Dir = root
 	output, err := cmd.Output()
 	if err != nil {
@@ -70,23 +169,26 @@ func internalPackages(t *testing.T) map[string]goPackage {
 		t.Fatalf("go list failed: %v", err)
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(output)))
-	pkgs := map[string]goPackage{}
+	var pkgs []goPackage
 	for {
 		var pkg goPackage
 		err := decoder.Decode(&pkg)
 		if errors.Is(err, io.EOF) {
-			break
+			return pkgs
 		}
 		if err != nil {
 			t.Fatalf("decode go list JSON: %v", err)
 		}
-		if !strings.HasPrefix(pkg.ImportPath, internalPrefix) {
-			continue
-		}
-		name := strings.TrimPrefix(pkg.ImportPath, internalPrefix)
-		pkgs[name] = pkg
+		pkgs = append(pkgs, pkg)
 	}
-	return pkgs
+}
+
+func importSet(imports []string) map[string]bool {
+	out := make(map[string]bool, len(imports))
+	for _, imp := range imports {
+		out[imp] = true
+	}
+	return out
 }
 
 func repoRoot(t *testing.T) string {
