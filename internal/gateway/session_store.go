@@ -30,9 +30,15 @@ const (
 )
 
 type sessionStore struct {
-	dir      string
-	mu       sync.Mutex
-	eventSeq map[string]int64
+	dir        string
+	mu         sync.Mutex
+	eventSeq   map[string]int64
+	eventState map[string]sessionEventAppendState
+}
+
+type sessionEventAppendState struct {
+	seq       int64
+	lifecycle *eventlog.LifecycleValidator
 }
 
 type storedSession struct {
@@ -152,8 +158,9 @@ type storedTurnChange struct {
 
 func newSessionStore(dir string) *sessionStore {
 	return &sessionStore{
-		dir:      filepath.Clean(dir),
-		eventSeq: map[string]int64{},
+		dir:        filepath.Clean(dir),
+		eventSeq:   map[string]int64{},
+		eventState: map[string]sessionEventAppendState{},
 	}
 }
 
@@ -345,14 +352,14 @@ func (s *sessionStore) AppendEvent(session *Session, event protocol.Event) (prot
 	}
 
 	eventsPath := filepath.Join(sessionDir, sessionFileName(manifest.EventsJSONL, sessionEventsJSONLName))
-	seq := s.eventSeq[id]
-	if seq == 0 {
-		seq, err = lastSessionEventSeq(eventsPath, id)
+	state, ok := s.eventState[id]
+	if !ok || state.lifecycle == nil {
+		state, err = loadSessionEventAppendState(eventsPath, id)
 		if err != nil {
 			return event, err
 		}
 	}
-	seq++
+	seq := state.seq + 1
 	status := session.Status()
 	now := time.Now().UTC()
 	storedEvent := protocol.EnrichEvent(event, protocol.EventEnvelope{
@@ -371,10 +378,20 @@ func (s *sessionStore) AppendEvent(session *Session, event protocol.Event) (prot
 		EventType:     string(storedEvent.Type),
 		Event:         storedEvent,
 	}
+	if err := validateSessionEventRecordForAppend(id, seq, record); err != nil {
+		return event, err
+	}
+	nextLifecycle := state.lifecycle.Clone()
+	if storedEvent.Type != "" {
+		if err := nextLifecycle.Observe(storedEvent); err != nil {
+			return event, fmt.Errorf("invalid event lifecycle: %w", err)
+		}
+	}
 	if err := eventlog.AppendJSONL(eventsPath, record); err != nil {
 		return event, err
 	}
 	s.eventSeq[id] = seq
+	s.eventState[id] = sessionEventAppendState{seq: seq, lifecycle: nextLifecycle}
 	return storedEvent, nil
 }
 
@@ -748,7 +765,13 @@ func replaySessionHistory(path, sessionID string) (replayedSessionHistory, error
 }
 
 func lastSessionEventSeq(path, sessionID string) (int64, error) {
+	state, err := loadSessionEventAppendState(path, sessionID)
+	return state.seq, err
+}
+
+func loadSessionEventAppendState(path, sessionID string) (sessionEventAppendState, error) {
 	validator := newSessionEventRecordValidator(sessionID)
+	lifecycle := eventlog.NewLifecycleValidator()
 	err := eventlog.ReplayJSONL[sessionEventRecord](path, eventlog.JSONLOptions{MissingOK: true}, func(item eventlog.JSONLRecord[sessionEventRecord]) error {
 		record := item.Value
 		recordNo := validator.NextSeq()
@@ -762,12 +785,42 @@ func lastSessionEventSeq(path, sessionID string) (int64, error) {
 		}); err != nil {
 			return eventlog.NewCorruptionError(path, item.Line, recordNo, "", err)
 		}
+		if record.Event.Type != "" {
+			if err := lifecycle.Observe(record.Event); err != nil {
+				return eventlog.NewCorruptionError(path, item.Line, recordNo, "lifecycle", err)
+			}
+		}
 		return nil
 	})
 	if err != nil {
-		return validator.LastSeq(), err
+		return sessionEventAppendState{seq: validator.LastSeq(), lifecycle: lifecycle}, err
 	}
-	return validator.LastSeq(), nil
+	return sessionEventAppendState{seq: validator.LastSeq(), lifecycle: lifecycle}, nil
+}
+
+func validateSessionEventRecordForAppend(sessionID string, seq int64, record sessionEventRecord) error {
+	if record.SchemaVersion != gatewaySessionSchemaVersion {
+		return fmt.Errorf("unsupported schema_version %d", record.SchemaVersion)
+	}
+	if record.Seq != seq {
+		return fmt.Errorf("event seq = %d, want %d", record.Seq, seq)
+	}
+	if record.SessionID != sessionID {
+		return fmt.Errorf("session_id = %q, want %q", record.SessionID, sessionID)
+	}
+	if record.EventType != "" && record.Event.Type != "" && record.EventType != string(record.Event.Type) {
+		return fmt.Errorf("event_type = %q, event.type = %q", record.EventType, record.Event.Type)
+	}
+	if record.Event.SchemaVersion == 0 {
+		return fmt.Errorf("missing event schema_version")
+	}
+	if record.Event.Seq != seq {
+		return fmt.Errorf("event seq = %d, record seq = %d", record.Event.Seq, seq)
+	}
+	if err := eventlog.ValidateEnvelope(record.Event); err != nil {
+		return fmt.Errorf("invalid event envelope: %w", err)
+	}
+	return nil
 }
 
 func replaySessionStatus(path, sessionID string) (SessionStatus, bool, error) {

@@ -51,6 +51,14 @@ envelope. The validator is scope-neutral: trace replay uses run scope in
 [internal/trace/trace.go](../../internal/trace/trace.go), and other stores can
 use their own scope names while sharing the same corruption behavior.
 
+Strict append paths validate before persistence. Gateway session events and
+benchmark trace events enrich an event, validate the v1 nested envelope, clone
+and advance lifecycle state, and only then write JSONL. Validation failures do
+not consume a durable sequence number and do not leave a partial event record.
+Legacy replay/import mode is explicit: callers can omit `RequireEnvelope` only
+for old records that predate schema-versioned envelopes; new durable writers
+must emit schema version `1`.
+
 ## Protocol Envelope
 
 `protocol.Event` has these durable identity fields:
@@ -143,23 +151,34 @@ that a child `parent_step_id` reference a known started step.
 [eventlog.LifecycleValidator](../../internal/eventlog/eventlog.go) currently
 enforces these replay rules:
 
-- terminal run events require a started run and reject duplicate terminal run
-  events for the same `run_id`;
-- `turn.completed` requires a started turn and rejects duplicate terminal turn
-  events for the same run/turn pair;
-- `step.completed` requires a started step and rejects duplicate terminal step
-  events for the same run/turn/step tuple;
+- `run.started` must carry `run_id`; terminal run events require a started run
+  and reject duplicate terminal run events for the same `run_id`;
+- turn events require a started run; `turn.completed` requires a started turn
+  and rejects duplicate terminal turn events for the same run/turn pair;
+- step events require a started run and turn; `step.completed` requires a
+  started step and rejects duplicate terminal step events for the same
+  run/turn/step tuple;
 - `step.started` with `parent_step_id` requires the parent step to have been
   started first;
+- model-call, assistant-delta, assistant-reasoning, and provider-usage events
+  require the enclosing run, turn, and step to have started;
+- context threshold, compaction, and provider-helper usage events require a
+  started run;
 - `tool.call_started` requires a previous `tool.call_requested` with the same
   run/call key and a non-empty attempt ID;
 - `tool.call_finished`, `tool.call_failed`, and `tool.call_aborted` require a
-  previous call request and attempt start, and reject duplicate terminal
-  attempt events for the same run/attempt key.
+  previous call request and attempt start, bind `attempt_id` to the original
+  `call_id`, and reject duplicate terminal attempt events for the same
+  run/attempt key;
+- `tool.call_progress` events that carry an `attempt_id` must reference the
+  same call as the started attempt, and `attempt_started` progress binds the
+  attempt to its first call before the terminal start event arrives.
 
 Trace replay in [internal/trace/trace.go](../../internal/trace/trace.go) runs
 both `RecordValidator` and `LifecycleValidator` before it builds counters or
-timeline rows. Benchmark verification in
+timeline rows. `trace.EventWriter` uses the same envelope/lifecycle checks
+before encoding a record and leaves the writer sequence unchanged when
+validation fails. Benchmark verification in
 [internal/bench/bench.go](../../internal/bench/bench.go) treats finished,
 failed, and aborted tool attempts as terminal outcomes.
 
@@ -253,10 +272,12 @@ marker event. It does not infer tool-call history as executable runtime state.
 These are current implementation boundaries, not desired behavior:
 
 - Lifecycle validation does not prove every semantic relationship. It does not
-  currently require `model.call_finished` to follow `model.call_started`, does
-  not require every started run/turn/step/attempt to be terminal by end of file,
-  and treats hook/session/import/gateway hint events mostly through envelope
+  currently require `model.call_finished` to follow `model.call_started`, and
+  treats hook/session/import/gateway hint events mostly through envelope
   validation and replay counters.
+- Incremental append and replay do not require every started run/turn/step or
+  attempt to be terminal by end of file, because live session logs can be open.
+  Closed artifacts can opt into `eventlog.ValidateClosedLifecycle`.
 - `eventlog.ReplayJSONL` is a full scan. Benchmark files include replay-after
   sequence benchmarks, but there is no shared sparse index in `internal/eventlog`.
 - Tool retries are not implemented as multiple attempts in the agent runtime;

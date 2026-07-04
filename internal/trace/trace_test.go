@@ -229,6 +229,7 @@ func TestReplayEventsAuditsToolOutputRefs(t *testing.T) {
 	var out bytes.Buffer
 	writer := NewEventWriter("run-refs", &out)
 	events := []protocol.Event{
+		{Type: protocol.EventRunStarted},
 		{
 			Type:   protocol.EventToolCallRequested,
 			CallID: "call-valid",
@@ -589,8 +590,6 @@ func TestGoldenRunBundleIncludesReplayInputs(t *testing.T) {
 }
 
 func TestReplayEventsRejectsLifecycleViolation(t *testing.T) {
-	var out bytes.Buffer
-	writer := NewEventWriter("run-1", &out)
 	events := []protocol.Event{
 		{Type: protocol.EventRunStarted},
 		{
@@ -607,15 +606,8 @@ func TestReplayEventsRejectsLifecycleViolation(t *testing.T) {
 			},
 		},
 	}
-	for _, event := range events {
-		if _, err := writer.Record("task-1", event); err != nil {
-			t.Fatal(err)
-		}
-	}
 	path := filepath.Join(t.TempDir(), "events.jsonl")
-	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeUncheckedTraceEvents(t, path, "run-1", events)
 
 	_, err := ReplayEvents(path)
 	if err == nil || !strings.Contains(err.Error(), "matching call_id") {
@@ -623,9 +615,41 @@ func TestReplayEventsRejectsLifecycleViolation(t *testing.T) {
 	}
 }
 
-func TestReplayEventsRejectsDuplicateTerminalToolAttempt(t *testing.T) {
+func TestEventWriterRejectsLifecycleViolationBeforeEncode(t *testing.T) {
 	var out bytes.Buffer
 	writer := NewEventWriter("run-1", &out)
+	if _, err := writer.Record("task-1", protocol.Event{Type: protocol.EventRunStarted}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := writer.Record("task-1", protocol.Event{
+		Type:      protocol.EventToolCallFinished,
+		CallID:    "call-1",
+		AttemptID: "attempt-1",
+		Data: protocol.ToolResult{
+			CallID:  "call-1",
+			Name:    "time_now",
+			Content: "ok",
+			Metadata: map[string]any{
+				"attempt_id": "attempt-1",
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid event lifecycle") || !strings.Contains(err.Error(), "matching call_id") {
+		t.Fatalf("expected append-time lifecycle error, got %v", err)
+	}
+	if lines := strings.Count(strings.TrimSpace(out.String()), "\n") + 1; lines != 1 {
+		t.Fatalf("invalid event should not be encoded, output=%q", out.String())
+	}
+	if _, err := writer.Record("task-1", protocol.Event{Type: protocol.EventRunCompleted}); err != nil {
+		t.Fatal(err)
+	}
+	records := testkit.ReadTraceRecords(t, writeTraceBytes(t, out.Bytes()))
+	if len(records) != 2 || records[0].Seq != 1 || records[1].Seq != 2 || records[1].EventType != string(protocol.EventRunCompleted) {
+		t.Fatalf("valid event after rejection should stay gapless: %#v", records)
+	}
+}
+
+func TestReplayEventsRejectsDuplicateTerminalToolAttempt(t *testing.T) {
 	attemptID := "turn-001:tool-call-001:attempt-001"
 	events := []protocol.Event{
 		{Type: protocol.EventRunStarted},
@@ -648,15 +672,8 @@ func TestReplayEventsRejectsDuplicateTerminalToolAttempt(t *testing.T) {
 			},
 		}},
 	}
-	for _, event := range events {
-		if _, err := writer.Record("task-1", event); err != nil {
-			t.Fatal(err)
-		}
-	}
 	path := filepath.Join(t.TempDir(), "events.jsonl")
-	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeUncheckedTraceEvents(t, path, "run-1", events)
 
 	_, err := ReplayEvents(path)
 	if err == nil || !strings.Contains(err.Error(), "duplicate terminal tool attempt event") {
@@ -664,11 +681,51 @@ func TestReplayEventsRejectsDuplicateTerminalToolAttempt(t *testing.T) {
 	}
 }
 
+func writeUncheckedTraceEvents(t *testing.T, path, runID string, events []protocol.Event) {
+	t.Helper()
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	now := time.Unix(10, 0).UTC().Format(time.RFC3339Nano)
+	for i, event := range events {
+		seq := int64(i + 1)
+		enriched := protocol.EnrichEvent(event, protocol.EventEnvelope{
+			Seq:    seq,
+			Source: protocol.EventSourceBench,
+			RunID:  runID,
+			TS:     now,
+		})
+		enriched.Seq = seq
+		if err := enc.Encode(EventRecord{
+			SchemaVersion: CurrentManifestVersion,
+			Seq:           seq,
+			RunID:         runID,
+			TaskID:        "task-1",
+			Timestamp:     time.Unix(10, 0).UTC(),
+			EventType:     string(enriched.Type),
+			Event:         enriched,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeTraceBytes(t *testing.T, body []byte) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestReplayEventsRejectsSequenceGap(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "events.jsonl")
 	data := strings.Join([]string{
-		`{"schema_version":1,"seq":1,"run_id":"run-1","event_type":"run.started","event":{"type":"run.started"}}`,
-		`{"schema_version":1,"seq":3,"run_id":"run-1","event_type":"run.completed","event":{"type":"run.completed"}}`,
+		`{"schema_version":1,"seq":1,"run_id":"run-1","event_type":"run.started","event":{"type":"run.started","run_id":"run-1"}}`,
+		`{"schema_version":1,"seq":3,"run_id":"run-1","event_type":"run.completed","event":{"type":"run.completed","run_id":"run-1"}}`,
 		"",
 	}, "\n")
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {

@@ -214,6 +214,13 @@ func TestLifecycleValidatorRejectsOrderingViolations(t *testing.T) {
 			want:   "without started run",
 		},
 		{
+			name: "turn without started run",
+			events: []protocol.Event{
+				{Type: protocol.EventTurnStarted, RunID: "run-1", TurnID: "turn-1"},
+			},
+			want: "without started run",
+		},
+		{
 			name: "orphan step completion",
 			events: []protocol.Event{
 				{Type: protocol.EventRunStarted, RunID: "run-1"},
@@ -221,6 +228,15 @@ func TestLifecycleValidatorRejectsOrderingViolations(t *testing.T) {
 				{Type: protocol.EventStepCompleted, RunID: "run-1", TurnID: "turn-1", StepID: "step-1"},
 			},
 			want: "orphan step completion",
+		},
+		{
+			name: "model call without started step",
+			events: []protocol.Event{
+				{Type: protocol.EventRunStarted, RunID: "run-1"},
+				{Type: protocol.EventTurnStarted, RunID: "run-1", TurnID: "turn-1"},
+				{Type: protocol.EventModelCallStarted, RunID: "run-1", TurnID: "turn-1", StepID: "step-1"},
+			},
+			want: "without started step",
 		},
 		{
 			name: "tool result without matching call id",
@@ -238,6 +254,28 @@ func TestLifecycleValidatorRejectsOrderingViolations(t *testing.T) {
 				{Type: protocol.EventToolCallFinished, RunID: "run-1", CallID: "call-1", AttemptID: "attempt-1"},
 			},
 			want: "matching attempt_id",
+		},
+		{
+			name: "tool attempt cannot move between calls",
+			events: []protocol.Event{
+				{Type: protocol.EventRunStarted, RunID: "run-1"},
+				{Type: protocol.EventToolCallRequested, RunID: "run-1", CallID: "call-1"},
+				{Type: protocol.EventToolCallStarted, RunID: "run-1", CallID: "call-1", AttemptID: "attempt-1"},
+				{Type: protocol.EventToolCallRequested, RunID: "run-1", CallID: "call-2"},
+				{Type: protocol.EventToolCallFinished, RunID: "run-1", CallID: "call-2", AttemptID: "attempt-1"},
+			},
+			want: "was started for call_id",
+		},
+		{
+			name: "attempt started progress cannot move between calls",
+			events: []protocol.Event{
+				{Type: protocol.EventRunStarted, RunID: "run-1"},
+				{Type: protocol.EventToolCallRequested, RunID: "run-1", CallID: "call-1"},
+				{Type: protocol.EventToolCallProgress, RunID: "run-1", CallID: "call-1", AttemptID: "attempt-1", Data: protocol.ToolProgressEvent{CallID: "call-1", AttemptID: "attempt-1", Phase: "attempt_started", Status: protocol.StepStatusStarted}},
+				{Type: protocol.EventToolCallRequested, RunID: "run-1", CallID: "call-2"},
+				{Type: protocol.EventToolCallStarted, RunID: "run-1", CallID: "call-2", AttemptID: "attempt-1"},
+			},
+			want: "was started for call_id",
 		},
 		{
 			name: "duplicate tool request",
@@ -351,6 +389,17 @@ func TestLifecycleValidatorRejectsOrderingViolations(t *testing.T) {
 				t.Fatalf("error = %v, want containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestLifecycleValidatorRejectsOpenTerminalStateWhenRequired(t *testing.T) {
+	err := ValidateClosedLifecycle([]protocol.Event{
+		{Type: protocol.EventRunStarted, RunID: "run-1"},
+		{Type: protocol.EventTurnStarted, RunID: "run-1", TurnID: "turn-1"},
+		{Type: protocol.EventStepStarted, RunID: "run-1", TurnID: "turn-1", StepID: "step-1"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "run \"run-1\" has no terminal event") {
+		t.Fatalf("closed lifecycle error = %v", err)
 	}
 }
 

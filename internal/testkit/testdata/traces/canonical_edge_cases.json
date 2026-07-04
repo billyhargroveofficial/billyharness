@@ -56,9 +56,11 @@
       "valid": true,
       "events": [
         {"schema_version":1,"seq":1,"source":"agent","ts":"2026-07-01T01:04:01Z","run_id":"run-provider-error","type":"run.started"},
-        {"schema_version":1,"seq":2,"source":"agent","ts":"2026-07-01T01:04:02Z","run_id":"run-provider-error","turn_id":"turn-001","step_id":"turn-001:model-call-001","type":"model.call_started","data":{"request_id":"req-provider-error","provider_id":"mock","model_id":"mock"}},
-        {"schema_version":1,"seq":3,"source":"agent","ts":"2026-07-01T01:04:03Z","run_id":"run-provider-error","turn_id":"turn-001","step_id":"turn-001:model-call-001","type":"assistant.content_delta","data":"partial answer before provider error"},
-        {"schema_version":1,"seq":4,"source":"agent","ts":"2026-07-01T01:04:04Z","run_id":"run-provider-error","type":"run.failed","data":"provider stream closed early"}
+        {"schema_version":1,"seq":2,"source":"agent","ts":"2026-07-01T01:04:02Z","run_id":"run-provider-error","turn_id":"turn-001","type":"turn.started","data":{"turn_id":"turn-001","round":1,"status":"started"}},
+        {"schema_version":1,"seq":3,"source":"agent","ts":"2026-07-01T01:04:03Z","run_id":"run-provider-error","turn_id":"turn-001","step_id":"turn-001:model-call-001","type":"step.started","data":{"turn_id":"turn-001","step_id":"turn-001:model-call-001","round":1,"kind":"model_call","status":"started"}},
+        {"schema_version":1,"seq":4,"source":"agent","ts":"2026-07-01T01:04:04Z","run_id":"run-provider-error","turn_id":"turn-001","step_id":"turn-001:model-call-001","type":"model.call_started","data":{"request_id":"req-provider-error","provider_id":"mock","model_id":"mock"}},
+        {"schema_version":1,"seq":5,"source":"agent","ts":"2026-07-01T01:04:05Z","run_id":"run-provider-error","turn_id":"turn-001","step_id":"turn-001:model-call-001","type":"assistant.content_delta","data":"partial answer before provider error"},
+        {"schema_version":1,"seq":6,"source":"agent","ts":"2026-07-01T01:04:06Z","run_id":"run-provider-error","type":"run.failed","data":"provider stream closed early"}
       ]
     },
     {

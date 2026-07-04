@@ -163,7 +163,9 @@ Store semantics:
   A new record is appended when the message hash changes.
 - `events.jsonl` stores protocol events enriched by the gateway with monotonic
   `seq`, source `gateway`, `run_id`, timestamp, event type, session id, and run
-  sequence.
+  sequence. The store validates the session record, v1 protocol envelope, and
+  lifecycle ordering before appending; rejected events do not consume sequence
+  numbers or become durable history.
 - `inputs.jsonl` stores input admission, promotion, completion, and
   restart-ambiguity records for idempotency.
 - snapshot JSON files capture selected runtime/config/model/MCP state for
@@ -175,6 +177,9 @@ Replay is strict. `replaySessionHistory`, `lastSessionEventSeq`,
 `replaySessionStatus`, `replaySessionEventsAfter`, and `replaySessionInputs`
 validate schema version, monotonic sequence, expected `session_id`, event type,
 and lifecycle where applicable through `internal/eventlog`.
+Session event replay allows open active runs, turns, steps, and tool attempts;
+closed-lifecycle checks are reserved for callers that know an artifact is
+complete.
 
 Offline helpers in `session_export.go` and `session_inspect.go` load transcripts,
 list stored sessions, inspect manifests/files/event types/output refs/turn

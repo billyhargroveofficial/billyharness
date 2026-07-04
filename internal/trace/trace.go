@@ -62,6 +62,7 @@ type EventWriter struct {
 	now           func() time.Time
 	sanitize      func(any) any
 	seq           int64
+	lifecycle     *eventlog.LifecycleValidator
 	payloadDir    string
 	payloadPolicy func(protocol.Event) bool
 }
@@ -91,8 +92,9 @@ func WithPayloadDir(dir string, policy func(protocol.Event) bool) EventWriterOpt
 
 func NewEventWriter(runID string, writer io.Writer, opts ...EventWriterOption) *EventWriter {
 	eventWriter := &EventWriter{
-		runID:   runID,
-		encoder: json.NewEncoder(writer),
+		runID:     runID,
+		encoder:   json.NewEncoder(writer),
+		lifecycle: eventlog.NewLifecycleValidator(),
 		now: func() time.Time {
 			return time.Now().UTC()
 		},
@@ -109,17 +111,21 @@ func (w *EventWriter) Record(taskID string, event protocol.Event) (EventRecord, 
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.seq++
+	seq := w.seq + 1
 	now := w.now()
 	event = protocol.EnrichEvent(event, protocol.EventEnvelope{
-		Seq:    w.seq,
+		Seq:    seq,
 		Source: protocol.EventSourceBench,
 		RunID:  w.runID,
 		TS:     now.UTC().Format(time.RFC3339Nano),
 	})
-	event.Seq = w.seq
+	event.Seq = seq
 	if err := eventlog.ValidateEnvelope(event); err != nil {
 		return EventRecord{}, err
+	}
+	nextLifecycle := w.lifecycle.Clone()
+	if err := nextLifecycle.Observe(event); err != nil {
+		return EventRecord{}, fmt.Errorf("invalid event lifecycle: %w", err)
 	}
 	value := any(event)
 	if w.sanitize != nil {
@@ -137,7 +143,7 @@ func (w *EventWriter) Record(taskID string, event protocol.Event) (EventRecord, 
 	}
 	record := EventRecord{
 		SchemaVersion: CurrentManifestVersion,
-		Seq:           w.seq,
+		Seq:           seq,
 		RunID:         w.runID,
 		TaskID:        taskID,
 		Timestamp:     now,
@@ -146,7 +152,12 @@ func (w *EventWriter) Record(taskID string, event protocol.Event) (EventRecord, 
 		Event:         recordEvent,
 		PayloadRefs:   payloadRefs,
 	}
-	return record, w.encoder.Encode(record)
+	if err := w.encoder.Encode(record); err != nil {
+		return EventRecord{}, err
+	}
+	w.seq = seq
+	w.lifecycle = nextLifecycle
+	return record, nil
 }
 
 func (w *EventWriter) writePayloads(event protocol.Event, value any) ([]PayloadRef, error) {

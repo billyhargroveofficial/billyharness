@@ -290,6 +290,72 @@ func TestStoredSessionContextReconstructsCompactionEpochs(t *testing.T) {
 	}
 }
 
+func TestSessionStoreAppendRejectsInvalidEventsBeforeDurableWrite(t *testing.T) {
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	store := newSessionStore(storeDir)
+	session := newGatewaySession("strict-append", time.Now().UTC(), []protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	if err := store.Save(session); err != nil {
+		t.Fatal(err)
+	}
+	runID := gatewaySessionRunID(session.ID, 1)
+	if _, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventRunStarted, RunID: runID}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := store.AppendEvent(session, protocol.Event{
+		Type:      protocol.EventToolCallFinished,
+		RunID:     runID,
+		CallID:    "call-missing",
+		AttemptID: "attempt-missing",
+		Data:      protocol.ToolResult{CallID: "call-missing", Content: "should not persist", Metadata: map[string]any{"attempt_id": "attempt-missing"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid event lifecycle") || !strings.Contains(err.Error(), "matching call_id") {
+		t.Fatalf("expected lifecycle rejection, got %v", err)
+	}
+	eventsPath := filepath.Join(storeDir, session.ID, sessionEventsJSONLName)
+	records := readSessionEventRecords(t, eventsPath)
+	if len(records) != 1 || records[0].Seq != 1 || records[0].Event.Type != protocol.EventRunStarted {
+		t.Fatalf("invalid event was persisted: %#v", records)
+	}
+
+	if _, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventRunCompleted, RunID: runID}); err != nil {
+		t.Fatal(err)
+	}
+	records = readSessionEventRecords(t, eventsPath)
+	if len(records) != 2 || records[1].Seq != 2 || records[1].Event.Type != protocol.EventRunCompleted {
+		t.Fatalf("valid append after rejection should stay gapless: %#v", records)
+	}
+}
+
+func TestSessionStoreAppendRejectsMalformedEnvelopeBeforeDurableWrite(t *testing.T) {
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	store := newSessionStore(storeDir)
+	session := newGatewaySession("strict-envelope", time.Now().UTC(), []protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	if err := store.Save(session); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.AppendEvent(session, protocol.Event{
+		SchemaVersion: protocol.EventSchemaVersion + 1,
+		Type:          protocol.EventRunStarted,
+		RunID:         gatewaySessionRunID(session.ID, 1),
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported event schema_version") {
+		t.Fatalf("expected malformed envelope rejection, got %v", err)
+	}
+	eventsPath := filepath.Join(storeDir, session.ID, sessionEventsJSONLName)
+	if _, statErr := os.Stat(eventsPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("malformed envelope should not create event log, stat err=%v", statErr)
+	}
+
+	stored, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventRunStarted, RunID: gatewaySessionRunID(session.ID, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Seq != 1 {
+		t.Fatalf("first valid append seq = %d, want 1", stored.Seq)
+	}
+}
+
 func TestSessionStoreLoadAllSurfacesCorruptSessions(t *testing.T) {
 	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
 	goodSession := newGatewaySession("good-session", time.Now().UTC(), []protocol.Message{
@@ -453,6 +519,12 @@ func TestSessionStoreRedoStateClearsOnNewTurnChange(t *testing.T) {
 	session := newGatewaySession("redo-state", time.Now().UTC(), []protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
 	changeA := protocol.TurnChangeEvent{ChangeID: "change-a", RunID: "run-1", TurnID: "turn-1", Status: "recorded", FileCount: 1, Modified: 1, Reversible: true}
 	changeB := protocol.TurnChangeEvent{ChangeID: "change-b", RunID: "run-1", TurnID: "turn-1", Status: "recorded", FileCount: 1, Added: 1, Reversible: true}
+	if _, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventRunStarted, RunID: "run-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventTurnStarted, RunID: "run-1", TurnID: "turn-1"}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventTurnChangeRecorded, Data: changeA}); err != nil {
 		t.Fatal(err)
 	}
@@ -768,6 +840,9 @@ func TestGatewaySessionInspectorVerifiesOutputRefs(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(body)
+	if _, err := session.publish(protocol.Event{Type: protocol.EventRunStarted, RunID: "run-1"}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := session.publish(protocol.Event{Type: protocol.EventToolCallRequested, RunID: "run-1", CallID: "call-1", Data: protocol.ToolCall{ID: "call-1", Name: "big_output"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -856,6 +931,9 @@ func TestStoredSessionResumeKeepsLargeOutputRefPreviewAndWarnsMissingArtifact(t 
 	})
 	store := newSessionStore(storeDir)
 	if err := store.Save(session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventRunStarted, RunID: "run-1"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventToolCallRequested, RunID: "run-1", CallID: "call-fs", Data: protocol.ToolCall{ID: "call-fs", Name: "fs_read_file"}}); err != nil {

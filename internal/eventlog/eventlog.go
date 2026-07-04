@@ -146,6 +146,7 @@ type LifecycleValidator struct {
 	terminalStep     map[string]protocol.EventType
 	calls            map[string]struct{}
 	attempts         map[string]struct{}
+	attemptCalls     map[string]string
 	terminalAttempts map[string]protocol.EventType
 	userInputs       map[string]struct{}
 }
@@ -172,6 +173,36 @@ func ValidateLifecycle(events []protocol.Event) error {
 	return nil
 }
 
+func ValidateClosedLifecycle(events []protocol.Event) error {
+	validator := NewLifecycleValidator()
+	for _, event := range events {
+		if err := validator.Observe(event); err != nil {
+			return err
+		}
+	}
+	return validator.ValidateClosed()
+}
+
+func (v *LifecycleValidator) Clone() *LifecycleValidator {
+	if v == nil {
+		return NewLifecycleValidator()
+	}
+	v.ensure()
+	return &LifecycleValidator{
+		runs:             cloneSet(v.runs),
+		terminalRun:      cloneEventTypeMap(v.terminalRun),
+		turns:            cloneSet(v.turns),
+		terminalTurn:     cloneEventTypeMap(v.terminalTurn),
+		steps:            cloneStepStateMap(v.steps),
+		terminalStep:     cloneEventTypeMap(v.terminalStep),
+		calls:            cloneSet(v.calls),
+		attempts:         cloneSet(v.attempts),
+		attemptCalls:     cloneStringMap(v.attemptCalls),
+		terminalAttempts: cloneEventTypeMap(v.terminalAttempts),
+		userInputs:       cloneSet(v.userInputs),
+	}
+}
+
 func (v *LifecycleValidator) Observe(event protocol.Event) error {
 	if v == nil {
 		return nil
@@ -186,9 +217,10 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 
 	switch event.Type {
 	case protocol.EventRunStarted:
-		if runID != "" {
-			v.runs[runID] = struct{}{}
+		if runID == "" {
+			return fmt.Errorf("%s missing run_id", event.Type)
 		}
+		v.runs[runID] = struct{}{}
 	case protocol.EventRunCompleted, protocol.EventRunFailed:
 		if runID == "" {
 			return fmt.Errorf("%s missing run_id", event.Type)
@@ -201,10 +233,17 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 		}
 		v.terminalRun[runID] = event.Type
 	case protocol.EventTurnStarted:
-		if runID != "" && turnID != "" {
-			v.turns[turnKey(runID, turnID)] = struct{}{}
+		if err := v.requireKnownRun(event.Type, runID); err != nil {
+			return err
 		}
+		if turnID == "" {
+			return fmt.Errorf("%s missing turn_id", event.Type)
+		}
+		v.turns[turnKey(runID, turnID)] = struct{}{}
 	case protocol.EventTurnCompleted:
+		if err := v.requireKnownRun(event.Type, runID); err != nil {
+			return err
+		}
 		if turnID == "" {
 			return fmt.Errorf("%s missing turn_id", event.Type)
 		}
@@ -216,9 +255,27 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 			return fmt.Errorf("duplicate terminal turn event for %q: got %s after %s", turnID, event.Type, previous)
 		}
 		v.terminalTurn[key] = event.Type
+	case protocol.EventTurnChangeRecorded, protocol.EventTurnChangeReverted:
+		if err := v.requireKnownRun(event.Type, runID); err != nil {
+			return err
+		}
+		if turnID != "" {
+			if _, ok := v.turns[turnKey(runID, turnID)]; !ok {
+				return fmt.Errorf("%s without started turn %q", event.Type, turnID)
+			}
+		}
 	case protocol.EventStepStarted:
+		if err := v.requireKnownRun(event.Type, runID); err != nil {
+			return err
+		}
+		if turnID == "" {
+			return fmt.Errorf("%s missing turn_id", event.Type)
+		}
+		if _, ok := v.turns[turnKey(runID, turnID)]; !ok {
+			return fmt.Errorf("%s without started turn %q", event.Type, turnID)
+		}
 		if stepID == "" {
-			return nil
+			return fmt.Errorf("%s missing step_id", event.Type)
 		}
 		if event.ParentStepID != "" {
 			if _, ok := v.steps[stepKey(runID, turnID, event.ParentStepID)]; !ok {
@@ -227,6 +284,15 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 		}
 		v.steps[stepKey(runID, turnID, stepID)] = stepState{runID: runID, turnID: turnID, stepID: stepID}
 	case protocol.EventStepCompleted:
+		if err := v.requireKnownRun(event.Type, runID); err != nil {
+			return err
+		}
+		if turnID == "" {
+			return fmt.Errorf("%s missing turn_id", event.Type)
+		}
+		if _, ok := v.turns[turnKey(runID, turnID)]; !ok {
+			return fmt.Errorf("%s without started turn %q", event.Type, turnID)
+		}
 		if stepID == "" {
 			return fmt.Errorf("%s missing step_id", event.Type)
 		}
@@ -238,7 +304,18 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 			return fmt.Errorf("duplicate terminal step event for %q: got %s after %s", stepID, event.Type, previous)
 		}
 		v.terminalStep[key] = event.Type
+	case protocol.EventModelCallStarted, protocol.EventModelCallFinished, protocol.EventAssistantDelta, protocol.EventAssistantReasoning, protocol.EventProviderUsageUpdate:
+		if err := v.requireKnownStep(event.Type, runID, turnID, stepID); err != nil {
+			return err
+		}
+	case protocol.EventContextThreshold, protocol.EventContextCompacted, protocol.EventProviderHelperUsage:
+		if err := v.requireKnownRun(event.Type, runID); err != nil {
+			return err
+		}
 	case protocol.EventToolCallRequested:
+		if err := v.requireKnownRun(event.Type, runID); err != nil {
+			return err
+		}
 		if callID == "" {
 			return fmt.Errorf("%s missing call_id", event.Type)
 		}
@@ -261,8 +338,19 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 			if previous, ok := v.terminalAttempts[key]; ok && !allowedPostTerminalProgressPhase(phase) {
 				return fmt.Errorf("%s after terminal tool attempt %q: got phase %q after %s", event.Type, attemptID, phase, previous)
 			}
+			if phase == "attempt_started" {
+				if previousCall, ok := v.attemptCalls[key]; ok && previousCall != callID {
+					return fmt.Errorf("%s attempt_id %q was started for call_id %q, got call_id %q", event.Type, attemptID, previousCall, callID)
+				}
+				v.attemptCalls[key] = callID
+			}
 			if _, ok := v.attempts[key]; !ok && phase != "attempt_started" {
 				return fmt.Errorf("%s without matching attempt_id %q", event.Type, attemptID)
+			}
+			if _, ok := v.attempts[key]; ok {
+				if err := v.requireKnownAttemptForCall(event.Type, runID, callID, attemptID); err != nil {
+					return err
+				}
 			}
 		}
 	case protocol.EventToolCallStarted:
@@ -276,10 +364,19 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 			return fmt.Errorf("%s missing attempt_id", event.Type)
 		}
 		key := attemptKey(runID, attemptID)
+		if previousCall, ok := v.attemptCalls[key]; ok {
+			if previousCall != callID {
+				return fmt.Errorf("%s attempt_id %q was started for call_id %q, got call_id %q", event.Type, attemptID, previousCall, callID)
+			}
+			if _, ok := v.attempts[key]; ok {
+				return fmt.Errorf("duplicate %s for attempt_id %q", event.Type, attemptID)
+			}
+		}
 		if previous, ok := v.terminalAttempts[key]; ok {
 			return fmt.Errorf("%s after terminal tool attempt %q: got start after %s", event.Type, attemptID, previous)
 		}
-		v.attempts[attemptKey(runID, attemptID)] = struct{}{}
+		v.attempts[key] = struct{}{}
+		v.attemptCalls[key] = callID
 	case protocol.EventToolCallFinished, protocol.EventToolCallFailed, protocol.EventToolCallAborted:
 		if callID == "" {
 			return fmt.Errorf("%s missing call_id", event.Type)
@@ -290,8 +387,8 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 		if attemptID == "" {
 			return fmt.Errorf("%s missing attempt_id", event.Type)
 		}
-		if _, ok := v.attempts[attemptKey(runID, attemptID)]; !ok {
-			return fmt.Errorf("%s without matching attempt_id %q", event.Type, attemptID)
+		if err := v.requireKnownAttemptForCall(event.Type, runID, callID, attemptID); err != nil {
+			return err
 		}
 		key := attemptKey(runID, attemptID)
 		if previous, ok := v.terminalAttempts[key]; ok {
@@ -302,14 +399,14 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 		if err := v.requireKnownCall(event.Type, runID, callID); err != nil {
 			return err
 		}
-		if err := v.requireKnownAttempt(event.Type, runID, attemptID); err != nil {
+		if err := v.requireKnownAttemptForCall(event.Type, runID, callID, attemptID); err != nil {
 			return err
 		}
 	case protocol.EventUserInputRequested:
 		if err := v.requireKnownCall(event.Type, runID, callID); err != nil {
 			return err
 		}
-		if err := v.requireKnownAttempt(event.Type, runID, attemptID); err != nil {
+		if err := v.requireKnownAttemptForCall(event.Type, runID, callID, attemptID); err != nil {
 			return err
 		}
 		if requestID := lifecycleDataString(event.Data, "request_id"); requestID != "" {
@@ -319,7 +416,7 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 		if err := v.requireKnownCall(event.Type, runID, callID); err != nil {
 			return err
 		}
-		if err := v.requireKnownAttempt(event.Type, runID, attemptID); err != nil {
+		if err := v.requireKnownAttemptForCall(event.Type, runID, callID, attemptID); err != nil {
 			return err
 		}
 		if requestID := lifecycleDataString(event.Data, "request_id"); requestID != "" {
@@ -334,7 +431,7 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 			}
 		}
 		if attemptID != "" {
-			if err := v.requireKnownAttempt(event.Type, runID, attemptID); err != nil {
+			if err := v.requireKnownAttemptForCall(event.Type, runID, callID, attemptID); err != nil {
 				return err
 			}
 		}
@@ -342,7 +439,67 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 	return nil
 }
 
+func (v *LifecycleValidator) ValidateClosed() error {
+	if v == nil {
+		return nil
+	}
+	v.ensure()
+	for runID := range v.runs {
+		if _, ok := v.terminalRun[runID]; !ok {
+			return fmt.Errorf("run %q has no terminal event", runID)
+		}
+	}
+	for key := range v.turns {
+		if _, ok := v.terminalTurn[key]; !ok {
+			return fmt.Errorf("turn %q has no terminal event", lastKeyPart(key))
+		}
+	}
+	for key := range v.steps {
+		if _, ok := v.terminalStep[key]; !ok {
+			return fmt.Errorf("step %q has no terminal event", lastKeyPart(key))
+		}
+	}
+	for key := range v.attempts {
+		if _, ok := v.terminalAttempts[key]; !ok {
+			return fmt.Errorf("tool attempt %q has no terminal event", lastKeyPart(key))
+		}
+	}
+	return nil
+}
+
+func (v *LifecycleValidator) requireKnownRun(eventType protocol.EventType, runID string) error {
+	if runID == "" {
+		return fmt.Errorf("%s missing run_id", eventType)
+	}
+	if _, ok := v.runs[runID]; !ok {
+		return fmt.Errorf("%s without started run %q", eventType, runID)
+	}
+	return nil
+}
+
+func (v *LifecycleValidator) requireKnownStep(eventType protocol.EventType, runID, turnID, stepID string) error {
+	if err := v.requireKnownRun(eventType, runID); err != nil {
+		return err
+	}
+	if turnID == "" {
+		return fmt.Errorf("%s missing turn_id", eventType)
+	}
+	if _, ok := v.turns[turnKey(runID, turnID)]; !ok {
+		return fmt.Errorf("%s without started turn %q", eventType, turnID)
+	}
+	if stepID == "" {
+		return fmt.Errorf("%s missing step_id", eventType)
+	}
+	if _, ok := v.steps[stepKey(runID, turnID, stepID)]; !ok {
+		return fmt.Errorf("%s without started step %q", eventType, stepID)
+	}
+	return nil
+}
+
 func (v *LifecycleValidator) requireKnownCall(eventType protocol.EventType, runID, callID string) error {
+	if err := v.requireKnownRun(eventType, runID); err != nil {
+		return err
+	}
 	if callID == "" {
 		return fmt.Errorf("%s missing call_id", eventType)
 	}
@@ -353,11 +510,28 @@ func (v *LifecycleValidator) requireKnownCall(eventType protocol.EventType, runI
 }
 
 func (v *LifecycleValidator) requireKnownAttempt(eventType protocol.EventType, runID, attemptID string) error {
+	if err := v.requireKnownRun(eventType, runID); err != nil {
+		return err
+	}
 	if attemptID == "" {
 		return fmt.Errorf("%s missing attempt_id", eventType)
 	}
 	if _, ok := v.attempts[attemptKey(runID, attemptID)]; !ok {
 		return fmt.Errorf("%s without matching attempt_id %q", eventType, attemptID)
+	}
+	return nil
+}
+
+func (v *LifecycleValidator) requireKnownAttemptForCall(eventType protocol.EventType, runID, callID, attemptID string) error {
+	if err := v.requireKnownAttempt(eventType, runID, attemptID); err != nil {
+		return err
+	}
+	if callID == "" {
+		return fmt.Errorf("%s missing call_id", eventType)
+	}
+	key := attemptKey(runID, attemptID)
+	if previousCall, ok := v.attemptCalls[key]; ok && previousCall != callID {
+		return fmt.Errorf("%s attempt_id %q was started for call_id %q, got call_id %q", eventType, attemptID, previousCall, callID)
 	}
 	return nil
 }
@@ -485,6 +659,9 @@ func (v *LifecycleValidator) ensure() {
 	if v.attempts == nil {
 		v.attempts = map[string]struct{}{}
 	}
+	if v.attemptCalls == nil {
+		v.attemptCalls = map[string]string{}
+	}
 	if v.terminalAttempts == nil {
 		v.terminalAttempts = map[string]protocol.EventType{}
 	}
@@ -511,4 +688,44 @@ func attemptKey(runID, attemptID string) string {
 
 func userInputKey(runID, requestID string) string {
 	return runID + "\x00" + requestID
+}
+
+func lastKeyPart(key string) string {
+	parts := strings.Split(key, "\x00")
+	if len(parts) == 0 {
+		return key
+	}
+	return parts[len(parts)-1]
+}
+
+func cloneSet(in map[string]struct{}) map[string]struct{} {
+	out := make(map[string]struct{}, len(in))
+	for key := range in {
+		out[key] = struct{}{}
+	}
+	return out
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneEventTypeMap(in map[string]protocol.EventType) map[string]protocol.EventType {
+	out := make(map[string]protocol.EventType, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneStepStateMap(in map[string]stepState) map[string]stepState {
+	out := make(map[string]stepState, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }

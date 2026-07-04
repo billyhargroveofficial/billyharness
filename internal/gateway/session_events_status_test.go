@@ -886,11 +886,43 @@ func TestGatewaySessionEventsFollowUsesLiveHubOnlyAsStoreWake(t *testing.T) {
 	}
 	events := decodeProtocolEvents(resp.Body)
 
+	runID := gatewaySessionRunID(session.ID, 1)
+	turnID := "turn-1"
+	stepID := "turn-1:model-call-1"
+	for _, event := range []protocol.Event{
+		{Type: protocol.EventRunStarted, RunID: runID},
+		{Type: protocol.EventTurnStarted, RunID: runID, TurnID: turnID},
+		{Type: protocol.EventStepStarted, RunID: runID, TurnID: turnID, StepID: stepID},
+	} {
+		if _, err := server.store.AppendEvent(session, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cancel()
+	resp.Body.Close()
+
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, httpServer.URL+"/v1/sessions/"+sessionID+"/events?after_seq=3&follow=true", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("events status = %d body=%s", resp.StatusCode, body)
+	}
+	events = decodeProtocolEvents(resp.Body)
+
 	stored, err := server.store.AppendEvent(session, protocol.Event{
 		Type:   protocol.EventAssistantDelta,
-		RunID:  "run-1",
-		TurnID: "turn-1",
-		StepID: "step-1",
+		RunID:  runID,
+		TurnID: turnID,
+		StepID: stepID,
 		Data:   "durable recovered",
 	})
 	if err != nil {
