@@ -77,6 +77,7 @@ Future agents should update this section from that route table, not from memory.
 | `GET /v1/sessions/{id}/context` | project context, runtime, usage, prompt, and replay-derived metrics |
 | `GET /v1/sessions/{id}/events` | NDJSON replay/follow stream for session events |
 | `POST /v1/sessions/{id}/inputs` | admit an idempotent pending input without running it |
+| `POST /v1/sessions/{id}/inputs/{input_id}/complete` | terminally complete an admitted input with optional failure evidence |
 | `POST /v1/sessions/{id}/run` | admit/promote an input and run it through the session thread |
 | `POST /v1/sessions/{id}/user_input/{request_id}/answer` | answer a pending user-input request |
 | `POST /v1/sessions/{id}/user_input/{request_id}/reject` | reject a pending user-input request |
@@ -117,9 +118,16 @@ The gateway layer adds HTTP identity, event delivery, durability, and status:
    `input_id`;
 2. applies the only supported interrupt policy, `interrupt`, by canceling and
    waiting for any active run;
-3. promotes the admitted input, runs the agent through the session thread,
-   observes/persists/publishes run events, saves the resulting transcript, and
-   completes the input record with a terminal status.
+3. promotes the admitted input under the input ledger lock, assigns the next run
+   sequence from durable session/input state, runs the agent through the session
+   thread, observes/persists/publishes run events, saves the resulting
+   transcript, and completes the input record with a terminal status.
+
+If preflight work fails after admission but before promotion, the gateway marks
+the input terminal in `inputs.jsonl` with `terminal_status=preflight_failed` and
+a redacted failure reason. Clients that admitted input separately can also call
+`POST /v1/sessions/{id}/inputs/{input_id}/complete` to terminally close an
+admitted input with replayable failure evidence.
 
 Run persistence is fail-closed around durable event truth. Event append failures
 stop the run stream with a non-durable `run.failed` surface and mark in-memory
@@ -178,7 +186,8 @@ Store semantics:
   lifecycle ordering before appending; rejected events do not consume sequence
   numbers or become durable history.
 - `inputs.jsonl` stores input admission, promotion, completion, and
-  restart-ambiguity records for idempotency.
+  restart-ambiguity records for idempotency. Completion records can include
+  terminal status and failure reason.
 - snapshot JSON files capture selected runtime/config/model/MCP state for
   offline inspection.
 - store directories are forced to `0700`; manifest, snapshots, legacy
@@ -191,6 +200,12 @@ and lifecycle where applicable through `internal/eventlog`.
 Session event replay allows open active runs, turns, steps, and tool attempts;
 closed-lifecycle checks are reserved for callers that know an artifact is
 complete.
+
+Input ledger corruption is quarantined separately from the session event log.
+When startup can otherwise load a session but `inputs.jsonl` fails strict replay,
+the gateway renames the input ledger to `inputs.jsonl.corrupt-<timestamp>` and
+continues loading the session with a fresh input ledger instead of hiding the
+usable session.
 
 Offline helpers in `session_export.go` and `session_inspect.go` load transcripts,
 list stored sessions, inspect manifests/files/event types/output refs/turn

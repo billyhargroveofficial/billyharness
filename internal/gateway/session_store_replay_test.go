@@ -225,6 +225,154 @@ func TestGatewaySessionInputsMarkPromotedIncompleteAmbiguousOnRestart(t *testing
 	}
 }
 
+func TestGatewaySessionCorruptInputLedgerQuarantinedOnRestart(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+
+	create := httptest.NewRecorder()
+	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", nil))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	session, ok := server.session(created.ID)
+	if !ok {
+		t.Fatal("created session missing from server")
+	}
+	if _, err := server.store.AdmitInput(session, gatewayapi.SessionInputRequest{InputID: "corrupt-input", Prompt: "maybe"}); err != nil {
+		t.Fatal(err)
+	}
+	inputsPath := filepath.Join(storeDir, created.ID, sessionInputsJSONLName)
+	if err := os.WriteFile(inputsPath, []byte("{not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+	if _, ok := restarted.session(created.ID); !ok {
+		t.Fatal("session should load even when inputs ledger is corrupt")
+	}
+	matches, err := filepath.Glob(inputsPath + ".corrupt-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("quarantine matches = %#v", matches)
+	}
+	admit := httptest.NewRecorder()
+	restarted.Handler().ServeHTTP(admit, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/inputs", strings.NewReader(`{"input_id":"after-quarantine","prompt":"hello"}`)))
+	if admit.Code != http.StatusCreated {
+		t.Fatalf("admit after quarantine status = %d body=%s", admit.Code, admit.Body.String())
+	}
+}
+
+func TestGatewaySessionRunCompletesInputOnPreflightFailure(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{
+		SessionStoreDir:     storeDir,
+		AuthToken:           "secret",
+		RequireMutationAuth: true,
+	})
+
+	create := httptest.NewRecorder()
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/sessions", nil)
+	createReq.Header.Set("Authorization", "Bearer secret")
+	server.Handler().ServeHTTP(create, createReq)
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	runBody := `{"input_id":"preflight-input","prompt":"conflict","provider":"deepseek","model":"gpt-5.5"}`
+	run := httptest.NewRecorder()
+	runReq := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/run", strings.NewReader(runBody))
+	runReq.Header.Set("Authorization", "Bearer secret")
+	runReq.Header.Set("Content-Type", "application/json")
+	server.Handler().ServeHTTP(run, runReq)
+	if run.Code != http.StatusOK {
+		t.Fatalf("run status = %d body=%s", run.Code, run.Body.String())
+	}
+	events := readProtocolEvents(t, run.Body)
+	if !sawEvent(events, protocol.EventRunFailed) {
+		t.Fatalf("run stream missing preflight failure: %#v", events)
+	}
+	records := readSessionInputRecords(t, filepath.Join(storeDir, created.ID, sessionInputsJSONLName))
+	if len(records) != 2 {
+		t.Fatalf("input record count = %d records=%#v", len(records), records)
+	}
+	if records[0].Kind != sessionInputAdmitted ||
+		records[1].Kind != sessionInputCompleted ||
+		records[1].TerminalStatus != "preflight_failed" ||
+		!strings.Contains(records[1].FailureReason, "provider/model conflict") {
+		t.Fatalf("input records = %#v", records)
+	}
+}
+
+func TestGatewaySessionPromoteInputForNextRunUsesInputLedgerSequence(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+
+	create := httptest.NewRecorder()
+	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", nil))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	session, ok := server.session(created.ID)
+	if !ok {
+		t.Fatal("created session missing from server")
+	}
+	if _, err := server.store.AdmitInput(session, gatewayapi.SessionInputRequest{InputID: "input-1", Prompt: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.store.AdmitInput(session, gatewayapi.SessionInputRequest{InputID: "input-2", Prompt: "two"}); err != nil {
+		t.Fatal(err)
+	}
+	firstSeq, err := server.store.PromoteInputForNextRun(session, "input-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSeq, err := server.store.PromoteInputForNextRun(session, "input-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstSeq != 1 || secondSeq != 2 {
+		t.Fatalf("run seqs = %d, %d; want 1, 2", firstSeq, secondSeq)
+	}
+	records := readSessionInputRecords(t, filepath.Join(storeDir, created.ID, sessionInputsJSONLName))
+	var promoted []sessionInputRecord
+	for _, record := range records {
+		if record.Kind == sessionInputPromoted {
+			promoted = append(promoted, record)
+		}
+	}
+	if len(promoted) != 2 || promoted[0].RunSeq != 1 || promoted[1].RunSeq != 2 {
+		t.Fatalf("promoted records = %#v", promoted)
+	}
+}
+
 func TestGatewaySessionEventsReplayAfterSeqAcrossRestart(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"

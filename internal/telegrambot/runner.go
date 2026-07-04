@@ -285,6 +285,9 @@ func (b *Bot) admitTelegramPromptUpdate(ctx context.Context, update Update) (tel
 		state.PendingUpdateID = update.UpdateID
 		state.UpdatedAt = time.Now().UTC()
 		if err := b.setChatStateStrict(key, state); err != nil {
+			if failErr := b.failAdmittedGatewayInput(ctx, msg, state, resp.InputID, "telegram_pending_state_save_failed", err); failErr != nil {
+				return telegramPromptAdmission{}, errors.Join(err, failErr)
+			}
 			return telegramPromptAdmission{}, fmt.Errorf("telegram pending input state save: %w", err)
 		}
 	}
@@ -385,6 +388,29 @@ func (b *Bot) deliverRunFinal(ctx context.Context, msg Message, live *telegramLi
 			return
 		}
 	}
+}
+
+func (b *Bot) failAdmittedGatewayInput(ctx context.Context, msg Message, state ChatState, inputID string, reason string, cause error) error {
+	completer, ok := b.harness.(sessionInputCompleter)
+	if !ok {
+		return nil
+	}
+	inputID = strings.TrimSpace(inputID)
+	if inputID == "" || strings.TrimSpace(state.SessionID) == "" {
+		return nil
+	}
+	if reason = strings.TrimSpace(reason); reason == "" {
+		reason = "telegram_preflight_failed"
+	}
+	req := gatewayapi.SessionInputCompleteRequest{
+		TerminalStatus: "preflight_failed",
+		FailureReason:  reason,
+	}
+	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
+		req.FailureReason = reason + ": " + cause.Error()
+	}
+	_, err := completer.CompleteSessionInput(b.gatewayScopedContext(ctx, msg, state), state.SessionID, inputID, req)
+	return err
 }
 
 type telegramLiveRunView struct {

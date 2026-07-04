@@ -305,6 +305,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/sessions/{id}/context", s.handleSessionContextStatus)
 	s.mux.HandleFunc("GET /v1/sessions/{id}/events", s.handleSessionEvents)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/inputs", s.handleSessionInput)
+	s.mux.HandleFunc("POST /v1/sessions/{id}/inputs/{input_id}/complete", s.handleSessionInputComplete)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/run", s.handleSessionRun)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/user_input/{request_id}/answer", s.handleUserInputAnswer)
 	s.mux.HandleFunc("POST /v1/sessions/{id}/user_input/{request_id}/reject", s.handleUserInputReject)
@@ -738,22 +739,31 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, fmt.Sprintf("input_id %q is already %s", admission.InputID, admission.State))
 		return
 	}
-	runSeq := session.Status().RunSeq + 1
 	streamEvents(w, func(emit func(protocol.Event)) error {
-		if err := s.applySessionInterruptPolicy(r.Context(), session, interruptPolicy); err != nil {
+		completePreflightFailure := func(err error) error {
+			if err == nil {
+				return nil
+			}
+			if completeErr := s.completeSessionInputWithReason(session, admission.InputID, 0, "preflight_failed", err.Error()); completeErr != nil {
+				return errors.Join(err, fmt.Errorf("complete preflight-failed input: %w", completeErr))
+			}
 			return err
+		}
+		if err := s.applySessionInterruptPolicy(r.Context(), session, interruptPolicy); err != nil {
+			return completePreflightFailure(err)
 		}
 		settings, err := s.runSettingsForRequest(r.Context(), req)
 		if err != nil {
-			return err
+			return completePreflightFailure(err)
 		}
 		a, err := s.agentForSessionRunSettings(session, settings)
 		if err != nil {
-			return err
+			return completePreflightFailure(err)
 		}
 		statusReq := runRequestFromSettings(settings)
-		if err := s.promoteSessionInput(session, admission.InputID, runSeq); err != nil {
-			return err
+		runSeq, err := s.promoteSessionInput(session, admission.InputID)
+		if err != nil {
+			return completePreflightFailure(err)
 		}
 		userMessage := protocol.UserMessage(req.Prompt, req.Attachments)
 		runCtx, cancelRun := context.WithCancel(r.Context())
@@ -783,7 +793,7 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if event.Type == protocol.EventRunStarted {
-				if err := session.beginRunStatus(statusReq); err != nil {
+				if err := session.beginRunStatusWithSeq(statusReq, runSeq); err != nil {
 					setPersistenceErr(err)
 					return
 				}
@@ -869,6 +879,27 @@ func (s *Server) handleSessionInput(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusOK
 	}
 	writeJSON(w, status, resp)
+}
+
+func (s *Server) handleSessionInputComplete(w http.ResponseWriter, r *http.Request) {
+	session, ok := s.sessionForRequest(w, r, sessionAccessMutate)
+	if !ok {
+		return
+	}
+	var req gatewayapi.SessionInputCompleteRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+	}
+	inputID := strings.TrimSpace(r.PathValue("input_id"))
+	resp, err := s.completeSessionInputResponse(session, inputID, 0, req.TerminalStatus, req.FailureReason)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "input completion failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleUserInputAnswer(w http.ResponseWriter, r *http.Request) {
@@ -967,18 +998,40 @@ func (s *Server) admitSessionInput(session *Session, req gatewayapi.SessionInput
 	return s.store.AdmitInput(session, req)
 }
 
-func (s *Server) promoteSessionInput(session *Session, inputID string, runSeq int64) error {
+func (s *Server) promoteSessionInput(session *Session, inputID string) (int64, error) {
 	if s == nil || s.store == nil {
-		return nil
+		if session == nil {
+			return 0, nil
+		}
+		return session.Status().RunSeq + 1, nil
 	}
-	return s.store.PromoteInput(session, inputID, runSeq)
+	return s.store.PromoteInputForNextRun(session, inputID)
 }
 
 func (s *Server) completeSessionInput(session *Session, inputID string, runSeq int64, terminalStatus string) error {
+	_, err := s.completeSessionInputResponse(session, inputID, runSeq, terminalStatus, "")
+	return err
+}
+
+func (s *Server) completeSessionInputWithReason(session *Session, inputID string, runSeq int64, terminalStatus, failureReason string) error {
+	_, err := s.completeSessionInputResponse(session, inputID, runSeq, terminalStatus, failureReason)
+	return err
+}
+
+func (s *Server) completeSessionInputResponse(session *Session, inputID string, runSeq int64, terminalStatus, failureReason string) (gatewayapi.SessionInputResponse, error) {
 	if s == nil || s.store == nil {
-		return nil
+		return gatewayapi.SessionInputResponse{
+			InputID:        strings.TrimSpace(inputID),
+			State:          sessionInputCompleted,
+			TerminalStatus: defaultSessionInputTerminalStatus(terminalStatus),
+			FailureReason:  strings.TrimSpace(failureReason),
+		}, nil
 	}
-	return s.store.CompleteInput(session, inputID, runSeq, terminalStatus)
+	return s.store.CompleteInputWithOptions(session, inputID, sessionInputCompleteOptions{
+		RunSeq:         runSeq,
+		TerminalStatus: terminalStatus,
+		FailureReason:  failureReason,
+	})
 }
 
 func sessionInputRequestFromRun(req RunRequest) gatewayapi.SessionInputRequest {

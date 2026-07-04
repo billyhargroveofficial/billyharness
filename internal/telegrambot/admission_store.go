@@ -99,7 +99,7 @@ func (s *telegramAdmissionStore) RecordAdmitted(updateID int, msg Message, sessi
 	return s.append(record)
 }
 
-func (s *telegramAdmissionStore) RecordAbandoned(key string, state ChatState, reason string) error {
+func (s *telegramAdmissionStore) RecordAbandoned(key string, state ChatState, reason string, gatewayState string) error {
 	if s == nil || strings.TrimSpace(s.path) == "" {
 		return nil
 	}
@@ -112,6 +112,7 @@ func (s *telegramAdmissionStore) RecordAbandoned(key string, state ChatState, re
 		Reason:        strings.TrimSpace(reason),
 		SessionID:     state.SessionID,
 		InputID:       state.PendingInputID,
+		GatewayState:  strings.TrimSpace(gatewayState),
 	}
 	return s.append(record)
 }

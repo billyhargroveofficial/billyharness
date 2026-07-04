@@ -45,10 +45,17 @@ type SessionInputRequest struct {
 }
 
 type SessionInputResponse struct {
-	InputID   string `json:"input_id"`
-	State     string `json:"state"`
-	Duplicate bool   `json:"duplicate,omitempty"`
-	Seq       int64  `json:"seq,omitempty"`
+	InputID        string `json:"input_id"`
+	State          string `json:"state"`
+	Duplicate      bool   `json:"duplicate,omitempty"`
+	Seq            int64  `json:"seq,omitempty"`
+	TerminalStatus string `json:"terminal_status,omitempty"`
+	FailureReason  string `json:"failure_reason,omitempty"`
+}
+
+type SessionInputCompleteRequest struct {
+	TerminalStatus string `json:"terminal_status"`
+	FailureReason  string `json:"failure_reason,omitempty"`
 }
 
 type CreateSessionRequest struct {

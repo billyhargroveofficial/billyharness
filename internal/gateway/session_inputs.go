@@ -34,6 +34,7 @@ type sessionInputRecord struct {
 	BodySHA256     string                         `json:"body_sha256,omitempty"`
 	RunSeq         int64                          `json:"run_seq,omitempty"`
 	TerminalStatus string                         `json:"terminal_status,omitempty"`
+	FailureReason  string                         `json:"failure_reason,omitempty"`
 	Request        gatewayapi.SessionInputRequest `json:"request,omitempty"`
 }
 
@@ -44,7 +45,14 @@ type sessionInputState struct {
 	State          string
 	RunSeq         int64
 	TerminalStatus string
+	FailureReason  string
 	LastSeq        int64
+}
+
+type sessionInputCompleteOptions struct {
+	RunSeq         int64
+	TerminalStatus string
+	FailureReason  string
 }
 
 type replayedSessionInputs struct {
@@ -144,29 +152,44 @@ func (s *sessionStore) AdmitInput(session *Session, req gatewayapi.SessionInputR
 }
 
 func (s *sessionStore) PromoteInput(session *Session, inputID string, runSeq int64) error {
+	_, err := s.promoteInput(session, inputID, runSeq)
+	return err
+}
+
+func (s *sessionStore) PromoteInputForNextRun(session *Session, inputID string) (int64, error) {
+	return s.promoteInput(session, inputID, 0)
+}
+
+func (s *sessionStore) promoteInput(session *Session, inputID string, runSeq int64) (int64, error) {
 	if s == nil || strings.TrimSpace(s.dir) == "" || session == nil {
-		return nil
+		if runSeq <= 0 && session != nil {
+			runSeq = session.Status().RunSeq + 1
+		}
+		return runSeq, nil
 	}
 	inputID, err := cleanSessionInputID(inputID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id, inputsPath, err := s.sessionInputsPathLocked(session)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	replayed, err := replaySessionInputs(inputsPath, id)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	state, ok := replayed.inputs[inputID]
 	if !ok {
-		return fmt.Errorf("input_id %q was not admitted", inputID)
+		return 0, fmt.Errorf("input_id %q was not admitted", inputID)
 	}
 	if state.State != sessionInputAdmitted {
-		return fmt.Errorf("input_id %q is already %s", inputID, state.State)
+		return 0, fmt.Errorf("input_id %q is already %s", inputID, state.State)
+	}
+	if runSeq <= 0 {
+		runSeq = nextSessionInputRunSeq(session, replayed)
 	}
 	record := sessionInputRecord{
 		SchemaVersion: gatewaySessionSchemaVersion,
@@ -178,37 +201,62 @@ func (s *sessionStore) PromoteInput(session *Session, inputID string, runSeq int
 		BodySHA256:    state.BodySHA256,
 		RunSeq:        runSeq,
 	}
-	return eventlog.AppendJSONL(inputsPath, record)
+	if err := eventlog.AppendJSONL(inputsPath, record); err != nil {
+		return 0, err
+	}
+	return runSeq, nil
 }
 
 func (s *sessionStore) CompleteInput(session *Session, inputID string, runSeq int64, terminalStatus string) error {
+	_, err := s.CompleteInputWithOptions(session, inputID, sessionInputCompleteOptions{
+		RunSeq:         runSeq,
+		TerminalStatus: terminalStatus,
+	})
+	return err
+}
+
+func (s *sessionStore) CompleteInputWithOptions(session *Session, inputID string, opts sessionInputCompleteOptions) (gatewayapi.SessionInputResponse, error) {
 	if s == nil || strings.TrimSpace(s.dir) == "" || session == nil {
-		return nil
+		return gatewayapi.SessionInputResponse{
+			InputID:        strings.TrimSpace(inputID),
+			State:          sessionInputCompleted,
+			TerminalStatus: defaultSessionInputTerminalStatus(opts.TerminalStatus),
+			FailureReason:  strings.TrimSpace(opts.FailureReason),
+		}, nil
 	}
 	inputID, err := cleanSessionInputID(inputID)
 	if err != nil {
-		return err
+		return gatewayapi.SessionInputResponse{}, err
 	}
-	terminalStatus = strings.TrimSpace(terminalStatus)
-	if terminalStatus == "" {
-		terminalStatus = "completed"
-	}
+	terminalStatus := defaultSessionInputTerminalStatus(opts.TerminalStatus)
+	failureReason := strings.TrimSpace(opts.FailureReason)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id, inputsPath, err := s.sessionInputsPathLocked(session)
 	if err != nil {
-		return err
+		return gatewayapi.SessionInputResponse{}, err
 	}
 	replayed, err := replaySessionInputs(inputsPath, id)
 	if err != nil {
-		return err
+		return gatewayapi.SessionInputResponse{}, err
 	}
 	state, ok := replayed.inputs[inputID]
 	if !ok {
-		return fmt.Errorf("input_id %q was not admitted", inputID)
+		return gatewayapi.SessionInputResponse{}, fmt.Errorf("input_id %q was not admitted", inputID)
 	}
 	if state.State == sessionInputCompleted {
-		return nil
+		return gatewayapi.SessionInputResponse{
+			InputID:        inputID,
+			State:          state.State,
+			Duplicate:      true,
+			Seq:            state.LastSeq,
+			TerminalStatus: state.TerminalStatus,
+			FailureReason:  state.FailureReason,
+		}, nil
+	}
+	runSeq := opts.RunSeq
+	if runSeq <= 0 {
+		runSeq = state.RunSeq
 	}
 	record := sessionInputRecord{
 		SchemaVersion:  gatewaySessionSchemaVersion,
@@ -220,8 +268,18 @@ func (s *sessionStore) CompleteInput(session *Session, inputID string, runSeq in
 		BodySHA256:     state.BodySHA256,
 		RunSeq:         runSeq,
 		TerminalStatus: terminalStatus,
+		FailureReason:  failureReason,
 	}
-	return eventlog.AppendJSONL(inputsPath, record)
+	if err := eventlog.AppendJSONL(inputsPath, record); err != nil {
+		return gatewayapi.SessionInputResponse{}, err
+	}
+	return gatewayapi.SessionInputResponse{
+		InputID:        inputID,
+		State:          sessionInputCompleted,
+		Seq:            record.Seq,
+		TerminalStatus: terminalStatus,
+		FailureReason:  failureReason,
+	}, nil
 }
 
 func (s *sessionStore) sessionInputsPathLocked(session *Session) (string, string, error) {
@@ -262,7 +320,7 @@ func (s *sessionStore) sessionInputsPathLocked(session *Session) (string, string
 func markPromotedSessionInputsAmbiguous(path, sessionID string) error {
 	replayed, err := replaySessionInputs(path, sessionID)
 	if err != nil {
-		return err
+		return quarantineCorruptSessionInputs(path, err)
 	}
 	nextSeq := replayed.lastSeq
 	for _, state := range replayed.inputs {
@@ -284,6 +342,29 @@ func markPromotedSessionInputsAmbiguous(path, sessionID string) error {
 		if err := eventlog.AppendJSONL(path, record); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func quarantineCorruptSessionInputs(path string, cause error) error {
+	var corrupt *eventlog.CorruptionError
+	if !errors.As(cause, &corrupt) {
+		return cause
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return cause
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("quarantine corrupt input ledger: %w", err)
+	}
+	stamp := time.Now().UTC().Format("20060102T150405.000000000Z")
+	quarantinePath := path + ".corrupt-" + stamp
+	if err := os.Rename(path, quarantinePath); err != nil {
+		return fmt.Errorf("quarantine corrupt input ledger: %w", err)
 	}
 	return nil
 }
@@ -335,6 +416,7 @@ func replaySessionInputs(path, sessionID string) (replayedSessionInputs, error) 
 			state.State = sessionInputCompleted
 			state.RunSeq = record.RunSeq
 			state.TerminalStatus = record.TerminalStatus
+			state.FailureReason = record.FailureReason
 		case sessionInputAmbiguous:
 			if state.InputID == "" {
 				return eventlog.NewCorruptionError(path, item.Line, recordNo, "", fmt.Errorf("ambiguity without admission for input_id %q", inputID))
@@ -342,6 +424,7 @@ func replaySessionInputs(path, sessionID string) (replayedSessionInputs, error) 
 			state.State = sessionInputAmbiguous
 			state.RunSeq = record.RunSeq
 			state.TerminalStatus = record.TerminalStatus
+			state.FailureReason = record.FailureReason
 		default:
 			return eventlog.NewCorruptionError(path, item.Line, recordNo, "", fmt.Errorf("unsupported kind %q", record.Kind))
 		}
@@ -355,6 +438,29 @@ func replaySessionInputs(path, sessionID string) (replayedSessionInputs, error) 
 		return out, err
 	}
 	return out, nil
+}
+
+func nextSessionInputRunSeq(session *Session, replayed replayedSessionInputs) int64 {
+	var next int64 = 1
+	if session != nil {
+		if status := session.Status(); status.RunSeq >= next {
+			next = status.RunSeq + 1
+		}
+	}
+	for _, state := range replayed.inputs {
+		if state.RunSeq >= next {
+			next = state.RunSeq + 1
+		}
+	}
+	return next
+}
+
+func defaultSessionInputTerminalStatus(status string) string {
+	status = strings.TrimSpace(status)
+	if status == "" {
+		return "completed"
+	}
+	return status
 }
 
 func normalizeSessionInputRequest(req gatewayapi.SessionInputRequest) gatewayapi.SessionInputRequest {

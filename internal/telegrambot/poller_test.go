@@ -31,12 +31,19 @@ type telegramAdmissionHarness struct {
 	admitted  chan gatewayapi.SessionInputRequest
 	ran       chan gatewayapi.RunRequest
 	answered  chan telegramUserInputAnswer
+	completed chan telegramCompletedInput
 }
 
 type telegramUserInputAnswer struct {
 	SessionID string
 	RequestID string
 	Request   gatewayapi.UserInputAnswerRequest
+}
+
+type telegramCompletedInput struct {
+	SessionID string
+	InputID   string
+	Request   gatewayapi.SessionInputCompleteRequest
 }
 
 type interruptBeforeAdmissionHarness struct {
@@ -48,9 +55,10 @@ type interruptBeforeAdmissionHarness struct {
 
 func newTelegramAdmissionHarness() *telegramAdmissionHarness {
 	return &telegramAdmissionHarness{
-		admitted: make(chan gatewayapi.SessionInputRequest, 4),
-		ran:      make(chan gatewayapi.RunRequest, 4),
-		answered: make(chan telegramUserInputAnswer, 4),
+		admitted:  make(chan gatewayapi.SessionInputRequest, 4),
+		ran:       make(chan gatewayapi.RunRequest, 4),
+		answered:  make(chan telegramUserInputAnswer, 4),
+		completed: make(chan telegramCompletedInput, 4),
 	}
 }
 
@@ -99,6 +107,16 @@ func (h *telegramAdmissionHarness) RunSession(_ context.Context, sessionID strin
 func (h *telegramAdmissionHarness) AnswerUserInput(_ context.Context, sessionID, requestID string, answer gatewayapi.UserInputAnswerRequest) (gatewayapi.UserInputResponse, error) {
 	h.answered <- telegramUserInputAnswer{SessionID: sessionID, RequestID: requestID, Request: answer}
 	return gatewayapi.UserInputResponse{RequestID: requestID, Status: "answered"}, nil
+}
+
+func (h *telegramAdmissionHarness) CompleteSessionInput(_ context.Context, sessionID, inputID string, req gatewayapi.SessionInputCompleteRequest) (gatewayapi.SessionInputResponse, error) {
+	h.completed <- telegramCompletedInput{SessionID: sessionID, InputID: inputID, Request: req}
+	return gatewayapi.SessionInputResponse{
+		InputID:        inputID,
+		State:          "completed",
+		TerminalStatus: req.TerminalStatus,
+		FailureReason:  req.FailureReason,
+	}, nil
 }
 
 func TestTelegramPromptAdmissionAdvancesOffsetAfterGatewayAdmission(t *testing.T) {
@@ -516,6 +534,12 @@ func TestTelegramStartupReconcilesAbandonedPendingInput(t *testing.T) {
 	harness := newTelegramAdmissionHarness()
 	bot := newAdmissionTestBot(t, statePath, harness)
 
+	completed := receive(t, harness.completed, "startup input completion")
+	if completed.SessionID != "session-1" || completed.InputID != "telegram-update-46" ||
+		completed.Request.TerminalStatus != "abandoned_after_restart" ||
+		completed.Request.FailureReason != "telegram_pending_input_after_restart" {
+		t.Fatalf("startup completion = %#v", completed)
+	}
 	if chat := bot.chatState(key); chat.PendingInputID != "" || chat.PendingUpdateID != 0 {
 		t.Fatalf("bot pending input after reconciliation = %#v", chat)
 	}
@@ -524,7 +548,8 @@ func TestTelegramStartupReconcilesAbandonedPendingInput(t *testing.T) {
 		t.Fatalf("stored state after reconciliation = %#v offset=%d", chat, state.Offset)
 	}
 	records := readTelegramAdmissionRecords(t, newTelegramAdmissionStore(statePath).path)
-	if len(records) != 1 || records[0].Kind != "abandoned" || records[0].InputID != "telegram-update-46" || records[0].Reason != "abandoned_after_restart" {
+	if len(records) != 1 || records[0].Kind != "abandoned" || records[0].InputID != "telegram-update-46" ||
+		records[0].Reason != "abandoned_after_restart" || records[0].GatewayState != "completed" {
 		t.Fatalf("abandoned admission record = %#v", records)
 	}
 }
@@ -542,6 +567,12 @@ func TestTelegramAdmissionRequiresPendingStatePersistenceBeforeAckOrRun(t *testi
 	bot.handlePolledUpdate(context.Background(), telegramTextUpdate(44, "persist before run"))
 
 	_ = receive(t, harness.admitted, "admission")
+	completed := receive(t, harness.completed, "failed pending state completion")
+	if completed.SessionID != "session-1" || completed.InputID != "telegram-update-44" ||
+		completed.Request.TerminalStatus != "preflight_failed" ||
+		!strings.Contains(completed.Request.FailureReason, "telegram_pending_state_save_failed") {
+		t.Fatalf("completion after state save failure = %#v", completed)
+	}
 	select {
 	case run := <-harness.ran:
 		t.Fatalf("run started before pending input was durable: %#v", run)

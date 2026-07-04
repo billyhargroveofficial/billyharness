@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 )
 
 func (b *Bot) nextOffset() int {
@@ -202,7 +204,7 @@ func (b *Bot) inputSuperseded(key string, seq int64) bool {
 	return seq > 0 && b.inputSeq[key] != seq
 }
 
-func reconcilePendingInputsOnStartup(state *State, store Store, admit *telegramAdmissionStore) error {
+func reconcilePendingInputsOnStartup(ctx context.Context, state *State, store Store, admit *telegramAdmissionStore, harness Harness) error {
 	if state == nil {
 		return nil
 	}
@@ -211,16 +213,37 @@ func reconcilePendingInputsOnStartup(state *State, store Store, admit *telegramA
 	}
 	now := time.Now().UTC()
 	changed := false
+	completer, _ := harness.(sessionInputCompleter)
 	for key, chat := range state.Chats {
 		inputID := strings.TrimSpace(chat.PendingInputID)
 		if inputID == "" {
 			continue
 		}
-		if err := admit.RecordAbandoned(key, chat, "abandoned_after_restart"); err != nil {
+		reason := "abandoned_after_restart"
+		gatewayState := ""
+		if completer != nil && strings.TrimSpace(chat.SessionID) != "" {
+			resp, err := completer.CompleteSessionInput(ctx, chat.SessionID, inputID, gatewayapi.SessionInputCompleteRequest{
+				TerminalStatus: "abandoned_after_restart",
+				FailureReason:  "telegram_pending_input_after_restart",
+			})
+			if err != nil {
+				if gatewaySessionMissing(err) {
+					reason = "gateway_session_missing_after_restart"
+				} else {
+					return err
+				}
+			} else {
+				gatewayState = resp.State
+				if resp.TerminalStatus != "" {
+					reason = resp.TerminalStatus
+				}
+			}
+		}
+		if err := admit.RecordAbandoned(key, chat, reason, gatewayState); err != nil {
 			return err
 		}
-		log.Printf("telegram abandoned pending input after restart key=%s session=%s input=%s update=%d",
-			key, short(chat.SessionID), inputID, chat.PendingUpdateID)
+		log.Printf("telegram abandoned pending input after restart key=%s session=%s input=%s update=%d gateway_state=%s reason=%s",
+			key, short(chat.SessionID), inputID, chat.PendingUpdateID, gatewayState, reason)
 		chat.PendingInputID = ""
 		chat.PendingUpdateID = 0
 		chat.UpdatedAt = now

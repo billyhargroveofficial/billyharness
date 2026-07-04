@@ -207,8 +207,9 @@ Normal prompt flow:
 7. Admit the prompt to the gateway with stable input ID
    `telegram-update-<update_id>`, `client_type=telegram`, a scoped client ID,
    metadata, and interrupt policy `interrupt`.
-8. Append a Telegram admission record, acknowledge the Telegram update offset,
-   and start the session run.
+8. Persist the pending gateway input in Telegram state, append a Telegram
+   admission record, acknowledge the Telegram update offset, and start the
+   session run.
 
 Admission records are stored next to the state file as
 `<state-base>.admissions.jsonl`. They include sequence number, update/message
@@ -222,6 +223,21 @@ If gateway admission fails or Telegram media download fails, the update offset
 is not advanced so the poller can retry. If the gateway reports a duplicate
 input that has already completed or otherwise left the admitted state, Telegram
 acks the update and does not start another run.
+
+Telegram treats pending-state persistence as part of admission. If gateway
+admission succeeds but saving the pending input fails before the Telegram offset
+is acknowledged, Telegram calls the gateway input-completion API with
+`terminal_status=preflight_failed` and a failure reason before returning the
+local persistence error.
+
+On startup, Telegram reconciles durable chat states that still contain a pending
+gateway input. When the gateway session is reachable, Telegram terminally
+completes that input as `abandoned_after_restart`, records the returned gateway
+state in the admission ledger, clears the local pending fields, and saves state.
+If the gateway session is missing, Telegram records a terminal local admission
+reason of `gateway_session_missing_after_restart`; other gateway completion
+errors fail startup so the adapter does not silently acknowledge an ambiguous
+input.
 
 The run request carries the admitted input ID, client ID, Telegram client type,
 prompt, attachment refs, selected model/profile/reasoning/access mode, max tool

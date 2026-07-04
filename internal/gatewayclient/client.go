@@ -305,6 +305,15 @@ func (c *Client) AdmitSessionInput(ctx context.Context, sessionID string, input 
 	return out, nil
 }
 
+func (c *Client) CompleteSessionInput(ctx context.Context, sessionID, inputID string, input gatewayapi.SessionInputCompleteRequest) (gatewayapi.SessionInputResponse, error) {
+	var out gatewayapi.SessionInputResponse
+	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/inputs/" + url.PathEscape(strings.TrimSpace(inputID)) + "/complete"
+	if err := c.JSON(ctx, http.MethodPost, path, input, &out); err != nil {
+		return gatewayapi.SessionInputResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) sessionEvents(ctx context.Context, sessionID string, afterSeq int64, follow bool, emit func(protocol.Event)) error {
 	path := fmt.Sprintf("/v1/sessions/%s/events?after_seq=%d&follow=%t", url.PathEscape(strings.TrimSpace(sessionID)), afterSeq, follow)
 	resp, err := c.do(ctx, http.MethodGet, path, nil)

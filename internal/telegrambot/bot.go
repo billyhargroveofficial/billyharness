@@ -88,7 +88,7 @@ func New(opts Options, client *Client, harness Harness) (*Bot, error) {
 		return nil, err
 	}
 	admit := newTelegramAdmissionStore(opts.StatePath)
-	if err := reconcilePendingInputsOnStartup(&state, store, admit); err != nil {
+	if err := reconcilePendingInputsOnStartup(context.Background(), &state, store, admit, harness); err != nil {
 		return nil, err
 	}
 	return &Bot{

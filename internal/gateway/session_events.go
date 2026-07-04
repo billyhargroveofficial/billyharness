@@ -246,6 +246,10 @@ func (s *Session) activeRunIDSnapshot() string {
 }
 
 func (s *Session) beginRunStatus(req RunRequest) error {
+	return s.beginRunStatusWithSeq(req, 0)
+}
+
+func (s *Session) beginRunStatusWithSeq(req RunRequest, runSeq int64) error {
 	if s == nil {
 		return nil
 	}
@@ -256,7 +260,11 @@ func (s *Session) beginRunStatus(req RunRequest) error {
 	s.status.Created = s.Created
 	s.status.Owner = s.Owner
 	s.status.Running = true
-	s.status.RunSeq++
+	if runSeq > s.status.RunSeq {
+		s.status.RunSeq = runSeq
+	} else {
+		s.status.RunSeq++
+	}
 	s.status.StartedAt = now
 	s.status.FinishedAt = time.Time{}
 	s.status.LastEvent = string(protocol.EventRunStarted)

@@ -35,6 +35,10 @@ type sessionStatusReporter interface {
 	SessionStatus(context.Context, string) (gatewayapi.SessionStatus, error)
 }
 
+type sessionInputCompleter interface {
+	CompleteSessionInput(context.Context, string, string, gatewayapi.SessionInputCompleteRequest) (gatewayapi.SessionInputResponse, error)
+}
+
 type GatewayClient struct {
 	BaseURL string
 	Client  *http.Client
@@ -81,6 +85,10 @@ func (c *GatewayClient) RunSession(ctx context.Context, sessionID string, run ga
 
 func (c *GatewayClient) AdmitSessionInput(ctx context.Context, sessionID string, input gatewayapi.SessionInputRequest) (gatewayapi.SessionInputResponse, error) {
 	return c.gatewayClient().AdmitSessionInput(ctx, sessionID, input)
+}
+
+func (c *GatewayClient) CompleteSessionInput(ctx context.Context, sessionID, inputID string, input gatewayapi.SessionInputCompleteRequest) (gatewayapi.SessionInputResponse, error) {
+	return c.gatewayClient().CompleteSessionInput(ctx, sessionID, inputID, input)
 }
 
 func (c *GatewayClient) ReplaySessionEvents(ctx context.Context, sessionID string, afterSeq int64, emit func(protocol.Event)) error {
