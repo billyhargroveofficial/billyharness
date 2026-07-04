@@ -1978,6 +1978,39 @@ Billy asks for final verification.
 - Blockers/residual risk: the workflow itself has not yet run on GitHub; proof
   is local YAML parsing plus local execution of the same commands.
 
+### 2026-07-04 - P1.13 fuzz targets for protocol and security parsers
+
+- Completed P1.13 slice. Added tracked fuzz targets for event envelope and
+  lifecycle validation (`internal/eventlog`), native tool JSON-schema argument
+  validation (`internal/tools`), and shared text/URL/JSON redaction
+  (`internal/secrets`).
+- Seeded the fuzzers with canonical-looking v1 event envelopes, malformed
+  envelopes, realistic object schemas, invalid schema input, bearer/API-key
+  examples, JSON secret fields, URL credentials, and plain text.
+- Checked docs routing: `llms.txt`, `.agents/rules/README.md`,
+  `docs/README.md`, and `docs/documentation-system.md`. No durable docs changed
+  because this slice adds verification infrastructure only; it does not change
+  runtime behavior, CLI/API contracts, config, gateway routes, or security
+  semantics.
+- Verification passed:
+  `gofmt -w internal/eventlog/fuzz_test.go internal/tools/fuzz_test.go internal/secrets/fuzz_test.go`;
+  `go test -count=1 ./internal/eventlog ./internal/tools ./internal/secrets`;
+  `go test -run '^$' -fuzz=Fuzz -fuzztime=30s ./internal/eventlog`;
+  `go test -run '^$' -fuzz=Fuzz -fuzztime=30s ./internal/tools`;
+  `go test -run '^$' -fuzz=Fuzz -fuzztime=30s ./internal/secrets`;
+  `git diff --check`;
+  `go test -count=1 ./...`.
+- Verification note: the TODO's combined fuzz command
+  `go test -run '^$' -fuzz=Fuzz -fuzztime=30s ./internal/eventlog ./internal/tools ./internal/secrets`
+  failed immediately with Go's built-in limitation, `cannot use -fuzz flag with
+  multiple packages`. The equivalent package-by-package fuzz runs above passed.
+- Commit: `7c09378 Add fuzz targets for critical parsers`
+  (`7c09378099b4640b2d94ef988c5d9d076da50a1a`).
+- Push: `origin/main` updated from `dae3f43` to `7c09378`.
+- Blockers/residual risk: fuzzing was a short local 30s-per-package smoke, not
+  long-running corpus growth or CI-continuous fuzzing. No new behavior was
+  intentionally introduced by this slice.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
