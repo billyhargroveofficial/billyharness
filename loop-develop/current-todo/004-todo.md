@@ -1320,6 +1320,56 @@ Billy asks for final verification.
   was run for this slice; current proof is unit/race/full-suite/rebuild plus
   docs review.
 
+### 2026-07-04 - P0.4 MCP/tool agency risk split and untrusted metadata labels
+
+- Completed P0.4 slice. Tool risk now supports explicit classes
+  `local_read`, `local_write`, `network_read`, `network_write`, `execute`,
+  `external_mutation`, and `secret_access` while preserving legacy native
+  `read_only`, `network`, `write`, and `external` compatibility. MCP catalog
+  risk is derived from local `default_tool_risk` / `tool_risks` config, not
+  remote description/schema text. `mcp_list_tools`, `tool_search`, `/v1/mcp`,
+  and `mcp_call` metadata label MCP descriptions, schemas, and initialize
+  instructions as untrusted server metadata. Side-effecting MCP targets require
+  normal dangerous-tool policy and explicit `enabled_tools` allowlisting before
+  `mcp_call` invokes the remote handler.
+- Added malicious MCP metadata tests and side-effect gate tests:
+  `TestBuildCatalogUsesLocalRiskPolicyAndLabelsMCPMetadataUntrusted`,
+  `TestMCPGatewayLabelsUntrustedMetadataAndGatesSideEffectingTargets`, and the
+  updated gateway MCP status assertion for the untrusted instruction trust tag.
+- Updated durable docs because MCP config keys, tool risk semantics, discovery
+  output, status trust labels, and permission behavior changed:
+  `README.md`, `docs/README.md`, `docs/adr/README.md`,
+  `docs/adr/0003-mcp-instructions-are-untrusted-metadata.md`,
+  `docs/architecture/tools-mcp-and-policy.md`,
+  `docs/architecture/security-model.md`,
+  `docs/architecture/config-provider-context.md`, and
+  `agent-index/docs-manifest.json`.
+- Verification passed:
+  `go test -count=1 ./internal/config`;
+  `go test -count=1 ./internal/mcpclient`;
+  `go test -count=1 ./internal/tools`;
+  `go test -count=1 ./internal/tools ./internal/mcpclient ./internal/config ./internal/mcpserver`;
+  `go test -race -count=1 ./internal/tools`;
+  `jq . agent-index/docs-manifest.json >/dev/null`;
+  `go test -count=1 ./internal/architecture`;
+  `git diff --check`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`;
+  `go test -count=1 ./internal/gateway`;
+  `go test -count=1 ./...`.
+- Verification note: the first broad `go test -count=1 ./...` run failed only
+  in `TestGatewayToolsExposeMCPRegistry` because the test expected the old
+  untagged MCP instruction string. The test was updated to require
+  `trust=untrusted_mcp_server_metadata`, then `go test -count=1 ./internal/gateway`,
+  `git diff --check`, and `go test -count=1 ./...` all passed.
+- Commit: `62127ea Harden MCP tool risk policy`
+  (`62127ea1de636b570cd0b78990d0788284120c33`).
+- Push: `origin/main` updated from `9214150` to `62127ea`.
+- Blockers/residual risk: no live MCP server or production gateway probe was
+  run for this slice; current proof is local unit/race/full-suite/rebuild plus
+  docs and status-surface tests. Unclassified legacy `external` MCP tools remain
+  compatible with existing build/guarded behavior; only locally declared
+  side-effecting MCP classes fail closed without `enabled_tools`.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
