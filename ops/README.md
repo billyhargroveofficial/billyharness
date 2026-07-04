@@ -1,10 +1,10 @@
 # Billyharness Operations
 
-Last verified: 2026-07-03. Commands in this index were checked against
+Last verified: 2026-07-04. Commands in this index were checked against
 `README.md`, `go run ./cmd/fast-agent-harness help`,
 `go run ./cmd/fast-agent-harness doctor -h`, and the gateway/service/session/
-incident command source in this worktree unless marked as an operator pattern
-needing live verification.
+incident command source in this worktree. Production SSH facts were checked
+against `root@82.23.163.16` for the dated inventory linked below.
 
 `ops/` is the runbook lane for production operation, health checks, and
 diagnostics. Keep these procedures outside `docs/`, because `docs/` is the
@@ -17,6 +17,9 @@ architecture canon only.
   incident bundles.
 - [Production services](production-services.md): production entrypoint, service
   names, readiness checks, restarts, and deployment-time cautions.
+- [Production inventory - 2026-07-04](production-inventory-2026-07-04.md):
+  dated redacted source of truth for the live host, unit files, binary,
+  checkout, gateway binding, and doctor snapshot.
 
 ## First Response
 
@@ -40,9 +43,8 @@ To preserve a redacted local bundle for one failed session:
 ```
 
 Production is described by the project contract as `root@82.23.163.16` under
-`/root/billyharness`. Live SSH access was not checked in this documentation
-pass, so treat the entry command as an operator pattern needing live
-verification:
+`/root/billyharness`. The most recent live inventory is
+`ops/production-inventory-2026-07-04.md`:
 
 ```sh
 ssh root@82.23.163.16

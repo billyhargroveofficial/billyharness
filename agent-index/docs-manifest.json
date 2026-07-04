@@ -224,7 +224,8 @@
       "related_code": [
         "internal/architecture/architecture_test.go",
         "cmd/fast-agent-harness/hygiene.go",
-        "internal/clientux/debug_snapshot.go"
+        "internal/clientux/debug_snapshot.go",
+        "internal/serviceops"
       ],
       "required_tests": [
         "go test -count=1 ./internal/architecture"

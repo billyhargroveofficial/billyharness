@@ -18,6 +18,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
+	"github.com/billyhargroveofficial/billyharness/internal/serviceops"
 )
 
 type doctorOptions struct {
@@ -107,12 +108,6 @@ type doctorCheck struct {
 	Status     string `json:"status"`
 	Detail     string `json:"detail,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
-}
-
-type doctorManagedService struct {
-	Service    string
-	Subcommand string
-	PIDFile    string
 }
 
 type doctorCommandRunner interface {
@@ -434,14 +429,11 @@ func doctorServiceStatuses(ctx context.Context, opts doctorOptions, runner docto
 	return out
 }
 
-func doctorManagedServices() []doctorManagedService {
-	return []doctorManagedService{
-		{Service: "billyharness-gateway.service", Subcommand: "gateway", PIDFile: "gateway.pid"},
-		{Service: "billyharness-telegram.service", Subcommand: "telegram", PIDFile: "telegram.pid"},
-	}
+func doctorManagedServices() []serviceops.ManagedService {
+	return serviceops.ManagedServices()
 }
 
-func doctorProcessDuplicateChecks(ctx context.Context, opts doctorOptions, runner doctorCommandRunner, services []doctorManagedService) []doctorCheck {
+func doctorProcessDuplicateChecks(ctx context.Context, opts doctorOptions, runner doctorCommandRunner, services []serviceops.ManagedService) []doctorCheck {
 	start := time.Now()
 	cmdOut, err := runDoctorCommand(ctx, runner, "", opts.Timeout, "pgrep", "-af", "fast-agent-harness")
 	durationMS := time.Since(start).Milliseconds()
@@ -475,7 +467,7 @@ func doctorProcessDuplicateChecks(ctx context.Context, opts doctorOptions, runne
 	return out
 }
 
-func doctorPIDFileChecks(services []doctorManagedService) []doctorCheck {
+func doctorPIDFileChecks(services []serviceops.ManagedService) []doctorCheck {
 	out := make([]doctorCheck, 0, len(services))
 	for _, service := range services {
 		path := filepath.Join(config.BillyHomeDir(), service.PIDFile)

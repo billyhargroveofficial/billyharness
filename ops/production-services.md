@@ -1,10 +1,10 @@
 # Production Services
 
-Last verified: 2026-07-03. Command shapes here were checked against
+Last verified: 2026-07-04. Command shapes here were checked against
 `README.md`, `go run ./cmd/fast-agent-harness help`,
 `go run ./cmd/fast-agent-harness doctor -h`, `internal/gatewaybase`, and the
-current service and doctor command sources unless marked as an operator pattern
-needing live verification.
+current service and doctor command sources. Live production service facts were
+checked over SSH in `ops/production-inventory-2026-07-04.md`.
 
 This runbook records production operation steps. It does not define
 architecture and it does not include systemd unit contents.
@@ -12,8 +12,9 @@ architecture and it does not include systemd unit contents.
 ## Production Entrypoint
 
 Production is described by the project contract as `root@82.23.163.16` under
-`/root/billyharness`. Live SSH access was not checked in this documentation
-pass, so verify access and host identity before running production commands:
+`/root/billyharness`. The current dated inventory is
+`ops/production-inventory-2026-07-04.md`; verify host identity again before
+changing production:
 
 ```sh
 ssh root@82.23.163.16
@@ -49,9 +50,20 @@ systemctl --no-pager --full status billyharness-gateway.service
 ```
 
 There are no `.service` unit files in this repository as of this verification
-pass. For unit contents, environment files, `WorkingDirectory`, restart policy,
-and log routing, use live-host inspection. These are operator patterns needing
-live verification:
+pass. The live host currently has unit files at:
+
+- `/etc/systemd/system/billyharness-gateway.service`
+- `/etc/systemd/system/billyharness-telegram.service`
+
+Both run as `root`, use `WorkingDirectory=/root/billyharness`, load
+`EnvironmentFile=-/root/billyharness/.env`, set
+`Environment=FAST_AGENT_ENV_FILE=/root/billyharness/.env`, restart with
+`Restart=always` and `RestartSec=2`, and log to journald with
+`StandardOutput=journal`. See the dated inventory for binary checksum, commit,
+doctor output, and route probe details.
+
+For fresh unit contents, environment files, `WorkingDirectory`, restart policy,
+and log routing, inspect the live host:
 
 ```sh
 systemctl cat billyharness-gateway.service
@@ -60,7 +72,9 @@ journalctl -u billyharness-gateway.service -n 200 --no-pager
 journalctl -u billyharness-telegram.service -n 200 --no-pager
 ```
 
-Redact secrets from unit environment files and logs before sharing output.
+Redact secrets from unit environment files and logs before sharing output. Do
+not copy raw `/root/billyharness/.env`, auth JSON, MCP inline env, Telegram
+tokens, provider keys, or bearer tokens into tickets.
 
 ## Deploy-Time Checks
 

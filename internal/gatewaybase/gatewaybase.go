@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/serviceops"
 )
 
 const (
@@ -78,8 +79,8 @@ func UnavailableHint(baseURL string) string {
 	parts := []string{
 		"gateway " + baseURL + " is not reachable",
 		"start it with ./bin/fast-agent-harness gateway",
-		"or run systemctl restart billyharness-gateway.service",
-		"inspect with systemctl --no-pager --full status billyharness-gateway.service",
+		"or run systemctl restart " + serviceops.GatewayServiceName,
+		"inspect with systemctl --no-pager --full status " + serviceops.GatewayServiceName,
 	}
 	return strings.Join(parts, "; ")
 }
