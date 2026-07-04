@@ -1623,6 +1623,50 @@ Billy asks for final verification.
   post-abort `saveSession` failure because there is no active HTTP caller to
   return an error to in that path.
 
+### 2026-07-04 - P0.11 admitted-input ledger and Telegram pending-input hardening
+
+- Completed P0.11 slice. Gateway startup now quarantines corrupt
+  `inputs.jsonl` files as `inputs.jsonl.corrupt-<timestamp>` when the session
+  event log is otherwise loadable, instead of hiding the usable session.
+  Admitted inputs can be terminally completed through
+  `POST /v1/sessions/{id}/inputs/{input_id}/complete`, completion records carry
+  terminal status plus failure reason, and run promotion computes the next run
+  sequence under the input-ledger/session-store lock.
+- Session run preflight failures after admission now complete the admitted input
+  as `preflight_failed` with replayable failure evidence. Telegram now treats
+  pending-state persistence as part of admission: if saving pending state fails
+  after gateway admission, it terminally completes the gateway input before
+  returning the local persistence error. On startup, Telegram reconciles pending
+  gateway inputs by completing reachable gateway inputs as
+  `abandoned_after_restart`, recording returned gateway state in the admission
+  ledger, and clearing local pending fields; missing gateway sessions get a
+  durable local terminal reason.
+- Added focused coverage for corrupt input-ledger quarantine on restart,
+  preflight-failure completion records, input-ledger run sequence allocation,
+  Telegram startup reconciliation of acked pending inputs, and gateway input
+  completion after Telegram pending-state save failure.
+- Updated durable docs because gateway route behavior, input-ledger replay
+  semantics, and Telegram admission/restart semantics changed:
+  `docs/architecture/gateway-and-sessions.md` and
+  `docs/architecture/telegram-and-operator-surfaces.md`. Checked
+  `agent-index/docs-manifest.json`; no manifest edit was needed because both
+  affected docs already had `2026-07-04` review metadata and routing did not
+  change.
+- Verification passed before commit:
+  `go test -count=1 ./internal/gateway ./internal/telegrambot`;
+  `go test -race -count=1 ./internal/gateway ./internal/telegrambot`;
+  `jq . agent-index/docs-manifest.json >/dev/null`;
+  `go test -count=1 ./internal/architecture`;
+  `git diff --check`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `afe10ff Harden session input ledgers`
+  (`afe10ff0e65f1f994837bea11ea2e5ad54e90745`).
+- Push: `origin/main` updated from `9a60eb1` to `afe10ff`.
+- Blockers/residual risk: no production gateway, live Telegram adapter, or
+  historical session-store corpus was exercised; proof is local focused/race/
+  full-suite verification, restart/admission tests, docs check, and rebuild.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
