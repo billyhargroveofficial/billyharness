@@ -2111,6 +2111,26 @@ Billy asks for final verification.
   layering model. Future generated package/reference docs may let this become
   less hand-maintained.
 
+### 2026-07-04 - P1.19 loop history metadata drift
+
+- Completed P1.19 slice. Updated `loop-develop/history/003-todo.md` so its
+  header now says `Status: completed/verified`, records the 2026-07-04 archive
+  date, and names the historical closeout commit.
+- Verified the closeout commit
+  `937255863e6a8b80564d754312dd6a378481b55b` is present on `origin/main`; the
+  observed remote tip after this slice's implementation push was
+  `6265fd0e4a2be19b28973a22d034a0a0af74f4d0`.
+- Verification passed:
+  `sed -n '1,40p' loop-develop/history/003-todo.md`;
+  `git diff --check -- loop-develop/history/003-todo.md`;
+  `git diff --check`.
+- Commit: `6265fd0 Fix 003 history status metadata`
+  (`6265fd0e4a2be19b28973a22d034a0a0af74f4d0`).
+- Push: `origin/main` updated from `11bfc85` to `6265fd0`.
+- Blockers/residual risk: none for the metadata drift; this was a historical
+  TODO metadata/evidence correction only, so no Go packages or durable
+  behavior contracts changed.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
