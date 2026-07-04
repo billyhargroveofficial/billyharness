@@ -1507,6 +1507,41 @@ Billy asks for final verification.
   artifact replay probe was run for this slice; proof is local focused/race/
   full-suite/build plus append-time rejection and replay-corruption tests.
 
+### 2026-07-04 - P0.8 strict trace replay counters and explicit legacy mode
+
+- Completed P0.8 slice. `trace.ReplaySummary` now exposes `replay_mode`,
+  `raw_event_types`, `validated_event_types`, `legacy_event_types`,
+  `validated_v1_records`, and `legacy_records`, so JSON consumers can
+  distinguish canonical v1 nested event truth from explicitly accepted legacy
+  or raw trace records.
+- Trace replay now advances lifecycle only for validated v1 nested events.
+  Schema-0 legacy records remain accepted as legacy/raw evidence, contribute
+  raw counters, and no longer fail strict lifecycle only because they lack
+  modern envelope IDs. New v1 events still fail on malformed envelopes or
+  lifecycle violations.
+- Reused the shared canonical edge-case fixture catalog in trace replay tests,
+  so trace replay and event-log contract tests now exercise the same sequence,
+  duplicate-tool, partial-stream, MCP, Telegram, and corrupted-envelope cases.
+- Fixed the P0.7 trace-writer refactor so payload-ref file names and payload
+  IDs use the candidate record sequence (`000004.json`, `payload:4`, etc.)
+  instead of the previous committed writer sequence.
+- Updated durable docs because trace replay JSON output and strict/legacy mode
+  semantics changed: `docs/architecture/runtime-event-system.md`.
+- Verification passed before commit:
+  `go test -count=1 ./internal/trace ./internal/gateway`;
+  `git diff --check`;
+  `jq . agent-index/docs-manifest.json`;
+  `go test -count=1 ./internal/architecture`;
+  `go test -count=1 ./internal/bench ./internal/trace ./internal/gateway`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `d5594e0 Separate strict trace replay counters`
+  (`d5594e0fa0b4b13e75ec6d1d96f8035f4ee1dba1`).
+- Push: `origin/main` updated from `77794ad` to `d5594e0`.
+- Blockers/residual risk: no real historical benchmark artifact corpus was
+  replayed for this slice; proof is focused synthetic legacy/v1 tests, shared
+  canonical fixture replay, package/full-suite verification, and rebuild.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
