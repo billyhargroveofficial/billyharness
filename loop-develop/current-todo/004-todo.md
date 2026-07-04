@@ -2011,6 +2011,44 @@ Billy asks for final verification.
   long-running corpus growth or CI-continuous fuzzing. No new behavior was
   intentionally introduced by this slice.
 
+### 2026-07-04 - P1.14 benchmark baselines and regression gate
+
+- Completed P1.14 slice. Added `scripts/bench-compare.sh` to record
+  host-keyed benchmark baselines under ignored
+  `bench-runs/bench-baselines/<host-key>/latest.txt`, run `benchstat`, and fail
+  only on large percentage-plus-absolute regressions. `scripts/bench-smoke.sh`
+  now includes gateway session JSONL, raw event JSONL, projector replay, and
+  tool schema validation benchmark metrics.
+- Added allocation-tracking benchmarks for projector replay
+  (`BenchmarkProjectorApplyReplay`) and native tool schema validation
+  (`BenchmarkToolSchemaValidation`). Existing gateway/eventlog replay
+  benchmarks continue to cover session/event JSONL append and replay paths.
+- Updated `benchmarks/README.md` because benchmark operator workflow changed.
+  No architecture docs changed because this slice only adds verification
+  infrastructure and benchmark notes; it does not change package boundaries,
+  runtime behavior, public APIs, config, gateway routes, or security semantics.
+- Verification passed:
+  `bash -n scripts/bench-smoke.sh scripts/bench-compare.sh`;
+  `go test -count=1 ./internal/clientux/projector ./internal/tools`;
+  `go test -bench=. -benchmem ./internal/bench ./internal/eventlog ./internal/clientux/projector`;
+  `env BENCHTIME=1x scripts/bench-smoke.sh`;
+  `env BENCHTIME=1x scripts/bench-compare.sh record`;
+  `env BENCHTIME=1x scripts/bench-compare.sh compare`;
+  `go test -count=1 ./...`;
+  `git diff --check`.
+- Verification note: the first live compare run failed on 1x microbenchmark
+  timing noise in `BenchmarkToolSchemaValidation` while bytes/allocs stayed
+  stable. The gate was tightened to require both percentage and absolute
+  deltas (`1ms`, `64KiB`, or `1000` allocs by default), then the same
+  `env BENCHTIME=1x scripts/bench-compare.sh compare` command passed.
+- Commit: `bcefff7 Add benchmark regression gate`
+  (`bcefff71767505a0536da55f5bc8eeb1cf9c6bc3`).
+- Push: `origin/main` updated from `bc8989b` to `bcefff7`.
+- Blockers/residual risk: the recorded local baseline is intentionally ignored
+  and host-specific. The smoke/compare verification used `BENCHTIME=1x` for
+  turn-time; operators should use a higher `BENCHTIME` such as `5x` or more
+  for meaningful investigations.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
