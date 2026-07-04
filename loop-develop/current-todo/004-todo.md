@@ -1789,6 +1789,49 @@ Billy asks for final verification.
   selection coverage, architecture/docs checks, race/full-suite verification,
   and rebuild.
 
+### 2026-07-04 - P0.15 incident-grade transcript export artifacts
+
+- Completed P0.15 slice. `/export` now writes or displays a
+  Billyharness transcript artifact with a metadata header instead of a bare
+  transcript body. The header records source store, source mode, transcript
+  mode, runtime mode, local/gateway session IDs, last known gateway event seq,
+  sequence range, provider/model/profile/access mode, reasoning settings,
+  export time, redaction mode, body byte count, body hash, block/message
+  counts, and warnings.
+- Added shared `internal/clientux/transcript_export.go` metadata formatting and
+  source normalization. Supported source modes are `cells`, `messages`,
+  `events`, and `combined`; TUI `events`/`combined` exports explicitly warn
+  that they are projected client state, not durable gateway JSONL replay.
+- `/export` now supports quoted paths and `mode=`, `source=`, and `path=`
+  arguments while preserving old forms like `/export raw PATH`.
+- Generated raw tool output-ref records now quote path-like values such as
+  `output_ref`, `output_ref_id`, `sha256`, and `preview`, and preserve the
+  quoted output-ref line when the final tool result appends to the same
+  transcript cell.
+- Added focused coverage for artifact metadata/warnings/redaction, source
+  normalization, quoted export path parsing, event-source artifact output, and
+  quoted output-ref raw-copy preservation.
+- Updated durable docs because transcript export behavior changed:
+  `docs/architecture/tui-and-clientux.md`. Checked
+  `agent-index/docs-manifest.json`; no manifest edit was needed because the TUI
+  architecture doc was already reviewed on `2026-07-04` and its routing already
+  covers TUI export/clientux changes.
+- Verification passed before commit:
+  `go test -count=1 ./internal/tui ./internal/tui/transcript ./internal/clientux`;
+  `go test -count=1 ./internal/architecture`;
+  `jq . agent-index/docs-manifest.json >/dev/null`;
+  `git diff --check`;
+  `go test -race -count=1 ./internal/tui ./internal/tui/transcript ./internal/clientux`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `9710418 Promote transcript exports to incident artifacts`
+  (`9710418f431807bed857b4e4ca635d860813f9c0`).
+- Push: `origin/main` updated from `508d8a0` to `9710418`.
+- Blockers/residual risk: TUI does not own durable gateway JSONL events, so
+  `events`/`combined` exports are clearly marked as projected client state;
+  proof is local focused/race/full-suite verification, architecture/docs
+  checks, path parser coverage, and rebuild.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
