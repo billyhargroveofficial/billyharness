@@ -1412,6 +1412,63 @@ Billy asks for final verification.
   failed restore attempts because existing `turn.change_reverted` semantics
   would incorrectly mark a failed restore as successful.
 
+### 2026-07-04 - P0.6 centralized gateway/Telegram/MCP/export redaction
+
+- Completed P0.6 slice. `internal/secrets` now owns shared text, JSON, URL,
+  environment-name, and argv-pair redaction helpers. The shared patterns cover
+  URL userinfo, secret query parameters, bearer/proxy auth headers, API-key and
+  cookie headers, token/api-key/password fields, provider/GitHub/Yandex/JWT
+  token shapes, Telegram bot-token URLs, image data URLs, and MCP-style secret
+  argv flags. JSON redaction recurses through string values, object keys, and
+  string arrays that look like argv lists.
+- Gateway JSON/NDJSON response redaction now delegates to
+  `secrets.RedactJSON`. Telegram outbound rendering and Telegram Bot API
+  transport errors use the shared redactor. MCP URL credential and argv secret
+  extraction now comes from `internal/secrets`, and MCP status URL redaction
+  uses `secrets.RedactURL`.
+- Operator debug/export surfaces were tightened. `incident collect` no longer
+  owns duplicate URL/header regexes and writes JSON through
+  `secrets.RedactJSONIndent`. `sessions export` text and `-json` transcript
+  exports are redacted before printing while the persisted session JSONL remains
+  the durable replay source of truth.
+- Added table and integration coverage:
+  `TestRedactSharedBoundaryTable`,
+  `TestRedactJSONRedactsStringsAndKeys`,
+  `TestSessionsExportRedactsTranscriptSurfaces`, updated Telegram client token
+  redaction assertion, and retained MCP status redaction coverage for URL
+  credentials and argv secrets.
+- Updated durable docs because public/operator behavior changed:
+  `docs/architecture/security-model.md`,
+  `docs/architecture/telegram-and-operator-surfaces.md`,
+  `ops/doctor-and-diagnostics.md`, and `agent-index/docs-manifest.json`.
+- Verification passed before commit:
+  `go test -count=1 ./internal/secrets`;
+  `go test -count=1 ./internal/gateway`;
+  `go test -count=1 ./internal/telegrambot`;
+  `go test -count=1 ./internal/mcpclient`;
+  `go test -count=1 ./cmd/fast-agent-harness`;
+  `go test -count=1 ./internal/secrets ./internal/gateway ./internal/telegrambot`;
+  `go test -count=1 ./internal/mcpclient ./cmd/fast-agent-harness`;
+  `jq . agent-index/docs-manifest.json >/dev/null`;
+  `go test -count=1 ./internal/architecture`;
+  `git diff --check`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Verification note: the first new `internal/secrets` table run exposed two
+  central pattern misses: Telegram bot tokens embedded after `/bot`, and bare
+  `--token value` argv redaction when `--api-key` appeared later on the line.
+  Both were fixed in `internal/secrets` before the final focused and broad
+  verification passed.
+- Commit: `a30cd2c Centralize redaction surfaces`
+  (`a30cd2cdabf40b5b406c2009e8a10a44246a0797`).
+- Push: `origin/main` updated from `44163ec` to `a30cd2c`.
+- Blockers/residual risk: no live Telegram Bot API, live MCP server, production
+  gateway, or production incident-bundle probe was run for this slice; current
+  proof is local unit/full-suite/build plus route/export/incident tests.
+  Redaction remains a leak-reduction boundary, not proof that arbitrary user
+  content is safe to disclose. Durable session logs are intentionally left as
+  replay truth; operator-facing exports are redacted presentation artifacts.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
