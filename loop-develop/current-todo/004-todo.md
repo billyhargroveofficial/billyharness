@@ -2082,6 +2082,35 @@ Billy asks for final verification.
   CLI command front doors such as bench/incident/tool dispatch. This slice kept
   tests deterministic and avoided live TUI/Telegram/gateway process startup.
 
+### 2026-07-04 - P1.16 stronger package-boundary guardrails
+
+- Completed P1.16 slice. Strengthened `internal/architecture` beyond the
+  existing docs-map forbidden-import check with positive required-import
+  assertions for core ownership boundaries, a command-package adapter allowlist,
+  and a repo-wide guard that `internal/testkit` and
+  `internal/testkit/fakeprovider` do not appear in non-test imports.
+- Positive assertions now pin important direct ownership links such as
+  gateway/trace to `eventlog`, gatewayclient/gatewaybase to shared gateway
+  DTO/helper packages, runtimehost to agent/provider/tools composition, TUI to
+  `gatewayclient` and `tui/runtimeclient`, and Telegram to `gatewayclient`
+  rather than gateway server internals.
+- Checked docs routing: `docs/README.md` and `docs/documentation-system.md`.
+  No durable docs changed because the new tests enforce existing
+  `docs/architecture.md` package-map and guarded-rule intent; package
+  ownership/import contracts did not change.
+- Verification passed:
+  `gofmt -w internal/architecture/architecture_test.go`;
+  `go test -count=1 ./internal/architecture`;
+  `go test -count=1 ./...`;
+  `git diff --check`.
+- Commit: `050089b Strengthen architecture boundary tests`
+  (`050089b42a1ab85f2638ae6bfa4acf88a8aea7a4`).
+- Push: `origin/main` updated from `2848655` to `050089b`.
+- Blockers/residual risk: command-package adapter policy is currently a
+  reviewed allowlist of existing CLI front-door imports, not a deeper semantic
+  layering model. Future generated package/reference docs may let this become
+  less hand-maintained.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
