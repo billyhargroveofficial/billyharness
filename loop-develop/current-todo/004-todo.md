@@ -2287,6 +2287,20 @@ Billy asks for final verification.
 - Push: `origin/main` updated from `0a3d86a` to `2576430`.
 - Blockers/residual risk: the deploy script was not executed against the live production host in this slice. A real deploy still needs to run from `/root/billyharness` and preserve the generated evidence directory from the production host.
 
+### 2026-07-04 - Final 004 verification gate
+
+- Ran the final verification gate requested by the 004 goal after P2.6 implementation and evidence were pushed.
+- Verification passed:
+  `go test -count=1 ./...`;
+  `go vet ./...`;
+  `go run golang.org/x/vuln/cmd/govulncheck@latest ./...` (`No vulnerabilities found.`);
+  `go test -race -count=1 ./internal/eventlog ./internal/gateway ./internal/telegrambot ./internal/tools ./internal/tui ./internal/clientux/projector`;
+  `go run ./cmd/fast-agent-harness hygiene -repo /Users/billy/repos/billyharness -strict`;
+  `git diff --check`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Push state before this evidence block: `origin/main` was at `5165507 Record P2.6 deploy workflow evidence`.
+- Blockers/residual risk: no live production deploy/restart was run by this final gate. Local working-copy changes unrelated to 004 implementation remain intentionally unstaged for Billy/main-chat follow-up.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
