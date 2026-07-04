@@ -351,6 +351,52 @@ func TestGatewaySessionUndoConflictDoesNotPartiallyRestore(t *testing.T) {
 	}
 }
 
+func TestGatewaySessionUndoRejectsTamperedPatchArtifact(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.WorkspaceRoots = []string{root}
+	cfg.AutoApproveDangerous = true
+	cfg.MaxToolRounds = 2
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	prov := &gatewayScriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_write", ToolName: "fs_write_file", ArgsDelta: `{"path":"out.txt","content":"agent\n"}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "done"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	registry := tools.NewRegistry(cfg)
+	server := NewServerWithOptions(cfg, provider.Mock{}, registry, ServerOptions{SessionStoreDir: storeDir})
+	sessionID := createGatewaySessionForTest(t, server)
+	runGatewaySessionAgentForTest(t, server, sessionID, agentpkg.New(cfg, prov, registry), "write")
+	path := filepath.Join(root, "out.txt")
+	preview := postGatewayJSON[gatewayapi.SessionUndoResponse](t, server, "/v1/sessions/"+sessionID+"/undo", `{"preview":true}`, http.StatusOK)
+	if preview.Change.PatchOutputRef == "" || preview.Change.PatchOutputRefSHA256 == "" {
+		t.Fatalf("preview missing patch artifact metadata: %#v", preview.Change)
+	}
+	if err := os.WriteFile(preview.Change.PatchOutputRef, []byte(`{"tampered":true}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+sessionID+"/undo", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "sha256 mismatch") {
+		t.Fatalf("tampered undo status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := readFileString(t, path); got != "agent\n" {
+		t.Fatalf("tampered undo mutated file: %q", got)
+	}
+}
+
 func TestGatewaySessionUndoDeniedDuringActiveRun(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"

@@ -240,6 +240,8 @@ Output refs are used in three places:
   the handler did not already provide an output ref.
 - Checkpoint change records use `tooloutput.Store` for patch/change evidence
   and attach patch output-ref metadata to `turn.change_recorded` events.
+  Gateway undo/redo verifies the recorded patch output-ref SHA-256 and then
+  rechecks workspace-root and symlink constraints before restoring files.
 
 When a tool result has an output ref, `toolOrchestrator.EmitAttemptFinished` in
 `internal/agent/tool_attempt.go` emits `tool.output_ref_created` before the

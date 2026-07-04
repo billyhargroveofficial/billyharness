@@ -180,6 +180,15 @@ Offline helpers in `session_export.go` and `session_inspect.go` load transcripts
 list stored sessions, inspect manifests/files/event types/output refs/turn
 changes, and fall back to legacy snapshots when no session directory exists.
 
+Undo/redo restore is fail-closed at the gateway boundary. The gateway loads the
+checkpoint patch artifact through the `patch_output_ref` recorded on the
+`turn.change_recorded` event and verifies the recorded
+`patch_output_ref_sha256` before preview, undo, or redo. Before writing files
+back, `internal/checkpoint` rechecks that every restored path is inside the
+configured workspace roots and that existing symlink ancestry does not escape
+those roots. Tampered, moved, symlinked, non-regular, out-of-root, or conflicting
+patches fail before workspace mutation.
+
 ## Replay and Live Streams
 
 Gateway session JSONL is the durable source of truth. Live HTTP streams are

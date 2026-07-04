@@ -37,6 +37,13 @@ type Options struct {
 	MaxPreviewBytes int
 }
 
+type RestoreOptions struct {
+	WorkspaceRoots       []string
+	PatchOutputRef       string
+	PatchOutputRefSHA256 string
+	requireWorkspaceRoot bool
+}
+
 type Tracker struct {
 	opts    Options
 	tool    string
@@ -155,6 +162,39 @@ func Load(path string) (PatchRecord, error) {
 	if err != nil {
 		return PatchRecord{}, err
 	}
+	return decodePatchRecord(bytes)
+}
+
+func LoadVerified(path, wantSHA256 string) (PatchRecord, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return PatchRecord{}, fmt.Errorf("checkpoint artifact path required")
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return PatchRecord{}, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return PatchRecord{}, fmt.Errorf("refusing checkpoint artifact symlink %s", path)
+	}
+	if !info.Mode().IsRegular() {
+		return PatchRecord{}, fmt.Errorf("refusing non-regular checkpoint artifact %s", path)
+	}
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return PatchRecord{}, err
+	}
+	if wantSHA256 = strings.TrimSpace(wantSHA256); wantSHA256 != "" {
+		sum := sha256.Sum256(bytes)
+		got := hex.EncodeToString(sum[:])
+		if got != wantSHA256 {
+			return PatchRecord{}, fmt.Errorf("checkpoint artifact sha256 mismatch: got %s want %s", got, wantSHA256)
+		}
+	}
+	return decodePatchRecord(bytes)
+}
+
+func decodePatchRecord(bytes []byte) (PatchRecord, error) {
 	var record PatchRecord
 	if err := json.Unmarshal(bytes, &record); err != nil {
 		return PatchRecord{}, err
@@ -204,14 +244,27 @@ func Preview(record PatchRecord, maxBytes int) (string, bool) {
 }
 
 func Restore(record PatchRecord) (RestoreResult, error) {
-	return restoreRecord(record, false)
+	return restoreRecord(record, false, RestoreOptions{})
 }
 
 func Redo(record PatchRecord) (RestoreResult, error) {
-	return restoreRecord(record, true)
+	return restoreRecord(record, true, RestoreOptions{})
 }
 
-func restoreRecord(record PatchRecord, useAfter bool) (RestoreResult, error) {
+func RestoreWithOptions(record PatchRecord, opts RestoreOptions) (RestoreResult, error) {
+	opts.requireWorkspaceRoot = true
+	return restoreRecord(record, false, opts)
+}
+
+func RedoWithOptions(record PatchRecord, opts RestoreOptions) (RestoreResult, error) {
+	opts.requireWorkspaceRoot = true
+	return restoreRecord(record, true, opts)
+}
+
+func restoreRecord(record PatchRecord, useAfter bool, opts RestoreOptions) (RestoreResult, error) {
+	if err := validateRestoreRecord(record, opts); err != nil {
+		return RestoreResult{}, err
+	}
 	conflicts := restoreConflicts(record, useAfter)
 	if len(conflicts) > 0 {
 		return RestoreResult{Conflicts: conflicts}, ErrConflict
@@ -243,6 +296,112 @@ func restoreRecord(record PatchRecord, useAfter bool) (RestoreResult, error) {
 func restoreRemoves(file FilePatch, useAfter bool) bool {
 	target := restoreTargetState(file, useAfter)
 	return !target.Exists
+}
+
+func validateRestoreRecord(record PatchRecord, opts RestoreOptions) error {
+	roots, err := normalizedWorkspaceRoots(opts.WorkspaceRoots)
+	if err != nil {
+		return err
+	}
+	if len(roots) == 0 {
+		if opts.requireWorkspaceRoot {
+			return fmt.Errorf("checkpoint restore requires workspace roots")
+		}
+		return nil
+	}
+	for _, file := range record.Files {
+		if err := validateRestorePath(file.Path, roots); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizedWorkspaceRoots(roots []string) ([]string, error) {
+	out := make([]string, 0, len(roots))
+	for _, root := range roots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		abs, err := filepath.Abs(root)
+		if err != nil {
+			return nil, err
+		}
+		abs = filepath.Clean(abs)
+		out = append(out, abs)
+		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+			resolved = filepath.Clean(resolved)
+			if resolved != abs {
+				out = append(out, resolved)
+			}
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+	}
+	sort.Strings(out)
+	deduped := out[:0]
+	for _, root := range out {
+		if len(deduped) == 0 || deduped[len(deduped)-1] != root {
+			deduped = append(deduped, root)
+		}
+	}
+	return deduped, nil
+}
+
+func validateRestorePath(path string, roots []string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("checkpoint restore path required")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	abs = filepath.Clean(abs)
+	if !pathWithinAnyRoot(abs, roots) {
+		return fmt.Errorf("refusing to restore path outside workspace roots: %s", abs)
+	}
+	ancestor, err := existingAncestor(abs)
+	if err != nil {
+		return err
+	}
+	if ancestor == "" {
+		return nil
+	}
+	resolved, err := filepath.EvalSymlinks(ancestor)
+	if err != nil {
+		return err
+	}
+	resolved = filepath.Clean(resolved)
+	if !pathWithinAnyRoot(resolved, roots) {
+		return fmt.Errorf("refusing to restore path through symlink outside workspace roots: %s", abs)
+	}
+	return nil
+}
+
+func pathWithinAnyRoot(path string, roots []string) bool {
+	for _, root := range roots {
+		if path == root || strings.HasPrefix(path, root+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func existingAncestor(path string) (string, error) {
+	for {
+		if _, err := os.Lstat(path); err == nil {
+			return path, nil
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return "", nil
+		}
+		path = parent
+	}
 }
 
 func normalizeOptions(opts Options) Options {

@@ -262,6 +262,13 @@ and whatever the operating system permits. The policy boundary is designed for
 local operator control and replayable guardrails, not hostile multi-user code
 execution.
 
+Checkpoint undo/redo adds a restore-time boundary on top of ordinary tool
+execution. Gateway restore paths verify the recorded patch artifact SHA-256,
+reject symlink or non-regular patch artifacts, require configured workspace
+roots, and recheck restored file paths plus symlink ancestry before writing
+files. Tampered, moved, out-of-root, or symlink-escaping patch records fail
+closed before workspace mutation.
+
 ## MCP Boundary
 
 MCP servers are external processes or, in future, endpoints. Their tool

@@ -1083,7 +1083,7 @@ func (s *Server) handleSessionUndo(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	record, err := checkpoint.Load(stored.Data.PatchOutputRef)
+	record, err := checkpoint.LoadVerified(stored.Data.PatchOutputRef, stored.Data.PatchOutputRefSHA256)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "checkpoint load failed: "+err.Error())
 		return
@@ -1100,7 +1100,12 @@ func (s *Server) handleSessionUndo(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	result, err := checkpoint.Restore(record)
+	restoreOpts := checkpoint.RestoreOptions{
+		WorkspaceRoots:       s.toolPolicy.WorkspaceRoots,
+		PatchOutputRef:       stored.Data.PatchOutputRef,
+		PatchOutputRefSHA256: stored.Data.PatchOutputRefSHA256,
+	}
+	result, err := checkpoint.RestoreWithOptions(record, restoreOpts)
 	if err != nil {
 		resp := gatewayapi.SessionUndoResponse{
 			ChangeID:  stored.Data.ChangeID,
@@ -1158,12 +1163,17 @@ func (s *Server) handleSessionRedo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "redo change not found")
 		return
 	}
-	record, err := checkpoint.Load(stored.Data.PatchOutputRef)
+	record, err := checkpoint.LoadVerified(stored.Data.PatchOutputRef, stored.Data.PatchOutputRefSHA256)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "checkpoint load failed: "+err.Error())
 		return
 	}
-	result, err := checkpoint.Redo(record)
+	restoreOpts := checkpoint.RestoreOptions{
+		WorkspaceRoots:       s.toolPolicy.WorkspaceRoots,
+		PatchOutputRef:       stored.Data.PatchOutputRef,
+		PatchOutputRefSHA256: stored.Data.PatchOutputRefSHA256,
+	}
+	result, err := checkpoint.RedoWithOptions(record, restoreOpts)
 	if err != nil {
 		resp := gatewayapi.SessionUndoResponse{
 			ChangeID:  stored.Data.ChangeID,

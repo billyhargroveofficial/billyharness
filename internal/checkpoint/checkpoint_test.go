@@ -1,7 +1,9 @@
 package checkpoint
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -202,6 +204,111 @@ func TestCheckpointRestoreOneRejectsSymlinkDirectoryTarget(t *testing.T) {
 	}
 }
 
+func TestCheckpointLoadVerifiedRejectsTamperedMovedAndSymlinkArtifacts(t *testing.T) {
+	root := t.TempDir()
+	record := PatchRecord{
+		SchemaVersion: SchemaVersion,
+		ChangeID:      "change-test",
+		Files: []FilePatch{{
+			Path:   filepath.Join(root, "file.txt"),
+			Change: ChangeModified,
+			Kind:   KindFile,
+			Before: checkpointFileState("before\n"),
+			After:  checkpointFileState("after\n"),
+		}},
+	}
+	artifact := filepath.Join(root, "patch.json")
+	body, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artifact, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	wantSHA := hex.EncodeToString(sum[:])
+	if _, err := LoadVerified(artifact, wantSHA); err != nil {
+		t.Fatalf("verified load: %v", err)
+	}
+	if err := os.WriteFile(artifact, append(body, []byte("\n ")...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadVerified(artifact, wantSHA); err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Fatalf("expected sha mismatch, got %v", err)
+	}
+	moved := filepath.Join(root, "moved.json")
+	if err := os.Rename(artifact, moved); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadVerified(artifact, wantSHA); err == nil {
+		t.Fatal("expected moved artifact path to fail")
+	}
+	link := filepath.Join(root, "patch-link.json")
+	if err := os.Symlink(moved, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := LoadVerified(link, ""); err == nil || !strings.Contains(err.Error(), "artifact symlink") {
+		t.Fatalf("expected artifact symlink rejection, got %v", err)
+	}
+}
+
+func TestCheckpointRestoreWithOptionsRequiresWorkspaceRootsAndRejectsOutOfRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("after\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	record := PatchRecord{
+		SchemaVersion: SchemaVersion,
+		ChangeID:      "change-outside",
+		Files: []FilePatch{{
+			Path:   outside,
+			Change: ChangeModified,
+			Kind:   KindFile,
+			Before: checkpointFileState("before\n"),
+			After:  checkpointFileState("after\n"),
+		}},
+	}
+	if _, err := RestoreWithOptions(record, RestoreOptions{}); err == nil || !strings.Contains(err.Error(), "requires workspace roots") {
+		t.Fatalf("expected missing roots error, got %v", err)
+	}
+	if _, err := RestoreWithOptions(record, RestoreOptions{WorkspaceRoots: []string{root}}); err == nil || !strings.Contains(err.Error(), "outside workspace roots") {
+		t.Fatalf("expected out-of-root restore rejection, got %v", err)
+	}
+	if got := readCheckpointFile(t, outside); got != "after\n" {
+		t.Fatalf("out-of-root restore mutated file: %q", got)
+	}
+}
+
+func TestCheckpointRestoreWithOptionsRejectsSymlinkParentEscapingRoot(t *testing.T) {
+	root := t.TempDir()
+	outsideDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outsideDir, "file.txt"), []byte("after\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(outsideDir, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	record := PatchRecord{
+		SchemaVersion: SchemaVersion,
+		ChangeID:      "change-symlink-parent",
+		Files: []FilePatch{{
+			Path:   filepath.Join(link, "file.txt"),
+			Change: ChangeModified,
+			Kind:   KindFile,
+			Before: checkpointFileState("before\n"),
+			After:  checkpointFileState("after\n"),
+		}},
+	}
+	if _, err := RestoreWithOptions(record, RestoreOptions{WorkspaceRoots: []string{root}}); err == nil || !strings.Contains(err.Error(), "symlink outside workspace roots") {
+		t.Fatalf("expected symlink-parent restore rejection, got %v", err)
+	}
+	if got := readCheckpointFile(t, filepath.Join(outsideDir, "file.txt")); got != "after\n" {
+		t.Fatalf("outside symlink target mutated: %q", got)
+	}
+}
+
 func TestCheckpointShellChangedDetectsCreatedModifiedDeletedFiles(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "keep.txt"), []byte("old\n"), 0o644); err != nil {
@@ -244,4 +351,16 @@ func readCheckpointFile(t *testing.T, path string) string {
 func rawArgs(value map[string]any) json.RawMessage {
 	body, _ := json.Marshal(value)
 	return body
+}
+
+func checkpointFileState(content string) *FileState {
+	sum := sha256.Sum256([]byte(content))
+	return &FileState{
+		Exists:        true,
+		Kind:          KindFile,
+		Mode:          0o644,
+		Size:          int64(len(content)),
+		SHA256:        hex.EncodeToString(sum[:]),
+		ContentBase64: base64.StdEncoding.EncodeToString([]byte(content)),
+	}
 }
