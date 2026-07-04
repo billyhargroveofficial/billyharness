@@ -5,7 +5,7 @@ projection, client UX metadata, rendering, selection/copy behavior, saved local
 chat state, and the local runtime adapter.
 
 Status note: this document was reviewed against the dirty current worktree on
-2026-07-03. Claims describe this checkout, not necessarily a clean release
+2026-07-04. Claims describe this checkout, not necessarily a clean release
 commit.
 
 The main rule is that UI surfaces are projections of protocol events and saved
@@ -243,6 +243,23 @@ profile metadata, and MCP prompt metadata. The TUI may display/search that
 registry, but client UX metadata should remain reusable by Telegram and future
 clients.
 
+### Debug Snapshot Contract
+
+`internal/clientux/debug_snapshot.go` defines the frontend-neutral
+`TUIDebugSnapshot` schema. The TUI exposes it through `/debug` and the
+compatibility path `/status debug`, both rendered as a redacted info block.
+The snapshot includes local chat identity, gateway session identity, last
+gateway event sequence, runtime mode/settings, stream queue state, client UX
+projector state, viewport/selection coordinates, transcript/export byte counts
+and hashes, stale flags, block/cell counts, and diagnostic hints.
+
+Snapshot content must stay incident-safe: raw transcript text, selected
+viewport text, provider secrets, bearer tokens, secret-bearing URLs, local
+settings paths passed as redaction inputs, and secret-like errors are not
+printed. Transcript, viewport, selection, and export bodies are represented by
+lengths and hashes so an operator can compare states without leaking the
+conversation.
+
 ## Runtime Boundary
 
 The local runtime adapter exists to keep `internal/tui` from becoming another
@@ -280,6 +297,9 @@ Current hardening:
   message fetch.
 - `internal/clientux/projector/presentation.go` prevents every low-level event
   from becoming transcript noise.
+- `internal/clientux/debug_snapshot.go` provides the redacted TUI debug
+  snapshot used by `/debug` and `/status debug`; it reports hashes and state
+  counters instead of raw transcript, selection, or export bodies.
 - `internal/tui/transcript_render_test.go`,
   `internal/tui/cross_surface_consistency_test.go`,
   `internal/tui/presentation_policy_test.go`, and package tests under

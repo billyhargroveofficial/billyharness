@@ -18,7 +18,7 @@ exceptions are allowed only when they name the phase that removes them.
 | `internal/attachments` | Attachment metadata, image validation, hashing, private local storage, and ref resolution. | `config`, `protocol` | Must not import provider, gateway, agent, tools, TUI, or Telegram packages; store refs and metadata only, never raw image bytes in JSONL. |
 | `internal/bench` | Benchmark runners, local-loop tasks, provider comparison, replay verification. | `agent`, `config`, `modelinfo`, `protocol`, `provider`, `runstate`, `runtimehost`, `trace` | Bench can compose broad runtime pieces, but should not become a shared runtime dependency. |
 | `internal/checkpoint` | Turn-scoped filesystem snapshots, compact diffs, preview, and conflict-safe restore records for mutating tool steps. | none | Must not write user `.git` state or import runtime, gateway, tools, provider, TUI, or Telegram packages. |
-| `internal/clientux` | Client-facing context projection helpers shared by TUI, gateway, and future projector code. | `config`, `gatewayapi`, `protocol` | Must not import gateway server, agent, provider, tools, TUI, or Telegram. |
+| `internal/clientux` | Client-facing context projection helpers shared by TUI, gateway, and future projector code. | `config`, `gatewayapi`, `protocol`, `secrets` | May import `secrets` only for shared redaction of debug/incident payloads. Must not import gateway server, agent, provider, tools, TUI, or Telegram. |
 | `internal/clientux/projector` | Presentation-neutral protocol event projector for client run snapshots. | `protocol` | Must not import gateway server, agent, provider, tools, TUI, Telegram, or rendering packages. |
 | `internal/codexauth` | Shared Codex auth payload, JWT claim, account, expiry, auth-mode, and refresh-status helpers. | none | Must remain pure parsing/status logic with no HTTP, file writes, provider, credentials, or config imports. |
 | `internal/commandregistry` | Shared searchable metadata registry for built-in actions, local prompt commands, profiles, and MCP prompt metadata. | `clientux`, `config`, `mcpclient`, `promptcommands` | Must stay metadata-only; no command execution, provider calls, gateway server, TUI, Telegram, cloud registry, or marketplace behavior. |
@@ -88,7 +88,7 @@ phase, and split plan before depending on it in strict hygiene.
 
 - `internal/protocol` has no billyharness internal imports.
 - `internal/eventlog` may import `protocol`, but not runtime, replay callers, or presentation adapters.
-- `internal/clientux` may import `config`, `gatewayapi`, and `protocol`, but not gateway server, runtime, provider, tools, or presentation adapters.
+- `internal/clientux` may import `config`, `gatewayapi`, `protocol`, and `secrets`, but not gateway server, runtime, provider, tools, or presentation adapters. The `secrets` import is limited to shared redaction of debug/incident payloads.
 - `internal/clientux/projector` may import `protocol`, but not gateway server, runtime, provider, tools, presentation adapters, or renderers.
 - `internal/gatewayapi` may import `config` and `protocol`, but not gateway server, clients, runtime, provider, or presentation adapters.
 - `internal/gatewayclient` may import `config`, `displayfmt`, `gatewayapi`, `gatewaybase`, and `protocol`, but not gateway server, runtime, provider, tools, or presentation adapters.

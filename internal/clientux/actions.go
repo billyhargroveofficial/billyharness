@@ -128,6 +128,13 @@ var sharedActionDefinitions = []ActionDefinition{
 		TelegramSummary: "preview latest turn diff",
 	},
 	{
+		ID:       "debug.full",
+		Title:    "Debug Snapshot",
+		Category: "session",
+		Slash:    "/debug",
+		Summary:  "show redacted TUI debug snapshot",
+	},
+	{
 		ID:        "vision.attach",
 		Title:     "Attach Image",
 		Category:  "message",

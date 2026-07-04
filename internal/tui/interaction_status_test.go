@@ -369,6 +369,7 @@ func TestStatusCommandShowsDetailedStatusBlock(t *testing.T) {
 func TestStatusDebugCommandShowsRedactedRuntimeSnapshot(t *testing.T) {
 	m := newTestModel(t)
 	m.gatewayURL = "http://127.0.0.1:8765"
+	m.localChatID = "local-123"
 	m.sessionID = "sess-123"
 	m.lastGatewayEventSeq = 42
 	m.pendingStreamEvents = []protocol.Event{{Type: protocol.EventAssistantDelta, Data: "secret pending payload"}}
@@ -400,19 +401,18 @@ func TestStatusDebugCommandShowsRedactedRuntimeSnapshot(t *testing.T) {
 	}
 	content := m.blocks[1].Content
 	for _, want := range []string{
-		"session: sess-123",
+		"schema: 1",
+		"session: local=local-123 gateway=sess-123 last_seq=42 mode=gateway",
 		"last_seq=42",
-		"pending_events=1",
+		"stream: pending=1",
 		"scheduled=true",
-		"transcript=true",
-		"blocks: total=1",
-		"selected=index=0",
+		"projector: available=true",
+		"selection: active=false",
+		"transcript: blocks=1 selected=0",
 		"call_id=call-secret",
-		"cache:",
-		"viewport:",
+		"viewport: app=100x40 viewport=80x20",
 		"reflows=7",
-		"usage:",
-		"context:",
+		"stale: transcript_projector=true",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("/status debug block missing %q:\n%s", want, content)
@@ -422,6 +422,17 @@ func TestStatusDebugCommandShowsRedactedRuntimeSnapshot(t *testing.T) {
 		if strings.Contains(content, notWant) {
 			t.Fatalf("/status debug leaked %q:\n%s", notWant, content)
 		}
+	}
+
+	handled, cmd = m.handleSlashCommand("/debug")
+	if !handled || cmd != nil {
+		t.Fatalf("/debug handled=%v cmd=%v, want handled without async command", handled, cmd)
+	}
+	if last := m.blocks[len(m.blocks)-1]; last.Title != "DEBUG" || !strings.Contains(last.Content, "schema: 1") {
+		t.Fatalf("/debug should add DEBUG snapshot block, got %#v", last)
+	}
+	if strings.Contains(m.blocks[len(m.blocks)-1].Content, "secret transcript body") {
+		t.Fatalf("/debug leaked transcript body:\n%s", m.blocks[len(m.blocks)-1].Content)
 	}
 }
 

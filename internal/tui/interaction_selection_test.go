@@ -345,4 +345,15 @@ func TestTranscriptSelectionHighlightMatchesSelectedGraphemes(t *testing.T) {
 	if got := selectionBackgroundText(highlighted); got != target {
 		t.Fatalf("highlighted selection = %q, want %q; rendered=%q", got, target, highlighted)
 	}
+	debug := m.debugFullText()
+	for _, want := range []string{"selection: active=true", "selected_bytes=", "selected_runes=", "hash="} {
+		if !strings.Contains(debug, want) {
+			t.Fatalf("debug snapshot missing %q:\n%s", want, debug)
+		}
+	}
+	for _, notWant := range []string{target, "привет", "🏳️‍🌈", "中 done"} {
+		if strings.Contains(debug, notWant) {
+			t.Fatalf("debug snapshot leaked selected viewport text %q:\n%s", notWant, debug)
+		}
+	}
 }

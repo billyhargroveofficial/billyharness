@@ -223,7 +223,8 @@
       ],
       "related_code": [
         "internal/architecture/architecture_test.go",
-        "cmd/fast-agent-harness/hygiene.go"
+        "cmd/fast-agent-harness/hygiene.go",
+        "internal/clientux/debug_snapshot.go"
       ],
       "required_tests": [
         "go test -count=1 ./internal/architecture"
@@ -467,7 +468,7 @@
       "owner": "billy",
       "source_of_truth": true,
       "generated": false,
-      "last_reviewed": "2026-07-03",
+      "last_reviewed": "2026-07-04",
       "trust_level": "hand_curated_and_tested",
       "read_when": [
         "changing TUI event projection",

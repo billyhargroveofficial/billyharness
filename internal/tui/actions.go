@@ -171,6 +171,18 @@ func actionRegistry() []actionSpec {
 			},
 		},
 		{
+			id:       "debug.full",
+			title:    "Debug Snapshot",
+			category: "session",
+			slash:    "/debug",
+			summary:  "show redacted TUI debug snapshot",
+			run: func(m *Model, _ string) (bool, tea.Cmd) {
+				m.addInfoBlock("DEBUG", m.debugFullText())
+				m.status = "debug snapshot shown"
+				return true, nil
+			},
+		},
+		{
 			id:        "vision.attach",
 			title:     "Attach Image",
 			category:  "message",
