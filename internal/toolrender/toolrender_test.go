@@ -615,6 +615,38 @@ func TestProgressAndOutputRefLinesUseToolCompact(t *testing.T) {
 	}
 }
 
+func TestOutputRefRawCopyPreservesEvidenceFields(t *testing.T) {
+	ref := protocol.ToolOutputRefEvent{
+		CallID:          "call_1",
+		Name:            "custom_tool",
+		OutputRef:       "/root/billyharness/tool-output/custom path.txt",
+		OutputRefID:     "ref-1",
+		OutputRefBytes:  1234,
+		OutputRefSHA256: "abc123",
+		Truncated:       true,
+		Compact: &protocol.ToolCompact{
+			Preview: "first line",
+		},
+	}
+	got := OutputRefRawCopy(ref, "fallback")
+	for _, want := range []string{
+		`tool="custom_tool"`,
+		`output_ref="/root/billyharness/tool-output/custom path.txt"`,
+		`output_ref_id="ref-1"`,
+		`bytes=1234`,
+		`sha256="abc123"`,
+		`truncated=true`,
+		`preview="first line"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("raw copy missing %q:\n%s", want, got)
+		}
+	}
+	if got := OutputRefRawCopy(map[string]any{"kind": "not-output-ref"}, "fallback"); got != "fallback" {
+		t.Fatalf("fallback = %q", got)
+	}
+}
+
 func TestTurnChangeSummaryAndDetailsExposePatchRef(t *testing.T) {
 	change := protocol.TurnChangeEvent{
 		ChangeID:       "change-1",

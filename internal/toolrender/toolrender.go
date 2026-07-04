@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -486,6 +487,47 @@ func OutputRefLine(data any, style Style) (string, string) {
 		OriginalBytes: ref.OutputRefBytes,
 		Truncated:     ref.Truncated,
 	}, "", style)
+}
+
+func OutputRefRawCopy(data any, fallback string) string {
+	ref, ok := DecodeOutputRef(data)
+	if !ok {
+		return fallback
+	}
+	var parts []string
+	name := strings.TrimSpace(ref.Name)
+	if name == "" && ref.Compact != nil {
+		name = strings.TrimSpace(ref.Compact.Name)
+	}
+	if name != "" {
+		parts = append(parts, "tool="+quoteRawCopyValue(name))
+	}
+	if ref.OutputRef != "" {
+		parts = append(parts, "output_ref="+quoteRawCopyValue(ref.OutputRef))
+	}
+	if ref.OutputRefID != "" {
+		parts = append(parts, "output_ref_id="+quoteRawCopyValue(ref.OutputRefID))
+	}
+	if ref.OutputRefBytes > 0 {
+		parts = append(parts, fmt.Sprintf("bytes=%d", ref.OutputRefBytes))
+	}
+	if ref.OutputRefSHA256 != "" {
+		parts = append(parts, "sha256="+quoteRawCopyValue(ref.OutputRefSHA256))
+	}
+	if ref.Truncated {
+		parts = append(parts, "truncated=true")
+	}
+	if ref.Compact != nil && strings.TrimSpace(ref.Compact.Preview) != "" {
+		parts = append(parts, "preview="+quoteRawCopyValue(strings.TrimSpace(ref.Compact.Preview)))
+	}
+	if len(parts) == 0 {
+		return fallback
+	}
+	return strings.Join(parts, " ")
+}
+
+func quoteRawCopyValue(value string) string {
+	return strconv.Quote(strings.TrimSpace(value))
 }
 
 func PermissionLine(data any, style Style) (string, string) {

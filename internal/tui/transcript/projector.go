@@ -3,7 +3,6 @@ package transcript
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -220,7 +219,7 @@ func (p *Projector) addProtocolCell(event protocol.Event, kind string, cellType 
 	ApplyEventIdentity(&cell, event)
 	applyToolCompactDefaults(&cell, event)
 	if event.Type == protocol.EventToolOutputRefCreated {
-		cell.RawCopy = outputRefRawCopy(event, cell.RawCopy)
+		cell.RawCopy = toolrender.OutputRefRawCopy(event.Data, cell.RawCopy)
 	}
 	p.cells = append(p.cells, cell)
 }
@@ -447,61 +446,11 @@ func eventToolCompact(event protocol.Event) (protocol.ToolCompact, bool) {
 			return *result.Compact, true
 		}
 	case protocol.EventToolOutputRefCreated:
-		if ref, ok := decodeToolOutputRef(event.Data); ok && ref.Compact != nil {
+		if ref, ok := toolrender.DecodeOutputRef(event.Data); ok && ref.Compact != nil {
 			return *ref.Compact, true
 		}
 	}
 	return protocol.ToolCompact{}, false
-}
-
-func decodeToolOutputRef(value any) (protocol.ToolOutputRefEvent, bool) {
-	bytes, _ := json.Marshal(value)
-	var ref protocol.ToolOutputRefEvent
-	if err := json.Unmarshal(bytes, &ref); err != nil {
-		return protocol.ToolOutputRefEvent{}, false
-	}
-	return ref, ref.OutputRef != "" || ref.CallID != ""
-}
-
-func outputRefRawCopy(event protocol.Event, fallback string) string {
-	ref, ok := decodeToolOutputRef(event.Data)
-	if !ok {
-		return fallback
-	}
-	var parts []string
-	name := strings.TrimSpace(ref.Name)
-	if name == "" && ref.Compact != nil {
-		name = strings.TrimSpace(ref.Compact.Name)
-	}
-	if name != "" {
-		parts = append(parts, "tool="+quoteRawCopyValue(name))
-	}
-	if ref.OutputRef != "" {
-		parts = append(parts, "output_ref="+quoteRawCopyValue(ref.OutputRef))
-	}
-	if ref.OutputRefID != "" {
-		parts = append(parts, "output_ref_id="+quoteRawCopyValue(ref.OutputRefID))
-	}
-	if ref.OutputRefBytes > 0 {
-		parts = append(parts, fmt.Sprintf("bytes=%d", ref.OutputRefBytes))
-	}
-	if ref.OutputRefSHA256 != "" {
-		parts = append(parts, "sha256="+quoteRawCopyValue(ref.OutputRefSHA256))
-	}
-	if ref.Truncated {
-		parts = append(parts, "truncated=true")
-	}
-	if ref.Compact != nil && strings.TrimSpace(ref.Compact.Preview) != "" {
-		parts = append(parts, "preview="+quoteRawCopyValue(strings.TrimSpace(ref.Compact.Preview)))
-	}
-	if len(parts) == 0 {
-		return fallback
-	}
-	return strings.Join(parts, " ")
-}
-
-func quoteRawCopyValue(value string) string {
-	return strconv.Quote(strings.TrimSpace(value))
 }
 
 func TurnChangeEventText(value any) string {
