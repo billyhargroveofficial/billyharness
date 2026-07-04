@@ -282,17 +282,20 @@ Client surfaces should import `gatewayapi`, `gatewayclient`, `gatewaybase`, and
 Current security behavior:
 
 - `/health` bypasses gateway auth so readiness probes can work.
+- All `/v1/` routes are treated as browser-reachable protected gateway
+  surfaces. Before handlers run, loopback requests must use an allowed loopback
+  host, and any `Origin` or `Referer` header must match the gateway host.
+- When a gateway bearer token is configured, `/v1/` requests require a matching
+  bearer token even from loopback remote addresses. This includes state-bearing
+  read routes such as sessions, events, config status, auth status, MCP status,
+  tool catalogs, and process summaries.
 - When `ServerOptions.RequireMutationAuth` is true, mutating `/v1/` requests
-  must pass browser-oriented request checks and bearer auth before reaching
-  handlers.
-- Those mutation checks validate loopback host, same-host `Origin` or
-  `Referer`, and `application/json` content type when a body is present.
+  must also pass `application/json` content-type checks when a body is present.
 - If mutation auth is required but no bearer token is configured, mutating
   requests receive `503`.
 - `DevAllowUnauthenticatedLoopbackMutations` is an explicit development bypass
-  for loopback mutations.
-- When mutation auth is not required, a configured gateway token still protects
-  non-loopback requests, while loopback requests are allowed without bearer.
+  for loopback mutations. It does not bypass configured-token protection for
+  `/v1/` read routes.
 - Provider/model/thinking/reasoning overrides are accepted only from bearer-
   authenticated mutation requests when mutation auth is required. Other mutation
   requests keep the server provider/model defaults.

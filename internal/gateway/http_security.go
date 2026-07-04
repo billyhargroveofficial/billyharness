@@ -40,10 +40,17 @@ func (s *Server) httpSecurityMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		v1Route := isGatewayV1Route(r)
+		if v1Route {
+			if err := s.validateBrowserReachableV1Request(r); err != nil {
+				s.writeSecurityDenial(w, r, err.status, err.reason)
+				return
+			}
+		}
 		mutation := isGatewayMutation(r)
 		if mutation {
 			if s.httpSecurity.requireMutationAuth {
-				if err := s.validateBrowserMutationRequest(r); err != nil {
+				if err := validateJSONMutationContentType(r); err != nil {
 					s.writeSecurityDenial(w, r, err.status, err.reason)
 					return
 				}
@@ -65,12 +72,16 @@ func (s *Server) httpSecurityMiddleware(next http.Handler) http.Handler {
 				return
 			}
 		}
-		if s.authToken != "" && !isLoopbackRemoteAddr(r.RemoteAddr) && !bearerTokenMatches(r.Header.Get("Authorization"), s.authToken) {
+		if v1Route && s.authToken != "" && !bearerTokenMatches(r.Header.Get("Authorization"), s.authToken) {
 			s.writeUnauthorized(w, r)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isGatewayV1Route(r *http.Request) bool {
+	return r != nil && strings.HasPrefix(r.URL.Path, "/v1/")
 }
 
 func isGatewayMutation(r *http.Request) bool {
@@ -85,11 +96,11 @@ func isGatewayMutation(r *http.Request) bool {
 	}
 }
 
-func (s *Server) validateBrowserMutationRequest(r *http.Request) *httpSecurityError {
+func (s *Server) validateBrowserReachableV1Request(r *http.Request) *httpSecurityError {
 	if isLoopbackRemoteAddr(r.RemoteAddr) && !s.isAllowedLoopbackHost(r.Host) {
 		return &httpSecurityError{
 			status: http.StatusForbidden,
-			reason: "gateway host is not allowed for loopback mutation",
+			reason: "gateway host is not allowed for loopback request",
 		}
 	}
 	if err := validateSameOriginHeader(r, "Origin"); err != nil {
@@ -99,9 +110,6 @@ func (s *Server) validateBrowserMutationRequest(r *http.Request) *httpSecurityEr
 		if err := validateSameOriginHeader(r, "Referer"); err != nil {
 			return err
 		}
-	}
-	if err := validateJSONMutationContentType(r); err != nil {
-		return err
 	}
 	return nil
 }

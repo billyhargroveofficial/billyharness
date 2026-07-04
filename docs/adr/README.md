@@ -32,6 +32,9 @@ Never reuse a number.
 - [ADR 0007](0007-local-gateway-mutating-routes-require-explicit-trust.md):
   accepted; local gateway mutating routes require bearer trust or an explicit
   development bypass.
+- [ADR 0008](0008-gateway-state-reads-require-bearer-when-token-configured.md):
+  accepted; state-bearing gateway `/v1/` reads require bearer auth when a
+  gateway token is configured.
 
 ## Template
 

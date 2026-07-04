@@ -626,8 +626,36 @@
         "cmd/fast-agent-harness/service_cmd.go"
       ],
       "required_tests": [
-        "go test -count=1 ./internal/gateway -run 'TestGateway(AuthMiddlewareProtectsNonLoopbackClients|MutationAuthProtectsLoopbackBrowserRoutes|MutationAuthExplicitDevLoopbackBypass|RunRequestPrivilegeClamps)$'",
+        "go test -count=1 ./internal/gateway -run 'TestGateway(AuthMiddlewareProtectsConfiguredV1Reads|MutationAuthProtectsLoopbackBrowserRoutes|MutationAuthExplicitDevLoopbackBypass|RunRequestPrivilegeClamps)$'",
         "go test -count=1 ./internal/gateway -run 'TestGatewaySessionOwner(MetadataPersistsAndLists|ScopeFiltersAndDeniesCrossOwner)$'",
+        "go test -count=1 ./internal/architecture"
+      ]
+    },
+    {
+      "path": "docs/adr/0008-gateway-state-reads-require-bearer-when-token-configured.md",
+      "kind": "adr",
+      "status": "accepted",
+      "owner": "billy",
+      "source_of_truth": true,
+      "generated": false,
+      "last_reviewed": "2026-07-04",
+      "trust_level": "hand_curated_and_tested",
+      "read_when": [
+        "changing gateway read-route auth",
+        "changing loopback browser or DNS-rebinding protections",
+        "changing configured gateway bearer-token requirements",
+        "adding unauthenticated gateway read routes"
+      ],
+      "related_code": [
+        "internal/gateway/http_security.go",
+        "internal/gateway/gateway.go",
+        "internal/gateway/url.go",
+        "internal/gatewaybase/gatewaybase.go",
+        "internal/gatewayclient/client.go",
+        "cmd/fast-agent-harness/service_cmd.go"
+      ],
+      "required_tests": [
+        "go test -count=1 ./internal/gateway -run 'TestGateway(AuthMiddlewareProtectsConfiguredV1Reads|MutationAuthProtectsLoopbackBrowserRoutes|MutationAuthExplicitDevLoopbackBypass)$'",
         "go test -count=1 ./internal/architecture"
       ]
     },

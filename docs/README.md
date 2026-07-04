@@ -56,6 +56,8 @@ fields, or tool schemas, inspect the source until generated references exist.
 - [ADR 0007](adr/0007-local-gateway-mutating-routes-require-explicit-trust.md):
   local gateway mutating routes require bearer trust or an explicit development
   bypass.
+- [ADR 0008](adr/0008-gateway-state-reads-require-bearer-when-token-configured.md):
+  gateway `/v1/` state reads require bearer auth when a token is configured.
 
 ## Research
 

@@ -587,7 +587,7 @@ func TestGatewayAPIRedactsSecretsAcrossResponsesAndStreams(t *testing.T) {
 	}
 }
 
-func TestGatewayAuthMiddlewareProtectsNonLoopbackClients(t *testing.T) {
+func TestGatewayAuthMiddlewareProtectsConfiguredV1Reads(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"
 	cfg.Model = "mock"
@@ -601,32 +601,49 @@ func TestGatewayAuthMiddlewareProtectsNonLoopbackClients(t *testing.T) {
 		t.Fatalf("health status = %d body=%s", health.Code, health.Body.String())
 	}
 
-	unauthorized := httptest.NewRecorder()
-	unauthorizedReq := httptest.NewRequest(http.MethodGet, "/v1/mcp", nil)
-	unauthorizedReq.RemoteAddr = "203.0.113.10:4444"
-	server.Handler().ServeHTTP(unauthorized, unauthorizedReq)
-	if unauthorized.Code != http.StatusUnauthorized {
-		t.Fatalf("unauthorized status = %d body=%s", unauthorized.Code, unauthorized.Body.String())
-	}
-	if unauthorized.Header().Get("WWW-Authenticate") == "" {
-		t.Fatal("missing WWW-Authenticate header")
-	}
-
-	authorized := httptest.NewRecorder()
-	authorizedReq := httptest.NewRequest(http.MethodGet, "/v1/mcp", nil)
-	authorizedReq.RemoteAddr = "203.0.113.10:4444"
-	authorizedReq.Header.Set("Authorization", "Bearer secret")
-	server.Handler().ServeHTTP(authorized, authorizedReq)
-	if authorized.Code != http.StatusOK {
-		t.Fatalf("authorized status = %d body=%s", authorized.Code, authorized.Body.String())
-	}
-
-	local := httptest.NewRecorder()
-	localReq := httptest.NewRequest(http.MethodGet, "/v1/mcp", nil)
-	localReq.RemoteAddr = "127.0.0.1:4444"
-	server.Handler().ServeHTTP(local, localReq)
-	if local.Code != http.StatusOK {
-		t.Fatalf("local status = %d body=%s", local.Code, local.Body.String())
+	for _, tc := range []struct {
+		name       string
+		method     string
+		remoteAddr string
+		host       string
+		origin     string
+		referer    string
+		auth       string
+		want       int
+	}{
+		{name: "non-loopback missing bearer", method: http.MethodGet, remoteAddr: "203.0.113.10:4444", host: "127.0.0.1:8765", want: http.StatusUnauthorized},
+		{name: "loopback missing bearer", method: http.MethodGet, remoteAddr: "127.0.0.1:4444", host: "127.0.0.1:8765", want: http.StatusUnauthorized},
+		{name: "loopback wrong bearer", method: http.MethodGet, remoteAddr: "127.0.0.1:4444", host: "127.0.0.1:8765", auth: "Bearer wrong", want: http.StatusUnauthorized},
+		{name: "loopback correct bearer", method: http.MethodGet, remoteAddr: "127.0.0.1:4444", host: "127.0.0.1:8765", auth: "Bearer secret", want: http.StatusOK},
+		{name: "loopback malicious host", method: http.MethodGet, remoteAddr: "127.0.0.1:4444", host: "evil.example", auth: "Bearer secret", want: http.StatusForbidden},
+		{name: "loopback cross origin", method: http.MethodGet, remoteAddr: "127.0.0.1:4444", host: "127.0.0.1:8765", origin: "https://evil.example", auth: "Bearer secret", want: http.StatusForbidden},
+		{name: "loopback cross referer", method: http.MethodGet, remoteAddr: "127.0.0.1:4444", host: "127.0.0.1:8765", referer: "https://evil.example/page", auth: "Bearer secret", want: http.StatusForbidden},
+		{name: "loopback same origin", method: http.MethodGet, remoteAddr: "127.0.0.1:4444", host: "127.0.0.1:8765", origin: "http://127.0.0.1:8765", auth: "Bearer secret", want: http.StatusOK},
+		{name: "options missing bearer", method: http.MethodOptions, remoteAddr: "127.0.0.1:4444", host: "127.0.0.1:8765", want: http.StatusUnauthorized},
+		{name: "options correct bearer reaches mux", method: http.MethodOptions, remoteAddr: "127.0.0.1:4444", host: "127.0.0.1:8765", auth: "Bearer secret", want: http.StatusMethodNotAllowed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(tc.method, "/v1/mcp", nil)
+			req.RemoteAddr = tc.remoteAddr
+			req.Host = tc.host
+			if tc.auth != "" {
+				req.Header.Set("Authorization", tc.auth)
+			}
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.referer != "" {
+				req.Header.Set("Referer", tc.referer)
+			}
+			server.Handler().ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d body=%s", rec.Code, tc.want, rec.Body.String())
+			}
+			if tc.want == http.StatusUnauthorized && rec.Header().Get("WWW-Authenticate") == "" {
+				t.Fatal("missing WWW-Authenticate header")
+			}
+		})
 	}
 }
 

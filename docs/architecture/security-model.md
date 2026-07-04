@@ -84,32 +84,28 @@ The major boundaries are:
 
 ## Gateway And Browser Trust
 
-Committed HEAD `b9df841` has a simple gateway auth model in
-`internal/gateway/gateway.go`: if `ServerOptions.AuthToken` is configured,
-`authMiddleware` protects non-loopback clients with bearer auth and always
-allows `/health` and loopback remote addresses. If no gateway token is
-configured, `Handler()` returns the mux directly. HEAD does not have
-`RequireMutationAuth`, browser-origin checks, mutating-route content-type
-checks, or session-owner authorization in `session_authz.go`.
+`Server.Handler()` always wraps the mux in `httpSecurityMiddleware`.
 
-Current dirty-worktree behavior hardens that boundary:
+Current behavior:
 
-- `Server.Handler()` always wraps the mux in `httpSecurityMiddleware`.
 - `/health` remains unauthenticated for readiness probes.
-- Mutating non-`GET`/`HEAD`/`OPTIONS` `/v1/` requests are classified as gateway
-  mutations.
-- When `RequireMutationAuth` is true, mutating requests must pass browser-style
-  checks before handlers run: loopback host must be allowed, `Origin` or
-  `Referer` must match the gateway host when present, and requests with a body
-  must use `application/json`.
-- Mutations then require a matching bearer token unless
+- All `/v1/` routes are treated as browser-reachable protected gateway
+  surfaces. Loopback requests must use an allowed loopback host, and any
+  `Origin` or `Referer` header must match the gateway host before handlers run.
+- When `ServerOptions.AuthToken` is configured, `/v1/` requests require a
+  matching bearer token even from loopback remote addresses. This includes
+  `GET`, `HEAD`, and `OPTIONS` state-read paths.
+- Mutating non-`GET`/`HEAD`/`OPTIONS` `/v1/` requests are additionally
+  classified as gateway mutations.
+- When `RequireMutationAuth` is true, mutation requests with a body must use
+  `application/json`.
+- Mutations require a matching bearer token unless
   `DevAllowUnauthenticatedLoopbackMutations` is explicitly enabled and the
   remote address is loopback.
 - If mutation auth is required and no bearer token is configured, mutating
   requests receive `503` instead of silently downgrading security.
-- When mutation auth is not required, a configured gateway token still protects
-  non-loopback requests, while loopback requests keep the older local-operator
-  behavior.
+- The development loopback mutation bypass does not bypass configured-token
+  protection for `/v1/` read routes.
 
 The CLI `serve` path in
 [cmd/fast-agent-harness/service_cmd.go](../../cmd/fast-agent-harness/service_cmd.go)
@@ -118,6 +114,8 @@ gateway auth token for mutating routes unless the operator explicitly passes
 `-dev-allow-unauthenticated-loopback-mutations`, and treats non-loopback or
 wildcard listen addresses as requiring auth. This decision is recorded in
 [ADR 0007](../adr/0007-local-gateway-mutating-routes-require-explicit-trust.md).
+Configured-token protection for state-bearing `/v1/` reads is recorded in
+[ADR 0008](../adr/0008-gateway-state-reads-require-bearer-when-token-configured.md).
 
 Bearer token handling is shared through
 [internal/gatewaybase/gatewaybase.go](../../internal/gatewaybase/gatewaybase.go)
@@ -362,16 +360,12 @@ changing auth behavior.
 
 ## Current Truth Boundaries
 
-Current committed HEAD truth:
+Current code truth:
 
 - Gateway bearer auth exists only when an auth token is configured.
-- `/health` and loopback remote addresses bypass the HEAD bearer middleware.
-- HEAD does not require explicit trust for loopback mutations.
-- HEAD does not enforce session owner headers for reads or mutations.
-- HEAD can inject MCP initialize instructions into the model instruction path.
-
-Current dirty-worktree hardening:
-
+- `/health` bypasses bearer auth.
+- Configured bearer auth protects `/v1/` reads and mutations, including
+  loopback callers.
 - Mutating `/v1/` gateway routes require bearer trust or an explicit loopback
   development bypass when `RequireMutationAuth` is true.
 - The `serve` command refuses to start mutating routes without a token unless

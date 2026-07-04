@@ -278,7 +278,7 @@ func serve(args []string) error {
 	mock := fs.Bool("mock", false, "use mock provider")
 	model := fs.String("model", "", "model override")
 	addr := fs.String("addr", "", "listen address")
-	authToken := fs.String("auth-token", "", "gateway bearer token for mutating routes; defaults to BILLYHARNESS_GATEWAY_AUTH_TOKEN")
+	authToken := fs.String("auth-token", "", "gateway bearer token for protected /v1 routes; defaults to BILLYHARNESS_GATEWAY_AUTH_TOKEN")
 	devAllowLoopbackMutationNoAuth := fs.Bool("dev-allow-unauthenticated-loopback-mutations", false, "development only: allow loopback mutating routes without a bearer token")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -327,7 +327,7 @@ func serve(args []string) error {
 	listenURL := normalizeGatewayURL(listener.Addr().String())
 	status := "fast-agent-harness gateway listening on " + listenURL
 	if *authToken != "" {
-		status += "; bearer auth required for mutating routes"
+		status += "; bearer auth required for protected /v1 routes"
 	} else if *devAllowLoopbackMutationNoAuth {
 		status += "; unauthenticated loopback mutations enabled for development"
 	}
