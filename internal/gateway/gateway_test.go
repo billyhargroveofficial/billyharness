@@ -647,6 +647,41 @@ func TestGatewayAuthMiddlewareProtectsConfiguredV1Reads(t *testing.T) {
 	}
 }
 
+func TestGatewayHealthAndReadinessAreSplit(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{AuthToken: "secret"})
+
+	health := httptest.NewRecorder()
+	server.Handler().ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if health.Code != http.StatusOK {
+		t.Fatalf("health status = %d body=%s", health.Code, health.Body.String())
+	}
+	if strings.Contains(health.Body.String(), "session_store") || strings.Contains(health.Body.String(), "checks") {
+		t.Fatalf("health included readiness details: %s", health.Body.String())
+	}
+
+	ready := httptest.NewRecorder()
+	server.Handler().ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	if ready.Code != http.StatusOK {
+		t.Fatalf("ready status = %d body=%s", ready.Code, ready.Body.String())
+	}
+	var got ReadinessResponse
+	if err := json.Unmarshal(ready.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.OK || got.Provider != "mock" || got.Model != "mock" {
+		t.Fatalf("readiness = %#v", got)
+	}
+	if got.Tools.Count == 0 {
+		t.Fatalf("readiness tool count = 0: %#v", got)
+	}
+	if len(got.Checks) == 0 {
+		t.Fatalf("readiness missing checks: %#v", got)
+	}
+}
+
 func TestGatewayMutationAuthProtectsLoopbackBrowserRoutes(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"

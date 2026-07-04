@@ -30,8 +30,10 @@ Project health:
 ./bin/fast-agent-harness doctor -json
 ```
 
-`doctor` prints git status, a lightweight CLI build check, systemd service health, gateway `/health`,
-current provider/model/reasoning settings, session directory, and config paths.
+`doctor` prints git status, a lightweight CLI build check, systemd service health,
+gateway `/health` liveness and `/ready` readiness, current provider/model/reasoning
+settings, session directory, and config paths. Use `-mode=production` on the
+production host to include production-only unit and journal crash-signal checks.
 
 For a non-failing local snapshot while editing, disable active checks:
 
@@ -71,8 +73,10 @@ export BILLYHARNESS_GATEWAY_AUTH_TOKEN='change-me'
 curl -H "Authorization: Bearer $BILLYHARNESS_GATEWAY_AUTH_TOKEN" http://127.0.0.1:8765/v1/auth/status
 ```
 
-`/health` remains unauthenticated for readiness checks. The `run`, `chat`, and `telegram` gateway clients
-read `BILLYHARNESS_GATEWAY_AUTH_TOKEN` automatically when calling a protected gateway.
+`/health` remains unauthenticated for cheap liveness. `/ready` returns bounded
+readiness details for effective config, tool/MCP status, and session-store startup
+health. The `run`, `chat`, and `telegram` gateway clients read
+`BILLYHARNESS_GATEWAY_AUTH_TOKEN` automatically when calling a protected gateway.
 
 For SSH terminals with broken alt-screen or key handling:
 

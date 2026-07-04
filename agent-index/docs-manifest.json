@@ -315,6 +315,7 @@
       ],
       "related_code": [
         "internal/gateway/gateway.go",
+        "internal/gateway/readiness.go",
         "internal/gateway/response.go",
         "internal/gateway/session_events.go",
         "internal/gateway/session_store.go",
@@ -768,6 +769,7 @@
         "cmd/fast-agent-harness/sessions.go",
         "cmd/fast-agent-harness/service_cmd.go",
         "internal/gateway/gateway.go",
+        "internal/gateway/readiness.go",
         "internal/gatewaybase/gatewaybase.go"
       ],
       "required_tests": [
@@ -794,6 +796,7 @@
         "README.md",
         "cmd/fast-agent-harness/doctor.go",
         "cmd/fast-agent-harness/service_cmd.go",
+        "internal/gateway/readiness.go",
         "internal/gatewaybase/gatewaybase.go",
         "internal/gateway/http_security.go"
       ],

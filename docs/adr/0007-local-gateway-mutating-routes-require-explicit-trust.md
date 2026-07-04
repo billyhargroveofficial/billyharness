@@ -34,8 +34,10 @@ that trust boundary. It requires a gateway auth token for mutating routes unless
 the operator explicitly enables unauthenticated loopback mutations for
 development.
 
-`/health` remains unauthenticated for readiness probes. Session owner headers
-remain scoping claims inside the HTTP security boundary, not credentials.
+`/health` remains unauthenticated for cheap liveness probes. `/ready` remains
+unauthenticated for bounded readiness probes that expose redacted counts and
+health state rather than raw gateway state. Session owner headers remain scoping
+claims inside the HTTP security boundary, not credentials.
 Per-run provider/model/reasoning overrides require bearer-authenticated
 mutation when mutation auth is enabled; requests may still lower privilege
 through stricter access mode or lower tool-round caps.

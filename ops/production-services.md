@@ -94,14 +94,15 @@ GO_BIN=/root/.local/go/bin/go ./scripts/verify-deps.sh
 After restart, run:
 
 ```sh
-./bin/fast-agent-harness doctor
+./bin/fast-agent-harness doctor -mode=production
 curl http://127.0.0.1:8765/health
+curl http://127.0.0.1:8765/ready
 ```
 
 For machine-readable evidence:
 
 ```sh
-./bin/fast-agent-harness doctor -json
+./bin/fast-agent-harness doctor -mode=production -json
 ```
 
 ## Rollback Pattern
@@ -120,15 +121,16 @@ systemctl is-active billyharness-telegram.service
 
 For a source-level rollback on the production checkout, return to the previous
 known-good commit, rebuild the binary with the same Go path used during deploy,
-restart both managed services, and rerun doctor plus `/health`:
+restart both managed services, and rerun doctor plus `/health` and `/ready`:
 
 ```sh
 git checkout PREVIOUS_GOOD_COMMIT
 /root/.local/go/bin/go build -buildvcs=false -o ./bin/fast-agent-harness ./cmd/fast-agent-harness
 systemctl restart billyharness-gateway.service
 systemctl restart billyharness-telegram.service
-./bin/fast-agent-harness doctor
+./bin/fast-agent-harness doctor -mode=production
 curl http://127.0.0.1:8765/health
+curl http://127.0.0.1:8765/ready
 ```
 
 If the live host uses a binary archive, symlink, package manager, or separate
@@ -195,8 +197,10 @@ Relevant flags checked from the command source include `-token`, `-bot-api-base`
 ## Restart Triage
 
 1. Run `./bin/fast-agent-harness doctor` and keep the sanitized output.
-2. If gateway readiness fails, run the gateway service status command above on
-   the production host and check `/health` again after restart.
+2. If gateway liveness fails, run the gateway service status command above on
+   the production host and check `/health` again after restart. If `/health`
+   passes but readiness fails, keep the `/ready` body and `doctor
+   -mode=production` output as the dependency snapshot.
 3. If Telegram is failing while gateway is healthy, inspect
    `billyharness-telegram.service` live using the operator patterns above,
    then confirm the gateway URL and allowlist settings.

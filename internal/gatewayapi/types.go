@@ -84,10 +84,39 @@ type CodexImportRequest struct {
 }
 
 type HealthResponse struct {
-	OK           bool                `json:"ok"`
-	Provider     string              `json:"provider"`
-	Model        string              `json:"model"`
-	SessionStore *SessionStoreHealth `json:"session_store,omitempty"`
+	OK       bool   `json:"ok"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+type ReadinessResponse struct {
+	OK           bool                   `json:"ok"`
+	Provider     string                 `json:"provider"`
+	Model        string                 `json:"model"`
+	GatewayAddr  string                 `json:"gateway_addr,omitempty"`
+	Checks       []ReadinessCheck       `json:"checks"`
+	Tools        ReadinessCatalogStatus `json:"tools"`
+	MCP          ReadinessMCPStatus     `json:"mcp"`
+	SessionStore *SessionStoreHealth    `json:"session_store,omitempty"`
+}
+
+type ReadinessCheck struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Detail string `json:"detail,omitempty"`
+}
+
+type ReadinessCatalogStatus struct {
+	Count int `json:"count"`
+}
+
+type ReadinessMCPStatus struct {
+	Enabled          bool `json:"enabled"`
+	Configured       int  `json:"configured"`
+	Connected        int  `json:"connected"`
+	RequiredFailures int  `json:"required_failures,omitempty"`
+	OptionalWarnings int  `json:"optional_warnings,omitempty"`
+	ToolCount        int  `json:"tool_count,omitempty"`
 }
 
 type SessionStoreHealth struct {

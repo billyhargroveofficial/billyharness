@@ -96,6 +96,10 @@ type CreateSessionRequest = gatewayapi.CreateSessionRequest
 type DeepSeekAuthRequest = gatewayapi.DeepSeekAuthRequest
 type CodexImportRequest = gatewayapi.CodexImportRequest
 type HealthResponse = gatewayapi.HealthResponse
+type ReadinessResponse = gatewayapi.ReadinessResponse
+type ReadinessCheck = gatewayapi.ReadinessCheck
+type ReadinessCatalogStatus = gatewayapi.ReadinessCatalogStatus
+type ReadinessMCPStatus = gatewayapi.ReadinessMCPStatus
 type ConfigStatusResponse = gatewayapi.ConfigStatusResponse
 type SessionListResponse = gatewayapi.SessionListResponse
 type SessionSummary = gatewayapi.SessionSummary
@@ -289,6 +293,7 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
+	s.mux.HandleFunc("GET /ready", s.handleReadiness)
 	s.mux.HandleFunc("GET /v1/auth/status", s.handleAuthStatus)
 	s.mux.HandleFunc("POST /v1/auth/deepseek", s.handleDeepSeekAuth)
 	s.mux.HandleFunc("POST /v1/auth/codex/import", s.handleCodexImport)
@@ -316,22 +321,20 @@ func (s *Server) routes() {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	resp := HealthResponse{
+	writeJSON(w, http.StatusOK, HealthResponse{
 		OK:       true,
 		Provider: s.providerAuth.Provider,
 		Model:    s.providerAuth.Model,
-	}
-	if s.store != nil {
-		storeHealth := s.storeHealth
-		storeHealth.Enabled = true
-		resp.SessionStore = &storeHealth
-	}
-	writeJSON(w, http.StatusOK, HealthResponse{
-		OK:           resp.OK,
-		Provider:     resp.Provider,
-		Model:        resp.Model,
-		SessionStore: resp.SessionStore,
 	})
+}
+
+func (s *Server) handleReadiness(w http.ResponseWriter, _ *http.Request) {
+	resp := s.readinessResponse()
+	status := http.StatusOK
+	if !resp.OK {
+		status = http.StatusServiceUnavailable
+	}
+	writeJSON(w, status, resp)
 }
 
 func (s *Server) handleTools(w http.ResponseWriter, _ *http.Request) {

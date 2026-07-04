@@ -61,6 +61,7 @@ Future agents should update this section from that route table, not from memory.
 | Route | Role |
 | --- | --- |
 | `GET /health` | unauthenticated liveness and active provider/model summary |
+| `GET /ready` | unauthenticated bounded readiness summary for effective config, native tool catalog, MCP catalog state, and startup session-store health |
 | `GET /v1/auth/status` | sanitized provider auth status |
 | `POST /v1/auth/deepseek` | persist a DeepSeek API key through the credentials manager |
 | `POST /v1/auth/codex/import` | import or save Codex auth JSON through the credentials manager |
@@ -350,7 +351,11 @@ Client surfaces should import `gatewayapi`, `gatewayclient`, `gatewaybase`, and
 
 Current security behavior:
 
-- `/health` bypasses gateway auth so readiness probes can work.
+- `/health` bypasses gateway auth for cheap process liveness.
+- `/ready` bypasses gateway auth for bounded readiness. It returns counts and
+  redacted state for effective config, visible tools, MCP catalog health, and
+  session-store startup diagnostics, but not raw MCP metadata, schemas, prompts,
+  or store paths.
 - All `/v1/` routes are treated as browser-reachable protected gateway
   surfaces. Before handlers run, loopback requests must use an allowed loopback
   host, and any `Origin` or `Referer` header must match the gateway host.

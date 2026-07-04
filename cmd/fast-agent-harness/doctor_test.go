@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -84,6 +86,9 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	if report.RepoDir != repo {
 		t.Fatalf("RepoDir = %q, want %q", report.RepoDir, repo)
 	}
+	if report.Mode != "local" {
+		t.Fatalf("Mode = %q, want local", report.Mode)
+	}
 	if report.BillyHome != filepath.Join(root, "home") {
 		t.Fatalf("BillyHome = %q", report.BillyHome)
 	}
@@ -132,9 +137,15 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	}
 	assertDoctorCheck(t, report, "git status", "ok")
 	assertDoctorCheck(t, report, "build check", "ok")
+	assertDoctorCheck(t, report, "config provider/model", "ok")
+	assertDoctorCheck(t, report, "gateway bind address", "ok")
+	assertDoctorCheck(t, report, "auth configured", "ok")
+	assertDoctorCheck(t, report, "tool catalog", "ok")
+	assertDoctorCheck(t, report, "session store access", "ok")
 	assertDoctorCheck(t, report, "service billyharness-gateway.service", "ok")
 	assertDoctorCheck(t, report, "service billyharness-telegram.service", "ok")
 	assertDoctorCheck(t, report, "gateway /health", "skip")
+	assertDoctorCheck(t, report, "gateway /ready", "skip")
 	for _, check := range report.Checks {
 		if check.Name == "build check" && !strings.HasPrefix(check.Detail, goCommand()+" test -run '^$'") {
 			t.Fatalf("build check detail = %q", check.Detail)
@@ -144,7 +155,7 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	var buf bytes.Buffer
 	printDoctorReport(&buf, report)
 	out := buf.String()
-	for _, want := range []string{"billyharness doctor", "model=deepseek-v4-pro", "settings:", "runtime:", "strict_hygiene=ok", "tool_output=", "auth:", "cost_mode=metered", "auth status:", "credential=redacted", "checks:"} {
+	for _, want := range []string{"billyharness doctor", "mode: local", "model=deepseek-v4-pro", "settings:", "runtime:", "strict_hygiene=ok", "tool_output=", "auth:", "cost_mode=metered", "auth status:", "credential=redacted", "checks:"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("formatted report missing %q:\n%s", want, out)
 		}
@@ -258,6 +269,53 @@ func TestDoctorServiceStatusDetectsDuplicateProcessesAndStalePIDFiles(t *testing
 	if telegramPID.Status != "ok" || telegramPID.Detail != "absent" {
 		t.Fatalf("telegram pid check = %#v", telegramPID)
 	}
+}
+
+func TestDoctorProductionServiceChecksIncludeUnitAndJournalSignals(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	runner := &fakeDoctorRunner{responses: map[string]fakeDoctorResponse{
+		doctorRunnerKey("", "systemctl", "is-active", "billyharness-gateway.service"): {
+			out: "active\n",
+		},
+		doctorRunnerKey("", "systemctl", "is-active", "billyharness-telegram.service"): {
+			out: "active\n",
+		},
+		doctorRunnerKey("", "systemctl", "show", "--property=FragmentPath", "--property=WorkingDirectory", "--property=User", "--property=Restart", "--property=NRestarts", "billyharness-gateway.service"): {
+			out: "FragmentPath=/etc/systemd/system/billyharness-gateway.service\nWorkingDirectory=/root/billyharness\nUser=root\nRestart=always\nNRestarts=0\n",
+		},
+		doctorRunnerKey("", "systemctl", "show", "--property=FragmentPath", "--property=WorkingDirectory", "--property=User", "--property=Restart", "--property=NRestarts", "billyharness-telegram.service"): {
+			out: "FragmentPath=/etc/systemd/system/billyharness-telegram.service\nWorkingDirectory=/root/billyharness\nUser=root\nRestart=always\nNRestarts=2\n",
+		},
+		doctorRunnerKey("", "journalctl", "--unit", "billyharness-gateway.service", "--since", "-1 hour", "--no-pager", "--lines", "200"): {
+			out: "no issues\n",
+		},
+		doctorRunnerKey("", "journalctl", "--unit", "billyharness-telegram.service", "--since", "-1 hour", "--no-pager", "--lines", "200"): {
+			out: "panic: reconnect loop\n",
+		},
+	}}
+	checks := doctorServiceStatuses(context.Background(), doctorOptions{Mode: "production", CheckServices: true, Timeout: time.Second}, runner)
+	assertDoctorCheckInList(t, checks, "service unit billyharness-gateway.service", "ok")
+	assertDoctorCheckInList(t, checks, "service journal billyharness-gateway.service", "ok")
+	assertDoctorCheckInList(t, checks, "service journal billyharness-telegram.service", "fail")
+}
+
+func TestDoctorGatewayStatusesProbeHealthAndReadiness(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			_, _ = w.Write([]byte(`{"ok":true,"provider":"mock","model":"mock"}`))
+		case "/ready":
+			_, _ = w.Write([]byte(`{"ok":true,"checks":[{"name":"tool_catalog","status":"ok"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("FAST_AGENT_GATEWAY_URL", server.URL)
+
+	checks := doctorGatewayStatuses(context.Background(), config.Default(), doctorOptions{CheckGateway: true, Timeout: time.Second})
+	assertDoctorCheckInList(t, checks, "gateway /health", "ok")
+	assertDoctorCheckInList(t, checks, "gateway /ready", "ok")
 }
 
 func assertDoctorCheck(t *testing.T, report doctorReport, name, status string) {

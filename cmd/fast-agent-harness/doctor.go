@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,11 +19,14 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/serviceops"
+	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
 type doctorOptions struct {
 	RepoDir       string
+	Mode          string
 	JSON          bool
 	Deep          bool
 	Strict        bool
@@ -35,6 +39,7 @@ type doctorOptions struct {
 type doctorReport struct {
 	Version           string              `json:"version"`
 	GeneratedAt       string              `json:"generated_at"`
+	Mode              string              `json:"mode"`
 	CWD               string              `json:"cwd"`
 	RepoDir           string              `json:"repo_dir,omitempty"`
 	BillyHome         string              `json:"billy_home"`
@@ -131,13 +136,24 @@ func doctorCmd(args []string) error {
 	repoDir := fs.String("repo", "", "repository directory; defaults to current git root")
 	checkBuild := fs.Bool("build", true, "compile-check the CLI package")
 	checkServices := fs.Bool("services", true, "check billyharness systemd services")
-	checkGateway := fs.Bool("gateway", true, "check gateway /health")
+	checkGateway := fs.Bool("gateway", true, "check gateway /health and /ready")
+	mode := fs.String("mode", "auto", "doctor mode: auto, local, or production")
 	timeoutSec := fs.Int("timeout-sec", 10, "per-command timeout seconds")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	modeValue := strings.ToLower(strings.TrimSpace(*mode))
+	if modeValue == "" {
+		modeValue = "auto"
+	}
+	switch modeValue {
+	case "auto", "local", "production":
+	default:
+		return fmt.Errorf("invalid doctor mode %q; use auto, local, or production", *mode)
+	}
 	opts := doctorOptions{
 		RepoDir:       strings.TrimSpace(*repoDir),
+		Mode:          modeValue,
 		JSON:          *jsonOut,
 		Deep:          *deep,
 		Strict:        *strict,
@@ -201,11 +217,16 @@ func collectDoctorReport(ctx context.Context, cfg config.Config, opts doctorOpti
 		repoDir, report.Checks = resolveDoctorRepo(ctx, cwd, opts, runner, report.Checks)
 	}
 	report.RepoDir = repoDir
+	opts.Mode = normalizeDoctorMode(opts.Mode, repoDir)
+	report.Mode = opts.Mode
 	report.Runtime = collectDoctorRuntime(ctx, cfg, repoDir, opts, runner)
+	report.Checks = append(report.Checks, doctorConfigChecks(cfg, report.Runtime.Auth)...)
+	report.Checks = append(report.Checks, doctorToolCatalogStatus(cfg))
+	report.Checks = append(report.Checks, doctorSessionStoreAccessCheck(report.GatewaySessionDir))
 	report.Checks = append(report.Checks, doctorGitStatus(ctx, repoDir, opts, runner))
 	report.Checks = append(report.Checks, doctorBuildStatus(ctx, repoDir, opts, runner))
 	report.Checks = append(report.Checks, doctorServiceStatuses(ctx, opts, runner)...)
-	report.Checks = append(report.Checks, doctorGatewayStatus(ctx, cfg, opts))
+	report.Checks = append(report.Checks, doctorGatewayStatuses(ctx, cfg, opts)...)
 	return report
 }
 
@@ -225,6 +246,147 @@ func collectDoctorRuntime(ctx context.Context, cfg config.Config, repoDir string
 		ToolOutputStore:     doctorPathUsageFor(filepath.Join(config.BillyHomeDir(), "tool-output")),
 		StrictHygiene:       doctorStrictHygieneStatus(ctx, repoDir, opts, runner),
 	}
+}
+
+func normalizeDoctorMode(mode string, repoDir string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "local", "production":
+		return strings.ToLower(strings.TrimSpace(mode))
+	}
+	clean := filepath.Clean(strings.TrimSpace(repoDir))
+	if clean == "/root/billyharness" {
+		return "production"
+	}
+	return "local"
+}
+
+func doctorConfigChecks(cfg config.Config, auth doctorAuthPresence) []doctorCheck {
+	checks := []doctorCheck{
+		doctorEffectiveConfigCheck(cfg),
+		doctorGatewayBindCheck(cfg),
+		doctorActiveAuthCheck(auth),
+	}
+	return checks
+}
+
+func doctorEffectiveConfigCheck(cfg config.Config) doctorCheck {
+	snapshot := cfg.ProviderAuthSnapshot()
+	provider := strings.TrimSpace(snapshot.Provider)
+	model := strings.TrimSpace(snapshot.Model)
+	if provider == "" || model == "" {
+		return doctorCheck{Name: "config provider/model", Status: "fail", Detail: "provider/model not fully set"}
+	}
+	return doctorCheck{Name: "config provider/model", Status: "ok", Detail: "provider=" + provider + " model=" + model}
+}
+
+func doctorGatewayBindCheck(cfg config.Config) doctorCheck {
+	addr := strings.TrimSpace(cfg.GatewayAddr)
+	if addr == "" {
+		return doctorCheck{Name: "gateway bind address", Status: "fail", Detail: "empty"}
+	}
+	detail := addr
+	if gateway.RequiresAuthForAddr(addr) {
+		detail += " non-loopback-or-wildcard"
+	} else {
+		detail += " loopback"
+	}
+	return doctorCheck{Name: "gateway bind address", Status: "ok", Detail: detail}
+}
+
+func doctorActiveAuthCheck(auth doctorAuthPresence) doctorCheck {
+	provider := strings.ToLower(strings.TrimSpace(auth.Provider))
+	if provider == "" {
+		return doctorCheck{Name: "auth configured", Status: "fail", Detail: "active provider unknown"}
+	}
+	if provider == "mock" || strings.EqualFold(auth.CostMode, "none") {
+		return doctorCheck{Name: "auth configured", Status: "skip", Detail: "mock provider"}
+	}
+	if strings.Contains(provider, "codex") || provider == "openai" || provider == "openai-codex" {
+		if auth.Codex.Configured {
+			return doctorCheck{Name: "auth configured", Status: "ok", Detail: "codex oauth configured"}
+		}
+		return doctorCheck{Name: "auth configured", Status: "fail", Detail: "codex oauth missing"}
+	}
+	if provider == "deepseek" {
+		if auth.DeepSeek.Configured {
+			return doctorCheck{Name: "auth configured", Status: "ok", Detail: "deepseek api key configured"}
+		}
+		return doctorCheck{Name: "auth configured", Status: "fail", Detail: "deepseek api key missing"}
+	}
+	if auth.APIKeyEnvSet || auth.CredentialFileExists || auth.CodexAuthFileExists {
+		return doctorCheck{Name: "auth configured", Status: "ok", Detail: "credential material present for " + provider}
+	}
+	return doctorCheck{Name: "auth configured", Status: "warn", Detail: "unknown provider credential state for " + provider}
+}
+
+func doctorToolCatalogStatus(cfg config.Config) doctorCheck {
+	registry := tools.NewRegistry(cfg)
+	count := len(registry.Specs())
+	if count == 0 {
+		return doctorCheck{Name: "tool catalog", Status: "fail", Detail: "no visible native tools"}
+	}
+	return doctorCheck{Name: "tool catalog", Status: "ok", Detail: fmt.Sprintf("%d visible native tools", count)}
+}
+
+func doctorSessionStoreAccessCheck(path string) doctorCheck {
+	path = strings.TrimSpace(path)
+	check := doctorCheck{Name: "session store access"}
+	if path == "" {
+		check.Status = "fail"
+		check.Detail = "empty session store path"
+		return check
+	}
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		parent := filepath.Dir(path)
+		if detail, ok := doctorWritableDirectory(parent); ok {
+			check.Status = "warn"
+			check.Detail = "missing; parent writable: " + detail
+		} else {
+			check.Status = "fail"
+			check.Detail = "missing; parent not writable: " + detail
+		}
+		return check
+	}
+	if err != nil {
+		check.Status = "fail"
+		check.Detail = err.Error()
+		return check
+	}
+	if !info.IsDir() {
+		check.Status = "fail"
+		check.Detail = "path is not a directory"
+		return check
+	}
+	if _, err := os.ReadDir(path); err != nil {
+		check.Status = "fail"
+		check.Detail = "not readable: " + err.Error()
+		return check
+	}
+	if detail, ok := doctorWritableDirectory(path); ok {
+		check.Status = "ok"
+		check.Detail = "readable/writable: " + detail
+	} else {
+		check.Status = "fail"
+		check.Detail = "not writable: " + detail
+	}
+	return check
+}
+
+func doctorWritableDirectory(path string) (string, bool) {
+	file, err := os.CreateTemp(path, ".doctor-write-*")
+	if err != nil {
+		return err.Error(), false
+	}
+	name := file.Name()
+	if err := file.Close(); err != nil {
+		_ = os.Remove(name)
+		return err.Error(), false
+	}
+	if err := os.Remove(name); err != nil {
+		return err.Error(), false
+	}
+	return path, true
 }
 
 func doctorAuthPresenceStatus(auth config.ProviderAuthSnapshot) doctorAuthPresence {
@@ -426,6 +588,10 @@ func doctorServiceStatuses(ctx context.Context, opts doctorOptions, runner docto
 	}
 	out = append(out, doctorProcessDuplicateChecks(ctx, opts, runner, services)...)
 	out = append(out, doctorPIDFileChecks(services)...)
+	if opts.Mode == "production" {
+		out = append(out, doctorServiceUnitMetadataChecks(ctx, opts, runner, services)...)
+		out = append(out, doctorServiceJournalChecks(ctx, opts, runner, services)...)
+	}
 	return out
 }
 
@@ -509,6 +675,130 @@ func doctorPIDFileChecks(services []serviceops.ManagedService) []doctorCheck {
 	return out
 }
 
+func doctorServiceUnitMetadataChecks(ctx context.Context, opts doctorOptions, runner doctorCommandRunner, services []serviceops.ManagedService) []doctorCheck {
+	out := make([]doctorCheck, 0, len(services))
+	for _, service := range services {
+		start := time.Now()
+		cmdOut, err := runDoctorCommand(ctx, runner, "", opts.Timeout, "systemctl", "show",
+			"--property=FragmentPath",
+			"--property=WorkingDirectory",
+			"--property=User",
+			"--property=Restart",
+			"--property=NRestarts",
+			service.Service,
+		)
+		check := doctorCheck{Name: "service unit " + service.Service, DurationMS: time.Since(start).Milliseconds()}
+		if isCommandMissing(err) {
+			check.Status = "skip"
+			check.Detail = "systemctl unavailable"
+			out = append(out, check)
+			continue
+		}
+		if err != nil {
+			check.Status = "warn"
+			check.Detail = commandErrorDetail(cmdOut, err)
+			out = append(out, check)
+			continue
+		}
+		props := parseSystemctlProperties(cmdOut)
+		if len(props) == 0 {
+			check.Status = "warn"
+			check.Detail = "empty unit metadata"
+			out = append(out, check)
+			continue
+		}
+		check.Status = "ok"
+		check.Detail = formatSystemctlUnitSummary(props)
+		out = append(out, check)
+	}
+	return out
+}
+
+func doctorServiceJournalChecks(ctx context.Context, opts doctorOptions, runner doctorCommandRunner, services []serviceops.ManagedService) []doctorCheck {
+	out := make([]doctorCheck, 0, len(services))
+	for _, service := range services {
+		start := time.Now()
+		cmdOut, err := runDoctorCommand(ctx, runner, "", opts.Timeout, "journalctl",
+			"--unit", service.Service,
+			"--since", "-1 hour",
+			"--no-pager",
+			"--lines", "200",
+		)
+		check := doctorCheck{Name: "service journal " + service.Service, DurationMS: time.Since(start).Milliseconds()}
+		if isCommandMissing(err) {
+			check.Status = "skip"
+			check.Detail = "journalctl unavailable"
+			out = append(out, check)
+			continue
+		}
+		if err != nil {
+			check.Status = "warn"
+			check.Detail = commandErrorDetail(cmdOut, err)
+			out = append(out, check)
+			continue
+		}
+		count := countCrashLoopSignals(cmdOut)
+		if count > 0 {
+			check.Status = "fail"
+			check.Detail = fmt.Sprintf("%d recent crash/error signal(s) in journal", count)
+		} else {
+			check.Status = "ok"
+			check.Detail = "no recent crash/error signals"
+		}
+		out = append(out, check)
+	}
+	return out
+}
+
+func parseSystemctlProperties(out string) map[string]string {
+	props := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" {
+			props[key] = value
+		}
+	}
+	return props
+}
+
+func formatSystemctlUnitSummary(props map[string]string) string {
+	parts := []string{}
+	for _, key := range []string{"FragmentPath", "WorkingDirectory", "User", "Restart", "NRestarts"} {
+		if value := strings.TrimSpace(props[key]); value != "" {
+			parts = append(parts, strings.ToLower(key)+"="+value)
+		}
+	}
+	if len(parts) == 0 {
+		return "no selected unit metadata"
+	}
+	return strings.Join(parts, " ")
+}
+
+func countCrashLoopSignals(out string) int {
+	count := 0
+	for _, line := range strings.Split(out, "\n") {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "panic:") ||
+			strings.Contains(lower, "fatal") ||
+			strings.Contains(lower, "segmentation fault") ||
+			strings.Contains(lower, "main process exited") ||
+			strings.Contains(lower, "restart counter") ||
+			strings.Contains(lower, "failed with result") {
+			count++
+		}
+	}
+	return count
+}
+
 func doctorMatchingProcessLines(out string, subcommand string) []string {
 	var matches []string
 	for _, line := range strings.Split(out, "\n") {
@@ -558,17 +848,101 @@ func doctorProcessCmdline(pid int) string {
 	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
-func doctorGatewayStatus(ctx context.Context, cfg config.Config, opts doctorOptions) doctorCheck {
+func doctorGatewayStatuses(ctx context.Context, cfg config.Config, opts doctorOptions) []doctorCheck {
 	if !opts.CheckGateway {
-		return doctorCheck{Name: "gateway /health", Status: "skip", Detail: "disabled"}
-	}
-	start := time.Now()
-	for _, candidate := range gatewayURLCandidates(cfg) {
-		if gateway.WaitForReady(ctx, candidate, 0) {
-			return doctorCheck{Name: "gateway /health", Status: "ok", Detail: candidate, DurationMS: time.Since(start).Milliseconds()}
+		return []doctorCheck{
+			{Name: "gateway /health", Status: "skip", Detail: "disabled"},
+			{Name: "gateway /ready", Status: "skip", Detail: "disabled"},
 		}
 	}
-	return doctorCheck{Name: "gateway /health", Status: "fail", Detail: "no healthy local gateway found", DurationMS: time.Since(start).Milliseconds()}
+	return []doctorCheck{
+		doctorGatewayEndpointStatus(ctx, cfg, opts, "/health", "gateway /health"),
+		doctorGatewayEndpointStatus(ctx, cfg, opts, "/ready", "gateway /ready"),
+	}
+}
+
+func doctorGatewayEndpointStatus(ctx context.Context, cfg config.Config, opts doctorOptions, path string, name string) doctorCheck {
+	start := time.Now()
+	lastDetail := ""
+	for _, candidate := range gatewayURLCandidates(cfg) {
+		status, detail, reached := doctorProbeGatewayEndpoint(ctx, candidate, path, opts.Timeout)
+		if reached {
+			return doctorCheck{Name: name, Status: status, Detail: detail, DurationMS: time.Since(start).Milliseconds()}
+		}
+		lastDetail = detail
+	}
+	if lastDetail == "" {
+		lastDetail = "no local gateway candidates"
+	}
+	return doctorCheck{Name: name, Status: "fail", Detail: "no reachable local gateway found: " + lastDetail, DurationMS: time.Since(start).Milliseconds()}
+}
+
+func doctorProbeGatewayEndpoint(ctx context.Context, baseURL string, path string, timeout time.Duration) (string, string, bool) {
+	baseURL = gateway.NormalizeBaseURL(baseURL)
+	if baseURL == "" {
+		return "fail", "empty gateway URL", false
+	}
+	if timeout <= 0 || timeout > 2*time.Second {
+		timeout = 2 * time.Second
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, baseURL+path, nil)
+	if err != nil {
+		return "fail", err.Error(), false
+	}
+	gateway.SetAuthHeaderFromEnv(req)
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
+	if err != nil {
+		return "fail", baseURL + path + ": " + err.Error(), false
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	detail := gatewayEndpointDetail(baseURL, path, resp.StatusCode, body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "fail", detail, true
+	}
+	if path == "/ready" {
+		var ready gatewayapi.ReadinessResponse
+		if err := json.Unmarshal(body, &ready); err == nil && !ready.OK {
+			return "fail", detail, true
+		}
+	}
+	return "ok", detail, true
+}
+
+func gatewayEndpointDetail(baseURL string, path string, statusCode int, body []byte) string {
+	prefix := fmt.Sprintf("%s%s status=%d", baseURL, path, statusCode)
+	switch path {
+	case "/ready":
+		var ready gatewayapi.ReadinessResponse
+		if err := json.Unmarshal(body, &ready); err == nil {
+			warn, fail := readinessCheckCounts(ready.Checks)
+			return fmt.Sprintf("%s ok=%v checks=%d warn=%d fail=%d", prefix, ready.OK, len(ready.Checks), warn, fail)
+		}
+	case "/health":
+		var health gatewayapi.HealthResponse
+		if err := json.Unmarshal(body, &health); err == nil {
+			return fmt.Sprintf("%s ok=%v provider=%s model=%s", prefix, health.OK, health.Provider, health.Model)
+		}
+	}
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		return prefix
+	}
+	return prefix + " body=" + firstLines(text, 2)
+}
+
+func readinessCheckCounts(checks []gatewayapi.ReadinessCheck) (warn int, fail int) {
+	for _, check := range checks {
+		switch strings.ToLower(strings.TrimSpace(check.Status)) {
+		case "warn":
+			warn++
+		case "fail":
+			fail++
+		}
+	}
+	return warn, fail
 }
 
 func runDoctorCommand(ctx context.Context, runner doctorCommandRunner, dir string, timeout time.Duration, name string, args ...string) (string, error) {
@@ -590,6 +964,7 @@ func runDoctorCommand(ctx context.Context, runner doctorCommandRunner, dir strin
 func printDoctorReport(w io.Writer, report doctorReport) {
 	fmt.Fprintln(w, "billyharness doctor")
 	fmt.Fprintf(w, "version: %s\n", report.Version)
+	fmt.Fprintf(w, "mode: %s\n", report.Mode)
 	fmt.Fprintf(w, "cwd: %s\n", report.CWD)
 	if report.RepoDir != "" {
 		fmt.Fprintf(w, "repo: %s\n", report.RepoDir)

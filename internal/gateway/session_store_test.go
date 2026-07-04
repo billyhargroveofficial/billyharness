@@ -400,7 +400,7 @@ func TestSessionStoreLoadAllSurfacesCorruptSessions(t *testing.T) {
 	}
 }
 
-func TestGatewayHealthSurfacesStartupSessionStoreCorruption(t *testing.T) {
+func TestGatewayReadinessSurfacesStartupSessionStoreCorruption(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"
 	cfg.Model = "mock"
@@ -439,14 +439,30 @@ func TestGatewayHealthSurfacesStartupSessionStoreCorruption(t *testing.T) {
 	if err := json.Unmarshal(health.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.SessionStore == nil || got.SessionStore.LoadedCount != 1 || got.SessionStore.ErrorCount != 1 || got.SessionStore.CorruptCount != 1 {
-		t.Fatalf("health session store = %#v", got.SessionStore)
+	if strings.Contains(health.Body.String(), "session_store") {
+		t.Fatalf("health leaked readiness details: %s", health.Body.String())
 	}
-	if len(got.SessionStore.Errors) != 1 || got.SessionStore.Errors[0].SessionID != corruptID {
-		t.Fatalf("health errors = %#v", got.SessionStore.Errors)
+
+	ready := httptest.NewRecorder()
+	server.Handler().ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	if ready.Code != http.StatusServiceUnavailable {
+		t.Fatalf("ready status = %d body=%s", ready.Code, ready.Body.String())
 	}
-	if strings.Contains(health.Body.String(), storeDir) {
-		t.Fatalf("health leaked store path: %s", health.Body.String())
+	var readiness ReadinessResponse
+	if err := json.Unmarshal(ready.Body.Bytes(), &readiness); err != nil {
+		t.Fatal(err)
+	}
+	if readiness.OK {
+		t.Fatalf("readiness OK with corrupt startup store: %#v", readiness)
+	}
+	if readiness.SessionStore == nil || readiness.SessionStore.LoadedCount != 1 || readiness.SessionStore.ErrorCount != 1 || readiness.SessionStore.CorruptCount != 1 {
+		t.Fatalf("ready session store = %#v", readiness.SessionStore)
+	}
+	if len(readiness.SessionStore.Errors) != 1 || readiness.SessionStore.Errors[0].SessionID != corruptID {
+		t.Fatalf("ready errors = %#v", readiness.SessionStore.Errors)
+	}
+	if strings.Contains(ready.Body.String(), storeDir) {
+		t.Fatalf("ready leaked store path: %s", ready.Body.String())
 	}
 }
 

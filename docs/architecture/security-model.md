@@ -85,7 +85,11 @@ The major boundaries are:
 
 Current behavior:
 
-- `/health` remains unauthenticated for readiness probes.
+- `/health` remains unauthenticated for cheap process liveness.
+- `/ready` remains unauthenticated for bounded dependency readiness. It reports
+  counts and redacted status for effective config, tool/MCP catalog health, and
+  startup session-store diagnostics without raw MCP metadata, prompts, schemas,
+  or store paths.
 - All `/v1/` routes are treated as browser-reachable protected gateway
   surfaces. Loopback requests must use an allowed loopback host, and any
   `Origin` or `Referer` header must match the gateway host before handlers run.
@@ -377,7 +381,8 @@ changing auth behavior.
 Current code truth:
 
 - Gateway bearer auth exists only when an auth token is configured.
-- `/health` bypasses bearer auth.
+- `/health` bypasses bearer auth for cheap liveness.
+- `/ready` bypasses bearer auth for bounded readiness summaries.
 - Configured bearer auth protects `/v1/` reads and mutations, including
   loopback callers.
 - Mutating `/v1/` gateway routes require bearer trust or an explicit loopback

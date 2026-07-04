@@ -21,7 +21,10 @@ the operator configured a gateway bearer token.
 
 ## Decision
 
-`/health` remains unauthenticated for cheap liveness and readiness probes.
+`/health` remains unauthenticated for cheap liveness probes. `/ready` remains
+unauthenticated for bounded readiness probes that summarize effective config,
+tool/MCP catalog health, and startup session-store diagnostics without raw MCP
+metadata, schemas, prompts, or store paths.
 
 All `/v1/` gateway routes are browser-reachable and must pass host and
 same-origin request checks before handlers run. Loopback requests must use a

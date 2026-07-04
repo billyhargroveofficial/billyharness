@@ -58,9 +58,14 @@ Point doctor at an explicit checkout and allow slower checks:
 ```
 
 The current doctor implementation reports config/runtime paths, provider/model
-state, credential presence, gateway session storage, tool-output storage, git
+state, credential presence, gateway bind mode, native tool catalog state,
+gateway session storage readability/writability, tool-output storage, git
 status, a lightweight CLI build check, systemd service activity, duplicate
-gateway/telegram processes, pid-file staleness, and gateway `/health`.
+gateway/telegram processes, pid-file staleness, gateway `/health` liveness, and
+gateway `/ready` readiness. It records `mode` in text and JSON output. `auto`
+mode resolves `/root/billyharness` as `production` and other checkouts as
+`local`; production mode also adds selected systemd unit metadata and recent
+journal crash/error signal summaries.
 
 ## Incident Bundles
 
@@ -107,12 +112,20 @@ The default Billyharness state root is `$BILLYHARNESS_HOME`, falling back to
 `mcp.config.toml`, `auth/credentials.json`, `auth/codex.json`,
 `gateway-sessions`, `tool-output`, `gateway.pid`, and `telegram.pid`.
 
-## Gateway Readiness
+## Gateway Liveness And Readiness
 
-`/health` is the readiness check and is intentionally unauthenticated:
+`/health` is the cheap liveness check and is intentionally unauthenticated:
 
 ```sh
 curl http://127.0.0.1:8765/health
+```
+
+`/ready` is the bounded readiness check. It reports effective provider/model,
+visible native tool count, MCP catalog summary, and startup session-store health
+without returning raw MCP metadata, prompts, schemas, or store paths:
+
+```sh
+curl http://127.0.0.1:8765/ready
 ```
 
 Read-only diagnostics that are useful after the gateway is reachable:
@@ -210,3 +223,5 @@ If a query reports that the diagnostics index is missing, run:
   running.
 - `gateway /health` failures mean no configured local gateway candidate
   returned a 2xx response.
+- `gateway /ready` failures mean the gateway process answered but dependency
+  readiness failed, or no configured local gateway candidate returned readiness.
