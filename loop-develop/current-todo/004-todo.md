@@ -2233,6 +2233,25 @@ Billy asks for final verification.
   output-ref evidence, but broader progress/status summaries and TUI-local
   batch grouping still have client-specific presentation code.
 
+### 2026-07-04 - P2.4 cross-surface client fixture boundary
+
+- Completed a narrow P2.4 verification slice. Strengthened
+  `internal/tui/cross_surface_consistency_test.go` so one golden event stream
+  now proves typed output-ref state across the clientux projector, Telegram
+  progress rendering, TUI transcript rendering, and formatted context output.
+- Updated the synthetic tool result in that fixture to use the typed
+  `ToolResult.OutputRef` field, which is the shared contract renderers consume,
+  instead of relying only on metadata.
+- Verification passed:
+  `gofmt -w internal/tui/cross_surface_consistency_test.go`;
+  `go test -count=1 ./internal/clientux ./internal/tui ./internal/telegrambot ./internal/gatewayclient`;
+  `git diff --check`.
+- Commit: `48e9114 Strengthen cross-surface client fixture`
+  (`48e911412f815abc54856a953d6594422ba2d0ac`).
+- Push: `origin/main` updated from `9a54c46` to `48e9114`.
+- Blockers/residual risk: this is test-only boundary proof. It does not split
+  additional client packages or remove remaining UI-specific presentation code.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
