@@ -59,6 +59,31 @@ benchmark runs. Keep generated run bundles under ignored output directories such
 as `bench-runs/`, `tb-runs/`, or another explicit scratch path outside
 `benchmarks/`.
 
+## Local Regression Baselines
+
+Use `scripts/bench-smoke.sh` for the fast wiring check in local verification and
+CI. It runs the session/event JSONL, projector replay, and tool schema
+validation benchmark smoke with `BENCHTIME=1x` by default and emits stable
+`METRIC` lines for quick log scanning.
+
+Use `scripts/bench-compare.sh` when a change may affect replay, projection, or
+tool validation performance:
+
+```bash
+BENCHTIME=5x scripts/bench-compare.sh record
+BENCHTIME=5x scripts/bench-compare.sh compare
+```
+
+Baseline artifacts are host-keyed under
+`bench-runs/bench-baselines/<host-key>/latest.txt`, outside generated docs and
+ignored by git. The compare script prints `benchstat` output and fails only on
+large default regressions: `+75%` and at least `1ms` for `ns/op`, `+75%` and at
+least `64KiB` for `B/op`, and `+50%` and at least `1000` for `allocs/op`.
+Override these with `BENCH_MAX_NS_REGRESSION_PCT`,
+`BENCH_MAX_BYTES_REGRESSION_PCT`, `BENCH_MAX_ALLOCS_REGRESSION_PCT`,
+`BENCH_MIN_NS_DELTA`, `BENCH_MIN_BYTES_DELTA`, or
+`BENCH_MIN_ALLOCS_DELTA` for a stricter local investigation.
+
 Each task suite owns its task JSONL and workspace templates:
 
 - `benchmarks/local-code-smoke/` owns small standalone JS/Python workspaces used

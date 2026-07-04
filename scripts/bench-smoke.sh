@@ -4,11 +4,13 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-go_bin="${GO_BIN:-/root/.local/go/bin/go}"
+go_bin="${GO_BIN:-go}"
 benchtime="${BENCHTIME:-1x}"
-bench_regex="${BENCH_REGEX:-Benchmark(SessionJSONL|EventJSONL|ReplayAfterSeq)}"
+bench_regex="${BENCH_REGEX:-Benchmark(SessionJSONL|GatewaySessionJSONL|ReplayAfterSeq|EventJSONL|Projector|ToolSchemaValidation)}"
+bench_packages_value="${BENCH_PACKAGES:-./internal/gateway ./internal/eventlog ./internal/clientux/projector ./internal/tools}"
+read -r -a bench_packages <<<"$bench_packages_value"
 
-if ! output="$("$go_bin" test -run '^$' -bench "$bench_regex" -benchmem -benchtime "$benchtime" ./internal/gateway ./internal/eventlog 2>&1)"; then
+if ! output="$("$go_bin" test -run '^$' -bench "$bench_regex" -benchmem -benchtime "$benchtime" "${bench_packages[@]}" 2>&1)"; then
 	printf '%s\n' "$output"
 	exit 1
 fi
@@ -34,6 +36,8 @@ function metric_name(name) {
 			print "METRIC", name, $i, "log_events"
 		} else if ($(i + 1) == "tail_events") {
 			print "METRIC", name, $i, "tail_events"
+		} else if ($(i + 1) == "events_per_replay") {
+			print "METRIC", name, $i, "events_per_replay"
 		}
 	}
 }
