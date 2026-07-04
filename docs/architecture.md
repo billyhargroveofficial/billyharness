@@ -87,7 +87,6 @@ Current exceptions:
 | File | Current exception owner | Split plan |
 | --- | --- | --- |
 | `internal/tools/tools.go` | P1.7/P1.8 tool/MCP schema and structured-output work. | Split native registry/core policy, MCP adapter, web tools, and output-ref settlement into smaller files or packages. |
-| `internal/gateway/gateway.go` | P1.2/P1.10 gateway streaming and context-epoch work. | Move health/readiness, config/auth handlers, route registration, and session-run admission into narrower gateway files. |
 | `internal/telegrambot/commands_flow_test.go` | P1 Telegram/operator verification follow-up. | Split command-flow coverage by auth policy, session commands, rendering/status commands, and secret-bearing command cases. |
 | `internal/gateway/gateway_test.go` | P1.2/P1.10 gateway behavior follow-up. | Split gateway tests by auth/browser boundary, liveness/readiness, run admission, and owner-scope behavior. |
 | `internal/mcpclient/client_test.go` | P1.7/P1.8 MCP schema and structured-output work. | Split MCP lifecycle, catalog/schema, reconnect/backoff, structured output, and error-redaction tests. |
