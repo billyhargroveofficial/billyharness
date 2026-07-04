@@ -279,6 +279,7 @@ func sessionsIndexRebuildCommand(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	index.Diagnostics = sessionDiagnosticsStatusFromIndex(diagnostics, index)
 	if err := printSessionIndex(out, index, *jsonOut); err != nil {
 		return err
 	}
@@ -305,6 +306,7 @@ func sessionsIndexShowCommand(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	index.Diagnostics = readSessionDiagnosticsStatus(*dir, index)
 	return printSessionIndex(out, index, *jsonOut)
 }
 
@@ -699,6 +701,34 @@ func readSessionsDiagnosticsIndex(dir string) (gateway.StoredSessionDiagnosticsI
 	return gateway.StoredSessionDiagnosticsIndex{}, fmt.Errorf("session diagnostics index unreadable for %s: %w; %s", dir, err, action)
 }
 
+func readSessionDiagnosticsStatus(dir string, index gateway.StoredSessionIndex) *gateway.StoredSessionDiagnosticsStatus {
+	diagnostics, err := gateway.ReadStoredSessionDiagnosticsIndex(dir)
+	if err == nil {
+		return sessionDiagnosticsStatusFromIndex(diagnostics, index)
+	}
+	status := &gateway.StoredSessionDiagnosticsStatus{
+		Present:   false,
+		LastError: err.Error(),
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		status.Missing = true
+	}
+	return status
+}
+
+func sessionDiagnosticsStatusFromIndex(diagnostics gateway.StoredSessionDiagnosticsIndex, index gateway.StoredSessionIndex) *gateway.StoredSessionDiagnosticsStatus {
+	return &gateway.StoredSessionDiagnosticsStatus{
+		Present:       true,
+		Stale:         diagnostics.BuiltAt.Before(index.BuiltAt) || diagnostics.SessionCount != index.SessionCount,
+		BuiltAt:       diagnostics.BuiltAt,
+		TextRowCount:  diagnostics.TextRowCount,
+		ToolRowCount:  diagnostics.ToolRowCount,
+		ErrorRowCount: diagnostics.ErrorRowCount,
+		RunRowCount:   diagnostics.RunRowCount,
+		UsageRowCount: diagnostics.UsageRowCount,
+	}
+}
+
 func printSessionFilter(out io.Writer, sessionID string, limit, total int) {
 	if strings.TrimSpace(sessionID) != "" {
 		fmt.Fprintf(out, "session: %s\n", sessionID)
@@ -777,6 +807,24 @@ func printSessionIndex(out io.Writer, index gateway.StoredSessionIndex, jsonOut 
 	fmt.Fprintf(out, "dir: %s\n", index.Dir)
 	fmt.Fprintf(out, "built: %s\n", index.BuiltAt.Format(time.RFC3339))
 	fmt.Fprintf(out, "sessions: %d\n", index.SessionCount)
+	if index.Diagnostics != nil {
+		fmt.Fprintf(out, "diagnostics: present=%t missing=%t stale=%t rows=text:%d tools:%d errors:%d runs:%d usage:%d\n",
+			index.Diagnostics.Present,
+			index.Diagnostics.Missing,
+			index.Diagnostics.Stale,
+			index.Diagnostics.TextRowCount,
+			index.Diagnostics.ToolRowCount,
+			index.Diagnostics.ErrorRowCount,
+			index.Diagnostics.RunRowCount,
+			index.Diagnostics.UsageRowCount,
+		)
+		if !index.Diagnostics.BuiltAt.IsZero() {
+			fmt.Fprintf(out, "diagnostics_built: %s\n", index.Diagnostics.BuiltAt.Format(time.RFC3339))
+		}
+		if index.Diagnostics.LastError != "" {
+			fmt.Fprintf(out, "diagnostics_last_error: %s\n", index.Diagnostics.LastError)
+		}
+	}
 	for _, session := range index.Sessions {
 		fmt.Fprintf(out, "- %s messages=%d history=%d events=%d snapshot=%t event_replay=%t replay=%t\n",
 			session.ID,

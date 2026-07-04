@@ -15,12 +15,26 @@ const (
 )
 
 type StoredSessionIndex struct {
-	SchemaVersion int                    `json:"schema_version"`
-	BuiltAt       time.Time              `json:"built_at"`
-	Dir           string                 `json:"dir"`
-	SessionCount  int                    `json:"session_count"`
-	Sessions      []StoredSessionSummary `json:"sessions"`
-	Warnings      []string               `json:"warnings,omitempty"`
+	SchemaVersion int                             `json:"schema_version"`
+	BuiltAt       time.Time                       `json:"built_at"`
+	Dir           string                          `json:"dir"`
+	SessionCount  int                             `json:"session_count"`
+	Sessions      []StoredSessionSummary          `json:"sessions"`
+	Warnings      []string                        `json:"warnings,omitempty"`
+	Diagnostics   *StoredSessionDiagnosticsStatus `json:"diagnostics,omitempty"`
+}
+
+type StoredSessionDiagnosticsStatus struct {
+	Present       bool      `json:"present"`
+	Missing       bool      `json:"missing,omitempty"`
+	Stale         bool      `json:"stale,omitempty"`
+	BuiltAt       time.Time `json:"built_at,omitempty"`
+	TextRowCount  int       `json:"text_row_count,omitempty"`
+	ToolRowCount  int       `json:"tool_row_count,omitempty"`
+	ErrorRowCount int       `json:"error_row_count,omitempty"`
+	RunRowCount   int       `json:"run_row_count,omitempty"`
+	UsageRowCount int       `json:"usage_row_count,omitempty"`
+	LastError     string    `json:"last_error,omitempty"`
 }
 
 func RebuildStoredSessionIndex(dir string) (StoredSessionIndex, error) {

@@ -674,7 +674,9 @@ func TestSessionsCommandListsAndInspectsStore(t *testing.T) {
 	if err := sessionsCommand([]string{"index", "rebuild", "-dir", storeDir}, &indexOut); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(indexOut.String(), "session index") || !strings.Contains(indexOut.String(), created.ID) {
+	if !strings.Contains(indexOut.String(), "session index") ||
+		!strings.Contains(indexOut.String(), created.ID) ||
+		!strings.Contains(indexOut.String(), "diagnostics: present=true missing=false stale=false") {
 		t.Fatalf("index rebuild output:\n%s", indexOut.String())
 	}
 	var indexJSON bytes.Buffer
@@ -685,7 +687,12 @@ func TestSessionsCommandListsAndInspectsStore(t *testing.T) {
 	if err := json.Unmarshal(indexJSON.Bytes(), &index); err != nil {
 		t.Fatal(err)
 	}
-	if index.SessionCount != 1 || index.Sessions[0].ID != created.ID {
+	if index.SessionCount != 1 || index.Sessions[0].ID != created.ID ||
+		index.Diagnostics == nil ||
+		!index.Diagnostics.Present ||
+		index.Diagnostics.Missing ||
+		index.Diagnostics.Stale ||
+		index.Diagnostics.TextRowCount == 0 {
 		t.Fatalf("index = %#v", index)
 	}
 	var deleteOut bytes.Buffer

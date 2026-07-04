@@ -192,6 +192,12 @@ Build or inspect the diagnostics index:
 ./bin/fast-agent-harness sessions index show
 ```
 
+`sessions index show` prints the session index build time and a derived
+diagnostics status line with `present`, `missing`, `stale`, row counts, the
+diagnostics build time, and the last read error when the diagnostics index is
+missing or corrupt. `sessions index rebuild` rebuilds both the session list
+index and the diagnostics rows from the durable session store.
+
 Query the diagnostics index:
 
 ```sh

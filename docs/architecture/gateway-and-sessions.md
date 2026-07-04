@@ -7,8 +7,11 @@ current worktree contracts, not assumptions from older releases.
 
 Code anchors:
 
-- `internal/gateway/gateway.go`: server construction, route registration,
-  session handlers, run settings projection, session context responses.
+- `internal/gateway/gateway.go`: server construction, session handlers, run
+  settings projection, session context responses.
+- `internal/gateway/routes.go`: gateway HTTP route table.
+- `internal/gateway/status_routes.go`: health/readiness, auth/config, tool,
+  MCP, and managed-process status handlers.
 - `internal/gateway/response.go`: NDJSON stream writer, live stream buffering,
   `gateway.stream_gap`, redacted JSON responses.
 - `internal/gateway/session_events.go`: gateway session wrapper, event hub,
@@ -55,7 +58,7 @@ logic belongs in `internal/clientux`.
 
 ## HTTP Surface
 
-Routes are registered in `Server.routes` in `internal/gateway/gateway.go`.
+Routes are registered in `Server.routes` in `internal/gateway/routes.go`.
 Future agents should update this section from that route table, not from memory.
 
 | Route | Role |
