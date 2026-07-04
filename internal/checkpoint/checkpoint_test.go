@@ -252,6 +252,48 @@ func TestCheckpointLoadVerifiedRejectsTamperedMovedAndSymlinkArtifacts(t *testin
 	}
 }
 
+func TestCheckpointLoadAndRedoWithOptionsRemoveDeletedFile(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "delete.txt")
+	if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	record := PatchRecord{
+		SchemaVersion: SchemaVersion,
+		ChangeID:      "change-delete",
+		Files: []FilePatch{{
+			Path:       path,
+			Change:     ChangeDeleted,
+			Kind:       KindFile,
+			Before:     checkpointFileState("before\n"),
+			After:      &FileState{Exists: false},
+			Reversible: true,
+		}},
+	}
+	artifact := filepath.Join(root, "patch.json")
+	body, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artifact, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(artifact)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	result, err := RedoWithOptions(loaded, RestoreOptions{WorkspaceRoots: []string{root}})
+	if err != nil {
+		t.Fatalf("redo with options: %v result=%#v", err, result)
+	}
+	if len(result.RestoredFiles) != 1 || result.RestoredFiles[0] != path {
+		t.Fatalf("restored files = %#v", result.RestoredFiles)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("redo should remove deleted file, stat err=%v", err)
+	}
+}
+
 func TestCheckpointRestoreWithOptionsRequiresWorkspaceRootsAndRejectsOutOfRoot(t *testing.T) {
 	root := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.txt")

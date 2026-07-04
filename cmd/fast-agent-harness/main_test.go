@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +22,22 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
+
+func TestRunHandlesHelpAndUnknownCommand(t *testing.T) {
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+
+	os.Args = []string{"fast-agent-harness", "help"}
+	if err := run(); err != nil {
+		t.Fatalf("help run err = %v", err)
+	}
+
+	os.Args = []string{"fast-agent-harness", "definitely-not-a-command"}
+	err := run()
+	if err == nil || !strings.Contains(err.Error(), `unknown command "definitely-not-a-command"`) {
+		t.Fatalf("unknown command err = %v", err)
+	}
+}
 
 func TestGatewayRunSendsFullRunRequest(t *testing.T) {
 	var captured gateway.RunRequest
@@ -174,6 +191,54 @@ func TestNormalizeGatewayURL(t *testing.T) {
 	}
 }
 
+func TestServiceCommandHelpersUseEnvFallbacksAndAliases(t *testing.T) {
+	t.Setenv("BILLYHARNESS_TEST_VALUE", "  configured  ")
+	if got := lookupEnvAny("MISSING_VALUE", "BILLYHARNESS_TEST_VALUE"); got != "configured" {
+		t.Fatalf("lookupEnvAny = %q", got)
+	}
+
+	t.Setenv("BILLYHARNESS_TEST_BOOL", "true")
+	if !envBoolAnyDefault(false, "BILLYHARNESS_TEST_BOOL") {
+		t.Fatal("envBoolAnyDefault should parse true")
+	}
+	t.Setenv("BILLYHARNESS_BAD_BOOL", "not-bool")
+	if !envBoolAnyDefault(true, "BILLYHARNESS_BAD_BOOL") {
+		t.Fatal("envBoolAnyDefault should keep fallback on invalid value")
+	}
+
+	t.Setenv("BILLYHARNESS_TEST_INT", "42")
+	if got := envIntAnyDefault(7, "BILLYHARNESS_TEST_INT"); got != 42 {
+		t.Fatalf("envIntAnyDefault = %d", got)
+	}
+	t.Setenv("BILLYHARNESS_BAD_INT", "many")
+	if got := envIntAnyDefault(7, "BILLYHARNESS_BAD_INT"); got != 7 {
+		t.Fatalf("invalid envIntAnyDefault = %d", got)
+	}
+
+	ids, err := parseChatIDs(" 1,2; 3\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{1, 2, 3} {
+		if !ids[id] {
+			t.Fatalf("missing parsed chat id %d in %#v", id, ids)
+		}
+	}
+	if _, err := parseChatIDs("1,nope"); err == nil {
+		t.Fatal("parseChatIDs should reject malformed ids")
+	}
+	if got := modelAliasForTelegram("flash"); got != "deepseek-v4-flash" {
+		t.Fatalf("modelAliasForTelegram = %q", got)
+	}
+
+	if mode, err := parseAccessModeFlag(""); err != nil || mode != "" {
+		t.Fatalf("empty access mode = %q err=%v", mode, err)
+	}
+	if _, err := parseAccessModeFlag("root"); err == nil {
+		t.Fatal("parseAccessModeFlag should reject unknown mode")
+	}
+}
+
 func TestConfigInspectJSONDoesNotLeakDotenvSecrets(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", home)
@@ -197,6 +262,14 @@ func TestConfigInspectJSONDoesNotLeakDotenvSecrets(t *testing.T) {
 		!strings.Contains(out.String(), `"max_output_tokens"`) ||
 		!strings.Contains(out.String(), `"runtime_tool"`) {
 		t.Fatalf("config inspect missing diagnostics: %s", out.String())
+	}
+}
+
+func TestGatewayRunUnavailableWrapsHint(t *testing.T) {
+	err := (&gatewayclient.UnavailableError{BaseURL: ":8765", Err: errors.New("connect refused")}).Error()
+	if !strings.Contains(err, "gateway http://127.0.0.1:8765 is not reachable") ||
+		!strings.Contains(err, "connect refused") {
+		t.Fatalf("unavailable error = %q", err)
 	}
 }
 

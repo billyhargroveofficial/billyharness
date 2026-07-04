@@ -247,6 +247,123 @@ func TestSessionInspectRawFetchesLiveInspectEndpoint(t *testing.T) {
 	}
 }
 
+func TestListAndGetSessionsFetchTypedResponses(t *testing.T) {
+	server := testkit.NewRouteServer(t,
+		testkit.Route{
+			Method: http.MethodGet,
+			Path:   "/v1/sessions",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				testkit.WriteJSON(t, w, gatewayapi.SessionListResponse{
+					Sessions: []gatewayapi.SessionSummary{{ID: "session-1", MessageCount: 2}},
+				})
+			},
+		},
+		testkit.Route{
+			Method: http.MethodGet,
+			Path:   "/v1/sessions/session-1",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				testkit.WriteJSON(t, w, gatewayapi.SessionResponse{
+					ID:           "session-1",
+					MessageCount: 2,
+					Messages: []protocol.Message{
+						protocol.UserMessage("hello", nil),
+					},
+				})
+			},
+		},
+	)
+
+	client := New(server.URL)
+	sessions, err := client.ListSessions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != "session-1" || sessions[0].MessageCount != 2 {
+		t.Fatalf("sessions = %#v", sessions)
+	}
+	session, err := client.GetSession(context.Background(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.ID != "session-1" || session.MessageCount != 2 || len(session.Messages) != 1 {
+		t.Fatalf("session = %#v", session)
+	}
+}
+
+func TestCompleteInputAndUndoRedoPostTypedRequests(t *testing.T) {
+	var gotComplete gatewayapi.SessionInputCompleteRequest
+	var gotUndo gatewayapi.SessionUndoRequest
+	server := testkit.NewRouteServer(t,
+		testkit.Route{
+			Method: http.MethodPost,
+			Path:   "/v1/sessions/session-1/inputs/input-1/complete",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				if !testkit.DecodeJSON(t, r, &gotComplete) {
+					return
+				}
+				testkit.WriteJSON(t, w, gatewayapi.SessionInputResponse{InputID: "input-1", State: "completed", TerminalStatus: gotComplete.TerminalStatus})
+			},
+		},
+		testkit.Route{
+			Method: http.MethodPost,
+			Path:   "/v1/sessions/session-1/undo",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				if !testkit.DecodeJSON(t, r, &gotUndo) {
+					return
+				}
+				testkit.WriteJSON(t, w, gatewayapi.SessionUndoResponse{ChangeID: gotUndo.ChangeID, Preview: gotUndo.Preview})
+			},
+		},
+		testkit.Route{
+			Method: http.MethodPost,
+			Path:   "/v1/sessions/session-1/redo",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				testkit.WriteJSON(t, w, gatewayapi.SessionUndoResponse{ChangeID: "change-1", RestoredFiles: []string{"file.txt"}})
+			},
+		},
+	)
+
+	client := New(server.URL)
+	completed, err := client.CompleteSessionInput(context.Background(), "session-1", "input-1", gatewayapi.SessionInputCompleteRequest{TerminalStatus: "completed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotComplete.TerminalStatus != "completed" || completed.InputID != "input-1" || completed.TerminalStatus != "completed" {
+		t.Fatalf("complete request=%#v response=%#v", gotComplete, completed)
+	}
+	preview, err := client.PreviewSessionUndo(context.Background(), "session-1", "change-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotUndo.ChangeID != "change-1" || !gotUndo.Preview || preview.ChangeID != "change-1" || !preview.Preview {
+		t.Fatalf("undo request=%#v response=%#v", gotUndo, preview)
+	}
+	redo, err := client.RedoSession(context.Background(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if redo.ChangeID != "change-1" || len(redo.RestoredFiles) != 1 {
+		t.Fatalf("redo = %#v", redo)
+	}
+}
+
+func TestClientErrorHelpersDescribeFailures(t *testing.T) {
+	if got := (&StatusError{Method: http.MethodGet, Path: "/v1/config", StatusCode: http.StatusForbidden, Body: " forbidden "}).Error(); got != "gateway GET /v1/config HTTP 403: forbidden" {
+		t.Fatalf("status error = %q", got)
+	}
+	if got := (&RunFailedError{}).Error(); got != "gateway run failed" {
+		t.Fatalf("empty run failed error = %q", got)
+	}
+	if got := (&EventSeqGapError{AfterSeq: 2, GotSeq: 4}).Error(); !strings.Contains(got, "got seq 4 after 2") {
+		t.Fatalf("gap error = %q", got)
+	}
+	base := errors.New("connect refused")
+	unavailable := &UnavailableError{BaseURL: ":8765", Err: base}
+	if !errors.Is(unavailable, base) || !strings.Contains(unavailable.Error(), "http://127.0.0.1:8765") {
+		t.Fatalf("unavailable = %v", unavailable)
+	}
+}
+
 func TestReplaySessionEventsDropsStaleCursorEvents(t *testing.T) {
 	var sawAuth bool
 	server := testkit.NewRouteServer(t, testkit.Route{
