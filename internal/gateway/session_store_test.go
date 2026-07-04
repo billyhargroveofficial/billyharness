@@ -125,7 +125,9 @@ func TestGatewaySessionStoreRestoresSessionAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !inspection.OfflineReplayReady ||
+	if !inspection.MessageSnapshotReady ||
+		!inspection.EventReplayReady ||
+		!inspection.OfflineReplayReady ||
 		inspection.MessageCount != manifest.MessageCount ||
 		inspection.Manifest.SchemaVersion != gatewaySessionSchemaVersion ||
 		inspection.Events.EventTypes[string(protocol.EventRunCompleted)] == 0 ||
@@ -134,12 +136,18 @@ func TestGatewaySessionStoreRestoresSessionAfterRestart(t *testing.T) {
 		!hasExistingFile(inspection.Files, "mcp_snapshot") {
 		t.Fatalf("inspection = %#v", inspection)
 	}
+	if !storedSessionHasReadiness(inspection.Readiness, storedSessionReadinessMessageSnapshotReady) ||
+		!storedSessionHasReadiness(inspection.Readiness, storedSessionReadinessEventReplayReady) {
+		t.Fatalf("inspection readiness = %#v", inspection.Readiness)
+	}
 	listed, err := ListStoredSessions(storeDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(listed.Sessions) != 1 ||
 		listed.Sessions[0].ID != created.ID ||
+		!listed.Sessions[0].MessageSnapshotReady ||
+		!listed.Sessions[0].EventReplayReady ||
 		!listed.Sessions[0].OfflineReplayReady {
 		t.Fatalf("listed sessions = %#v warnings=%#v", listed.Sessions, listed.Warnings)
 	}

@@ -627,6 +627,49 @@ func TestGatewaySessionEventsReplayRejectsDuplicateTerminalRun(t *testing.T) {
 	}
 }
 
+func TestInspectStoredSessionReadinessSplitsMessageSnapshotFromEventReplay(t *testing.T) {
+	root := t.TempDir()
+	sessionID := "partial-replay-session"
+	now := time.Unix(20, 0).UTC()
+	writeInspectReadinessSession(t, root, sessionID, now,
+		validGatewaySessionEventRecord(1, sessionID, protocol.Event{Type: protocol.EventRunStarted, RunID: "run-1"}),
+	)
+
+	inspection, err := InspectStoredSession(root, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inspection.MessageSnapshotReady || inspection.EventReplayReady || inspection.OfflineReplayReady {
+		t.Fatalf("partial replay readiness = %#v", inspection)
+	}
+	if !inspection.Events.Validation.Valid || !inspection.Events.Validation.LifecycleValid || inspection.Events.Validation.ClosedLifecycleValid {
+		t.Fatalf("partial replay validation = %#v", inspection.Events.Validation)
+	}
+	if !strings.Contains(inspection.Events.Validation.ClosedLifecycleError, "no terminal event") {
+		t.Fatalf("closed lifecycle error = %q", inspection.Events.Validation.ClosedLifecycleError)
+	}
+	if !storedSessionHasReadiness(inspection.Readiness, storedSessionReadinessMessageSnapshotReady) ||
+		!storedSessionHasReadiness(inspection.Readiness, storedSessionReadinessEventReplayIncomplete) {
+		t.Fatalf("partial replay readiness states = %#v", inspection.Readiness)
+	}
+
+	completeID := "complete-replay-session"
+	writeInspectReadinessSession(t, root, completeID, now,
+		validGatewaySessionEventRecord(1, completeID, protocol.Event{Type: protocol.EventRunStarted, RunID: "run-1"}),
+		validGatewaySessionEventRecord(2, completeID, protocol.Event{Type: protocol.EventRunCompleted, RunID: "run-1"}),
+	)
+	completeInspection, err := InspectStoredSession(root, completeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !completeInspection.MessageSnapshotReady || !completeInspection.EventReplayReady || !completeInspection.OfflineReplayReady {
+		t.Fatalf("complete replay readiness = %#v", completeInspection)
+	}
+	if !storedSessionHasReadiness(completeInspection.Readiness, storedSessionReadinessEventReplayReady) {
+		t.Fatalf("complete replay readiness states = %#v", completeInspection.Readiness)
+	}
+}
+
 func validGatewaySessionEventRecord(seq int64, sessionID string, event protocol.Event) sessionEventRecord {
 	now := time.Unix(1000+seq, 0).UTC()
 	runID := strings.TrimSpace(event.RunID)
@@ -649,6 +692,55 @@ func validGatewaySessionEventRecord(seq int64, sessionID string, event protocol.
 		EventType:     string(storedEvent.Type),
 		Event:         storedEvent,
 	}
+}
+
+func writeInspectReadinessSession(t *testing.T, root, sessionID string, now time.Time, events ...sessionEventRecord) {
+	t.Helper()
+	sessionDir := filepath.Join(root, sessionID)
+	if err := writeSessionManifest(filepath.Join(sessionDir, sessionManifestName), sessionManifest{
+		SchemaVersion: gatewaySessionSchemaVersion,
+		SessionID:     sessionID,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		HistoryJSONL:  sessionHistoryJSONLName,
+		EventsJSONL:   sessionEventsJSONLName,
+		InputsJSONL:   sessionInputsJSONLName,
+		SnapshotJSON:  sessionID + ".json",
+		MessageCount:  2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eventlog.AppendJSONL(filepath.Join(sessionDir, sessionHistoryJSONLName), sessionHistoryRecord{
+		SchemaVersion: gatewaySessionSchemaVersion,
+		Seq:           1,
+		SessionID:     sessionID,
+		Timestamp:     now,
+		Kind:          sessionHistoryCreated,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		MessageCount:  2,
+		Messages: []protocol.Message{
+			{Role: protocol.RoleSystem, Content: "system"},
+			{Role: protocol.RoleUser, Content: "hello"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	eventsPath := filepath.Join(sessionDir, sessionEventsJSONLName)
+	for _, record := range events {
+		if err := eventlog.AppendJSONL(eventsPath, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func storedSessionHasReadiness(states []string, want string) bool {
+	for _, state := range states {
+		if state == want {
+			return true
+		}
+	}
+	return false
 }
 
 func writeGatewaySessionEventRecords(t *testing.T, path string, records ...sessionEventRecord) {

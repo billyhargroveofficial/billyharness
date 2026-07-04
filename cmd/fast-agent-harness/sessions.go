@@ -80,13 +80,15 @@ func sessionsListCommand(args []string, out io.Writer) error {
 		if session.Legacy {
 			marker = "legacy"
 		}
-		fmt.Fprintf(out, "- %s %s messages=%d history=%d events=%d last=%s replay=%t\n",
+		fmt.Fprintf(out, "- %s %s messages=%d history=%d events=%d last=%s snapshot=%t event_replay=%t replay=%t\n",
 			session.ID,
 			marker,
 			session.MessageCount,
 			session.HistorySeq,
 			session.EventSeq,
 			emptyDash(session.LastEvent),
+			session.MessageSnapshotReady,
+			session.EventReplayReady,
 			session.OfflineReplayReady,
 		)
 	}
@@ -719,11 +721,13 @@ func printSessionIndex(out io.Writer, index gateway.StoredSessionIndex, jsonOut 
 	fmt.Fprintf(out, "built: %s\n", index.BuiltAt.Format(time.RFC3339))
 	fmt.Fprintf(out, "sessions: %d\n", index.SessionCount)
 	for _, session := range index.Sessions {
-		fmt.Fprintf(out, "- %s messages=%d history=%d events=%d replay=%t\n",
+		fmt.Fprintf(out, "- %s messages=%d history=%d events=%d snapshot=%t event_replay=%t replay=%t\n",
 			session.ID,
 			session.MessageCount,
 			session.HistorySeq,
 			session.EventSeq,
+			session.MessageSnapshotReady,
+			session.EventReplayReady,
 			session.OfflineReplayReady,
 		)
 	}
@@ -742,6 +746,11 @@ func printSessionInspection(out io.Writer, inspection gateway.StoredSessionInspe
 	}
 	fmt.Fprintf(out, "mode: %s\n", sessionMode(inspection.Legacy))
 	fmt.Fprintf(out, "messages: %d\n", inspection.MessageCount)
+	if len(inspection.Readiness) > 0 {
+		fmt.Fprintf(out, "readiness: %s\n", strings.Join(inspection.Readiness, ","))
+	}
+	fmt.Fprintf(out, "message snapshot: %t\n", inspection.MessageSnapshotReady)
+	fmt.Fprintf(out, "event replay: %t\n", inspection.EventReplayReady)
 	fmt.Fprintf(out, "offline replay: %t\n", inspection.OfflineReplayReady)
 	if inspection.Manifest.SchemaVersion != 0 || inspection.Manifest.SessionID != "" {
 		fmt.Fprintf(out, "manifest: schema=%d history=%s events=%s snapshots=%s,%s,%s\n",
@@ -780,6 +789,12 @@ func printSessionInspection(out io.Writer, inspection gateway.StoredSessionInspe
 		validation.UnmatchedOutputRefs,
 		validation.UnmatchedPermissions,
 	)
+	if !validation.ClosedLifecycleValid || validation.ClosedLifecycleError != "" {
+		fmt.Fprintf(out, "closed lifecycle: valid=%t error=%s\n",
+			validation.ClosedLifecycleValid,
+			emptyDash(validation.ClosedLifecycleError),
+		)
+	}
 	if validation.Error != "" {
 		fmt.Fprintf(out, "validation error: kind=%s line=%d record=%d error=%s\n",
 			emptyDash(validation.CorruptionKind),

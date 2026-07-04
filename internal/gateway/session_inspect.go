@@ -27,30 +27,36 @@ type StoredSessionList struct {
 }
 
 type StoredSessionSummary struct {
-	ID                 string                  `json:"id"`
-	CreatedAt          time.Time               `json:"created_at,omitempty"`
-	UpdatedAt          time.Time               `json:"updated_at,omitempty"`
-	MessageCount       int                     `json:"message_count"`
-	HistorySeq         int64                   `json:"history_seq,omitempty"`
-	EventSeq           int64                   `json:"event_seq,omitempty"`
-	LastEvent          string                  `json:"last_event,omitempty"`
-	Owner              gatewayapi.SessionOwner `json:"owner,omitempty"`
-	Legacy             bool                    `json:"legacy,omitempty"`
-	OfflineReplayReady bool                    `json:"offline_replay_ready"`
+	ID                   string                  `json:"id"`
+	CreatedAt            time.Time               `json:"created_at,omitempty"`
+	UpdatedAt            time.Time               `json:"updated_at,omitempty"`
+	MessageCount         int                     `json:"message_count"`
+	HistorySeq           int64                   `json:"history_seq,omitempty"`
+	EventSeq             int64                   `json:"event_seq,omitempty"`
+	LastEvent            string                  `json:"last_event,omitempty"`
+	Owner                gatewayapi.SessionOwner `json:"owner,omitempty"`
+	Legacy               bool                    `json:"legacy,omitempty"`
+	Readiness            []string                `json:"readiness,omitempty"`
+	MessageSnapshotReady bool                    `json:"message_snapshot_ready"`
+	EventReplayReady     bool                    `json:"event_replay_ready"`
+	OfflineReplayReady   bool                    `json:"offline_replay_ready"`
 }
 
 type StoredSessionInspection struct {
-	Dir                string                         `json:"dir"`
-	SessionID          string                         `json:"session_id"`
-	SessionDir         string                         `json:"session_dir,omitempty"`
-	Legacy             bool                           `json:"legacy,omitempty"`
-	Manifest           StoredSessionManifest          `json:"manifest,omitempty"`
-	Files              []StoredSessionFile            `json:"files,omitempty"`
-	History            StoredSessionHistoryInspection `json:"history,omitempty"`
-	Events             StoredSessionEventsInspection  `json:"events,omitempty"`
-	MessageCount       int                            `json:"message_count,omitempty"`
-	OfflineReplayReady bool                           `json:"offline_replay_ready"`
-	Warnings           []string                       `json:"warnings,omitempty"`
+	Dir                  string                         `json:"dir"`
+	SessionID            string                         `json:"session_id"`
+	SessionDir           string                         `json:"session_dir,omitempty"`
+	Legacy               bool                           `json:"legacy,omitempty"`
+	Manifest             StoredSessionManifest          `json:"manifest,omitempty"`
+	Files                []StoredSessionFile            `json:"files,omitempty"`
+	History              StoredSessionHistoryInspection `json:"history,omitempty"`
+	Events               StoredSessionEventsInspection  `json:"events,omitempty"`
+	MessageCount         int                            `json:"message_count,omitempty"`
+	Readiness            []string                       `json:"readiness,omitempty"`
+	MessageSnapshotReady bool                           `json:"message_snapshot_ready"`
+	EventReplayReady     bool                           `json:"event_replay_ready"`
+	OfflineReplayReady   bool                           `json:"offline_replay_ready"`
+	Warnings             []string                       `json:"warnings,omitempty"`
 }
 
 type StoredSessionManifest struct {
@@ -114,6 +120,8 @@ type StoredSessionEventValidation struct {
 	EnvelopeValid        bool   `json:"envelope_valid"`
 	SequenceValid        bool   `json:"sequence_valid"`
 	LifecycleValid       bool   `json:"lifecycle_valid"`
+	ClosedLifecycleValid bool   `json:"closed_lifecycle_valid"`
+	ClosedLifecycleError string `json:"closed_lifecycle_error,omitempty"`
 	SequenceGaps         int    `json:"sequence_gaps,omitempty"`
 	DuplicateSeqs        int    `json:"duplicate_seqs,omitempty"`
 	UnmatchedProgress    int    `json:"unmatched_progress,omitempty"`
@@ -161,6 +169,13 @@ const (
 	storedSessionRunStateRunning   = "running"
 	storedSessionRunStateCompleted = "completed"
 	storedSessionRunStateFailed    = "failed"
+
+	storedSessionReadinessMessageSnapshotReady   = "message_snapshot_ready"
+	storedSessionReadinessMessageSnapshotMissing = "message_snapshot_missing"
+	storedSessionReadinessEventReplayReady       = "event_replay_ready"
+	storedSessionReadinessEventReplayMissing     = "event_replay_missing"
+	storedSessionReadinessEventReplayInvalid     = "event_replay_invalid"
+	storedSessionReadinessEventReplayIncomplete  = "event_replay_incomplete"
 )
 
 type StoredSessionOutputRefWarning struct {
@@ -312,7 +327,7 @@ func InspectStoredSession(dir, id string) (StoredSessionInspection, error) {
 		}
 	}
 	out.MessageCount = len(history.messages)
-	out.OfflineReplayReady = out.History.Exists && out.History.Records > 0 && out.Events.Validation.Valid
+	applyStoredSessionReadiness(&out)
 	if !hasExistingFile(out.Files, "config_snapshot") {
 		out.Warnings = append(out.Warnings, "config snapshot missing")
 	}
@@ -427,13 +442,12 @@ func inspectLegacyStoredSession(dir, id string) (StoredSessionInspection, error)
 		return StoredSessionInspection{}, err
 	}
 	out := StoredSessionInspection{
-		Dir:                dir,
-		SessionID:          id,
-		Legacy:             true,
-		Files:              []StoredSessionFile{file},
-		MessageCount:       len(record.Messages),
-		OfflineReplayReady: len(record.Messages) > 0,
-		Warnings:           []string{"legacy snapshot only; JSONL manifest/history/events missing"},
+		Dir:          dir,
+		SessionID:    id,
+		Legacy:       true,
+		Files:        []StoredSessionFile{file},
+		MessageCount: len(record.Messages),
+		Warnings:     []string{"legacy snapshot only; JSONL manifest/history/events missing"},
 	}
 	out.History = StoredSessionHistoryInspection{
 		Path:         path,
@@ -451,7 +465,43 @@ func inspectLegacyStoredSession(dir, id string) (StoredSessionInspection, error)
 		MessageCount: len(record.Messages),
 		SnapshotJSON: filepath.Base(path),
 	}
+	applyStoredSessionReadiness(&out)
 	return out, nil
+}
+
+func applyStoredSessionReadiness(out *StoredSessionInspection) {
+	if out == nil {
+		return
+	}
+	out.MessageSnapshotReady = out.History.Exists && out.History.Records > 0 && out.MessageCount > 0
+	out.EventReplayReady = out.Events.Exists &&
+		out.Events.Records > 0 &&
+		out.Events.Validation.Valid &&
+		out.Events.Validation.ClosedLifecycleValid
+	out.OfflineReplayReady = out.EventReplayReady
+	out.Readiness = storedSessionReadinessStates(out.MessageSnapshotReady, out.EventReplayReady, out.Events)
+}
+
+func storedSessionReadinessStates(messageReady, eventReady bool, events StoredSessionEventsInspection) []string {
+	states := make([]string, 0, 2)
+	if messageReady {
+		states = append(states, storedSessionReadinessMessageSnapshotReady)
+	} else {
+		states = append(states, storedSessionReadinessMessageSnapshotMissing)
+	}
+	switch {
+	case eventReady:
+		states = append(states, storedSessionReadinessEventReplayReady)
+	case !events.Exists || events.Records == 0:
+		states = append(states, storedSessionReadinessEventReplayMissing)
+	case !events.Validation.Valid:
+		states = append(states, storedSessionReadinessEventReplayInvalid)
+	case !events.Validation.ClosedLifecycleValid:
+		states = append(states, storedSessionReadinessEventReplayIncomplete)
+	default:
+		states = append(states, storedSessionReadinessEventReplayMissing)
+	}
+	return states
 }
 
 func inspectStoredSessionFile(name, path string) StoredSessionFile {
@@ -553,6 +603,10 @@ func inspectSessionEvents(sessionID, path string, events []protocol.Event) Store
 		out.Validation.LifecycleValid = false
 		out.Validation.Valid = false
 	}
+	if err := eventlog.ValidateClosedLifecycle(events); err != nil {
+		out.Validation.ClosedLifecycleValid = false
+		out.Validation.ClosedLifecycleError = err.Error()
+	}
 	out.Projector = inspectSessionProjector(sessionID, events, out.LastSeq)
 	out.OutputRefsVerified = out.OutputRefs > 0 && out.MissingOutputRefs == 0 && out.OutputRefHashMismatch == 0
 	if len(out.EventTypes) == 0 {
@@ -563,16 +617,18 @@ func inspectSessionEvents(sessionID, path string, events []protocol.Event) Store
 
 func storedSessionEventValidationOK() StoredSessionEventValidation {
 	return StoredSessionEventValidation{
-		Valid:          true,
-		EnvelopeValid:  true,
-		SequenceValid:  true,
-		LifecycleValid: true,
+		Valid:                true,
+		EnvelopeValid:        true,
+		SequenceValid:        true,
+		LifecycleValid:       true,
+		ClosedLifecycleValid: true,
 	}
 }
 
 func storedSessionEventValidationFromError(storeDir string, err error) StoredSessionEventValidation {
 	out := storedSessionEventValidationOK()
 	out.Valid = false
+	out.ClosedLifecycleValid = false
 	out.Error = sanitizeSessionStoreLoadError(storeDir, err.Error())
 	var corrupt *eventlog.CorruptionError
 	if errors.As(err, &corrupt) {
@@ -989,16 +1045,19 @@ func storedSessionManifest(manifest sessionManifest) StoredSessionManifest {
 
 func inspectionSummary(inspection StoredSessionInspection) StoredSessionSummary {
 	summary := StoredSessionSummary{
-		ID:                 inspection.SessionID,
-		CreatedAt:          inspection.Manifest.CreatedAt,
-		UpdatedAt:          inspection.Manifest.UpdatedAt,
-		MessageCount:       inspection.MessageCount,
-		HistorySeq:         inspection.History.LastSeq,
-		EventSeq:           inspection.Events.LastSeq,
-		LastEvent:          inspection.Events.LastEvent,
-		Owner:              inspection.Manifest.Owner,
-		Legacy:             inspection.Legacy,
-		OfflineReplayReady: inspection.OfflineReplayReady,
+		ID:                   inspection.SessionID,
+		CreatedAt:            inspection.Manifest.CreatedAt,
+		UpdatedAt:            inspection.Manifest.UpdatedAt,
+		MessageCount:         inspection.MessageCount,
+		HistorySeq:           inspection.History.LastSeq,
+		EventSeq:             inspection.Events.LastSeq,
+		LastEvent:            inspection.Events.LastEvent,
+		Owner:                inspection.Manifest.Owner,
+		Legacy:               inspection.Legacy,
+		Readiness:            append([]string(nil), inspection.Readiness...),
+		MessageSnapshotReady: inspection.MessageSnapshotReady,
+		EventReplayReady:     inspection.EventReplayReady,
+		OfflineReplayReady:   inspection.OfflineReplayReady,
 	}
 	if summary.UpdatedAt.IsZero() {
 		summary.UpdatedAt = summary.CreatedAt

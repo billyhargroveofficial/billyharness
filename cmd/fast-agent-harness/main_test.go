@@ -475,7 +475,10 @@ func TestSessionsCommandListsAndInspectsStore(t *testing.T) {
 	if err := sessionsCommand([]string{"list", "-dir", storeDir}, &listOut); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(listOut.String(), created.ID) || !strings.Contains(listOut.String(), "replay=true") {
+	if !strings.Contains(listOut.String(), created.ID) ||
+		!strings.Contains(listOut.String(), "snapshot=true") ||
+		!strings.Contains(listOut.String(), "event_replay=true") ||
+		!strings.Contains(listOut.String(), "replay=true") {
 		t.Fatalf("list output missing session/replay:\n%s", listOut.String())
 	}
 
@@ -483,7 +486,7 @@ func TestSessionsCommandListsAndInspectsStore(t *testing.T) {
 	if err := sessionsCommand([]string{"inspect", "-dir", storeDir, created.ID}, &inspectOut); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"offline replay: true", "validation: valid=true", "terminal: state=completed", "projector: parity=true", "config_snapshot exists=true", "model_provider_snapshot exists=true", "mcp_snapshot exists=true"} {
+	for _, want := range []string{"readiness: message_snapshot_ready,event_replay_ready", "message snapshot: true", "event replay: true", "offline replay: true", "validation: valid=true", "terminal: state=completed", "projector: parity=true", "config_snapshot exists=true", "model_provider_snapshot exists=true", "mcp_snapshot exists=true"} {
 		if !strings.Contains(inspectOut.String(), want) {
 			t.Fatalf("inspect output missing %q:\n%s", want, inspectOut.String())
 		}
@@ -497,10 +500,18 @@ func TestSessionsCommandListsAndInspectsStore(t *testing.T) {
 	if err := json.Unmarshal(jsonOut.Bytes(), &inspection); err != nil {
 		t.Fatal(err)
 	}
-	if inspection.SessionID != created.ID || !inspection.OfflineReplayReady || inspection.Events.Records == 0 {
+	if inspection.SessionID != created.ID ||
+		!inspection.MessageSnapshotReady ||
+		!inspection.EventReplayReady ||
+		!inspection.OfflineReplayReady ||
+		inspection.Events.Records == 0 {
 		t.Fatalf("inspection = %#v", inspection)
 	}
-	if !inspection.Events.Validation.Valid || !inspection.Events.Validation.EnvelopeValid || !inspection.Events.Validation.SequenceValid || !inspection.Events.Validation.LifecycleValid {
+	if !inspection.Events.Validation.Valid ||
+		!inspection.Events.Validation.EnvelopeValid ||
+		!inspection.Events.Validation.SequenceValid ||
+		!inspection.Events.Validation.LifecycleValid ||
+		!inspection.Events.Validation.ClosedLifecycleValid {
 		t.Fatalf("inspection validation = %#v", inspection.Events.Validation)
 	}
 	if inspection.Events.Terminal.State != "completed" || !inspection.Events.Projector.ParityOK {

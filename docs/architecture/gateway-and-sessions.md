@@ -215,6 +215,12 @@ Stored-session inspection feeds replayed events through the shared
 projected snapshot, and reports sequence range, last event identity, projection
 hash, and mismatch reasons when projector parity fails.
 
+Stored-session readiness separates message snapshots from event replay. A legacy
+or JSONL history snapshot can be `message_snapshot_ready` while
+`event_replay_ready` stays false when event JSONL is missing, corrupt, or only a
+partial/open lifecycle. The compatibility `offline_replay_ready` field follows
+`event_replay_ready`; it does not mean "messages can be loaded."
+
 Undo/redo restore is fail-closed at the gateway boundary. The gateway loads the
 checkpoint patch artifact through the `patch_output_ref` recorded on the
 `turn.change_recorded` event and verifies the recorded

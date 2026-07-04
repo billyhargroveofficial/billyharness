@@ -50,7 +50,11 @@ func TestGatewaySessionStoreLoadsLegacySnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !inspection.Legacy || !inspection.OfflineReplayReady || inspection.MessageCount != 2 {
+	if !inspection.Legacy || !inspection.MessageSnapshotReady || inspection.EventReplayReady || inspection.OfflineReplayReady || inspection.MessageCount != 2 {
 		t.Fatalf("legacy inspection = %#v", inspection)
+	}
+	if !storedSessionHasReadiness(inspection.Readiness, storedSessionReadinessMessageSnapshotReady) ||
+		!storedSessionHasReadiness(inspection.Readiness, storedSessionReadinessEventReplayMissing) {
+		t.Fatalf("legacy readiness = %#v", inspection.Readiness)
 	}
 }

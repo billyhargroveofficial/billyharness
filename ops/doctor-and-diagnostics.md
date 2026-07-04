@@ -151,6 +151,11 @@ Inspect a specific session:
 ./bin/fast-agent-harness sessions context SESSION_ID
 ```
 
+`sessions inspect` reports separate readiness states. `message_snapshot_ready`
+means a message/history snapshot can be loaded; `event_replay_ready` means the
+event JSONL is present, valid, and closed enough for incident-grade replay. The
+legacy `offline_replay_ready` field follows event replay readiness.
+
 Export transcript text:
 
 ```sh
