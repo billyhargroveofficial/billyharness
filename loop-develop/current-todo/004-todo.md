@@ -2252,6 +2252,22 @@ Billy asks for final verification.
 - Blockers/residual risk: this is test-only boundary proof. It does not split
   additional client packages or remove remaining UI-specific presentation code.
 
+### 2026-07-04 - P2.5 session diagnostics index status surface
+
+- Completed a narrow P2.5 slice. `sessions index show` and rebuild JSON/text output now include derived diagnostics index status with present/missing/stale, build time, text/tool/error/run/usage row counts, and last read error when missing/corrupt.
+- The status is derived at show/rebuild time from the durable session store/index files; it is not a new source of truth. Stale is true when diagnostics was built before the session index or session counts differ.
+- Updated `ops/doctor-and-diagnostics.md` for operator use and corrected `docs/architecture/gateway-and-sessions.md` route anchors for the P2.1 route split.
+- Verification passed:
+  `gofmt -w internal/gateway/session_index.go cmd/fast-agent-harness/sessions.go cmd/fast-agent-harness/main_test.go`;
+  `go test -count=1 ./internal/gateway ./internal/clientux ./cmd/fast-agent-harness ./internal/architecture`;
+  `rg -n "routes.go|status_routes.go|diagnostics status|present|missing|stale|sessions index" docs/architecture/gateway-and-sessions.md ops/doctor-and-diagnostics.md`;
+  `git diff --check`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `c497b6f Surface session diagnostics index status` (`c497b6f5c66d36d87cc1336176ee143df2a3f721`).
+- Push: `origin/main` updated from `47a0537` to `c497b6f`.
+- Blockers/residual risk: no automatic `--rebuild-if-missing` flag yet; query commands still fail closed with a rebuild hint when diagnostics index is missing.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
