@@ -16,10 +16,11 @@ import (
 func BenchmarkGatewaySessionJSONLAppend(b *testing.B) {
 	store := newSessionStore(b.TempDir())
 	session := newGatewaySession("bench-append", time.Now().UTC(), []protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	appendGatewayBenchmarkPrelude(b, store, session, protocol.EventAssistantDelta)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventAssistantDelta, Data: fmt.Sprintf("delta-%06d", i)}); err != nil {
+		if _, err := store.AppendEvent(session, benchmarkEventForSession(session, benchmarkDeltaEvent(i))); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -43,7 +44,7 @@ func BenchmarkSessionJSONLAppend(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if _, err := store.AppendEvent(session, tc.event(tc.existing+i)); err != nil {
+				if _, err := store.AppendEvent(session, benchmarkEventForSession(session, tc.event(tc.existing+i))); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -66,20 +67,28 @@ func BenchmarkGatewaySessionJSONLReplay(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			store := newSessionStore(b.TempDir())
 			session := newGatewaySession("bench-replay-"+tc.name, time.Now().UTC(), []protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+			preludeCount := appendGatewayBenchmarkPrelude(b, store, session, protocol.EventAssistantDelta)
 			for i := 0; i < tc.events; i++ {
-				if _, err := store.AppendEvent(session, protocol.Event{Type: protocol.EventAssistantDelta, Data: fmt.Sprintf("delta-%06d", i)}); err != nil {
+				if _, err := store.AppendEvent(session, benchmarkEventForSession(session, benchmarkDeltaEvent(i))); err != nil {
 					b.Fatal(err)
 				}
+			}
+			afterSeq := tc.afterSeq
+			want := tc.want
+			if afterSeq == 0 {
+				want += preludeCount
+			} else {
+				afterSeq += int64(preludeCount)
 			}
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				events, err := store.ReplayEventsAfter(session.ID, tc.afterSeq)
+				events, err := store.ReplayEventsAfter(session.ID, afterSeq)
 				if err != nil {
 					b.Fatal(err)
 				}
-				if len(events) != tc.want {
-					b.Fatalf("replayed events = %d, want %d", len(events), tc.want)
+				if len(events) != want {
+					b.Fatalf("replayed events = %d, want %d", len(events), want)
 				}
 			}
 		})
@@ -179,27 +188,16 @@ func writeGatewayBenchmarkEventFixture(store *sessionStore, session *Session, co
 	writer := bufio.NewWriterSize(file, 1<<20)
 	encoder := json.NewEncoder(writer)
 	start := 0
-	if count >= 2 && event(0).Type == protocol.EventToolOutputRefCreated {
-		for _, prelude := range []protocol.Event{
-			{
-				Type:   protocol.EventToolCallRequested,
-				CallID: benchmarkOutputRefCallID,
-				Data:   protocol.ToolCall{ID: benchmarkOutputRefCallID, Name: "web_fetch"},
-			},
-			{
-				Type:      protocol.EventToolCallStarted,
-				CallID:    benchmarkOutputRefCallID,
-				AttemptID: benchmarkOutputRefAttemptID,
-				Data:      "web_fetch",
-			},
-		} {
-			seq := int64(start + 1)
-			ts := created.Add(time.Duration(start) * time.Microsecond)
-			if err := encodeGatewayBenchmarkEventRecord(encoder, id, seq, ts, prelude); err != nil {
-				return err
-			}
-			start++
+	for _, prelude := range benchmarkLifecyclePrelude(event(0).Type) {
+		if start >= count {
+			break
 		}
+		seq := int64(start + 1)
+		ts := created.Add(time.Duration(start) * time.Microsecond)
+		if err := encodeGatewayBenchmarkEventRecord(encoder, id, seq, ts, prelude); err != nil {
+			return err
+		}
+		start++
 	}
 	for i := start; i < count; i++ {
 		seq := int64(i + 1)
@@ -236,12 +234,84 @@ func encodeGatewayBenchmarkEventRecord(encoder *json.Encoder, sessionID string, 
 	return encoder.Encode(record)
 }
 
+func appendGatewayBenchmarkPrelude(b *testing.B, store *sessionStore, session *Session, eventType protocol.EventType) int {
+	b.Helper()
+	count := 0
+	for _, event := range benchmarkLifecyclePrelude(eventType) {
+		if _, err := store.AppendEvent(session, benchmarkEventForSession(session, event)); err != nil {
+			b.Fatal(err)
+		}
+		count++
+	}
+	return count
+}
+
+func benchmarkEventForSession(session *Session, event protocol.Event) protocol.Event {
+	if event.RunID == "" {
+		event.RunID = gatewaySessionRunID(session.ID, 1)
+	}
+	return event
+}
+
+func benchmarkLifecyclePrelude(eventType protocol.EventType) []protocol.Event {
+	switch eventType {
+	case protocol.EventAssistantDelta, protocol.EventAssistantReasoning, protocol.EventProviderUsageUpdate, protocol.EventModelCallFinished:
+		return []protocol.Event{
+			{Type: protocol.EventRunStarted},
+			{Type: protocol.EventTurnStarted, TurnID: benchmarkTurnID},
+			{
+				Type:   protocol.EventStepStarted,
+				TurnID: benchmarkTurnID,
+				StepID: benchmarkModelStepID,
+				Data: protocol.StepEvent{
+					TurnID: benchmarkTurnID,
+					StepID: benchmarkModelStepID,
+					Round:  1,
+					Kind:   protocol.StepKindModelCall,
+					Status: protocol.StepStatusStarted,
+				},
+			},
+			{
+				Type:   protocol.EventModelCallStarted,
+				TurnID: benchmarkTurnID,
+				StepID: benchmarkModelStepID,
+				Data: protocol.ModelCallEvent{
+					RequestID: "bench-model-call",
+					Status:    protocol.StepStatusStarted,
+				},
+			},
+		}
+	case protocol.EventToolOutputRefCreated:
+		return []protocol.Event{
+			{Type: protocol.EventRunStarted},
+			{
+				Type:   protocol.EventToolCallRequested,
+				CallID: benchmarkOutputRefCallID,
+				Data:   protocol.ToolCall{ID: benchmarkOutputRefCallID, Name: "web_fetch"},
+			},
+			{
+				Type:      protocol.EventToolCallStarted,
+				CallID:    benchmarkOutputRefCallID,
+				AttemptID: benchmarkOutputRefAttemptID,
+				Data:      "web_fetch",
+			},
+		}
+	default:
+		return []protocol.Event{{Type: protocol.EventRunStarted}}
+	}
+}
+
+const (
+	benchmarkTurnID      = "turn-bench"
+	benchmarkModelStepID = "turn-bench:model-call-001"
+)
+
 func benchmarkDeltaEvent(i int) protocol.Event {
-	return protocol.Event{Type: protocol.EventAssistantDelta, TurnID: "turn-bench", StepID: "turn-bench:model-call-001", Data: fmt.Sprintf("delta-%06d", i)}
+	return protocol.Event{Type: protocol.EventAssistantDelta, TurnID: benchmarkTurnID, StepID: benchmarkModelStepID, Data: fmt.Sprintf("delta-%06d", i)}
 }
 
 func benchmarkCoalescedDeltaEvent(i int) protocol.Event {
-	return protocol.Event{Type: protocol.EventAssistantDelta, TurnID: "turn-bench", StepID: "turn-bench:model-call-001", Data: strings.Repeat(fmt.Sprintf("delta-%06d ", i), 200)}
+	return protocol.Event{Type: protocol.EventAssistantDelta, TurnID: benchmarkTurnID, StepID: benchmarkModelStepID, Data: strings.Repeat(fmt.Sprintf("delta-%06d ", i), 200)}
 }
 
 const (
