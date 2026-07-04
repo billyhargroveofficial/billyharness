@@ -1370,6 +1370,48 @@ Billy asks for final verification.
   compatible with existing build/guarded behavior; only locally declared
   side-effecting MCP classes fail closed without `enabled_tools`.
 
+### 2026-07-04 - P0.5 checkpoint artifact and restore-time path verification
+
+- Completed P0.5 slice. Gateway undo/redo now loads checkpoint patch artifacts
+  with recorded `patch_output_ref_sha256` verification before preview, restore,
+  or redo. `internal/checkpoint` rejects symlink and non-regular patch
+  artifacts, requires workspace roots for `RestoreWithOptions`/`RedoWithOptions`,
+  and rechecks every restored path plus existing symlink ancestry against the
+  configured workspace roots before any file write.
+- Added tests for tampered, moved, and symlink patch artifacts; missing
+  workspace roots; out-of-root restore records; symlink-parent root escapes;
+  and a gateway `/undo` tampered-artifact route failure that leaves the
+  workspace unchanged.
+- Updated durable docs because undo/redo restore behavior, checkpoint artifact
+  verification, and workspace-root semantics changed:
+  `docs/architecture/gateway-and-sessions.md`,
+  `docs/architecture/tools-mcp-and-policy.md`,
+  `docs/architecture/security-model.md`, and
+  `agent-index/docs-manifest.json`.
+- Verification passed:
+  `go test -count=1 ./internal/checkpoint`;
+  `go test -count=1 ./internal/gateway -run 'TestGatewaySessionUndo(PreviewAndRestoreCheckpoint|ConflictDoesNotPartiallyRestore|RejectsTamperedPatchArtifact)$'`;
+  `go test -count=1 ./internal/checkpoint ./internal/gateway`;
+  `go test -race -count=1 ./internal/checkpoint ./internal/gateway`;
+  `jq . agent-index/docs-manifest.json >/dev/null`;
+  `go test -count=1 ./internal/architecture`;
+  `git diff --check`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Verification note: the first race run passed `internal/checkpoint` but timed
+  out in unrelated gateway follow test
+  `TestGatewaySessionEventsFollowEmitsNonDurableLiveEvent`; rerunning the same
+  `go test -race -count=1 ./internal/checkpoint ./internal/gateway` command
+  passed both packages.
+- Commit: `96c1cd1 Verify checkpoint restore artifacts`
+  (`96c1cd1fb0a0faa5361db65577c8b41018cbce4f`).
+- Push: `origin/main` updated from `d60b13b` to `96c1cd1`.
+- Blockers/residual risk: no production gateway/session-store probe was run for
+  this slice; proof is local package/race/full-suite/rebuild plus route-level
+  tamper tests. This slice did not add a new neutral replay event type for
+  failed restore attempts because existing `turn.change_reverted` semantics
+  would incorrectly mark a failed restore as successful.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
