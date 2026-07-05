@@ -2553,6 +2553,48 @@ Billy asks for final verification.
 - Push state before this evidence block: `origin/main` was at `5165507 Record P2.6 deploy workflow evidence`.
 - Blockers/residual risk: no live production deploy/restart was run by this final gate. Local working-copy changes unrelated to 004 implementation remain intentionally unstaged for Billy/main-chat follow-up.
 
+### 2026-07-05 - P1.10 context epoch and drift model
+
+- Completed P1.10. Runstate snapshots now define a hash-only `context_epoch`
+  with config, tool catalog, MCP catalog/status, profile instructions, prompt
+  inventory, AGENTS, memory, project context, optional
+  `agent-index/docs-manifest.json`, and MCP-instructions hashes. Model call
+  events carry the epoch and epoch hash alongside existing prompt inventory and
+  prompt-cache diagnostics.
+- Gateway session run admission now stamps `session.status` and `run.started`
+  with the run epoch plus `context_epoch_drift`. The policy is
+  `session_locked`: the first admitted run becomes the locked baseline, later
+  runs compare it with a freshly rendered ambient epoch, and drift is surfaced
+  as changed-field warnings rather than silently mixed into replay.
+- Live and offline session context reports now project epoch/drift state from
+  status/events, format it in `gatewayclient`, and keep memory/body contents out
+  of drift evidence. The regression test proves memory drift is visible across
+  durable events, live `/context`, and `StoredSessionContext`, while current
+  memory summaries/topic bodies do not leak into events.
+- Updated durable docs because runtime/session context contracts changed:
+  `docs/architecture/config-provider-context.md`,
+  `docs/architecture/runtime-event-system.md`, and
+  `docs/architecture/gateway-and-sessions.md`.
+- Verification passed:
+  `gofmt -w internal/protocol/types.go internal/runstate/runstate.go internal/runstate/runstate_test.go internal/agent/agent.go internal/agent/agent_test.go internal/agent/transcript.go internal/gatewayapi/types.go internal/gateway/session_events.go internal/gateway/context_epoch.go internal/gateway/gateway.go internal/gateway/session_snapshot.go internal/clientux/context.go internal/gatewayclient/client.go internal/gateway/session_events_status_test.go`;
+  `go test -count=1 ./internal/runstate ./internal/agent ./internal/gateway ./internal/clientux ./internal/gatewayclient`;
+  `go test -count=1 ./internal/gateway ./internal/agent ./internal/config`;
+  `go test -race -count=1 ./internal/gateway ./internal/agent ./internal/runstate ./internal/clientux ./internal/gatewayclient`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`;
+  `go test -count=1 ./...`;
+  `git diff --check`.
+- A broad `go test -count=1 ./...` attempt initially failed because
+  `internal/gateway` imported `internal/projectcontext` directly, violating the
+  documented architecture boundary. Fixed by routing project-context reconcile
+  through `internal/agent`, then reran the full verification gate above
+  successfully.
+- Commit: `3049267 Enforce context epoch drift model`
+  (`30492672eaaf1c188b2298deb4ef9c9897299855`).
+- Push: `origin/main` updated from `34ae4f9` to `3049267`.
+- Blockers/residual risk: epoch drift is warning/reporting, not automatic
+  session refresh or hard blocking. Fork/resume consumers must continue using
+  the durable event/status projection to decide whether to refresh context.
+
 ## Copy-Ready Codex Goal Prompt
 
 ```text
