@@ -907,25 +907,43 @@ func TestToolBlocksCompactLongWebFetchURL(t *testing.T) {
 	}
 }
 
-func TestUserAndAssistantBlocksRenderCompactRoleMarkers(t *testing.T) {
+func TestUserAndAssistantBlocksRenderClaudeStyleDialogue(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 100
 	user := stripANSITest(m.renderBlock(0, transcript.Cell{Kind: "user", Title: "USER", Content: "hello"}))
-	assistant := stripANSITest(m.renderBlock(1, transcript.Cell{Kind: "assistant", Title: "ASSISTANT", Content: "world"}))
-	for _, want := range []string{"❯ you", "hello"} {
+	assistant := stripANSITest(m.renderBlock(1, transcript.Cell{Kind: "assistant", Title: "ASSISTANT", Content: "world\nnext"}))
+	for _, want := range []string{"❯ hello"} {
 		if !strings.Contains(user, want) {
 			t.Fatalf("user block missing %q: %q", want, user)
 		}
 	}
-	for _, want := range []string{"● assistant", "world"} {
+	for _, want := range []string{"● world", "  next"} {
 		if !strings.Contains(assistant, want) {
 			t.Fatalf("assistant block missing %q: %q", want, assistant)
 		}
 	}
-	for _, rendered := range []string{user, assistant} {
-		if strings.Contains(rendered, "┌") || strings.Contains(rendered, "╭") {
-			t.Fatalf("dialogue marker should stay compact, rendered=%q", rendered)
+	for _, oldMarker := range []string{"❯ you", "● assistant", "╭", "╰", "│"} {
+		if strings.Contains(user, oldMarker) || strings.Contains(assistant, oldMarker) {
+			t.Fatalf("dialogue block should not render old marker %q: user=%q assistant=%q", oldMarker, user, assistant)
 		}
+	}
+}
+
+func TestDialogueReflowSeparatesUserAndAssistantBlocks(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.height = 24
+	m.addBlock("user", "USER", "hello")
+	m.addBlock("assistant", "ASSISTANT", "world")
+	m.reflow(true)
+
+	lines := strings.Split(stripANSITest(m.viewportContent), "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " ")
+	}
+	rendered := strings.Join(lines, "\n")
+	if !strings.Contains(rendered, "❯ hello\n\n● world") {
+		t.Fatalf("viewport dialogue blocks should be separated by a blank line, got %q", rendered)
 	}
 }
 

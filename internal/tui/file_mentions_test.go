@@ -34,6 +34,13 @@ func TestTUIAtFilePopupInsertsExactRelativePath(t *testing.T) {
 	if !strings.Contains(popup, "src/alpha.go") {
 		t.Fatalf("popup missing file path:\n%s", popup)
 	}
+	lines := strings.Split(popup, "\n")
+	if len(lines) == 0 || !strings.HasPrefix(lines[0], " ┌") {
+		t.Fatalf("file popup should keep a safe column before the left border, got %q", popup)
+	}
+	if !strings.Contains(popup, "│› ") {
+		t.Fatalf("file popup selected row should have a visible marker, got %q", popup)
+	}
 	if !m.handleFileMentionNavigation(tea.KeyPressMsg{Code: tea.KeyTab}) {
 		t.Fatal("tab should insert file mention")
 	}

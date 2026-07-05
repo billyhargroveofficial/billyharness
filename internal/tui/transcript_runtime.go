@@ -1075,7 +1075,7 @@ func (m *Model) reflow(gotoBottom bool) {
 	m.reflowVisibleKeys = reflowItemKeys(items)
 	m.reflowParts = parts
 	m.lastReflowBlockCount = len(m.blocks)
-	m.viewportContent = strings.Join(parts, "\n")
+	m.viewportContent = joinReflowParts(parts, items)
 	m.viewportSelectableLines = selectableLines
 	m.viewport.SetContent(m.viewportContent)
 	m.reapplyFindQuery()
@@ -1090,6 +1090,7 @@ func (m *Model) reflow(gotoBottom bool) {
 type reflowItem struct {
 	index      int
 	key        string
+	kind       string
 	selectable bool
 }
 
@@ -1127,6 +1128,7 @@ func (m *Model) reflowVisibleItems() ([]reflowItem, string) {
 		items = append(items, reflowItem{
 			index:      i,
 			key:        tuirender.RichCacheKey(m.richTerminalCacheKeyInput(i, b)),
+			kind:       b.Kind,
 			selectable: m.blockSelectableForCopy(i, b),
 		})
 	}
@@ -1171,23 +1173,19 @@ func (m *Model) reflowFastPath(items []reflowItem, signature string) ([]string, 
 		rendered, cache := m.renderBlockCached(last.index)
 		m.setRichBlockCache(m.blocks[last.index], cache)
 		parts = append(parts, rendered)
-		lines := append([]bool(nil), m.viewportSelectableLines...)
-		lines = appendSelectableLines(lines, rendered, last.selectable)
-		return parts, lines, true
+		return parts, selectableLinesForReflowParts(parts, items), true
 	}
 	return nil, nil, false
 }
 
 func (m *Model) reflowFull(items []reflowItem) ([]string, []bool) {
 	parts := make([]string, 0, len(items))
-	var selectableLines []bool
 	for _, item := range items {
 		rendered, cache := m.renderBlockCached(item.index)
 		m.setRichBlockCache(m.blocks[item.index], cache)
 		parts = append(parts, rendered)
-		selectableLines = appendSelectableLines(selectableLines, rendered, item.selectable)
 	}
-	return parts, selectableLines
+	return parts, selectableLinesForReflowParts(parts, items)
 }
 
 func reflowItemKeys(items []reflowItem) []string {
@@ -1203,8 +1201,33 @@ func selectableLinesForReflowParts(parts []string, items []reflowItem) []bool {
 	for i, part := range parts {
 		selectable := i < len(items) && items[i].selectable
 		lines = appendSelectableLines(lines, part, selectable)
+		if dialogueSeparatorAfter(items, i) {
+			lines = append(lines, false)
+		}
 	}
 	return lines
+}
+
+func joinReflowParts(parts []string, items []reflowItem) string {
+	var out strings.Builder
+	for i, part := range parts {
+		if i > 0 {
+			out.WriteByte('\n')
+		}
+		out.WriteString(part)
+		if dialogueSeparatorAfter(items, i) {
+			out.WriteByte('\n')
+		}
+	}
+	return out.String()
+}
+
+func dialogueSeparatorAfter(items []reflowItem, i int) bool {
+	return i >= 0 && i+1 < len(items) && dialogueKind(items[i].kind) && dialogueKind(items[i+1].kind)
+}
+
+func dialogueKind(kind string) bool {
+	return kind == "user" || kind == "assistant"
 }
 
 func appendSelectableLines(lines []bool, rendered string, selectable bool) []bool {
@@ -1353,10 +1376,10 @@ func (m Model) renderBlock(i int, b transcript.Cell) string {
 		body = tuirender.RenderAssistantMarkdown(body, width, styles.markdown, b.Live)
 	}
 	if b.Kind == "user" {
-		return renderDialogueBlock("❯ you", body, width, style, styles.statusAccess)
+		return renderDialogueBlock("❯", body, width, style, styles.statusAccess)
 	}
 	if b.Kind == "assistant" {
-		return renderDialogueBlock("● assistant", body, width, style, styles.statusModel)
+		return renderDialogueBlock("●", body, width, style, styles.statusModel)
 	}
 	if b.Kind == "user" || b.Kind == "assistant" {
 		return style.Width(width).Render(body)
@@ -1368,13 +1391,29 @@ func (m Model) renderBlock(i int, b transcript.Cell) string {
 	}, width, styles.activity)
 }
 
-func renderDialogueBlock(header, body string, width int, bodyStyle, headerStyle lipgloss.Style) string {
-	header = strings.TrimSpace(header)
+func renderDialogueBlock(marker, body string, width int, bodyStyle, markerStyle lipgloss.Style) string {
+	marker = strings.TrimSpace(marker)
 	body = strings.TrimRight(body, "\n")
+	innerWidth := max(1, width-2)
+	textStyle := bodyStyle.
+		UnsetBorderLeft().
+		UnsetBorderLeftForeground().
+		UnsetMargins().
+		UnsetWidth()
 	if body == "" {
-		return headerStyle.Render(header)
+		return markerStyle.Render(marker)
 	}
-	return headerStyle.Render(header) + "\n" + bodyStyle.Width(width).Render(body)
+	lines := strings.Split(strings.TrimRight(textStyle.Width(innerWidth).Render(body), "\n"), "\n")
+	for i, line := range lines {
+		if i == 0 {
+			lines[i] = markerStyle.Render(marker) + " " + line
+			continue
+		}
+		if strings.TrimSpace(line) != "" {
+			lines[i] = "  " + line
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) toolCollapsed(i int) bool {

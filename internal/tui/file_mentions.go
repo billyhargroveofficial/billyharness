@@ -249,8 +249,7 @@ func (m Model) fileMentionPopupView() string {
 		return ""
 	}
 	styles := m.styles()
-	outerW := min(max(40, m.width-4), 88)
-	contentW := max(36, outerW-styles.popup.GetHorizontalFrameSize())
+	contentW := inputPopupContentWidth(styles, m.width)
 	var lines []string
 	title := "files"
 	if m.fileMentionToken.Query != "" {
@@ -260,16 +259,16 @@ func (m Model) fileMentionPopupView() string {
 	if m.fileMentionErr != "" {
 		lines = append(lines, styles.popupMuted.Width(contentW).Render("File search failed: "+truncateRunes(m.fileMentionErr, contentW)))
 		lines = append(lines, styles.popupMuted.Width(contentW).Render("Esc close"))
-		return styles.popup.Width(contentW).Render(strings.Join(lines, "\n"))
+		return renderPopupFrame(styles, strings.Join(lines, "\n"))
 	}
 	if m.fileMentionSearching && len(m.fileMentionResults) == 0 {
 		lines = append(lines, styles.popupMuted.Width(contentW).Render("Searching files..."))
-		return styles.popup.Width(contentW).Render(strings.Join(lines, "\n"))
+		return renderPopupFrame(styles, strings.Join(lines, "\n"))
 	}
 	if len(m.fileMentionResults) == 0 {
 		lines = append(lines, styles.popupMuted.Width(contentW).Render("No files match"))
 		lines = append(lines, styles.popupMuted.Width(contentW).Render("Esc close"))
-		return styles.popup.Width(contentW).Render(strings.Join(lines, "\n"))
+		return renderPopupFrame(styles, strings.Join(lines, "\n"))
 	}
 	index := m.fileMentionIndex
 	if index < 0 || index >= len(m.fileMentionResults) {
@@ -284,15 +283,11 @@ func (m Model) fileMentionPopupView() string {
 	for i := start; i < end; i++ {
 		match := m.fileMentionResults[i]
 		line := padRight(truncateRunes(match.Path, pathW), pathW) + "  " + fmt.Sprintf("%s %d", match.Type, match.Score)
-		if i == index {
-			lines = append(lines, styles.popupSelected.Width(contentW).Render(line))
-		} else {
-			lines = append(lines, styles.popupLine.Width(contentW).Render(line))
-		}
+		lines = append(lines, renderPopupChoiceLine(styles, contentW, line, i == index))
 	}
 	if end < len(m.fileMentionResults) {
 		lines = append(lines, styles.popupMuted.Width(contentW).Render(fmt.Sprintf("%d more matches", len(m.fileMentionResults)-end)))
 	}
 	lines = append(lines, styles.popupMuted.Width(contentW).Render("Up/Down select  Tab/Enter insert  Esc close"))
-	return styles.popup.Width(contentW).Render(strings.Join(lines, "\n"))
+	return renderPopupFrame(styles, strings.Join(lines, "\n"))
 }

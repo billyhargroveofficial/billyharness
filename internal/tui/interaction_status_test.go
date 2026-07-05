@@ -122,6 +122,21 @@ func TestCommandPaletteOpensSlashRegistry(t *testing.T) {
 	}
 }
 
+func TestSlashPopupKeepsLeftBorderVisibleAndSelectedMarker(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.textarea.SetValue("/model ")
+
+	popup := stripANSITest(m.slashPopupView())
+	lines := strings.Split(popup, "\n")
+	if len(lines) == 0 || !strings.HasPrefix(lines[0], " ┌") {
+		t.Fatalf("popup should keep a safe column before the left border, got %q", popup)
+	}
+	if !strings.Contains(popup, "│› ") {
+		t.Fatalf("popup selected row should have a visible marker, got %q", popup)
+	}
+}
+
 func TestSlashPopupCompletesArgument(t *testing.T) {
 	m := newTestModel(t)
 	m.textarea.SetValue("/theme")

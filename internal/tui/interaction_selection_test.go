@@ -19,8 +19,10 @@ func TestTranscriptSelectionText(t *testing.T) {
 	m.height = 24
 	m.addBlock("assistant", "ASSISTANT", "alpha\nbeta\ngamma")
 	m.resize(true)
-	m.selection.Start = tuiselection.Point{Row: 1, Col: 1}
-	m.selection.End = tuiselection.Point{Row: 2, Col: 4}
+	alphaRow, alphaCol := findVisibleTextPoint(t, m.viewport.GetContent(), "alpha")
+	betaRow, betaCol := findVisibleTextPoint(t, m.viewport.GetContent(), "beta")
+	m.selection.Start = tuiselection.Point{Row: alphaRow, Col: alphaCol + 1}
+	m.selection.End = tuiselection.Point{Row: betaRow, Col: betaCol + len("bet")}
 	got := stripANSITest(m.selectedTranscriptText())
 	if !strings.Contains(got, "lpha") || !strings.Contains(got, "bet") {
 		t.Fatalf("selected text = %q", got)
@@ -305,8 +307,9 @@ func TestReflowPreservesSelectionHighlightDuringLiveUpdate(t *testing.T) {
 	m.addBlock("assistant", "ASSISTANT", "alpha\nbeta\ngamma")
 	m.resize(true)
 	target := "bet"
-	m.selection.Start = tuiselection.Point{Row: 2, Col: 0}
-	m.selection.End = tuiselection.Point{Row: 2, Col: len(target)}
+	betaRow, betaCol := findVisibleTextPoint(t, m.viewport.GetContent(), "beta")
+	m.selection.Start = tuiselection.Point{Row: betaRow, Col: betaCol}
+	m.selection.End = tuiselection.Point{Row: betaRow, Col: betaCol + len(target)}
 	m.applySelectionHighlight()
 
 	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: "\ndelta"})
@@ -315,6 +318,20 @@ func TestReflowPreservesSelectionHighlightDuringLiveUpdate(t *testing.T) {
 	if got := selectionBackgroundText(highlighted); got != target {
 		t.Fatalf("highlighted selection after live update = %q, want %q; rendered=%q", got, target, highlighted)
 	}
+}
+
+func findVisibleTextPoint(t *testing.T, content, target string) (int, int) {
+	t.Helper()
+	for row, line := range strings.Split(content, "\n") {
+		visible := stripANSITest(line)
+		startByte := strings.Index(visible, target)
+		if startByte < 0 {
+			continue
+		}
+		return row, xansi.StringWidth(visible[:startByte])
+	}
+	t.Fatalf("rendered transcript missing %q: %q", target, stripANSITest(content))
+	return 0, 0
 }
 
 func TestTranscriptSelectionHighlightsCorrectStyledLine(t *testing.T) {

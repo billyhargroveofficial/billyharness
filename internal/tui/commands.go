@@ -498,8 +498,7 @@ func (m Model) slashPopupView() string {
 		return ""
 	}
 	styles := m.styles()
-	outerW := min(max(40, m.width-4), 88)
-	contentW := max(36, outerW-styles.popup.GetHorizontalFrameSize())
+	contentW := inputPopupContentWidth(styles, m.width)
 	if command, prefix, ok := m.slashArgMode(); ok {
 		return m.slashArgPopupView(styles, command, prefix, contentW)
 	}
@@ -507,7 +506,7 @@ func (m Model) slashPopupView() string {
 	if len(commands) == 0 {
 		noMatch := styles.popupMuted.Width(contentW).Render("No slash command matches " + strconv.Quote(m.slashToken()))
 		hint := styles.popupMuted.Width(contentW).Render("Esc close")
-		return styles.popup.Width(contentW).Render(noMatch + "\n" + hint)
+		return renderPopupFrame(styles, noMatch+"\n"+hint)
 	}
 	index := m.slashIndex
 	if index < 0 || index >= len(commands) {
@@ -531,17 +530,13 @@ func (m Model) slashPopupView() string {
 		if source := slashSourceLabel(command); source != "" {
 			line = padRight(truncateRunes(label, nameW), nameW) + "  " + truncateRunes(command.summary+" ["+source+"]", summaryW)
 		}
-		if i == index {
-			lines = append(lines, styles.popupSelected.Width(contentW).Render(line))
-		} else {
-			lines = append(lines, styles.popupLine.Width(contentW).Render(line))
-		}
+		lines = append(lines, renderPopupChoiceLine(styles, contentW, line, i == index))
 	}
 	if end < len(commands) {
 		lines = append(lines, styles.popupMuted.Width(contentW).Render(fmt.Sprintf("%d more matches", len(commands)-end)))
 	}
 	lines = append(lines, styles.popupMuted.Width(contentW).Render("Up/Down select  Tab complete  Enter run  Esc close"))
-	return styles.popup.Width(contentW).Render(strings.Join(lines, "\n"))
+	return renderPopupFrame(styles, strings.Join(lines, "\n"))
 }
 
 func slashSourceLabel(command slashCommand) string {
@@ -563,7 +558,7 @@ func (m Model) slashArgPopupView(styles themeStyles, command slashCommand, prefi
 	if len(args) == 0 {
 		noMatch := styles.popupMuted.Width(contentW).Render("No argument matches " + strconv.Quote(prefix))
 		hint := styles.popupMuted.Width(contentW).Render("Esc close")
-		return styles.popup.Width(contentW).Render(noMatch + "\n" + hint)
+		return renderPopupFrame(styles, noMatch+"\n"+hint)
 	}
 	index := m.slashIndex
 	if index < 0 || index >= len(args) {
@@ -582,17 +577,13 @@ func (m Model) slashArgPopupView(styles themeStyles, command slashCommand, prefi
 	for i := start; i < end; i++ {
 		arg := args[i]
 		line := padRight(truncateRunes(arg.value, valueW), valueW) + "  " + truncateRunes(arg.summary, summaryW)
-		if i == index {
-			lines = append(lines, styles.popupSelected.Width(contentW).Render(line))
-		} else {
-			lines = append(lines, styles.popupLine.Width(contentW).Render(line))
-		}
+		lines = append(lines, renderPopupChoiceLine(styles, contentW, line, i == index))
 	}
 	if end < len(args) {
 		lines = append(lines, styles.popupMuted.Width(contentW).Render(fmt.Sprintf("%d more matches", len(args)-end)))
 	}
 	lines = append(lines, styles.popupMuted.Width(contentW).Render("Up/Down select  Tab complete  Enter run  Esc close"))
-	return styles.popup.Width(contentW).Render(strings.Join(lines, "\n"))
+	return renderPopupFrame(styles, strings.Join(lines, "\n"))
 }
 
 func slashPopupWindow(length, index, limit int) (int, int) {
@@ -616,6 +607,42 @@ func slashPopupWindow(length, index, limit int) (int, int) {
 		start = max(0, end-limit)
 	}
 	return start, end
+}
+
+const inputPopupLeftInset = 1
+const inputPopupHorizontalFrame = 2
+
+func inputPopupContentWidth(_ themeStyles, terminalWidth int) int {
+	outerW := min(max(40, terminalWidth-4-inputPopupLeftInset), 88)
+	return max(36, outerW-inputPopupHorizontalFrame)
+}
+
+func renderPopupChoiceLine(styles themeStyles, contentW int, line string, selected bool) string {
+	prefix := "  "
+	style := styles.popupLine
+	if selected {
+		prefix = "› "
+		style = styles.popupSelected
+	}
+	return style.Width(contentW).Render(prefix + truncateRunes(line, max(0, contentW-2)))
+}
+
+func renderPopupFrame(styles themeStyles, body string) string {
+	body = strings.TrimRight(body, "\n")
+	lines := strings.Split(body, "\n")
+	width := 1
+	for _, line := range lines {
+		width = max(width, lipgloss.Width(line))
+	}
+	border := styles.inputBorder
+	prefix := strings.Repeat(" ", inputPopupLeftInset)
+	framed := make([]string, 0, len(lines)+2)
+	framed = append(framed, prefix+border.Render("┌"+strings.Repeat("─", width)+"┐"))
+	for _, line := range lines {
+		framed = append(framed, prefix+border.Render("│")+padRight(line, width)+border.Render("│"))
+	}
+	framed = append(framed, prefix+border.Render("└"+strings.Repeat("─", width)+"┘"))
+	return strings.Join(framed, "\n")
 }
 
 func (m Model) slashPopupHeight() int {

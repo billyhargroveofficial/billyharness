@@ -197,16 +197,13 @@ func newThemeStyles(theme tuiTheme) themeStyles {
 			Foreground(lipgloss.Color(theme.statusFg)).
 			Bold(true),
 		popup: lipgloss.NewStyle().
-			Foreground(text).
-			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color(theme.inputBorder)).
-			Padding(0, 0),
+			Foreground(text),
 		popupLine: lipgloss.NewStyle().
 			Foreground(text),
 		popupMuted: lipgloss.NewStyle().
 			Foreground(muted),
 		popupSelected: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(theme.headerFg)).
+			Foreground(lipgloss.Color(theme.reasoningBorder)).
 			Bold(true),
 		statusState: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(theme.statusFg)).
