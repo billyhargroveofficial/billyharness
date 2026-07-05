@@ -635,11 +635,12 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 			return completePreflightFailure(err)
 		}
 		statusReq := runRequestFromSettings(settings)
+		userMessage := protocol.UserMessage(req.Prompt, req.Attachments)
+		contextEpochAdmission := s.sessionContextEpochAdmission(r.Context(), session, settings, userMessage)
 		runSeq, err := s.promoteSessionInput(session, admission.InputID)
 		if err != nil {
 			return completePreflightFailure(err)
 		}
-		userMessage := protocol.UserMessage(req.Prompt, req.Attachments)
 		runCtx, cancelRun := context.WithCancel(r.Context())
 		defer cancelRun()
 		var persistenceMu sync.Mutex
@@ -667,10 +668,12 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if event.Type == protocol.EventRunStarted {
-				if err := session.beginRunStatusWithSeq(statusReq, runSeq); err != nil {
+				drift, err := session.beginRunStatusWithContextEpoch(statusReq, runSeq, contextEpochAdmission.Run, contextEpochAdmission.Current)
+				if err != nil {
 					setPersistenceErr(err)
 					return
 				}
+				event = addContextEpochToRunStarted(event, contextEpochAdmission.Run, drift)
 			}
 			observed, ok, err := session.observeRunEvent(event)
 			if err != nil {

@@ -10,6 +10,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/runstate"
 	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
 )
 
@@ -250,8 +251,13 @@ func (s *Session) beginRunStatus(req RunRequest) error {
 }
 
 func (s *Session) beginRunStatusWithSeq(req RunRequest, runSeq int64) error {
+	_, err := s.beginRunStatusWithContextEpoch(req, runSeq, nil, nil)
+	return err
+}
+
+func (s *Session) beginRunStatusWithContextEpoch(req RunRequest, runSeq int64, runEpoch, currentEpoch *protocol.ContextEpoch) (*protocol.ContextEpochDrift, error) {
 	if s == nil {
-		return nil
+		return nil, nil
 	}
 	now := time.Now().UTC()
 	s.mu.Lock()
@@ -281,6 +287,28 @@ func (s *Session) beginRunStatusWithSeq(req RunRequest, runSeq int64) error {
 	s.status.ModelCalls = 0
 	s.status.ToolCalls = 0
 	s.status.LastError = ""
+	if runEpoch != nil {
+		runEpoch = runstate.CloneContextEpoch(runEpoch)
+		if runEpoch.Policy == "" {
+			runEpoch.Policy = memoryDriftPolicySessionLocked
+		}
+	}
+	if currentEpoch != nil {
+		currentEpoch = runstate.CloneContextEpoch(currentEpoch)
+		if currentEpoch.Policy == "" {
+			currentEpoch.Policy = memoryDriftPolicySessionLocked
+		}
+	}
+	lockedEpoch := runstate.CloneContextEpoch(s.status.LockedEpoch)
+	if lockedEpoch == nil && runEpoch != nil {
+		lockedEpoch = runstate.CloneContextEpoch(runEpoch)
+	}
+	drift := runstate.ContextEpochDrift(lockedEpoch, firstContextEpoch(currentEpoch, runEpoch), memoryDriftPolicySessionLocked)
+	s.status.ContextEpoch = runstate.CloneContextEpoch(runEpoch)
+	s.status.LockedEpoch = runstate.CloneContextEpoch(lockedEpoch)
+	s.status.ContextDrift = cloneContextEpochDrift(drift)
+	s.status.ContextEpochHash = contextEpochHash(runEpoch)
+	s.status.LockedEpochHash = contextEpochHash(lockedEpoch)
 	status := s.status
 	hub := s.events
 	s.mu.Unlock()
@@ -289,10 +317,10 @@ func (s *Session) beginRunStatusWithSeq(req RunRequest, runSeq int64) error {
 	event, err := s.recordEvent(event)
 	if err != nil {
 		s.markPersistenceFailure(err)
-		return err
+		return drift, err
 	}
 	hub.Publish(event)
-	return nil
+	return drift, nil
 }
 
 func (s *Session) observeRunEvent(event protocol.Event) (protocol.Event, bool, error) {

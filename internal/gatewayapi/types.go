@@ -161,27 +161,32 @@ type ManagedProcessResponse struct {
 }
 
 type SessionStatus struct {
-	ID               string       `json:"id"`
-	Created          time.Time    `json:"created"`
-	Running          bool         `json:"running"`
-	RunSeq           int64        `json:"run_seq"`
-	StartedAt        time.Time    `json:"started_at,omitempty"`
-	FinishedAt       time.Time    `json:"finished_at,omitempty"`
-	LastEvent        string       `json:"last_event,omitempty"`
-	LastEventAt      time.Time    `json:"last_event_at,omitempty"`
-	Model            string       `json:"model,omitempty"`
-	Provider         string       `json:"provider,omitempty"`
-	Profile          string       `json:"profile,omitempty"`
-	ReasoningEffort  string       `json:"reasoning_effort,omitempty"`
-	AccessMode       string       `json:"access_mode,omitempty"`
-	Owner            SessionOwner `json:"owner,omitempty"`
-	MessageCount     int          `json:"message_count"`
-	AttachmentCount  int          `json:"attachment_count,omitempty"`
-	ImageSubmissions int          `json:"image_submissions,omitempty"`
-	ModelCalls       int          `json:"model_calls"`
-	ToolCalls        int          `json:"tool_calls"`
-	DroppedEvents    int64        `json:"dropped_events,omitempty"`
-	LastError        string       `json:"last_error,omitempty"`
+	ID               string                      `json:"id"`
+	Created          time.Time                   `json:"created"`
+	Running          bool                        `json:"running"`
+	RunSeq           int64                       `json:"run_seq"`
+	StartedAt        time.Time                   `json:"started_at,omitempty"`
+	FinishedAt       time.Time                   `json:"finished_at,omitempty"`
+	LastEvent        string                      `json:"last_event,omitempty"`
+	LastEventAt      time.Time                   `json:"last_event_at,omitempty"`
+	Model            string                      `json:"model,omitempty"`
+	Provider         string                      `json:"provider,omitempty"`
+	Profile          string                      `json:"profile,omitempty"`
+	ReasoningEffort  string                      `json:"reasoning_effort,omitempty"`
+	AccessMode       string                      `json:"access_mode,omitempty"`
+	Owner            SessionOwner                `json:"owner,omitempty"`
+	MessageCount     int                         `json:"message_count"`
+	AttachmentCount  int                         `json:"attachment_count,omitempty"`
+	ImageSubmissions int                         `json:"image_submissions,omitempty"`
+	ModelCalls       int                         `json:"model_calls"`
+	ToolCalls        int                         `json:"tool_calls"`
+	DroppedEvents    int64                       `json:"dropped_events,omitempty"`
+	LastError        string                      `json:"last_error,omitempty"`
+	ContextEpochHash string                      `json:"context_epoch_hash,omitempty"`
+	LockedEpochHash  string                      `json:"locked_context_epoch_hash,omitempty"`
+	ContextEpoch     *protocol.ContextEpoch      `json:"context_epoch,omitempty"`
+	LockedEpoch      *protocol.ContextEpoch      `json:"locked_context_epoch,omitempty"`
+	ContextDrift     *protocol.ContextEpochDrift `json:"context_epoch_drift,omitempty"`
 }
 
 type SessionListResponse struct {
@@ -221,29 +226,31 @@ type SessionResponse struct {
 }
 
 type SessionContextResponse struct {
-	ID                      string               `json:"id"`
-	MessageCount            int                  `json:"message_count"`
-	AttachmentCount         int                  `json:"attachment_count,omitempty"`
-	ImageSubmissions        int                  `json:"image_submissions,omitempty"`
-	EstimatedTokens         int64                `json:"estimated_tokens"`
-	ContextWindowTokens     int64                `json:"context_window_tokens"`
-	ContextWindowSource     string               `json:"context_window_source,omitempty"`
-	ContextCompactTokens    int64                `json:"context_compact_tokens"`
-	PercentUsed             float64              `json:"percent_used"`
-	CompactThresholdPercent float64              `json:"compact_threshold_percent"`
-	OverCompactThreshold    bool                 `json:"over_compact_threshold"`
-	Estimator               string               `json:"estimator"`
-	Sources                 []ContextSource      `json:"sources,omitempty"`
-	Thresholds              []ContextThreshold   `json:"thresholds,omitempty"`
-	TopContributors         []ContextContributor `json:"top_contributors,omitempty"`
-	Runtime                 ContextRuntime       `json:"runtime,omitempty"`
-	Usage                   ContextUsage         `json:"usage,omitempty"`
-	Prompt                  ContextPrompt        `json:"prompt,omitempty"`
-	Memory                  ContextMemory        `json:"memory,omitempty"`
-	Diagnostics             ContextDiagnostics   `json:"diagnostics,omitempty"`
-	LastCompaction          *ContextCompaction   `json:"last_compaction,omitempty"`
-	OutputRefs              ContextOutputRefs    `json:"output_refs,omitempty"`
-	Warnings                []string             `json:"warnings,omitempty"`
+	ID                      string                      `json:"id"`
+	MessageCount            int                         `json:"message_count"`
+	AttachmentCount         int                         `json:"attachment_count,omitempty"`
+	ImageSubmissions        int                         `json:"image_submissions,omitempty"`
+	EstimatedTokens         int64                       `json:"estimated_tokens"`
+	ContextWindowTokens     int64                       `json:"context_window_tokens"`
+	ContextWindowSource     string                      `json:"context_window_source,omitempty"`
+	ContextCompactTokens    int64                       `json:"context_compact_tokens"`
+	PercentUsed             float64                     `json:"percent_used"`
+	CompactThresholdPercent float64                     `json:"compact_threshold_percent"`
+	OverCompactThreshold    bool                        `json:"over_compact_threshold"`
+	Estimator               string                      `json:"estimator"`
+	Sources                 []ContextSource             `json:"sources,omitempty"`
+	Thresholds              []ContextThreshold          `json:"thresholds,omitempty"`
+	TopContributors         []ContextContributor        `json:"top_contributors,omitempty"`
+	Runtime                 ContextRuntime              `json:"runtime,omitempty"`
+	Usage                   ContextUsage                `json:"usage,omitempty"`
+	Prompt                  ContextPrompt               `json:"prompt,omitempty"`
+	Memory                  ContextMemory               `json:"memory,omitempty"`
+	ContextEpoch            *protocol.ContextEpoch      `json:"context_epoch,omitempty"`
+	ContextDrift            *protocol.ContextEpochDrift `json:"context_epoch_drift,omitempty"`
+	Diagnostics             ContextDiagnostics          `json:"diagnostics,omitempty"`
+	LastCompaction          *ContextCompaction          `json:"last_compaction,omitempty"`
+	OutputRefs              ContextOutputRefs           `json:"output_refs,omitempty"`
+	Warnings                []string                    `json:"warnings,omitempty"`
 }
 
 type ContextRuntime struct {
@@ -303,6 +310,12 @@ type ContextMemory struct {
 
 type ContextDiagnostics struct {
 	CurrentEpoch              int    `json:"current_epoch,omitempty"`
+	ContextEpochHash          string `json:"context_epoch_hash,omitempty"`
+	ContextEpochStatus        string `json:"context_epoch_status,omitempty"`
+	ConfigHash                string `json:"config_hash,omitempty"`
+	ToolCatalogHash           string `json:"tool_catalog_hash,omitempty"`
+	MCPCatalogHash            string `json:"mcp_catalog_hash,omitempty"`
+	DocsIndexHash             string `json:"docs_index_hash,omitempty"`
 	CompactionEvents          int    `json:"compaction_events,omitempty"`
 	ThresholdEvents           int    `json:"threshold_events,omitempty"`
 	ToolCallEvents            int    `json:"tool_call_events,omitempty"`

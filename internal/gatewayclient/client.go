@@ -541,6 +541,9 @@ func FormatSessionContext(resp gatewayapi.SessionContextResponse) string {
 	if memoryText := formatContextMemory(resp.Memory); memoryText != "" {
 		b.WriteString(memoryText)
 	}
+	if epochText := formatContextEpoch(resp.ContextEpoch, resp.ContextDrift); epochText != "" {
+		b.WriteString(epochText)
+	}
 	if diagnosticsText := formatContextDiagnostics(resp.Diagnostics); diagnosticsText != "" {
 		b.WriteString(diagnosticsText)
 	}
@@ -804,6 +807,49 @@ func contextMemoryEmpty(memory gatewayapi.ContextMemory) bool {
 	return memory == (gatewayapi.ContextMemory{})
 }
 
+func formatContextEpoch(epoch *protocol.ContextEpoch, drift *protocol.ContextEpochDrift) string {
+	if epoch == nil && drift == nil {
+		return ""
+	}
+	var parts []string
+	if drift != nil && drift.Status != "" {
+		parts = append(parts, "status="+drift.Status)
+	}
+	if epoch != nil && epoch.Policy != "" {
+		parts = append(parts, "policy="+epoch.Policy)
+	} else if drift != nil && drift.Policy != "" {
+		parts = append(parts, "policy="+drift.Policy)
+	}
+	if epoch != nil && epoch.Hash != "" {
+		parts = append(parts, "run="+shortContextHash(epoch.Hash))
+	}
+	if drift != nil && drift.LockedHash != "" {
+		parts = append(parts, "locked="+shortContextHash(drift.LockedHash))
+	}
+	if drift != nil && drift.CurrentHash != "" {
+		parts = append(parts, "current="+shortContextHash(drift.CurrentHash))
+	}
+	if epoch != nil && epoch.AgentsHash != "" {
+		parts = append(parts, "agents="+shortContextHash(epoch.AgentsHash))
+	}
+	if epoch != nil && epoch.MemoryHash != "" {
+		parts = append(parts, "memory="+shortContextHash(epoch.MemoryHash))
+	}
+	if epoch != nil && epoch.ProjectContextHash != "" {
+		parts = append(parts, "project="+shortContextHash(epoch.ProjectContextHash))
+	}
+	if epoch != nil && epoch.DocsIndexHash != "" {
+		parts = append(parts, "docs="+shortContextHash(epoch.DocsIndexHash))
+	}
+	if drift != nil && len(drift.ChangedFields) > 0 {
+		parts = append(parts, "changed="+strings.Join(drift.ChangedFields, ","))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "context epoch: " + strings.Join(parts, " ") + "\n"
+}
+
 func formatContextDiagnostics(diagnostics gatewayapi.ContextDiagnostics) string {
 	if contextDiagnosticsEmpty(diagnostics) {
 		return ""
@@ -811,6 +857,24 @@ func formatContextDiagnostics(diagnostics gatewayapi.ContextDiagnostics) string 
 	var parts []string
 	if diagnostics.CurrentEpoch > 0 {
 		parts = append(parts, fmt.Sprintf("epoch=%d", diagnostics.CurrentEpoch))
+	}
+	if diagnostics.ContextEpochHash != "" {
+		parts = append(parts, "context_epoch="+shortContextHash(diagnostics.ContextEpochHash))
+	}
+	if diagnostics.ContextEpochStatus != "" {
+		parts = append(parts, "context_epoch_status="+diagnostics.ContextEpochStatus)
+	}
+	if diagnostics.ConfigHash != "" {
+		parts = append(parts, "config_hash="+shortContextHash(diagnostics.ConfigHash))
+	}
+	if diagnostics.ToolCatalogHash != "" {
+		parts = append(parts, "tool_catalog="+shortContextHash(diagnostics.ToolCatalogHash))
+	}
+	if diagnostics.MCPCatalogHash != "" {
+		parts = append(parts, "mcp_catalog="+shortContextHash(diagnostics.MCPCatalogHash))
+	}
+	if diagnostics.DocsIndexHash != "" {
+		parts = append(parts, "docs_hash="+shortContextHash(diagnostics.DocsIndexHash))
 	}
 	if diagnostics.CompactionEvents > 0 {
 		parts = append(parts, fmt.Sprintf("compactions=%d", diagnostics.CompactionEvents))

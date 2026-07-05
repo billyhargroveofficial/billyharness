@@ -251,9 +251,11 @@ snapshots that are attached to turn/model events through metadata:
 
 - provider, model, reasoning mode, context budget, access mode, and dangerous
   permission mode;
-- tool schema hash and MCP status snapshot hash;
+- config hash, tool schema/catalog hash, and MCP status/catalog snapshot hash;
 - profile instruction hash;
 - prompt inventory over stable prompt sections and tool schemas;
+- context epoch hash and component hashes for AGENTS, memory, project context,
+  docs index, MCP instructions, prompt inventory, config, tools, and MCP;
 - prompt-cache break diagnostics comparing the current turn snapshot to the
   previous turn.
 
@@ -265,12 +267,18 @@ Memory drift diagnostics reuse the same hash-only posture. A session keeps the
 memory context it was created with; context/status projections compare the
 locked memory hash with the current rendered memory hash when the live gateway
 can load memory, and expose no memory topic body text in the drift fields.
+Gateway session run admission also records `context_epoch` and
+`context_epoch_drift` on the durable `session.status` and `run.started` events.
+The chosen policy is `session_locked`: the first admitted run becomes the locked
+baseline, later runs compare that baseline with a freshly rendered ambient
+context epoch, and changed fields produce an explicit warning instead of being
+silently mixed into replay.
 
 Context diagnostics are rebuilt as projections over snapshots and events. The
 index surfaces epoch, compaction and threshold counts, helper/tool counts,
 protected-prefix/body token split, compaction/window margins, and stable prompt
-section hashes so operators can correlate active context with replay without
-reading full prompt sections.
+section and context epoch hashes so operators can correlate active context with
+replay without reading full prompt sections.
 
 ## Session State Boundary
 

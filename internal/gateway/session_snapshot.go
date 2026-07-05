@@ -29,6 +29,7 @@ func (s *Server) sessionContextResponse(session *Session) SessionContextResponse
 		}
 	}
 	messages := session.messages()
+	status := session.Status()
 	return clientux.BuildContextResponseWithOptions(snapshot.Runtime, session.ID, messages, clientux.ContextReportOptions{
 		Runtime: gatewayapi.ContextRuntime{
 			Provider:      snapshot.Provider.Provider.Provider,
@@ -37,9 +38,11 @@ func (s *Server) sessionContextResponse(session *Session) SessionContextResponse
 			ReasoningMode: snapshot.Provider.Model.ReasoningEffort,
 			AccessMode:    snapshot.ToolPolicy.AccessMode,
 		},
-		Memory:   sessionMemoryContextStatus(instructionSettingsFromSessionSnapshot(snapshot), messages),
-		Events:   events,
-		Warnings: warnings,
+		Memory:       sessionMemoryContextStatus(instructionSettingsFromSessionSnapshot(snapshot), messages),
+		ContextEpoch: status.ContextEpoch,
+		ContextDrift: status.ContextDrift,
+		Events:       events,
+		Warnings:     warnings,
 	})
 }
 
@@ -74,11 +77,12 @@ func (s *Server) refreshSessionSnapshots(session *Session) {
 		specs = s.registry.SnapshotWithToolPolicy(context.Background(), snapshot.ToolPolicy).Specs()
 	}
 	runtimeSnapshot := runstate.NewSnapshot(runstate.SnapshotInput{
-		Provider:   snapshot.Provider,
-		Profile:    snapshot.Profile,
-		Runtime:    snapshot.Runtime,
-		ToolPolicy: snapshot.ToolPolicy,
-		MCP:        snapshot.MCP,
+		Provider:      snapshot.Provider,
+		Profile:       snapshot.Profile,
+		Runtime:       snapshot.Runtime,
+		ToolPolicy:    snapshot.ToolPolicy,
+		MCP:           snapshot.MCP,
+		DocsIndexHash: docsIndexHash(instructionSettingsFromSessionSnapshot(snapshot)),
 	}, session.messages(), specs)
 	session.setStoreSnapshots(sessionStoreSnapshots{
 		Config:        sessionConfigSnapshot(snapshot.ProviderAuth, snapshot.Runtime, snapshot.ToolPolicy, snapshot.MCP, snapshot.GatewayAddr),

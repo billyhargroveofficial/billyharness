@@ -59,11 +59,13 @@ type Snapshot struct {
 	ModelID                 string                     `json:"model_id"`
 	ReasoningMode           string                     `json:"reasoning_mode,omitempty"`
 	ContextBudgetTokens     int64                      `json:"context_budget_tokens,omitempty"`
+	ConfigHash              string                     `json:"config_hash,omitempty"`
 	ToolSnapshotHash        string                     `json:"tool_snapshot_hash,omitempty"`
 	MCPStatusSnapshotHash   string                     `json:"mcp_status_snapshot_hash,omitempty"`
 	ProfileInstructionHash  string                     `json:"profile_instruction_hash,omitempty"`
 	PromptInventory         *protocol.PromptInventory  `json:"prompt_inventory,omitempty"`
 	PromptCacheBreak        *protocol.PromptCacheBreak `json:"prompt_cache_break,omitempty"`
+	ContextEpoch            *protocol.ContextEpoch     `json:"context_epoch,omitempty"`
 	DangerousPermissionMode string                     `json:"dangerous_permission_mode,omitempty"`
 	AccessMode              string                     `json:"access_mode,omitempty"`
 }
@@ -75,6 +77,7 @@ type SnapshotInput struct {
 	ToolPolicy            config.ToolPolicySettings
 	MCP                   config.MCPSettings
 	MCPStatusSnapshotHash string
+	DocsIndexHash         string
 }
 
 func NewSnapshot(input SnapshotInput, messages []protocol.Message, specs []protocol.ToolSpec) Snapshot {
@@ -83,11 +86,12 @@ func NewSnapshot(input SnapshotInput, messages []protocol.Message, specs []proto
 		mcpHash = mcpSnapshotHash(input.MCP)
 	}
 	inventory := promptInventory(messages, specs)
-	return Snapshot{
+	snapshot := Snapshot{
 		ProviderID:              input.Provider.Provider.Provider,
 		ModelID:                 input.Provider.Model.Model,
 		ReasoningMode:           reasoningMode(input.Provider.Model),
 		ContextBudgetTokens:     input.Runtime.ContextWindowTokens,
+		ConfigHash:              runtimeConfigHash(input),
 		ToolSnapshotHash:        toolSnapshotHash(specs),
 		MCPStatusSnapshotHash:   mcpHash,
 		ProfileInstructionHash:  instructionHash(input.Profile, messages),
@@ -95,6 +99,8 @@ func NewSnapshot(input SnapshotInput, messages []protocol.Message, specs []proto
 		DangerousPermissionMode: dangerousPermissionMode(input.ToolPolicy),
 		AccessMode:              config.NormalizeAccessMode(input.ToolPolicy.AccessMode),
 	}
+	snapshot.ContextEpoch = NewContextEpoch(snapshot, input.DocsIndexHash)
+	return snapshot
 }
 
 func (s Snapshot) WithPromptCacheBreak(previous *Snapshot) Snapshot {
@@ -143,6 +149,9 @@ func (s Snapshot) Metadata() map[string]any {
 	if s.ContextBudgetTokens > 0 {
 		metadata["context_budget_tokens"] = s.ContextBudgetTokens
 	}
+	if s.ConfigHash != "" {
+		metadata["config_hash"] = s.ConfigHash
+	}
 	if s.ToolSnapshotHash != "" {
 		metadata["tool_snapshot_hash"] = s.ToolSnapshotHash
 	}
@@ -173,6 +182,12 @@ func (s Snapshot) Metadata() map[string]any {
 			metadata["prompt_cache_reason"] = s.PromptCacheBreak.Reason
 		}
 	}
+	if s.ContextEpoch != nil {
+		metadata["context_epoch"] = s.ContextEpoch
+		if s.ContextEpoch.Hash != "" {
+			metadata["context_epoch_hash"] = s.ContextEpoch.Hash
+		}
+	}
 	return metadata
 }
 
@@ -200,6 +215,29 @@ func dangerousPermissionMode(policy config.ToolPolicySettings) string {
 		return "auto_approve_dangerous"
 	}
 	return "safe_only"
+}
+
+func runtimeConfigHash(input SnapshotInput) string {
+	type runtimeConfig struct {
+		ProviderID              string `json:"provider_id,omitempty"`
+		ModelID                 string `json:"model_id,omitempty"`
+		ReasoningMode           string `json:"reasoning_mode,omitempty"`
+		ContextBudgetTokens     int64  `json:"context_budget_tokens,omitempty"`
+		MaxToolRounds           int    `json:"max_tool_rounds,omitempty"`
+		DangerousPermissionMode string `json:"dangerous_permission_mode,omitempty"`
+		AccessMode              string `json:"access_mode,omitempty"`
+		MCPSettingsHash         string `json:"mcp_settings_hash,omitempty"`
+	}
+	return hashJSON(runtimeConfig{
+		ProviderID:              input.Provider.Provider.Provider,
+		ModelID:                 input.Provider.Model.Model,
+		ReasoningMode:           reasoningMode(input.Provider.Model),
+		ContextBudgetTokens:     input.Runtime.ContextWindowTokens,
+		MaxToolRounds:           input.Runtime.MaxToolRounds,
+		DangerousPermissionMode: dangerousPermissionMode(input.ToolPolicy),
+		AccessMode:              config.NormalizeAccessMode(input.ToolPolicy.AccessMode),
+		MCPSettingsHash:         mcpSnapshotHash(input.MCP),
+	})
 }
 
 func instructionHash(profile config.ProfileSelection, messages []protocol.Message) string {
@@ -346,10 +384,12 @@ func promptCacheSignature(s Snapshot) string {
 		ModelID                 string `json:"model_id,omitempty"`
 		ReasoningMode           string `json:"reasoning_mode,omitempty"`
 		ContextBudgetTokens     int64  `json:"context_budget_tokens,omitempty"`
+		ConfigHash              string `json:"config_hash,omitempty"`
 		ToolSnapshotHash        string `json:"tool_snapshot_hash,omitempty"`
 		MCPStatusSnapshotHash   string `json:"mcp_status_snapshot_hash,omitempty"`
 		ProfileInstructionHash  string `json:"profile_instruction_hash,omitempty"`
 		PromptInventoryHash     string `json:"prompt_inventory_hash,omitempty"`
+		ContextEpochHash        string `json:"context_epoch_hash,omitempty"`
 		DangerousPermissionMode string `json:"dangerous_permission_mode,omitempty"`
 		AccessMode              string `json:"access_mode,omitempty"`
 	}{
@@ -357,10 +397,12 @@ func promptCacheSignature(s Snapshot) string {
 		ModelID:                 s.ModelID,
 		ReasoningMode:           s.ReasoningMode,
 		ContextBudgetTokens:     s.ContextBudgetTokens,
+		ConfigHash:              s.ConfigHash,
 		ToolSnapshotHash:        s.ToolSnapshotHash,
 		MCPStatusSnapshotHash:   s.MCPStatusSnapshotHash,
 		ProfileInstructionHash:  s.ProfileInstructionHash,
 		PromptInventoryHash:     promptInventoryHash(s.PromptInventory),
+		ContextEpochHash:        contextEpochHashValue(s.ContextEpoch),
 		DangerousPermissionMode: s.DangerousPermissionMode,
 		AccessMode:              s.AccessMode,
 	})
@@ -371,6 +413,13 @@ func promptInventoryHash(inventory *protocol.PromptInventory) string {
 		return ""
 	}
 	return inventory.Hash
+}
+
+func contextEpochHashValue(epoch *protocol.ContextEpoch) string {
+	if epoch == nil {
+		return ""
+	}
+	return epoch.Hash
 }
 
 func promptCacheChangedFields(previous, current Snapshot) []string {
@@ -389,9 +438,11 @@ func promptCacheChangedFields(previous, current Snapshot) []string {
 	addStringChange("model_changed", previous.ModelID, current.ModelID)
 	addStringChange("reasoning_changed", previous.ReasoningMode, current.ReasoningMode)
 	addInt64Change("context_budget_changed", previous.ContextBudgetTokens, current.ContextBudgetTokens)
+	addStringChange("config_changed", previous.ConfigHash, current.ConfigHash)
 	addStringChange("tool_schema_changed", previous.ToolSnapshotHash, current.ToolSnapshotHash)
 	addStringChange("mcp_status_changed", previous.MCPStatusSnapshotHash, current.MCPStatusSnapshotHash)
 	addStringChange("profile_instruction_changed", previous.ProfileInstructionHash, current.ProfileInstructionHash)
+	addStringChange("context_epoch_changed", contextEpochHashValue(previous.ContextEpoch), contextEpochHashValue(current.ContextEpoch))
 	addStringChange("permission_mode_changed", previous.DangerousPermissionMode, current.DangerousPermissionMode)
 	addStringChange("access_mode_changed", previous.AccessMode, current.AccessMode)
 	changed = append(changed, changedPromptSections(previous.PromptInventory, current.PromptInventory)...)
@@ -436,6 +487,123 @@ func promptSectionMap(inventory *protocol.PromptInventory) map[string]protocol.P
 		out[section.Name] = section
 	}
 	return out
+}
+
+func NewContextEpoch(snapshot Snapshot, docsIndexHash string) *protocol.ContextEpoch {
+	sections := promptSectionMap(snapshot.PromptInventory)
+	epoch := &protocol.ContextEpoch{
+		Version:                1,
+		ConfigHash:             snapshot.ConfigHash,
+		ToolCatalogHash:        snapshot.ToolSnapshotHash,
+		MCPCatalogHash:         snapshot.MCPStatusSnapshotHash,
+		ProfileInstructionHash: snapshot.ProfileInstructionHash,
+		PromptInventoryHash:    promptInventoryHash(snapshot.PromptInventory),
+		AgentsHash:             sections["agents_instructions"].SHA256,
+		MemoryHash:             sections["memory_context"].SHA256,
+		ProjectContextHash:     sections["project_context"].SHA256,
+		DocsIndexHash:          strings.TrimSpace(docsIndexHash),
+		MCPInstructionsHash:    sections["mcp_instructions"].SHA256,
+	}
+	epoch.Hash = contextEpochHash(epoch)
+	return epoch
+}
+
+func CloneContextEpoch(epoch *protocol.ContextEpoch) *protocol.ContextEpoch {
+	if epoch == nil {
+		return nil
+	}
+	cloned := *epoch
+	return &cloned
+}
+
+func ContextEpochDrift(locked, current *protocol.ContextEpoch, policy string) *protocol.ContextEpochDrift {
+	if locked == nil && current == nil {
+		return nil
+	}
+	locked = CloneContextEpoch(locked)
+	current = CloneContextEpoch(current)
+	drift := &protocol.ContextEpochDrift{
+		Status:  "current",
+		Policy:  strings.TrimSpace(policy),
+		Locked:  locked,
+		Current: current,
+	}
+	if locked != nil {
+		drift.LockedHash = locked.Hash
+	}
+	if current != nil {
+		drift.CurrentHash = current.Hash
+	}
+	if locked == nil {
+		drift.Status = "initial"
+		return drift
+	}
+	if current == nil {
+		drift.Status = "missing"
+		drift.Warning = "context epoch drift: current context epoch unavailable"
+		return drift
+	}
+	drift.ChangedFields = contextEpochChangedFields(locked, current)
+	if len(drift.ChangedFields) > 0 {
+		drift.Status = "changed"
+		drift.Warning = "context epoch drift: " + strings.Join(drift.ChangedFields, ",")
+	}
+	return drift
+}
+
+func contextEpochChangedFields(locked, current *protocol.ContextEpoch) []string {
+	if locked == nil || current == nil {
+		return nil
+	}
+	var changed []string
+	add := func(name, oldValue, newValue string) {
+		if strings.TrimSpace(oldValue) != strings.TrimSpace(newValue) {
+			changed = append(changed, name)
+		}
+	}
+	add("config_hash", locked.ConfigHash, current.ConfigHash)
+	add("tool_catalog_hash", locked.ToolCatalogHash, current.ToolCatalogHash)
+	add("mcp_catalog_hash", locked.MCPCatalogHash, current.MCPCatalogHash)
+	add("profile_instruction_hash", locked.ProfileInstructionHash, current.ProfileInstructionHash)
+	add("prompt_inventory_hash", locked.PromptInventoryHash, current.PromptInventoryHash)
+	add("agents_hash", locked.AgentsHash, current.AgentsHash)
+	add("memory_hash", locked.MemoryHash, current.MemoryHash)
+	add("project_context_hash", locked.ProjectContextHash, current.ProjectContextHash)
+	add("docs_index_hash", locked.DocsIndexHash, current.DocsIndexHash)
+	add("mcp_instructions_hash", locked.MCPInstructionsHash, current.MCPInstructionsHash)
+	return changed
+}
+
+func contextEpochHash(epoch *protocol.ContextEpoch) string {
+	if epoch == nil {
+		return ""
+	}
+	type epochHashPayload struct {
+		Version                int    `json:"version,omitempty"`
+		ConfigHash             string `json:"config_hash,omitempty"`
+		ToolCatalogHash        string `json:"tool_catalog_hash,omitempty"`
+		MCPCatalogHash         string `json:"mcp_catalog_hash,omitempty"`
+		ProfileInstructionHash string `json:"profile_instruction_hash,omitempty"`
+		PromptInventoryHash    string `json:"prompt_inventory_hash,omitempty"`
+		AgentsHash             string `json:"agents_hash,omitempty"`
+		MemoryHash             string `json:"memory_hash,omitempty"`
+		ProjectContextHash     string `json:"project_context_hash,omitempty"`
+		DocsIndexHash          string `json:"docs_index_hash,omitempty"`
+		MCPInstructionsHash    string `json:"mcp_instructions_hash,omitempty"`
+	}
+	return hashJSON(epochHashPayload{
+		Version:                epoch.Version,
+		ConfigHash:             epoch.ConfigHash,
+		ToolCatalogHash:        epoch.ToolCatalogHash,
+		MCPCatalogHash:         epoch.MCPCatalogHash,
+		ProfileInstructionHash: epoch.ProfileInstructionHash,
+		PromptInventoryHash:    epoch.PromptInventoryHash,
+		AgentsHash:             epoch.AgentsHash,
+		MemoryHash:             epoch.MemoryHash,
+		ProjectContextHash:     epoch.ProjectContextHash,
+		DocsIndexHash:          epoch.DocsIndexHash,
+		MCPInstructionsHash:    epoch.MCPInstructionsHash,
+	})
 }
 
 func toolSnapshotHash(specs []protocol.ToolSpec) string {

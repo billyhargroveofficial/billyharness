@@ -34,6 +34,10 @@ func InitialMessagesFromSettings(settings config.InstructionSettings) []protocol
 	return messages
 }
 
+func ReconcileProjectContextMessages(settings config.InstructionSettings, messages []protocol.Message) ([]protocol.Message, bool) {
+	return projectcontext.ReconcileMessages(settings, messages)
+}
+
 func (a *Agent) appendModelResponse(messages []protocol.Message, step modelCallStepResult) []protocol.Message {
 	msg := protocol.Message{
 		Role:             protocol.RoleAssistant,

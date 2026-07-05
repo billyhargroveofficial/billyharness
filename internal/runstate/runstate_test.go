@@ -44,9 +44,12 @@ func TestNewSnapshotCapturesTurnRuntimeState(t *testing.T) {
 		snapshot.ContextBudgetTokens != 1_000_000 ||
 		snapshot.DangerousPermissionMode != "auto_approve_dangerous" ||
 		snapshot.AccessMode != config.AccessModeBuild ||
+		snapshot.ConfigHash == "" ||
 		snapshot.ToolSnapshotHash == "" ||
 		snapshot.MCPStatusSnapshotHash == "" ||
-		snapshot.ProfileInstructionHash == "" {
+		snapshot.ProfileInstructionHash == "" ||
+		snapshot.ContextEpoch == nil ||
+		snapshot.ContextEpoch.Hash == "" {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 	for _, key := range []string{
@@ -54,9 +57,12 @@ func TestNewSnapshotCapturesTurnRuntimeState(t *testing.T) {
 		"model_id",
 		"reasoning_mode",
 		"context_budget_tokens",
+		"config_hash",
 		"tool_snapshot_hash",
 		"mcp_status_snapshot_hash",
 		"profile_instruction_hash",
+		"context_epoch",
+		"context_epoch_hash",
 		"dangerous_permission_mode",
 		"access_mode",
 	} {
@@ -200,6 +206,51 @@ func TestPromptInventoryIsStableAndOmitsArbitraryUserText(t *testing.T) {
 	}
 }
 
+func TestContextEpochIncludesProtectedContextHashes(t *testing.T) {
+	cfg := config.Config{Model: "mock", Provider: "mock", Profile: "billy"}
+	messages := []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "# Memory context\n<MEMORY_CONTEXT>\nentries:\n- type=\"user\" topic=\"style\" summary=\"concise\" path=\"topics/style.md\" source=\"home\"\n</MEMORY_CONTEXT>"},
+		{Role: protocol.RoleUser, Content: "# Project context\n<PROJECT_CONTEXT>\ncwd: /repo\n</PROJECT_CONTEXT>"},
+		{Role: protocol.RoleUser, Content: "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nproject rules\n</INSTRUCTIONS>"},
+		{Role: protocol.RoleUser, Content: "# MCP server instructions\n\nUse MCP carefully."},
+		{Role: protocol.RoleUser, Content: "ordinary prompt with sk-test-123"},
+	}
+	input := snapshotInput(cfg)
+	input.DocsIndexHash = "docs-sha"
+	snapshot := NewSnapshot(input, messages, []protocol.ToolSpec{{Name: "fs_read_file", Parameters: []byte(`{"type":"object"}`), Risk: protocol.RiskReadOnly}})
+	epoch := snapshot.ContextEpoch
+	if epoch == nil ||
+		epoch.Hash == "" ||
+		epoch.ConfigHash == "" ||
+		epoch.ToolCatalogHash == "" ||
+		epoch.MCPCatalogHash == "" ||
+		epoch.ProfileInstructionHash == "" ||
+		epoch.PromptInventoryHash == "" ||
+		epoch.AgentsHash == "" ||
+		epoch.MemoryHash == "" ||
+		epoch.ProjectContextHash == "" ||
+		epoch.MCPInstructionsHash == "" ||
+		epoch.DocsIndexHash != "docs-sha" {
+		t.Fatalf("context epoch = %#v", epoch)
+	}
+	body, err := json.Marshal(epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "ordinary prompt") || strings.Contains(string(body), "sk-test-123") {
+		t.Fatalf("context epoch leaked ordinary prompt text: %s", body)
+	}
+
+	changedMessages := append([]protocol.Message(nil), messages...)
+	changedMessages[1].Content = "# Memory context\n<MEMORY_CONTEXT>\nentries:\n- type=\"user\" topic=\"style\" summary=\"changed\" path=\"topics/style.md\" source=\"home\"\n</MEMORY_CONTEXT>"
+	changed := NewSnapshot(input, changedMessages, nil).ContextEpoch
+	drift := ContextEpochDrift(epoch, changed, "session_locked")
+	if drift == nil || drift.Status != "changed" || !containsString(drift.ChangedFields, "memory_hash") || drift.Warning == "" {
+		t.Fatalf("context epoch drift = %#v", drift)
+	}
+}
+
 func TestPromptCacheBreakReasonsForModelToolAndContextChanges(t *testing.T) {
 	cfg := config.Config{Model: "mock", Provider: "mock", Profile: "billy"}
 	messages := []protocol.Message{
@@ -241,6 +292,15 @@ func TestPromptCacheBreakReasonsForModelToolAndContextChanges(t *testing.T) {
 	if !cacheBreakContains(contextChanged.PromptCacheBreak, "prompt_section:project_context") {
 		t.Fatalf("context cache diagnostic = %#v", contextChanged.PromptCacheBreak)
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func hasPromptSection(inventory *protocol.PromptInventory, name string) bool {

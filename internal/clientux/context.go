@@ -14,11 +14,13 @@ import (
 )
 
 type ContextReportOptions struct {
-	Runtime  gatewayapi.ContextRuntime
-	Usage    gatewayapi.ContextUsage
-	Memory   gatewayapi.ContextMemory
-	Events   []protocol.Event
-	Warnings []string
+	Runtime      gatewayapi.ContextRuntime
+	Usage        gatewayapi.ContextUsage
+	Memory       gatewayapi.ContextMemory
+	ContextEpoch *protocol.ContextEpoch
+	ContextDrift *protocol.ContextEpochDrift
+	Events       []protocol.Event
+	Warnings     []string
 }
 
 func BuildContextResponse(limits config.RuntimeLimits, id string, messages []protocol.Message) gatewayapi.SessionContextResponse {
@@ -114,6 +116,12 @@ func BuildContextResponseWithOptions(limits config.RuntimeLimits, id string, mes
 	runtime := mergeContextRuntime(opts.Runtime, eventReport.runtime)
 	usage := mergeContextUsage(opts.Usage, eventReport.usage)
 	prompt := eventReport.prompt
+	contextEpoch := firstContextEpoch(opts.ContextEpoch, eventReport.contextEpoch)
+	contextDrift := firstContextDrift(opts.ContextDrift, eventReport.contextDrift)
+	warnings := append([]string(nil), opts.Warnings...)
+	if contextDrift != nil && strings.TrimSpace(contextDrift.Warning) != "" {
+		warnings = append(warnings, strings.TrimSpace(contextDrift.Warning))
+	}
 	if eventReport.outputRefs > outputRefCount {
 		outputRefCount = eventReport.outputRefs
 	}
@@ -137,33 +145,41 @@ func BuildContextResponseWithOptions(limits config.RuntimeLimits, id string, mes
 		Usage:                   usage,
 		Prompt:                  prompt,
 		Memory:                  opts.Memory,
-		Diagnostics:             contextDiagnosticsIndex(messages, eventReport, prompt, usage, estimatedTokens, contextWindow, compactAt),
+		ContextEpoch:            cloneProtocolContextEpoch(contextEpoch),
+		ContextDrift:            cloneProtocolContextDrift(contextDrift),
+		Diagnostics:             contextDiagnosticsIndex(messages, eventReport, prompt, usage, estimatedTokens, contextWindow, compactAt, contextEpoch, contextDrift),
 		LastCompaction:          eventReport.compaction,
 		OutputRefs: gatewayapi.ContextOutputRefs{
 			Count:             outputRefCount,
 			LargeInlineCount:  largeInlineCount,
 			SourceBucketCount: outputRefBuckets,
 		},
-		Warnings: append([]string(nil), opts.Warnings...),
+		Warnings: warnings,
 	}
 }
 
 type contextEventMetrics struct {
-	runtime     gatewayapi.ContextRuntime
-	usage       gatewayapi.ContextUsage
-	prompt      gatewayapi.ContextPrompt
-	compaction  *gatewayapi.ContextCompaction
-	outputRefs  int
-	thresholds  int
-	compactions int
-	usageAcc    contextUsageAccumulator
-	helperSeen  map[string]bool
+	runtime      gatewayapi.ContextRuntime
+	usage        gatewayapi.ContextUsage
+	prompt       gatewayapi.ContextPrompt
+	contextEpoch *protocol.ContextEpoch
+	contextDrift *protocol.ContextEpochDrift
+	compaction   *gatewayapi.ContextCompaction
+	outputRefs   int
+	thresholds   int
+	compactions  int
+	usageAcc     contextUsageAccumulator
+	helperSeen   map[string]bool
 }
 
 func contextEventReport(events []protocol.Event) contextEventMetrics {
 	metrics := contextEventMetrics{helperSeen: map[string]bool{}}
 	for _, event := range events {
 		switch event.Type {
+		case protocol.EventRunStarted:
+			metrics.observeContextEpoch(event.Data)
+		case protocol.EventSessionStatus:
+			metrics.observeSessionStatus(event.Data)
 		case protocol.EventModelCallStarted:
 			metrics.usage.ModelCalls++
 			metrics.usageAcc.Reset()
@@ -224,6 +240,35 @@ func (m *contextEventMetrics) observeModelCall(data any) {
 	if model.PromptCacheBreak != nil {
 		m.prompt.CacheStatus = model.PromptCacheBreak.Status
 		m.prompt.CacheReason = model.PromptCacheBreak.Reason
+	}
+	if model.ContextEpoch != nil {
+		m.contextEpoch = cloneProtocolContextEpoch(model.ContextEpoch)
+	}
+}
+
+func (m *contextEventMetrics) observeContextEpoch(data any) {
+	raw := mapFromContextData(data)
+	if len(raw) == 0 {
+		return
+	}
+	if epoch := contextEpochFromAny(raw["context_epoch"]); epoch != nil {
+		m.contextEpoch = epoch
+	}
+	if drift := contextDriftFromAny(raw["context_epoch_drift"]); drift != nil {
+		m.contextDrift = drift
+	}
+}
+
+func (m *contextEventMetrics) observeSessionStatus(data any) {
+	status, ok := decodeContextData[gatewayapi.SessionStatus](data)
+	if !ok {
+		return
+	}
+	if status.ContextEpoch != nil {
+		m.contextEpoch = cloneProtocolContextEpoch(status.ContextEpoch)
+	}
+	if status.ContextDrift != nil {
+		m.contextDrift = cloneProtocolContextDrift(status.ContextDrift)
 	}
 }
 
@@ -351,10 +396,16 @@ func mergeContextUsage(primary, fallback gatewayapi.ContextUsage) gatewayapi.Con
 	return fallback
 }
 
-func contextDiagnosticsIndex(messages []protocol.Message, events contextEventMetrics, prompt gatewayapi.ContextPrompt, usage gatewayapi.ContextUsage, estimatedTokens, contextWindow, compactAt int64) gatewayapi.ContextDiagnostics {
+func contextDiagnosticsIndex(messages []protocol.Message, events contextEventMetrics, prompt gatewayapi.ContextPrompt, usage gatewayapi.ContextUsage, estimatedTokens, contextWindow, compactAt int64, epoch *protocol.ContextEpoch, drift *protocol.ContextEpochDrift) gatewayapi.ContextDiagnostics {
 	protectedTokens, bodyTokens := contextTokenSplit(messages)
 	diag := gatewayapi.ContextDiagnostics{
 		CurrentEpoch:              contextCurrentEpoch(events),
+		ContextEpochHash:          contextEpochHash(epoch),
+		ContextEpochStatus:        contextDriftStatus(drift),
+		ConfigHash:                contextEpochConfigHash(epoch),
+		ToolCatalogHash:           contextEpochToolCatalogHash(epoch),
+		MCPCatalogHash:            contextEpochMCPCatalogHash(epoch),
+		DocsIndexHash:             contextEpochDocsIndexHash(epoch),
 		CompactionEvents:          events.compactions,
 		ThresholdEvents:           events.thresholds,
 		ToolCallEvents:            usage.ToolCalls,
@@ -378,6 +429,144 @@ func contextDiagnosticsIndex(messages []protocol.Message, events contextEventMet
 		diag.LastCompactionHistoryHash = events.compaction.PostHistoryHash
 	}
 	return diag
+}
+
+func firstContextEpoch(values ...*protocol.ContextEpoch) *protocol.ContextEpoch {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func firstContextDrift(values ...*protocol.ContextEpochDrift) *protocol.ContextEpochDrift {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func cloneProtocolContextEpoch(epoch *protocol.ContextEpoch) *protocol.ContextEpoch {
+	if epoch == nil {
+		return nil
+	}
+	cloned := *epoch
+	return &cloned
+}
+
+func cloneProtocolContextDrift(drift *protocol.ContextEpochDrift) *protocol.ContextEpochDrift {
+	if drift == nil {
+		return nil
+	}
+	cloned := *drift
+	cloned.ChangedFields = append([]string(nil), drift.ChangedFields...)
+	cloned.Locked = cloneProtocolContextEpoch(drift.Locked)
+	cloned.Current = cloneProtocolContextEpoch(drift.Current)
+	return &cloned
+}
+
+func contextEpochFromAny(value any) *protocol.ContextEpoch {
+	if value == nil {
+		return nil
+	}
+	if epoch, ok := value.(*protocol.ContextEpoch); ok {
+		return cloneProtocolContextEpoch(epoch)
+	}
+	if epoch, ok := value.(protocol.ContextEpoch); ok {
+		return cloneProtocolContextEpoch(&epoch)
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var epoch protocol.ContextEpoch
+	if err := json.Unmarshal(body, &epoch); err != nil {
+		return nil
+	}
+	if epoch == (protocol.ContextEpoch{}) {
+		return nil
+	}
+	return &epoch
+}
+
+func contextDriftFromAny(value any) *protocol.ContextEpochDrift {
+	if value == nil {
+		return nil
+	}
+	if drift, ok := value.(*protocol.ContextEpochDrift); ok {
+		return cloneProtocolContextDrift(drift)
+	}
+	if drift, ok := value.(protocol.ContextEpochDrift); ok {
+		return cloneProtocolContextDrift(&drift)
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var drift protocol.ContextEpochDrift
+	if err := json.Unmarshal(body, &drift); err != nil {
+		return nil
+	}
+	if contextDriftEmpty(drift) {
+		return nil
+	}
+	return &drift
+}
+
+func contextDriftEmpty(drift protocol.ContextEpochDrift) bool {
+	return drift.Status == "" &&
+		drift.Policy == "" &&
+		drift.LockedHash == "" &&
+		drift.CurrentHash == "" &&
+		len(drift.ChangedFields) == 0 &&
+		drift.Warning == "" &&
+		drift.Locked == nil &&
+		drift.Current == nil
+}
+
+func contextEpochHash(epoch *protocol.ContextEpoch) string {
+	if epoch == nil {
+		return ""
+	}
+	return epoch.Hash
+}
+
+func contextDriftStatus(drift *protocol.ContextEpochDrift) string {
+	if drift == nil {
+		return ""
+	}
+	return drift.Status
+}
+
+func contextEpochConfigHash(epoch *protocol.ContextEpoch) string {
+	if epoch == nil {
+		return ""
+	}
+	return epoch.ConfigHash
+}
+
+func contextEpochToolCatalogHash(epoch *protocol.ContextEpoch) string {
+	if epoch == nil {
+		return ""
+	}
+	return epoch.ToolCatalogHash
+}
+
+func contextEpochMCPCatalogHash(epoch *protocol.ContextEpoch) string {
+	if epoch == nil {
+		return ""
+	}
+	return epoch.MCPCatalogHash
+}
+
+func contextEpochDocsIndexHash(epoch *protocol.ContextEpoch) string {
+	if epoch == nil {
+		return ""
+	}
+	return epoch.DocsIndexHash
 }
 
 func contextCurrentEpoch(events contextEventMetrics) int {

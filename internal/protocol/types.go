@@ -89,6 +89,33 @@ type PromptCacheBreak struct {
 	CurrentSignature  string   `json:"current_signature,omitempty"`
 }
 
+type ContextEpoch struct {
+	Version                int    `json:"version,omitempty"`
+	Policy                 string `json:"policy,omitempty"`
+	Hash                   string `json:"hash,omitempty"`
+	ConfigHash             string `json:"config_hash,omitempty"`
+	ToolCatalogHash        string `json:"tool_catalog_hash,omitempty"`
+	MCPCatalogHash         string `json:"mcp_catalog_hash,omitempty"`
+	ProfileInstructionHash string `json:"profile_instruction_hash,omitempty"`
+	PromptInventoryHash    string `json:"prompt_inventory_hash,omitempty"`
+	AgentsHash             string `json:"agents_hash,omitempty"`
+	MemoryHash             string `json:"memory_hash,omitempty"`
+	ProjectContextHash     string `json:"project_context_hash,omitempty"`
+	DocsIndexHash          string `json:"docs_index_hash,omitempty"`
+	MCPInstructionsHash    string `json:"mcp_instructions_hash,omitempty"`
+}
+
+type ContextEpochDrift struct {
+	Status        string        `json:"status,omitempty"`
+	Policy        string        `json:"policy,omitempty"`
+	LockedHash    string        `json:"locked_hash,omitempty"`
+	CurrentHash   string        `json:"current_hash,omitempty"`
+	ChangedFields []string      `json:"changed_fields,omitempty"`
+	Warning       string        `json:"warning,omitempty"`
+	Locked        *ContextEpoch `json:"locked,omitempty"`
+	Current       *ContextEpoch `json:"current,omitempty"`
+}
+
 type EventType string
 
 const (
@@ -340,12 +367,15 @@ type ModelCallEvent struct {
 	Reasoning               string            `json:"reasoning,omitempty"`
 	ReasoningMode           string            `json:"reasoning_mode,omitempty"`
 	ContextBudgetTokens     int64             `json:"context_budget_tokens,omitempty"`
+	ConfigHash              string            `json:"config_hash,omitempty"`
 	ToolSnapshotHash        string            `json:"tool_snapshot_hash,omitempty"`
 	MCPStatusSnapshotHash   string            `json:"mcp_status_snapshot_hash,omitempty"`
 	ProfileInstructionHash  string            `json:"profile_instruction_hash,omitempty"`
 	PromptInventoryHash     string            `json:"prompt_inventory_hash,omitempty"`
 	PromptInventory         *PromptInventory  `json:"prompt_inventory,omitempty"`
 	PromptCacheBreak        *PromptCacheBreak `json:"prompt_cache_break,omitempty"`
+	ContextEpochHash        string            `json:"context_epoch_hash,omitempty"`
+	ContextEpoch            *ContextEpoch     `json:"context_epoch,omitempty"`
 	DangerousPermissionMode string            `json:"dangerous_permission_mode,omitempty"`
 	AccessMode              string            `json:"access_mode,omitempty"`
 	Status                  string            `json:"status"`

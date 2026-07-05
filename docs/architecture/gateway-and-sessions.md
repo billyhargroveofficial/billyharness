@@ -313,6 +313,17 @@ an existing session implicitly. Offline stored-session context reports the
 locked session memory hash only because it cannot safely prove the current
 memory root/profile state from the durable session bundle alone.
 
+Run admission records a broader session-locked context epoch before the agent
+run is persisted. The epoch stores only hashes: effective config, tool catalog,
+MCP catalog/status, profile instructions, prompt inventory, AGENTS, memory,
+project context, optional `agent-index/docs-manifest.json`, and promoted MCP
+instructions when present. `session.status` and `run.started` both carry the
+run epoch plus `context_epoch_drift`; follow-up runs compare the first locked
+epoch with a freshly rendered ambient epoch and emit changed-field warnings
+instead of silently mixing AGENTS, memory, docs-index, MCP, or config drift.
+Stored-session context rebuilds the same drift state from `events.jsonl`, so
+offline replay/fork inspection does not need to trust the current filesystem.
+
 For compaction replay, the context response keeps the latest compaction ID,
 event sequence, `context_epoch`, before/after token estimates, reason/strategy,
 and audit hashes such as post-history hash. `gatewayclient.FormatSessionContext`
@@ -321,10 +332,11 @@ status with durable `context.compacted` events.
 
 The response also includes a compact diagnostics index: current epoch,
 compaction/threshold/tool/helper counts, protected-prefix versus body token
-split, context-window and compaction margins, and shortable hashes for memory,
-project, AGENTS, MCP instructions, prompt inventory, and the latest compaction
-post-history state. These fields are derived from message snapshots and durable
-events; they are an operator/debug projection, not separate runtime state.
+split, context-window and compaction margins, context epoch status, and
+shortable hashes for config, tools, MCP, docs index, memory, project, AGENTS,
+MCP instructions, prompt inventory, and the latest compaction post-history
+state. These fields are derived from message snapshots and durable events; they
+are an operator/debug projection, not separate runtime state.
 
 ## API and Client Boundary
 

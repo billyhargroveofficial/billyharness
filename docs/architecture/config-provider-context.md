@@ -288,9 +288,13 @@ skills directory with import metadata. Skills are not injected by
 
 `internal/runstate.NewSnapshot` records the runtime state that matters for a
 model turn: provider ID, model ID, reasoning mode, context budget, tool schema
-hash, MCP status hash, profile/instruction hash, prompt inventory, permission
-mode, and access mode. `WithPromptCacheBreak` compares the current snapshot to
-the previous turn and reports which fields or prompt sections changed.
+hash, MCP status/catalog hash, profile/instruction hash, prompt inventory,
+permission mode, access mode, config hash, and context epoch. The context epoch
+is hash-only: it carries an aggregate epoch hash plus the config, tool catalog,
+MCP catalog, AGENTS, memory, project-context, docs-index, MCP-instructions, and
+prompt-inventory hashes when those inputs are available. `WithPromptCacheBreak`
+compares the current snapshot to the previous turn and reports which fields,
+prompt sections, or epoch inputs changed.
 
 Prompt inventory is approximate. It records protected/system/context prompt
 sections and tool schemas with byte counts, SHA-256 values, and token estimates

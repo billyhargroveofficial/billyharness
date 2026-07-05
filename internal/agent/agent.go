@@ -682,12 +682,15 @@ func modelCallEventData(base map[string]any, status string, totalLatencyMS, firs
 		Reasoning:               metadataString(base, "reasoning"),
 		ReasoningMode:           metadataString(base, "reasoning_mode"),
 		ContextBudgetTokens:     metadataInt64(base, "context_budget_tokens"),
+		ConfigHash:              metadataString(base, "config_hash"),
 		ToolSnapshotHash:        metadataString(base, "tool_snapshot_hash"),
 		MCPStatusSnapshotHash:   metadataString(base, "mcp_status_snapshot_hash"),
 		ProfileInstructionHash:  metadataString(base, "profile_instruction_hash"),
 		PromptInventoryHash:     metadataString(base, "prompt_inventory_hash"),
 		PromptInventory:         metadataPromptInventory(base, "prompt_inventory"),
 		PromptCacheBreak:        metadataPromptCacheBreak(base, "prompt_cache_break"),
+		ContextEpochHash:        metadataString(base, "context_epoch_hash"),
+		ContextEpoch:            metadataContextEpoch(base, "context_epoch"),
 		DangerousPermissionMode: metadataString(base, "dangerous_permission_mode"),
 		AccessMode:              metadataString(base, "access_mode"),
 		Status:                  status,
@@ -754,6 +757,7 @@ func modelCallEventMetadata(data protocol.ModelCallEvent) map[string]any {
 	addStringMetadata(metadata, "reasoning", data.Reasoning)
 	addStringMetadata(metadata, "reasoning_mode", data.ReasoningMode)
 	addInt64Metadata(metadata, "context_budget_tokens", data.ContextBudgetTokens)
+	addStringMetadata(metadata, "config_hash", data.ConfigHash)
 	addStringMetadata(metadata, "tool_snapshot_hash", data.ToolSnapshotHash)
 	addStringMetadata(metadata, "mcp_status_snapshot_hash", data.MCPStatusSnapshotHash)
 	addStringMetadata(metadata, "profile_instruction_hash", data.ProfileInstructionHash)
@@ -765,6 +769,10 @@ func modelCallEventMetadata(data protocol.ModelCallEvent) map[string]any {
 		metadata["prompt_cache_break"] = data.PromptCacheBreak
 		addStringMetadata(metadata, "prompt_cache_status", data.PromptCacheBreak.Status)
 		addStringMetadata(metadata, "prompt_cache_reason", data.PromptCacheBreak.Reason)
+	}
+	addStringMetadata(metadata, "context_epoch_hash", data.ContextEpochHash)
+	if data.ContextEpoch != nil {
+		metadata["context_epoch"] = data.ContextEpoch
 	}
 	addStringMetadata(metadata, "provider_request_id", data.ProviderRequestID)
 	addIntMetadata(metadata, "attempts", data.Attempts)
@@ -821,6 +829,27 @@ func metadataPromptCacheBreak(metadata map[string]any, key string) *protocol.Pro
 		return value
 	case protocol.PromptCacheBreak:
 		return &value
+	default:
+		return nil
+	}
+}
+
+func metadataContextEpoch(metadata map[string]any, key string) *protocol.ContextEpoch {
+	switch value := metadata[key].(type) {
+	case *protocol.ContextEpoch:
+		return value
+	case protocol.ContextEpoch:
+		return &value
+	case map[string]any:
+		body, err := json.Marshal(value)
+		if err != nil {
+			return nil
+		}
+		var epoch protocol.ContextEpoch
+		if err := json.Unmarshal(body, &epoch); err != nil {
+			return nil
+		}
+		return &epoch
 	default:
 		return nil
 	}

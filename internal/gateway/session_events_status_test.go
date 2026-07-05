@@ -618,6 +618,118 @@ func TestGatewaySessionContextReportsMemoryDriftWithoutCurrentContents(t *testin
 	}
 }
 
+func TestGatewaySessionRunRecordsContextEpochDrift(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex-empty"))
+	writeTestMemoryIndex(t, home, "Prefers first evidence summary", "FIRST SECRET TOPIC BODY")
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "agent-index"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("project rules"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "agent-index", "docs-manifest.json"), []byte(`{"schema_version":1,"docs":["README.md"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.WorkspaceRoots = []string{root}
+	cfg.ProjectDocMaxBytes = 2048
+	cfg.MemoryEnabled = true
+	cfg.MemorySummaryMaxBytes = 2048
+	cfg.MemoryIndexMaxBytes = 4096
+	cfg.MemoryTopicMaxBytes = 4096
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+
+	create := httptest.NewRecorder()
+	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/sessions", nil))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var created SessionResponse
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	firstRun := httptest.NewRecorder()
+	server.Handler().ServeHTTP(firstRun, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/run", strings.NewReader(`{"prompt":"first"}`)))
+	if firstRun.Code != http.StatusOK {
+		t.Fatalf("first run status = %d body=%s", firstRun.Code, firstRun.Body.String())
+	}
+	writeTestMemoryIndex(t, home, "Prefers updated evidence summary", "SECOND SECRET TOPIC BODY")
+	secondRun := httptest.NewRecorder()
+	server.Handler().ServeHTTP(secondRun, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/run", strings.NewReader(`{"prompt":"second"}`)))
+	if secondRun.Code != http.StatusOK {
+		t.Fatalf("second run status = %d body=%s", secondRun.Code, secondRun.Body.String())
+	}
+
+	events, err := server.store.ReplayEventsAfter(created.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var secondStarted protocol.Event
+	var secondStatus SessionStatus
+	runStartedCount := 0
+	for _, event := range events {
+		if event.Type == protocol.EventRunStarted {
+			runStartedCount++
+			if runStartedCount == 2 {
+				secondStarted = event
+			}
+		}
+		if event.Type == protocol.EventSessionStatus {
+			var status SessionStatus
+			if body, err := json.Marshal(event.Data); err == nil && json.Unmarshal(body, &status) == nil && status.RunSeq == 2 {
+				secondStatus = status
+			}
+		}
+	}
+	if secondStatus.ContextEpoch == nil || secondStatus.LockedEpoch == nil || secondStatus.ContextDrift == nil {
+		t.Fatalf("second status missing context epoch: %#v", secondStatus)
+	}
+	if secondStatus.ContextEpoch.DocsIndexHash == "" || secondStatus.ContextEpoch.ConfigHash == "" || secondStatus.ContextEpoch.ToolCatalogHash == "" || secondStatus.ContextEpoch.MCPCatalogHash == "" {
+		t.Fatalf("second status epoch missing required hashes: %#v", secondStatus.ContextEpoch)
+	}
+	if secondStatus.ContextDrift.Status != "changed" ||
+		secondStatus.ContextDrift.LockedHash == "" ||
+		secondStatus.ContextDrift.CurrentHash == "" ||
+		!gatewayTestHasString(secondStatus.ContextDrift.ChangedFields, "memory_hash") {
+		t.Fatalf("second status drift = %#v", secondStatus.ContextDrift)
+	}
+	startedData := mapFromEventData(secondStarted.Data)
+	if startedData["context_epoch"] == nil || startedData["context_epoch_drift"] == nil || startedData["context_epoch_warning"] == "" {
+		t.Fatalf("second run.started missing context epoch drift: %#v", startedData)
+	}
+	body, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"Prefers updated evidence summary", "SECOND SECRET TOPIC BODY"} {
+		if strings.Contains(string(body), forbidden) {
+			t.Fatalf("context epoch event leaked current memory content %q: %s", forbidden, body)
+		}
+	}
+
+	live := readSessionContext(t, server, created.ID)
+	if live.ContextDrift == nil || live.ContextDrift.Status != "changed" || !gatewayTestHasString(live.ContextDrift.ChangedFields, "memory_hash") {
+		t.Fatalf("live context drift = %#v", live.ContextDrift)
+	}
+	if formatted := gatewayclient.FormatSessionContext(live); !strings.Contains(formatted, "context epoch: status=changed") || !strings.Contains(formatted, "memory_hash") {
+		t.Fatalf("formatted context missing epoch drift:\n%s", formatted)
+	}
+	offline, err := StoredSessionContext(storeDir, created.ID, cfg.RuntimeLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if offline.ContextDrift == nil || offline.ContextDrift.Status != "changed" || !gatewayTestHasString(offline.ContextDrift.ChangedFields, "memory_hash") {
+		t.Fatalf("offline context drift = %#v", offline.ContextDrift)
+	}
+}
+
 func readSessionContext(t *testing.T, server *Server, sessionID string) SessionContextResponse {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -630,6 +742,15 @@ func readSessionContext(t *testing.T, server *Server, sessionID string) SessionC
 		t.Fatal(err)
 	}
 	return got
+}
+
+func gatewayTestHasString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func writeTestMemoryIndex(t *testing.T, home, summary, body string) {
