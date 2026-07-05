@@ -33,8 +33,9 @@ Project health:
 
 `doctor` prints git status, a lightweight CLI build check, systemd service health,
 gateway `/health` liveness and `/ready` readiness, current provider/model/reasoning
-settings, session directory, and config paths. Use `-mode=production` on the
-production host to include production-only unit and journal crash-signal checks.
+settings, provider capability validation, MCP allowlist availability, session
+directory, and config paths. Use `-mode=production` on the production host to
+include production-only unit and journal crash-signal checks.
 
 For a non-failing local snapshot while editing, disable active checks:
 

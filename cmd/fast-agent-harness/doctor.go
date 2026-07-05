@@ -57,6 +57,7 @@ type doctorReport struct {
 
 type doctorConfigStatus struct {
 	config.ProviderAuthSnapshot
+	ProviderCapability config.ProviderCapabilitySnapshot `json:"provider_capability"`
 	config.RuntimeToolSnapshot
 }
 
@@ -188,6 +189,7 @@ func collectDoctorReportFromResolved(ctx context.Context, resolved config.Resolv
 	report := collectDoctorReport(ctx, resolved.Config, opts, runner)
 	diagnostics := resolved.DiagnosticSnapshot()
 	report.Config.ProviderAuthSnapshot = diagnostics.ProviderAuth
+	report.Config.ProviderCapability = diagnostics.ProviderCapability
 	report.Config.RuntimeToolSnapshot = diagnostics.RuntimeTool
 	return report
 }
@@ -213,6 +215,7 @@ func collectDoctorReport(ctx context.Context, cfg config.Config, opts doctorOpti
 		GatewaySessionDir: gateway.DefaultSessionStoreDir(),
 		Config: doctorConfigStatus{
 			ProviderAuthSnapshot: cfg.ProviderAuthSnapshot(),
+			ProviderCapability:   cfg.ProviderCapabilitySnapshot(),
 			RuntimeToolSnapshot:  cfg.RuntimeToolSnapshot(),
 		},
 	}
@@ -268,8 +271,10 @@ func normalizeDoctorMode(mode string, repoDir string) string {
 func doctorConfigChecks(cfg config.Config, auth doctorAuthPresence) []doctorCheck {
 	checks := []doctorCheck{
 		doctorEffectiveConfigCheck(cfg),
+		doctorProviderCapabilityCheck(cfg),
 		doctorGatewayBindCheck(cfg),
 		doctorActiveAuthCheck(auth),
+		doctorMCPAllowlistCheck(cfg),
 	}
 	return checks
 }
@@ -282,6 +287,22 @@ func doctorEffectiveConfigCheck(cfg config.Config) doctorCheck {
 		return doctorCheck{Name: "config provider/model", Status: "fail", Detail: "provider/model not fully set"}
 	}
 	return doctorCheck{Name: "config provider/model", Status: "ok", Detail: "provider=" + provider + " model=" + model}
+}
+
+func doctorProviderCapabilityCheck(cfg config.Config) doctorCheck {
+	caps := cfg.ProviderCapabilitySnapshot()
+	detail := fmt.Sprintf("provider=%s model=%s known=%t streaming=%t tools=%t parallel=%t",
+		caps.Provider,
+		caps.Model,
+		caps.Known,
+		caps.Streaming,
+		caps.ToolCalls,
+		caps.ParallelToolCalls,
+	)
+	if strings.TrimSpace(caps.ValidationError) != "" {
+		return doctorCheck{Name: "provider capability", Status: "fail", Detail: detail + " error=" + caps.ValidationError}
+	}
+	return doctorCheck{Name: "provider capability", Status: "ok", Detail: detail}
 }
 
 func doctorGatewayBindCheck(cfg config.Config) doctorCheck {
@@ -322,6 +343,69 @@ func doctorActiveAuthCheck(auth doctorAuthPresence) doctorCheck {
 		return doctorCheck{Name: "auth configured", Status: "ok", Detail: "credential material present for " + provider}
 	}
 	return doctorCheck{Name: "auth configured", Status: "warn", Detail: "unknown provider credential state for " + provider}
+}
+
+func doctorMCPAllowlistCheck(cfg config.Config) doctorCheck {
+	mcp := cfg.MCPSettings()
+	if !mcp.Enabled {
+		return doctorCheck{Name: "mcp allowlist", Status: "skip", Detail: "mcp disabled"}
+	}
+	allowed := doctorAllowedMCPNames(mcp.AllowedServers)
+	if len(allowed) == 0 {
+		if len(mcp.Servers) == 0 {
+			return doctorCheck{Name: "mcp allowlist", Status: "warn", Detail: "mcp enabled with no configured servers"}
+		}
+		return doctorCheck{Name: "mcp allowlist", Status: "ok", Detail: fmt.Sprintf("%d configured server(s); no allowlist", len(mcp.Servers))}
+	}
+	byName := make(map[string]config.MCPServer, len(mcp.Servers))
+	for _, server := range mcp.Servers {
+		name := strings.ToLower(strings.TrimSpace(server.Name))
+		if name != "" {
+			byName[name] = server
+		}
+	}
+	var missing, disabled, unsupported []string
+	for _, name := range allowed {
+		server, ok := byName[name]
+		if !ok {
+			missing = append(missing, name)
+			continue
+		}
+		if !server.Enabled {
+			disabled = append(disabled, name)
+		}
+		if reason := strings.TrimSpace(server.UnsupportedReason); reason != "" {
+			unsupported = append(unsupported, name+": "+reason)
+		}
+	}
+	if len(missing) > 0 || len(disabled) > 0 || len(unsupported) > 0 {
+		var parts []string
+		if len(missing) > 0 {
+			parts = append(parts, "missing="+strings.Join(missing, ","))
+		}
+		if len(disabled) > 0 {
+			parts = append(parts, "disabled="+strings.Join(disabled, ","))
+		}
+		if len(unsupported) > 0 {
+			parts = append(parts, "unsupported="+strings.Join(unsupported, " | "))
+		}
+		return doctorCheck{Name: "mcp allowlist", Status: "fail", Detail: strings.Join(parts, " ")}
+	}
+	return doctorCheck{Name: "mcp allowlist", Status: "ok", Detail: fmt.Sprintf("%d allowed server(s) available", len(allowed))}
+}
+
+func doctorAllowedMCPNames(in []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, name := range in {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
 }
 
 func doctorToolCatalogStatus(cfg config.Config) doctorCheck {
@@ -1009,6 +1093,19 @@ func printDoctorReport(w io.Writer, report doctorReport) {
 		diagnosticSourceSummary(report.Config.WebSearchBackendSource),
 		diagnosticSourceSummary(report.Config.WebExtractBackendSource),
 	)
+	fmt.Fprintf(w, "capability: provider=%s model=%s known=%v context=%d max_output=%d tools=%v parallel=%v streaming=%v reasoning=%v cost=%s validation=%s\n",
+		report.Config.ProviderCapability.Provider,
+		report.Config.ProviderCapability.Model,
+		report.Config.ProviderCapability.Known,
+		report.Config.ProviderCapability.ContextWindowTokens,
+		report.Config.ProviderCapability.MaxOutputTokens,
+		report.Config.ProviderCapability.ToolCalls,
+		report.Config.ProviderCapability.ParallelToolCalls,
+		report.Config.ProviderCapability.Streaming,
+		report.Config.ProviderCapability.Reasoning,
+		report.Config.ProviderCapability.CostMode,
+		doctorCapabilityValidationSummary(report.Config.ProviderCapability),
+	)
 	fmt.Fprintf(w, "runtime: provider=%s model=%s gateway=%s strict_hygiene=%s service_binary=%s age=%s sessions=%s tool_output=%s\n",
 		report.Runtime.Provider,
 		report.Runtime.Model,
@@ -1091,6 +1188,13 @@ func presenceSummary(label string, present bool) string {
 		return label + ":present"
 	}
 	return label + ":missing"
+}
+
+func doctorCapabilityValidationSummary(caps config.ProviderCapabilitySnapshot) string {
+	if strings.TrimSpace(caps.ValidationError) == "" {
+		return "ok"
+	}
+	return caps.ValidationError
 }
 
 func doctorHasFailures(report doctorReport) bool {

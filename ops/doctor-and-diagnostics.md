@@ -58,15 +58,15 @@ Point doctor at an explicit checkout and allow slower checks:
 ```
 
 The current doctor implementation reports config/runtime paths, provider/model
-state, credential presence, binary version, build commit, UTC build time,
-gateway bind mode, native tool catalog state, gateway session storage
-readability/writability, tool-output storage, git status, a lightweight CLI
-build check, systemd service activity, duplicate gateway/telegram processes,
-pid-file staleness, gateway `/health` liveness, and gateway `/ready` readiness.
-It records `mode` in text and JSON output. `auto` mode resolves
-`/root/billyharness` as `production` and other checkouts as `local`; production
-mode also adds selected systemd unit metadata and recent journal crash/error
-signal summaries.
+state, provider capability validation, credential presence, binary version,
+build commit, UTC build time, gateway bind mode, native tool catalog state, MCP
+allowlist availability, gateway session storage readability/writability,
+tool-output storage, git status, a lightweight CLI build check, systemd service
+activity, duplicate gateway/telegram processes, pid-file staleness, gateway
+`/health` liveness, and gateway `/ready` readiness. It records `mode` in text
+and JSON output. `auto` mode resolves `/root/billyharness` as `production` and
+other checkouts as `local`; production mode also adds selected systemd unit
+metadata and recent journal crash/error signal summaries.
 
 ## Incident Bundles
 
@@ -221,6 +221,10 @@ If a query reports that the diagnostics index is missing, run:
   deploy so unrelated work is not overwritten.
 - `build check` failures come from a lightweight
   `go test -run '^$' ./cmd/fast-agent-harness` compile check.
+- `provider capability` failures mean the effective runtime provider/model
+  binding violates local model capability policy before credentials are probed.
+- `mcp allowlist` failures mean an allowlisted MCP server is missing, disabled,
+  or configured with an unsupported transport such as streamable HTTP.
 - `service ...` failures come from `systemctl is-active` for the managed
   service names.
 - Duplicate-process failures come from `pgrep -af fast-agent-harness` matching

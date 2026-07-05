@@ -110,6 +110,11 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	if report.Config.APIKeyEnv != "DEEPSEEK_API_KEY" || report.Config.CodexAuthFile == "" || report.CodexAuthPath != report.Config.CodexAuthFile {
 		t.Fatalf("provider/auth diagnostics = %#v codex_path=%q", report.Config.ProviderAuthSnapshot, report.CodexAuthPath)
 	}
+	if report.Config.ProviderCapability.Provider != "deepseek" ||
+		report.Config.ProviderCapability.Model != "deepseek-v4-pro" ||
+		report.Config.ProviderCapability.ValidationError != "" {
+		t.Fatalf("provider capability diagnostics = %#v", report.Config.ProviderCapability)
+	}
 	if report.Config.MaxToolRounds == 0 || report.Config.MCPAllowedServers == "" || report.Config.WebSummaryMode == "" {
 		t.Fatalf("runtime/tool diagnostics = %#v", report.Config.RuntimeToolSnapshot)
 	}
@@ -141,6 +146,7 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	assertDoctorCheck(t, report, "git status", "ok")
 	assertDoctorCheck(t, report, "build check", "ok")
 	assertDoctorCheck(t, report, "config provider/model", "ok")
+	assertDoctorCheck(t, report, "provider capability", "ok")
 	assertDoctorCheck(t, report, "gateway bind address", "ok")
 	assertDoctorCheck(t, report, "auth configured", "ok")
 	assertDoctorCheck(t, report, "tool catalog", "ok")
@@ -158,10 +164,60 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	var buf bytes.Buffer
 	printDoctorReport(&buf, report)
 	out := buf.String()
-	for _, want := range []string{"billyharness doctor", "build: commit=", "mode: local", "model=deepseek-v4-pro", "settings:", "runtime:", "strict_hygiene=ok", "tool_output=", "auth:", "cost_mode=metered", "auth status:", "credential=redacted", "checks:"} {
+	for _, want := range []string{"billyharness doctor", "build: commit=", "mode: local", "model=deepseek-v4-pro", "settings:", "capability:", "validation=ok", "runtime:", "strict_hygiene=ok", "tool_output=", "auth:", "cost_mode=metered", "auth status:", "credential=redacted", "checks:"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("formatted report missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestDoctorProviderCapabilityCheckFailsRuntimeValidation(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	cfg := config.Default()
+	cfg.Provider = "deepseek"
+	cfg.Model = "unknown-non-custom-model"
+
+	check := doctorProviderCapabilityCheck(cfg)
+	if check.Status != "fail" ||
+		!strings.Contains(check.Detail, "model capabilities are unknown") ||
+		!strings.Contains(check.Detail, "provider=deepseek") {
+		t.Fatalf("provider capability check = %#v", check)
+	}
+}
+
+func TestDoctorMCPAllowlistCheckFailsMissingDisabledAndUnsupported(t *testing.T) {
+	cfg := config.Config{
+		MCPEnabled:        true,
+		MCPAllowedServers: []string{"github", "remote", "disabled"},
+		MCPServers: []config.MCPServer{
+			{Name: "remote", Enabled: true, UnsupportedReason: "streamable HTTP MCP is not implemented"},
+			{Name: "disabled", Enabled: false, Command: "stdio-helper"},
+		},
+	}
+
+	check := doctorMCPAllowlistCheck(cfg)
+	if check.Status != "fail" ||
+		!strings.Contains(check.Detail, "missing=github") ||
+		!strings.Contains(check.Detail, "disabled=disabled") ||
+		!strings.Contains(check.Detail, "unsupported=remote") {
+		t.Fatalf("mcp allowlist check = %#v", check)
+	}
+}
+
+func TestDoctorMCPAllowlistCheckPassesAvailableAllowedServers(t *testing.T) {
+	cfg := config.Config{
+		MCPEnabled:        true,
+		MCPAllowedServers: []string{"github", "context7"},
+		MCPServers: []config.MCPServer{
+			{Name: "github", Enabled: true, Command: "github-mcp"},
+			{Name: "context7", Enabled: true, Command: "context7-mcp"},
+		},
+	}
+
+	check := doctorMCPAllowlistCheck(cfg)
+	if check.Status != "ok" || !strings.Contains(check.Detail, "2 allowed") {
+		t.Fatalf("mcp allowlist check = %#v", check)
 	}
 }
 
