@@ -2074,6 +2074,40 @@ Billy asks for final verification.
   locally for external schemas; the MCP server remains responsible for full
   JSON Schema semantics such as regex and numeric bound enforcement.
 
+### 2026-07-05 - P1.8 MCP structured output preservation
+
+- Completed P1.8. MCP `tools/call` results now preserve redacted raw content
+  parts, `structuredContent`, and response `_meta` in tool-result metadata
+  (`mcp_result_content`, `mcp_structured_content`, and `mcp_result_meta`) while
+  keeping model-facing text compact.
+- Non-text MCP content such as images/resources now renders as short
+  placeholders in `Content` instead of dumping raw JSON/base64 into the
+  transcript. Text parts still render inline, and structured-only responses
+  still fall back to compact JSON for the model.
+- The manager catalog now exposes a richer MCP `ResultHandler`; the tools
+  registry uses it when present and carries metadata through `mcp_call`.
+  Projector `ToolItem` snapshots now retain tool-result metadata so debug JSON
+  can show the preserved MCP structure.
+- Added tests for text plus image/resource content, structured output, `_meta`,
+  redaction, `mcp_call` gateway preservation, JSONL replay, and projector debug
+  snapshots.
+- Updated `docs/architecture/tools-mcp-and-policy.md` because MCP output/result
+  metadata semantics changed.
+- Verification passed:
+  `gofmt -w internal/mcpclient/client.go internal/mcpclient/jsonrpc.go internal/mcpclient/content.go internal/mcpclient/server.go internal/mcpclient/catalog.go internal/mcpclient/content_test.go internal/mcpclient/client_test.go internal/mcpclient/fake_server_helpers_test.go internal/tools/tools.go internal/tools/mcp_test.go internal/eventlog/eventlog_test.go internal/clientux/projector/projector.go internal/clientux/projector/projector_test.go`;
+  `go test -count=1 ./internal/mcpclient`;
+  `go test -count=1 ./internal/tools ./internal/eventlog ./internal/clientux/projector`;
+  `git diff --check`;
+  `go test -race -count=1 ./internal/mcpclient ./internal/tools ./internal/eventlog ./internal/clientux/projector`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`;
+  `go test -count=1 ./...`.
+- Commit: `3a134be Preserve MCP structured result metadata`
+  (`3a134be24497fc0d9397ee3bc0b7203a39446f5a`).
+- Push: `origin/main` updated from `e2b8288` to `3a134be`.
+- Blockers/residual risk: structured MCP data is preserved in event/debug
+  metadata, not promoted into provider-native structured tool-result channels;
+  model-facing text remains the compact string path used today.
+
 ### 2026-07-04 - P1.12 verify-local temp rebuild and strict hygiene pass
 
 - Completed P1.12 slice. `scripts/verify-local.sh` now builds the CLI binary
