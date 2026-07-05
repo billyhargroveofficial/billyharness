@@ -1897,6 +1897,37 @@ Billy asks for final verification.
   possible third-party provider implementation; bounded shutdown now depends on
   the caller's context/deadline when a provider violates the stream contract.
 
+### 2026-07-05 - P1.2 bounded live stream writer drain
+
+- Completed P1.2. `/v1/run` and `/v1/sessions/{id}/run` now pass the request
+  context into live NDJSON stream handling so client cancellation participates
+  in event enqueue and final writer-drain decisions.
+- Added bounded final gap enqueue and writer drain behavior. A dead or stalled
+  HTTP/SSE client can no longer pin the run handler forever after the run
+  function returns; the live stream may drop the final `gateway.stream_gap`
+  hint rather than blocking the handler.
+- Added focused gateway tests for a permanently stalled response writer and for
+  active-stream client context cancellation while events are still being
+  emitted.
+- Updated `docs/architecture/gateway-and-sessions.md` because the live stream
+  contract changed: live streams remain progress/wake channels, durable replay
+  remains the source of truth, and final gap emission is best-effort when the
+  client is already dead or stalled.
+- Verification passed:
+  `gofmt -w internal/gateway/response.go internal/gateway/gateway.go internal/gateway/session_stream_events_test.go`;
+  `go test -count=1 ./internal/gateway ./internal/architecture`;
+  `go test -race -count=1 ./internal/gateway`;
+  `git diff --check`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `a562c09 Bound live stream writer drain`
+  (`a562c09230b89b5da2e788f011f6436b45bf733a`).
+- Push: `origin/main` updated from `e2f5035` to `a562c09`.
+- Blockers/residual risk: this was verified with synthetic stalled writers and
+  local gateway tests, not a live production client disconnect. A blocked
+  writer goroutine may still wait for the underlying HTTP stack to return, but
+  the run handler and run goroutine are no longer pinned by final stream drain.
+
 ### 2026-07-04 - P1.12 verify-local temp rebuild and strict hygiene pass
 
 - Completed P1.12 slice. `scripts/verify-local.sh` now builds the CLI binary
