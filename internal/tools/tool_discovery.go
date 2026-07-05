@@ -104,15 +104,18 @@ func (r *Registry) discoveryCandidates(includeNative, includeMCP bool) []discove
 			if metadataTrust == "" {
 				metadataTrust = mcpclient.MCPMetadataTrustUntrusted
 			}
+			schemaReport := externalMCPSchemaReport(tool.Spec.Parameters)
 			candidates = append(candidates, discovery.Candidate{
-				Spec:          tool.Spec,
-				Source:        discovery.SourceMCP,
-				Namespace:     discovery.MCPNamespace(serverName),
-				Server:        serverName,
-				CallTool:      "mcp_call",
-				CallName:      tool.Spec.Name,
-				RiskSource:    riskSource,
-				MetadataTrust: metadataTrust,
+				Spec:                           tool.Spec,
+				Source:                         discovery.SourceMCP,
+				Namespace:                      discovery.MCPNamespace(serverName),
+				Server:                         serverName,
+				CallTool:                       "mcp_call",
+				CallName:                       tool.Spec.Name,
+				RiskSource:                     riskSource,
+				MetadataTrust:                  metadataTrust,
+				InputSchemaValidation:          schemaReport.Mode,
+				InputSchemaUnsupportedKeywords: schemaReport.UnsupportedKeywords,
 			})
 		}
 	}

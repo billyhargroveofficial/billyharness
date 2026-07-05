@@ -168,6 +168,109 @@ func TestLazyMCPGatewayHidesRawSpecsAndCanCallTool(t *testing.T) {
 	}
 }
 
+func TestMCPGatewayAcceptsExternalJSONSchemaKeywords(t *testing.T) {
+	registry := NewRegistry(config.Default())
+	registry.mcpTools["mcp__fake__schema_rich"] = Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "mcp__fake__schema_rich",
+			Description: "MCP fake/schema_rich. Uses common JSON Schema keywords.",
+			Parameters: raw(`{
+				"type":"object",
+				"properties":{
+					"name":{"type":"string","pattern":"^repo-[a-z]+$"},
+					"limit":{"type":"integer","minimum":1},
+					"target":{"oneOf":[{"type":"string"},{"type":"integer"}]}
+				},
+				"required":["name","limit"],
+				"additionalProperties":false,
+				"oneOf":[{"required":["target"]},{"required":["name"]}]
+			}`),
+			Risk: protocol.RiskExternal,
+		},
+		mcpPolicy: mcpToolPolicy{
+			ServerName:    "fake",
+			OriginalName:  "schema_rich",
+			MetadataTrust: mcpclient.MCPMetadataTrustUntrusted,
+		},
+		Handler: func(context.Context, json.RawMessage) (Result, error) {
+			return Result{Content: "accepted"}, nil
+		},
+	}
+	registry.addMCPGateway()
+
+	list, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_list_tools",
+		Arguments: rawArgs(map[string]any{
+			"query":             "schema_rich",
+			"include_schema":    true,
+			"max_schema_tokens": 500,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"pattern": "^repo-[a-z]+$"`,
+		`"minimum": 1`,
+		`"oneOf"`,
+		`"input_schema_validation": "external_mcp_json_schema_subset"`,
+		`"input_schema_unsupported_keywords":`,
+		`"minimum"`,
+		`"oneOf"`,
+		`"pattern"`,
+	} {
+		if !strings.Contains(list.Content, want) {
+			t.Fatalf("mcp_list_tools should preserve external schema metadata %q in:\n%s", want, list.Content)
+		}
+	}
+
+	called, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_call",
+		Arguments: rawArgs(map[string]any{
+			"name": "mcp__fake__schema_rich",
+			"arguments": map[string]any{
+				"name":  "not-matching-local-pattern",
+				"limit": 0,
+			},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("mcp_call should not reject unsupported external JSON Schema keywords: result=%#v err=%v", called, err)
+	}
+	if called.Content != "accepted" ||
+		called.Metadata["mcp_input_schema_validation"] != "external_mcp_json_schema_subset" {
+		t.Fatalf("unexpected mcp_call result = %#v", called)
+	}
+	keywords, ok := called.Metadata["mcp_input_schema_unsupported_keywords"].([]string)
+	if !ok {
+		t.Fatalf("missing unsupported keyword metadata: %#v", called.Metadata)
+	}
+	for _, want := range []string{"minimum", "oneOf", "pattern"} {
+		if !containsString(keywords, want) {
+			t.Fatalf("metadata missing keyword %q: %#v", want, called.Metadata)
+		}
+	}
+
+	rejected, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_call",
+		Arguments: rawArgs(map[string]any{
+			"name": "mcp__fake__schema_rich",
+			"arguments": map[string]any{
+				"name":  "repo-ok",
+				"limit": 1,
+				"extra": true,
+			},
+		}),
+	})
+	if err == nil || !strings.Contains(err.Error(), `unknown property "extra"`) {
+		t.Fatalf("mcp_call should still enforce supported schema subset, result=%#v err=%v", rejected, err)
+	}
+	if !rejected.IsError || rejected.ErrorCode != "validation_error" ||
+		rejected.Metadata["mcp_input_schema_validation"] != "external_mcp_json_schema_subset" {
+		t.Fatalf("unexpected validation result = %#v", rejected)
+	}
+}
+
 func TestToolSearchFindsNativeAndMCPTools(t *testing.T) {
 	registry := NewRegistry(config.Default())
 	registry.mcpTools["mcp__github__search_repositories"] = Tool{

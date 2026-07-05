@@ -10,30 +10,82 @@ import (
 )
 
 func validateArgs(schema json.RawMessage, args json.RawMessage) error {
+	_, err := validateArgsWithMode(schema, args, schemaValidationNativeStrict)
+	return err
+}
+
+func validateExternalMCPArgs(schema json.RawMessage, args json.RawMessage) (schemaValidationReport, error) {
+	return validateArgsWithMode(schema, args, schemaValidationExternalMCP)
+}
+
+func externalMCPSchemaReport(schema json.RawMessage) schemaValidationReport {
+	report := schemaValidationReport{Mode: schemaValidationExternalMCP.String()}
 	if len(schema) == 0 {
-		return nil
+		return report
+	}
+	var root schemaNode
+	if err := json.Unmarshal(schema, &root); err != nil {
+		report.ParseError = truncate(err.Error(), 240)
+		return report
+	}
+	report.UnsupportedKeywords = unsupportedSchemaKeywords(root)
+	return report
+}
+
+type schemaValidationMode int
+
+const (
+	schemaValidationNativeStrict schemaValidationMode = iota
+	schemaValidationExternalMCP
+)
+
+func (m schemaValidationMode) String() string {
+	switch m {
+	case schemaValidationExternalMCP:
+		return "external_mcp_json_schema_subset"
+	default:
+		return "native_strict_subset"
+	}
+}
+
+func (m schemaValidationMode) failOnUnsupportedKeywords() bool {
+	return m == schemaValidationNativeStrict
+}
+
+type schemaValidationReport struct {
+	Mode                string
+	UnsupportedKeywords []string
+	ParseError          string
+}
+
+func validateArgsWithMode(schema json.RawMessage, args json.RawMessage, mode schemaValidationMode) (schemaValidationReport, error) {
+	report := schemaValidationReport{Mode: mode.String()}
+	if len(schema) == 0 {
+		return report, nil
 	}
 	if len(args) == 0 || string(args) == "null" {
 		args = json.RawMessage(`{}`)
 	}
 	var root schemaNode
 	if err := json.Unmarshal(schema, &root); err != nil {
-		return fmt.Errorf("invalid tool schema: %w", err)
+		report.ParseError = truncate(err.Error(), 240)
+		return report, fmt.Errorf("invalid tool schema: %w", err)
 	}
+	report.UnsupportedKeywords = unsupportedSchemaKeywords(root)
 	var value any
 	dec := json.NewDecoder(strings.NewReader(string(args)))
 	dec.UseNumber()
 	if err := dec.Decode(&value); err != nil {
-		return fmt.Errorf("invalid JSON args: %w", err)
+		return report, fmt.Errorf("invalid JSON args: %w", err)
 	}
 	var trailing any
 	if err := dec.Decode(&trailing); err != io.EOF {
-		return fmt.Errorf("invalid JSON args: trailing data")
+		return report, fmt.Errorf("invalid JSON args: trailing data")
 	}
-	if err := validateValue("$", root, value); err != nil {
-		return err
+	if err := validateValue("$", root, value, mode); err != nil {
+		return report, err
 	}
-	return nil
+	return report, nil
 }
 
 type schemaNode struct {
@@ -88,14 +140,14 @@ func (s *schemaNode) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func validateValue(path string, schema schemaNode, value any) error {
-	if len(schema.UnsupportedKeywords) > 0 {
+func validateValue(path string, schema schemaNode, value any, mode schemaValidationMode) error {
+	if mode.failOnUnsupportedKeywords() && len(schema.UnsupportedKeywords) > 0 {
 		return fmt.Errorf("%s uses unsupported JSON Schema keyword %q", path, schema.UnsupportedKeywords[0])
 	}
 	if len(schema.AnyOf) > 0 {
 		var failures []string
 		for _, option := range schema.AnyOf {
-			if err := validateValue(path, option, value); err == nil {
+			if err := validateValue(path, option, value, mode); err == nil {
 				failures = nil
 				break
 			} else {
@@ -137,7 +189,7 @@ func validateValue(path string, schema schemaNode, value any) error {
 		}
 		for key, child := range schema.Properties {
 			if childValue, ok := obj[key]; ok {
-				if err := validateValue(path+"."+key, child, childValue); err != nil {
+				if err := validateValue(path+"."+key, child, childValue, mode); err != nil {
 					return err
 				}
 			}
@@ -156,13 +208,41 @@ func validateValue(path string, schema schemaNode, value any) error {
 		}
 		if schema.Items != nil {
 			for i, item := range items {
-				if err := validateValue(fmt.Sprintf("%s[%d]", path, i), *schema.Items, item); err != nil {
+				if err := validateValue(fmt.Sprintf("%s[%d]", path, i), *schema.Items, item, mode); err != nil {
 					return err
 				}
 			}
 		}
 	}
 	return nil
+}
+
+func unsupportedSchemaKeywords(schema schemaNode) []string {
+	seen := map[string]struct{}{}
+	var walk func(schemaNode)
+	walk = func(node schemaNode) {
+		for _, keyword := range node.UnsupportedKeywords {
+			if keyword != "" {
+				seen[keyword] = struct{}{}
+			}
+		}
+		for _, child := range node.Properties {
+			walk(child)
+		}
+		if node.Items != nil {
+			walk(*node.Items)
+		}
+		for _, child := range node.AnyOf {
+			walk(child)
+		}
+	}
+	walk(schema)
+	out := make([]string, 0, len(seen))
+	for keyword := range seen {
+		out = append(out, keyword)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func supportedSchemaKeyword(key string) bool {

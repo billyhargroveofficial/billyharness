@@ -1193,18 +1193,20 @@ func (r *Registry) addMCPGateway() {
 				in.Limit = 40
 			}
 			type item struct {
-				Name                string          `json:"name"`
-				Server              string          `json:"server,omitempty"`
-				Namespace           string          `json:"namespace,omitempty"`
-				Risk                protocol.Risk   `json:"risk,omitempty"`
-				RiskClass           protocol.Risk   `json:"risk_class,omitempty"`
-				RiskSource          string          `json:"risk_source,omitempty"`
-				MetadataTrust       string          `json:"metadata_trust,omitempty"`
-				DescriptionTrust    string          `json:"description_trust,omitempty"`
-				Description         string          `json:"description,omitempty"`
-				InputSchema         json.RawMessage `json:"input_schema,omitempty"`
-				InputSchemaTrust    string          `json:"input_schema_trust,omitempty"`
-				SchemaOmittedReason string          `json:"schema_omitted,omitempty"`
+				Name                           string          `json:"name"`
+				Server                         string          `json:"server,omitempty"`
+				Namespace                      string          `json:"namespace,omitempty"`
+				Risk                           protocol.Risk   `json:"risk,omitempty"`
+				RiskClass                      protocol.Risk   `json:"risk_class,omitempty"`
+				RiskSource                     string          `json:"risk_source,omitempty"`
+				MetadataTrust                  string          `json:"metadata_trust,omitempty"`
+				DescriptionTrust               string          `json:"description_trust,omitempty"`
+				Description                    string          `json:"description,omitempty"`
+				InputSchema                    json.RawMessage `json:"input_schema,omitempty"`
+				InputSchemaTrust               string          `json:"input_schema_trust,omitempty"`
+				InputSchemaValidation          string          `json:"input_schema_validation,omitempty"`
+				InputSchemaUnsupportedKeywords []string        `json:"input_schema_unsupported_keywords,omitempty"`
+				SchemaOmittedReason            string          `json:"schema_omitted,omitempty"`
 			}
 			type serverItem struct {
 				Name              string                       `json:"name"`
@@ -1238,18 +1240,20 @@ func (r *Registry) addMCPGateway() {
 			tools := make([]item, 0, len(results.Items))
 			for _, found := range results.Items {
 				tools = append(tools, item{
-					Name:                found.Name,
-					Server:              found.Server,
-					Namespace:           found.Namespace,
-					Risk:                found.Risk,
-					RiskClass:           found.RiskClass,
-					RiskSource:          found.RiskSource,
-					MetadataTrust:       found.MetadataTrust,
-					DescriptionTrust:    found.DescriptionTrust,
-					Description:         found.Description,
-					InputSchema:         found.InputSchema,
-					InputSchemaTrust:    found.InputSchemaTrust,
-					SchemaOmittedReason: found.SchemaOmittedReason,
+					Name:                           found.Name,
+					Server:                         found.Server,
+					Namespace:                      found.Namespace,
+					Risk:                           found.Risk,
+					RiskClass:                      found.RiskClass,
+					RiskSource:                     found.RiskSource,
+					MetadataTrust:                  found.MetadataTrust,
+					DescriptionTrust:               found.DescriptionTrust,
+					Description:                    found.Description,
+					InputSchema:                    found.InputSchema,
+					InputSchemaTrust:               found.InputSchemaTrust,
+					InputSchemaValidation:          found.InputSchemaValidation,
+					InputSchemaUnsupportedKeywords: found.InputSchemaUnsupportedKeywords,
+					SchemaOmittedReason:            found.SchemaOmittedReason,
 				})
 			}
 
@@ -1333,14 +1337,34 @@ func (r *Registry) addMCPGateway() {
 				result.Metadata = addMCPTargetPolicyMetadata(result.Metadata, tool, decision)
 				return result, err
 			}
-			if err := validateArgs(tool.Spec.Parameters, in.Arguments); err != nil {
-				return errorResult("validation_error", err.Error()), err
+			schemaReport, err := validateExternalMCPArgs(tool.Spec.Parameters, in.Arguments)
+			if err != nil {
+				result := errorResult("validation_error", err.Error())
+				result.Metadata = addExternalMCPSchemaMetadata(result.Metadata, schemaReport)
+				return result, err
 			}
 			result, err := tool.Handler(ctx, in.Arguments)
+			result.Metadata = addExternalMCPSchemaMetadata(result.Metadata, schemaReport)
 			result.Metadata = addMCPTargetPolicyMetadata(result.Metadata, tool, decision)
 			return result, err
 		},
 	})
+}
+
+func addExternalMCPSchemaMetadata(metadata map[string]any, report schemaValidationReport) map[string]any {
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	if report.Mode != "" {
+		metadata["mcp_input_schema_validation"] = report.Mode
+	}
+	if len(report.UnsupportedKeywords) > 0 {
+		metadata["mcp_input_schema_unsupported_keywords"] = append([]string(nil), report.UnsupportedKeywords...)
+	}
+	if report.ParseError != "" {
+		metadata["mcp_input_schema_parse_error"] = report.ParseError
+	}
+	return metadata
 }
 
 func (r *Registry) safePath(ctx context.Context, input string) (string, error) {

@@ -18,14 +18,16 @@ const (
 )
 
 type Candidate struct {
-	Spec          protocol.ToolSpec
-	Source        string
-	Namespace     string
-	Server        string
-	CallTool      string
-	CallName      string
-	RiskSource    string
-	MetadataTrust string
+	Spec                           protocol.ToolSpec
+	Source                         string
+	Namespace                      string
+	Server                         string
+	CallTool                       string
+	CallName                       string
+	RiskSource                     string
+	MetadataTrust                  string
+	InputSchemaValidation          string
+	InputSchemaUnsupportedKeywords []string
 }
 
 type Query struct {
@@ -45,21 +47,23 @@ type Results struct {
 }
 
 type Item struct {
-	Name                string          `json:"name"`
-	Source              string          `json:"source"`
-	Namespace           string          `json:"namespace,omitempty"`
-	Server              string          `json:"server,omitempty"`
-	CallTool            string          `json:"call_tool"`
-	CallName            string          `json:"call_name,omitempty"`
-	Risk                protocol.Risk   `json:"risk,omitempty"`
-	RiskClass           protocol.Risk   `json:"risk_class,omitempty"`
-	RiskSource          string          `json:"risk_source,omitempty"`
-	MetadataTrust       string          `json:"metadata_trust,omitempty"`
-	DescriptionTrust    string          `json:"description_trust,omitempty"`
-	Description         string          `json:"description,omitempty"`
-	InputSchema         json.RawMessage `json:"input_schema,omitempty"`
-	InputSchemaTrust    string          `json:"input_schema_trust,omitempty"`
-	SchemaOmittedReason string          `json:"schema_omitted,omitempty"`
+	Name                           string          `json:"name"`
+	Source                         string          `json:"source"`
+	Namespace                      string          `json:"namespace,omitempty"`
+	Server                         string          `json:"server,omitempty"`
+	CallTool                       string          `json:"call_tool"`
+	CallName                       string          `json:"call_name,omitempty"`
+	Risk                           protocol.Risk   `json:"risk,omitempty"`
+	RiskClass                      protocol.Risk   `json:"risk_class,omitempty"`
+	RiskSource                     string          `json:"risk_source,omitempty"`
+	MetadataTrust                  string          `json:"metadata_trust,omitempty"`
+	DescriptionTrust               string          `json:"description_trust,omitempty"`
+	Description                    string          `json:"description,omitempty"`
+	InputSchema                    json.RawMessage `json:"input_schema,omitempty"`
+	InputSchemaTrust               string          `json:"input_schema_trust,omitempty"`
+	InputSchemaValidation          string          `json:"input_schema_validation,omitempty"`
+	InputSchemaUnsupportedKeywords []string        `json:"input_schema_unsupported_keywords,omitempty"`
+	SchemaOmittedReason            string          `json:"schema_omitted,omitempty"`
 }
 
 type Metrics struct {
@@ -176,6 +180,8 @@ func Search(candidates []Candidate, q Query) Results {
 			AddSchemaWithinBudget(&item, candidate.Spec.Parameters, &metrics)
 			if len(item.InputSchema) > 0 {
 				item.InputSchemaTrust = candidate.MetadataTrust
+				item.InputSchemaValidation = candidate.InputSchemaValidation
+				item.InputSchemaUnsupportedKeywords = append([]string(nil), candidate.InputSchemaUnsupportedKeywords...)
 			}
 		}
 		items = append(items, item)

@@ -135,6 +135,44 @@ func TestValidateArgsSupportsAnyOfAndRejectsUnsupportedSchemaFeatures(t *testing
 	}
 }
 
+func TestValidateExternalMCPArgsAcceptsCommonJSONSchemaKeywords(t *testing.T) {
+	schema := raw(`{
+		"type":"object",
+		"properties":{
+			"name":{"type":"string","pattern":"^repo-[a-z]+$"},
+			"limit":{"type":"integer","minimum":1},
+			"target":{"oneOf":[{"type":"string"},{"type":"integer"}]}
+		},
+		"required":["name","limit"],
+		"additionalProperties":false,
+		"oneOf":[{"required":["target"]},{"required":["name"]}]
+	}`)
+	report, err := validateExternalMCPArgs(schema, rawArgs(map[string]any{
+		"name":  "not-matching-local-pattern",
+		"limit": 0,
+		"extra": true,
+	}))
+	if err == nil || !strings.Contains(err.Error(), `unknown property "extra"`) {
+		t.Fatalf("external schema should still enforce supported subset, report=%#v err=%v", report, err)
+	}
+
+	report, err = validateExternalMCPArgs(schema, rawArgs(map[string]any{
+		"name":  "not-matching-local-pattern",
+		"limit": 0,
+	}))
+	if err != nil {
+		t.Fatalf("external MCP schema should accept unsupported JSON Schema keywords: report=%#v err=%v", report, err)
+	}
+	if report.Mode != "external_mcp_json_schema_subset" {
+		t.Fatalf("report mode = %#v", report)
+	}
+	for _, want := range []string{"minimum", "oneOf", "pattern"} {
+		if !containsString(report.UnsupportedKeywords, want) {
+			t.Fatalf("unsupported keywords missing %q: %#v", want, report.UnsupportedKeywords)
+		}
+	}
+}
+
 func TestToolSetCallUsesSnapshotWorkspacePolicyForHandlers(t *testing.T) {
 	oldRoot := t.TempDir()
 	newRoot := t.TempDir()

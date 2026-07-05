@@ -3,7 +3,7 @@
 This document is the durable architecture map for Billyharness tool execution,
 MCP catalog handling, public web access, output references, and downstream tool
 rendering. It documents current behavior verified against code paths on
-2026-07-04.
+2026-07-05.
 
 ## Source Map
 
@@ -54,10 +54,12 @@ Current order is:
 4. Validate arguments against the tool schema in `internal/tools/schema.go`.
 5. Invoke the handler.
 
-The schema validator is intentionally small. It checks the subset used by local
-tool specs: object properties, required fields, `additionalProperties:false`,
-arrays, enums, min/max item counts, and primitive JSON types. It does not claim
-full JSON Schema support.
+The native schema validator is intentionally small and strict. It checks the
+subset used by local tool specs: object properties, required fields,
+`additionalProperties:false`, arrays, enums, min/max item counts, and primitive
+JSON types. Native tool schemas fail validation when they use unsupported JSON
+Schema keywords, so Billyharness does not silently expose native contracts it
+cannot validate.
 
 ## Policy Boundary
 
@@ -161,14 +163,21 @@ Current lazy flow:
    `catalog_stale` depending on mirrored tool state and listener lag. MCP tool
    entries include `risk`, `risk_class`, `risk_source`,
    `metadata_trust`, `description_trust`, and `input_schema_trust` when schema
-   text is returned.
+   text is returned. External MCP schemas are preserved as remote JSON Schema
+   metadata; search/list responses also label them with
+   `input_schema_validation = external_mcp_json_schema_subset` and list any
+   unsupported local-validation keywords.
 4. MCP search/list results return `call_tool: "mcp_call"` and the full
    `call_name`/`name` such as `mcp__github__search_repositories`.
 5. `mcp_call` looks up the full dynamic name in the current mirror, checks the
-   target MCP tool risk policy, validates the target MCP tool schema, and then
-   calls the underlying server tool. Permission denials and successful calls
-   carry MCP target metadata such as server, original tool, risk source, and
-   metadata trust.
+   target MCP tool risk policy, validates the target MCP tool arguments against
+   Billyharness's supported external-schema subset, and then calls the
+   underlying server tool. Valid MCP JSON Schema keywords that Billyharness does
+   not enforce locally, such as `pattern`, `minimum`, or `oneOf`, do not block
+   the call; the server remains responsible for its full schema semantics.
+   Permission denials, validation errors, and successful calls carry MCP target
+   metadata such as server, original tool, risk source, metadata trust, schema
+   validation mode, and unsupported schema keywords.
 
 `ToolSet.Snapshot()` freezes the tool view for a provider turn, including an
 MCP status/catalog hash from `internal/tools/toolset.go`. Live catalog changes
