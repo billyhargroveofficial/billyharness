@@ -80,7 +80,10 @@ an explicit source such as home config, project config, dotenv, environment,
 CLI, or gateway override. Profile metadata can set provider/model/thinking,
 reasoning effort, `disable_spark`, context window, web summary mode, MCP
 allowlist, instruction fragments, and cost hints as defined by
-`ProfileMetadata`.
+`ProfileMetadata`. Instruction fragments are active prompt inputs: they are
+loaded in declared order from the profile directory, must be relative paths
+inside that directory, and missing, directory, symlink, absolute, or traversal
+fragments are skipped.
 
 `ResolveStrict` wraps `Resolve` and fails when any resolved value has a typed
 parse error. CLI runtime entry points use it through
@@ -216,11 +219,13 @@ then configured fallback filenames. Project instruction bytes are capped by
 `ProjectDocMaxBytes`. Loaded instruction sources record path, scope, byte
 count, SHA-256, and capping.
 
-Profile instructions come from
-`$BILLYHARNESS_HOME/profiles/<profile>/SOUL.md`; the default `billy` profile
-and metadata are created on demand. Profile metadata and profile prompt text
-are separate: metadata changes config projections, while `SOUL.md` becomes the
-profile system message.
+Profile instructions come from the profile metadata `instruction_fragments`
+list, defaulting to `SOUL.md`. Fragments are read from
+`$BILLYHARNESS_HOME/profiles/<profile>/` in list order and concatenated into
+one profile system message. The default `billy` profile and metadata are
+created on demand. Profile metadata and profile prompt text stay separate:
+metadata changes config projections, while loaded instruction fragments become
+the profile system message.
 
 ## Project Context
 

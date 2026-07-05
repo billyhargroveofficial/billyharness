@@ -151,6 +151,62 @@ func TestMessageRendersCodexStyleUserContext(t *testing.T) {
 	}
 }
 
+func TestLoadProfileInstructionFragmentsInMetadataOrder(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	profileDir := filepath.Join(home, "profiles", "teacher")
+	mustWrite(t, filepath.Join(profileDir, "profile.toml"), `
+name = "teacher"
+instruction_fragments = ["00-base.md", "10-extra.md"]
+`)
+	mustWrite(t, filepath.Join(profileDir, "00-base.md"), "base rules")
+	mustWrite(t, filepath.Join(profileDir, "10-extra.md"), "extra rules")
+
+	profile, ok := LoadProfile(instructionSettings(config.Config{Profile: "teacher"}))
+	if !ok {
+		t.Fatal("LoadProfile returned false")
+	}
+	if profile.Text != "base rules\n\nextra rules" {
+		t.Fatalf("Text = %q", profile.Text)
+	}
+	if len(profile.Sources) != 2 ||
+		filepath.Base(profile.Sources[0].Path) != "00-base.md" ||
+		filepath.Base(profile.Sources[1].Path) != "10-extra.md" {
+		t.Fatalf("Sources = %#v", profile.Sources)
+	}
+	rendered := profile.ContextualText()
+	for _, want := range []string{"# Billyharness profile: teacher", "Sources:", "00-base.md", "10-extra.md", "<SOUL>", "base rules\n\nextra rules", "</SOUL>"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered profile missing %q: %s", want, rendered)
+		}
+	}
+}
+
+func TestLoadProfileInstructionFragmentsSkipMissingAndTraversal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	profileDir := filepath.Join(home, "profiles", "teacher")
+	mustWrite(t, filepath.Join(home, "outside.md"), "outside secret")
+	mustWrite(t, filepath.Join(profileDir, "profile.toml"), `
+name = "teacher"
+instruction_fragments = ["missing.md", "../outside.md", "safe.md"]
+`)
+	mustWrite(t, filepath.Join(profileDir, "safe.md"), "safe rules")
+
+	msg, ok := ProfileMessage(instructionSettings(config.Config{Profile: "teacher"}))
+	if !ok {
+		t.Fatal("ProfileMessage returned false")
+	}
+	if !strings.Contains(msg.Content, "safe rules") {
+		t.Fatalf("profile message missing safe fragment: %s", msg.Content)
+	}
+	for _, blocked := range []string{"outside secret", "missing.md", "../outside.md"} {
+		if strings.Contains(msg.Content, blocked) {
+			t.Fatalf("profile message included blocked fragment %q: %s", blocked, msg.Content)
+		}
+	}
+}
+
 func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
 	mustMkdir(t, filepath.Dir(path))

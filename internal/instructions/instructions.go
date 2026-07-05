@@ -44,9 +44,10 @@ type Loaded struct {
 }
 
 type Profile struct {
-	Name string
-	Path string
-	Text string
+	Name    string
+	Path    string
+	Text    string
+	Sources []Source
 }
 
 func Load(settings config.InstructionSettings) Loaded {
@@ -90,19 +91,12 @@ func LoadProfile(settings config.InstructionSettings) (Profile, bool) {
 		return Profile{}, false
 	}
 	name := config.NormalizeProfileName(settings.Profile.Profile)
-	path, err := config.EnsureDefaultProfileFile(name)
-	if err != nil || strings.TrimSpace(path) == "" {
+	fragments := profileFragments(name)
+	profile := loadProfileFragments(name, fragments)
+	if strings.TrimSpace(profile.Text) == "" {
 		return Profile{}, false
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return Profile{}, false
-	}
-	text := strings.TrimSpace(string(raw))
-	if text == "" {
-		return Profile{}, false
-	}
-	return Profile{Name: name, Path: path, Text: text}, true
+	return profile, true
 }
 
 func (l Loaded) ContextualText() string {
@@ -118,10 +112,32 @@ func (l Loaded) ContextualText() string {
 
 func (p Profile) ContextualText() string {
 	return profileStartMarker + ": " + p.Name + "\n" +
-		"Source: " + p.Path + "\n\n" +
+		p.ContextualSourceText() + "\n\n" +
 		profileOpenMarker + "\n" +
 		p.Text + "\n" +
 		profileEndMarker
+}
+
+func (p Profile) ContextualSourceText() string {
+	if len(p.Sources) == 0 {
+		if strings.TrimSpace(p.Path) == "" {
+			return "Source: unknown"
+		}
+		return "Source: " + p.Path
+	}
+	if len(p.Sources) == 1 {
+		return "Source: " + p.Sources[0].Path
+	}
+	var b strings.Builder
+	b.WriteString("Sources:")
+	for _, source := range p.Sources {
+		if strings.TrimSpace(source.Path) == "" {
+			continue
+		}
+		b.WriteString("\n- ")
+		b.WriteString(source.Path)
+	}
+	return b.String()
 }
 
 type instructionPart struct {
@@ -154,6 +170,74 @@ func loadGlobalInstructions() (string, Source) {
 		}
 	}
 	return "", Source{}
+}
+
+func profileFragments(name string) []string {
+	if name == config.DefaultProfileName {
+		_, _ = config.EnsureDefaultProfileFile(name)
+	}
+	meta, _, ok, err := config.LoadProfileMetadata(name)
+	if err == nil && ok && len(meta.InstructionFragments) > 0 {
+		return append([]string(nil), meta.InstructionFragments...)
+	}
+	path, err := config.EnsureDefaultProfileFile(name)
+	if err != nil || strings.TrimSpace(path) == "" {
+		return nil
+	}
+	return []string{filepath.Base(path)}
+}
+
+func loadProfileFragments(name string, fragments []string) Profile {
+	dir := config.DefaultProfileDir(name)
+	var parts []string
+	var sources []Source
+	for _, fragment := range fragments {
+		path, ok := safeProfileFragmentPath(dir, fragment)
+		if !ok {
+			continue
+		}
+		info, err := os.Lstat(path)
+		if err != nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		text := strings.TrimSpace(string(raw))
+		if text == "" {
+			continue
+		}
+		parts = append(parts, text)
+		sources = append(sources, instructionSource(path, "profile", raw, false))
+	}
+	path := ""
+	if len(sources) > 0 {
+		path = sources[0].Path
+	}
+	return Profile{
+		Name:    name,
+		Path:    path,
+		Text:    strings.Join(parts, "\n\n"),
+		Sources: sources,
+	}
+}
+
+func safeProfileFragmentPath(dir, fragment string) (string, bool) {
+	fragment = strings.TrimSpace(fragment)
+	if fragment == "" || filepath.IsAbs(fragment) {
+		return "", false
+	}
+	clean := filepath.Clean(fragment)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	path := filepath.Join(dir, clean)
+	rel, err := filepath.Rel(dir, path)
+	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+		return "", false
+	}
+	return path, true
 }
 
 func loadProjectInstructions(settings config.InstructionSettings) projectLoad {

@@ -170,6 +170,39 @@ func TestInitialMessagesInjectProfileAsSystemContext(t *testing.T) {
 	}
 }
 
+func TestInitialMessagesInjectProfileInstructionFragments(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex-empty"))
+	profileDir := filepath.Join(home, "profiles", "teacher")
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "profile.toml"), []byte(`
+name = "teacher"
+instruction_fragments = ["00-base.md", "10-extra.md"]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "00-base.md"), []byte("base rules"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "10-extra.md"), []byte("extra rules"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	messages := InitialMessages(config.Config{Profile: "teacher"})
+	if len(messages) != 2 {
+		t.Fatalf("messages = %#v", messages)
+	}
+	profile := messages[1].Content
+	if !strings.Contains(profile, "base rules\n\nextra rules") ||
+		!strings.Contains(profile, "00-base.md") ||
+		!strings.Contains(profile, "10-extra.md") {
+		t.Fatalf("profile message = %s", profile)
+	}
+}
+
 func TestInitialMessagesInjectAgentsAsUserContext(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", home)
