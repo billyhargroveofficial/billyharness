@@ -54,9 +54,10 @@ func TestFileFindFilesRejectsOutsideWorkspace(t *testing.T) {
 	cfg := config.Default()
 	cfg.WorkspaceRoots = []string{root}
 	registry := NewRegistry(cfg)
+	outside := filepath.Join(filepath.Dir(root), "outside-workspace")
 	_, err := registry.Call(context.Background(), protocol.ToolCall{
 		Name:      "fs_find_files",
-		Arguments: rawArgs(map[string]any{"query": "passwd", "path": "/etc"}),
+		Arguments: rawArgs(map[string]any{"query": "passwd", "path": outside}),
 	})
 	if err == nil || !strings.Contains(err.Error(), "outside workspace") {
 		t.Fatalf("err = %v", err)

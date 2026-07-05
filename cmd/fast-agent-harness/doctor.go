@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/attachments"
@@ -944,11 +943,7 @@ func doctorProcessLineMatchesSubcommand(line string, subcommand string) bool {
 }
 
 func doctorProcessExists(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	err := syscall.Kill(pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
+	return doctorProcessExistsOS(pid)
 }
 
 func doctorProcessCmdline(pid int) string {

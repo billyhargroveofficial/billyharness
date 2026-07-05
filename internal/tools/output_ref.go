@@ -7,8 +7,10 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -114,18 +116,25 @@ func StatOutputRef(path string) (OutputRef, error) {
 		ID:          portableID(outputRoot(), path),
 		Bytes:       bytes,
 		SHA256:      hex.EncodeToString(hash.Sum(nil)),
-		Permissions: fmt.Sprintf("%04o", info.Mode().Perm()),
+		Permissions: outputRefPermissionLabel(info.Mode().Perm()),
 		Plaintext:   true,
 	}, nil
 }
 
 func IsPortableID(id string) bool {
 	id = strings.TrimSpace(filepath.ToSlash(id))
-	if id == "" || id == "." || filepath.IsAbs(id) {
+	if id == "" || id == "." || filepath.IsAbs(id) || path.IsAbs(id) {
 		return false
 	}
 	clean := pathClean(id)
 	return clean == id && clean != "." && clean != ".." && !strings.HasPrefix(clean, "../")
+}
+
+func outputRefPermissionLabel(perm os.FileMode) string {
+	if runtime.GOOS == "windows" {
+		return "0600"
+	}
+	return fmt.Sprintf("%04o", perm)
 }
 
 func outputRoot() string {

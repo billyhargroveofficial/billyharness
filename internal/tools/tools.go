@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
@@ -106,7 +107,7 @@ type Registry struct {
 	shellSeq              int64
 	webSummarizer         webtools.Summarizer
 	webSummarySlots       chan struct{}
-	webSummarySeq         int64
+	webSummarySeq         atomic.Int64
 	nativeWebClient       *webtools.Client
 	webBackendHTTP        *http.Client
 	webBackendSleep       func(context.Context, time.Duration) error

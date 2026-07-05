@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
@@ -413,7 +412,7 @@ func (r *Registry) startManagedShell(in shellExecInput, cwd string) (Result, err
 	}
 	cmd := exec.Command(in.Argv[0], in.Argv[1:]...)
 	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureManagedShellCommand(cmd)
 	cmd.Stdout = &proc.output
 	cmd.Stderr = &proc.output
 	proc.cmd = cmd
@@ -990,27 +989,7 @@ func terminateManagedShell(proc *managedShellProcess) error {
 	if proc == nil || proc.cmd == nil || proc.cmd.Process == nil {
 		return nil
 	}
-	pid := proc.cmd.Process.Pid
-	if pid <= 0 {
-		return nil
-	}
-	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil {
-		_ = proc.cmd.Process.Kill()
-	}
-	deadline := time.Now().Add(shellTerminateGrace)
-	for time.Now().Before(deadline) {
-		if proc.isExited() {
-			return nil
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if proc.isExited() {
-		return nil
-	}
-	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
-		return proc.cmd.Process.Kill()
-	}
-	return nil
+	return terminateManagedShellProcess(proc, shellTerminateGrace)
 }
 
 func metadataStringValue(metadata map[string]any, key string) string {

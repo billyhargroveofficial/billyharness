@@ -52,6 +52,16 @@ setsid ./bin/fast-agent-harness > gateway.log 2>&1 < /dev/null &
 ./bin/fast-agent-harness tui
 ```
 
+Windows local smoke path:
+
+```powershell
+go build -buildvcs=false -o .\bin\fast-agent-harness.exe .\cmd\fast-agent-harness
+$env:BILLYHARNESS_HOME = "$HOME\billyharness"
+.\bin\fast-agent-harness.exe gateway -mock -addr 127.0.0.1:8765 -dev-allow-unauthenticated-loopback-mutations
+# or use the local PowerShell helper:
+.\dev.ps1
+```
+
 Running `bin/fast-agent-harness` with no subcommand starts the gateway. The gateway uses the model and
 reasoning mode saved in `$BILLYHARNESS_HOME/settings.json` (`~/billyharness/settings.json` by default),
 unless command-line flags or env vars override them. The TUI auto-discovers a local gateway from the same
@@ -110,6 +120,9 @@ The TUI credential menu is available through `/auth`. It has two setup actions:
   `$BILLYHARNESS_HOME/.env`.
 - `/auth codex` imports an existing Codex CLI ChatGPT/OAuth login into
   `$BILLYHARNESS_HOME/auth/codex.json`.
+  On Windows, the import source is `%CODEX_HOME%\auth.json` when `CODEX_HOME`
+  is set, otherwise `%USERPROFILE%\.codex\auth.json`; the default destination
+  is `%USERPROFILE%\billyharness\auth\codex.json`.
 
 When exposed through Telegram, `/auth` is owner-only and secret-bearing
 `/auth deepseek ...` is accepted only in a private owner chat.

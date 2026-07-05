@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
@@ -29,7 +28,7 @@ type stdioClient struct {
 	closeOnce      sync.Once
 	closing        atomic.Bool
 	waitCh         chan error
-	nextID         int64
+	nextID         atomic.Int64
 	stderr         *limitedBuffer
 	connected      atomic.Bool
 	outputLimit    int
@@ -89,7 +88,7 @@ func startStdio(parent context.Context, settings ManagerSettings, server config.
 	cmd := exec.Command(server.Command, server.Args...)
 	cmd.Dir = cwd
 	cmd.Env = mcpEnv(server)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureStdioCommand(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, nil, nil, "", fmt.Errorf("MCP %s stdin: %w", server.Name, err)
@@ -275,8 +274,7 @@ func (c *stdioClient) close() {
 			_ = c.stdin.Close()
 		}
 		if c.cmd != nil && c.cmd.Process != nil {
-			_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
-			_ = c.cmd.Process.Kill()
+			killStdioCommand(c.cmd)
 		}
 		if c.waitCh != nil {
 			select {

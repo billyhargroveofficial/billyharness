@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -828,6 +829,7 @@ func TestFSListLimitAndSearch(t *testing.T) {
 
 func TestShellExecGateAndWorkspaceCWD(t *testing.T) {
 	root := t.TempDir()
+	cwdArgv, cwdDisplay := shellCWDCommand()
 	cfg := config.Default()
 	cfg.WorkspaceRoots = []string{root}
 	cfg.AutoApproveDangerous = false
@@ -835,7 +837,7 @@ func TestShellExecGateAndWorkspaceCWD(t *testing.T) {
 
 	_, err := registry.Call(context.Background(), protocol.ToolCall{
 		Name:      "shell_exec",
-		Arguments: rawArgs(map[string]any{"argv": []string{"sh", "-c", "pwd"}}),
+		Arguments: rawArgs(map[string]any{"argv": cwdArgv}),
 	})
 	if err == nil || !strings.Contains(err.Error(), "disabled") {
 		t.Fatalf("expected disabled shell error, got %v", err)
@@ -845,21 +847,37 @@ func TestShellExecGateAndWorkspaceCWD(t *testing.T) {
 	registry = NewRegistry(cfg)
 	result, err := registry.Call(context.Background(), protocol.ToolCall{
 		Name:      "shell_exec",
-		Arguments: rawArgs(map[string]any{"argv": []string{"sh", "-c", "pwd"}, "cwd": ".", "max_output_bytes": 4096}),
+		Arguments: rawArgs(map[string]any{"argv": cwdArgv, "cwd": ".", "max_output_bytes": 4096}),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.TrimSpace(result.Content), root) {
+	if !samePathString(strings.TrimSpace(result.Content), root) {
 		t.Fatalf("pwd output = %q, want workspace root %q", result.Content, root)
 	}
 	if result.Metadata["display_group"] != "shell" ||
 		result.Metadata["display_path"] != root ||
 		result.Metadata["background"] != false ||
 		result.Metadata["retry_semantics"] != "shell_not_replay_safe" ||
-		!strings.Contains(fmt.Sprint(result.Metadata["display_target"]), "pwd") {
+		!strings.Contains(fmt.Sprint(result.Metadata["display_target"]), cwdDisplay) {
 		t.Fatalf("shell metadata = %#v", result.Metadata)
 	}
+}
+
+func shellCWDCommand() ([]string, string) {
+	if runtime.GOOS == "windows" {
+		return []string{"cmd", "/c", "cd"}, "cd"
+	}
+	return []string{"sh", "-c", "pwd"}, "pwd"
+}
+
+func samePathString(got, want string) bool {
+	gotAbs, gotErr := filepath.Abs(strings.TrimSpace(got))
+	wantAbs, wantErr := filepath.Abs(strings.TrimSpace(want))
+	if gotErr == nil && wantErr == nil && strings.EqualFold(filepath.Clean(gotAbs), filepath.Clean(wantAbs)) {
+		return true
+	}
+	return strings.Contains(got, want)
 }
 
 func TestWriteRejectsOversizedContent(t *testing.T) {
@@ -1170,6 +1188,9 @@ func assertMode(t *testing.T, path string, want os.FileMode) {
 		t.Fatal(err)
 	}
 	if got := info.Mode().Perm(); got != want {
+		if runtime.GOOS == "windows" {
+			return
+		}
 		t.Fatalf("%s mode = %o, want %o", path, got, want)
 	}
 }

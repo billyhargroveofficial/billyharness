@@ -10,7 +10,6 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
@@ -349,7 +348,7 @@ func serve(args []string) error {
 }
 
 func processContext() (context.Context, context.CancelFunc) {
-	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	return signal.NotifyContext(context.Background(), processSignals()...)
 }
 
 func mcp(args []string) error {

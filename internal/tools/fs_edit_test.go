@@ -46,9 +46,7 @@ func TestFSEditFileAppliesExactEditsAtomically(t *testing.T) {
 	if string(edited) != "ALPHA BETA BETA\ngamma\n" {
 		t.Fatalf("edited content = %q", edited)
 	}
-	if info, err := os.Stat(target); err != nil || info.Mode().Perm() != 0o640 {
-		t.Fatalf("mode = %v err=%v, want 0640", info, err)
-	}
+	assertMode(t, target, 0o640)
 	if strings.Contains(result.Content, "ALPHA BETA") {
 		t.Fatalf("result leaked file content: %q", result.Content)
 	}

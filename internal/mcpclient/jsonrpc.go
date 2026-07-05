@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync/atomic"
 
 	"github.com/billyhargroveofficial/billyharness/internal/secrets"
 )
@@ -42,7 +41,7 @@ type callToolResponse struct {
 }
 
 func (c *stdioClient) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	id := atomic.AddInt64(&c.nextID, 1)
+	id := c.nextID.Add(1)
 	req := rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params}
 	c.mu.Lock()
 	defer c.mu.Unlock()

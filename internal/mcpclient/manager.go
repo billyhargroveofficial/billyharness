@@ -18,9 +18,9 @@ type Manager struct {
 	collisions                []string
 	catalogVersion            int64
 	promoteServerInstructions bool
+	listenerSeq               atomic.Int64
 	mu                        sync.RWMutex
 	servers                   []*managedServer
-	listenerSeq               int64
 	listenersMu               sync.RWMutex
 	statusListeners           map[int64]func(ServerStatus)
 	catalogListeners          map[int64]func(CatalogChange)
@@ -108,7 +108,7 @@ func (m *Manager) AddStatusListener(listener func(ServerStatus)) func() {
 	if m == nil || listener == nil {
 		return func() {}
 	}
-	id := atomic.AddInt64(&m.listenerSeq, 1)
+	id := m.listenerSeq.Add(1)
 	m.listenersMu.Lock()
 	if m.statusListeners == nil {
 		m.statusListeners = map[int64]func(ServerStatus){}
@@ -126,7 +126,7 @@ func (m *Manager) AddCatalogListener(listener func(CatalogChange)) func() {
 	if m == nil || listener == nil {
 		return func() {}
 	}
-	id := atomic.AddInt64(&m.listenerSeq, 1)
+	id := m.listenerSeq.Add(1)
 	m.listenersMu.Lock()
 	if m.catalogListeners == nil {
 		m.catalogListeners = map[int64]func(CatalogChange){}

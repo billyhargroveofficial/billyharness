@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -313,7 +314,7 @@ func TestImportCodexAuthCopiesOAuthJSONToBillyHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if !fileModeMatches(info.Mode().Perm(), 0o600) {
 		t.Fatalf("mode = %v", info.Mode().Perm())
 	}
 }
@@ -465,4 +466,8 @@ func writeJSON(path string, value any) error {
 		return err
 	}
 	return os.WriteFile(path, append(body, '\n'), 0o600)
+}
+
+func fileModeMatches(got, want os.FileMode) bool {
+	return got == want || runtime.GOOS == "windows"
 }

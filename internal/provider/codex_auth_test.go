@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -190,7 +191,7 @@ func TestLoadCodexAuthRefreshesExpiredAuthJSONAndPersistsTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if !fileModeMatches(info.Mode().Perm(), 0o600) {
 		t.Fatalf("mode = %v", info.Mode().Perm())
 	}
 }
@@ -380,4 +381,8 @@ func emptyEnvFile(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func fileModeMatches(got, want os.FileMode) bool {
+	return got == want || runtime.GOOS == "windows"
 }

@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/webtools"
@@ -104,7 +103,7 @@ func (r *Registry) nextWebSummaryRequestID() string {
 	if r == nil {
 		return "websum-0"
 	}
-	id := atomic.AddInt64(&r.webSummarySeq, 1)
+	id := r.webSummarySeq.Add(1)
 	return fmt.Sprintf("websum-%d", id)
 }
 

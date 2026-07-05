@@ -88,8 +88,8 @@ func (r *Registry) SnapshotWithToolPolicy(ctx context.Context, policy config.Too
 		mcpTools:        map[string]Tool{},
 		webSummarizer:   r.webSummarizer,
 		webSummarySlots: r.webSummarySlots,
-		webSummarySeq:   r.webSummarySeq,
 	}
+	snapshot.webSummarySeq.Store(r.webSummarySeq.Load())
 	r.mcpMu.RLock()
 	snapshot.mcpTools = cloneToolMap(r.mcpTools)
 	snapshot.mcpCatalog = cloneMCPCatalogState(r.mcpCatalog)
