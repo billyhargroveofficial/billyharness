@@ -1956,6 +1956,35 @@ Billy asks for final verification.
   explicit write target is still process-environment driven, so operators must
   keep `FAST_AGENT_ENV_FILE` consistent between gateway/TUI/Telegram services.
 
+### 2026-07-05 - P1.4 active profile instruction fragments
+
+- Completed P1.4 by implementing deterministic profile instruction fragment
+  loading instead of hiding the metadata. `instruction_fragments` now feeds the
+  profile system message in declared order, defaulting to `SOUL.md`.
+- Fragment loading is constrained to relative paths inside
+  `$BILLYHARNESS_HOME/profiles/<profile>/`. Missing files, directories,
+  symlinks, absolute paths, and traversal fragments are skipped; loaded
+  fragment sources are rendered in the profile message for prompt/debug
+  inspection without exposing skipped path contents.
+- Added focused instruction tests for fragment order, rendered prompt sources,
+  missing-file behavior, and traversal rejection. Added an agent prompt test
+  proving `InitialMessages` now includes multi-fragment profile content.
+- Updated `docs/architecture/config-provider-context.md` because profile
+  metadata and prompt assembly semantics changed.
+- Verification passed:
+  `gofmt -w internal/instructions/instructions.go internal/instructions/instructions_test.go internal/agent/agent_test.go`;
+  `go test -count=1 ./internal/config ./internal/instructions ./internal/agent`;
+  `git diff --check`;
+  `go test -count=1 ./...`;
+  `go test -race -count=1 ./internal/agent`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `fcd581b Load profile instruction fragments`
+  (`fcd581b68b6c92cb164f2592b4001f739a54af65`).
+- Push: `origin/main` updated from `eb6ebda` to `fcd581b`.
+- Blockers/residual risk: skipped fragments are not yet surfaced as structured
+  diagnostics; they are simply excluded from the prompt to avoid unsafe or
+  missing file reads.
+
 ### 2026-07-04 - P1.12 verify-local temp rebuild and strict hygiene pass
 
 - Completed P1.12 slice. `scripts/verify-local.sh` now builds the CLI binary
