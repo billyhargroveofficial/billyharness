@@ -2042,6 +2042,38 @@ Billy asks for final verification.
   provider response after provider-side filtering; only native fallback/direct
   search can report local before/after filter counts.
 
+### 2026-07-05 - P1.7 external MCP schema validation split
+
+- Completed P1.7. Native tool schemas still use the strict local validation
+  subset, while `mcp_call` now validates target MCP arguments through an
+  external MCP JSON Schema subset that does not reject valid-but-unsupported
+  remote schema keywords such as `pattern`, `minimum`, or `oneOf`.
+- MCP `tool_search`/`mcp_list_tools` schema-inclusive responses now preserve raw
+  external schemas and add `input_schema_validation =
+  external_mcp_json_schema_subset` plus
+  `input_schema_unsupported_keywords` metadata when local validation cannot
+  enforce every remote JSON Schema keyword.
+- `mcp_call` success and validation-error metadata now includes
+  `mcp_input_schema_validation` and unsupported keyword details, so incident
+  debugging can distinguish local subset validation from the remote server's
+  full schema semantics.
+- Updated `docs/architecture/tools-mcp-and-policy.md` because MCP schema
+  validation and discovery metadata semantics changed.
+- Verification passed:
+  `gofmt -w internal/tools/schema.go internal/tools/tool_discovery.go internal/tools/tools.go internal/tools/tools_test.go internal/tools/mcp_test.go internal/tools/discovery/discovery.go`;
+  `go test -count=1 ./internal/tools`;
+  `go test -count=1 ./internal/tools/discovery`;
+  `git diff --check`;
+  `go test -race -count=1 ./internal/tools`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`;
+  `go test -count=1 ./...`.
+- Commit: `4ecd8af Split MCP schema validation mode`
+  (`4ecd8aff46875ef8cc78eec9a70b1fefad3fdb49`).
+- Push: `origin/main` updated from `80277d5` to `4ecd8af`.
+- Blockers/residual risk: Billyharness still enforces only its supported subset
+  locally for external schemas; the MCP server remains responsible for full
+  JSON Schema semantics such as regex and numeric bound enforcement.
+
 ### 2026-07-04 - P1.12 verify-local temp rebuild and strict hygiene pass
 
 - Completed P1.12 slice. `scripts/verify-local.sh` now builds the CLI binary
