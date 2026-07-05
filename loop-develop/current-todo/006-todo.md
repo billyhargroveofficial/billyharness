@@ -1164,6 +1164,206 @@ git diff --check
   JSONL examples extracted from golden test data; generating the
   `required-imports` half of `architecture_test.go:60`'s hardcoded map.
 
+## Implementation Evidence Log
+
+### P0.1 Scaffold internal/docsgen and docsgen subcommand
+
+- 2026-07-05: Re-verified anchors after 005 moved: `cmd/fast-agent-harness/main.go` dispatch switch is at lines 35-78 and `usage()` is at lines 81-113 before the docsgen edit.
+- 2026-07-05: Added `internal/docsgen` target contract/render helpers, `cmd/fast-agent-harness docsgen`, `docs/generated/README.md`, and the initial `internal/docsgen` architecture row.
+- 2026-07-05: Verification green:
+  - `go test -count=1 ./internal/config ./internal/docsgen ./internal/architecture` -> ok.
+  - `git diff --check` -> ok.
+
+### P0.2 Export config key table and generate config reference
+
+- 2026-07-05: Re-verified anchors after 005 moved: `configSpecs()` is at `internal/config/resolved.go:273`, helper constructors are at `resolved.go:405-456`, and `builtInConfig()` is at `internal/config/defaults.go:217`.
+- 2026-07-05: Extended the runtime-owned config spec table with type and description fields; exported `ConfigKeySpecs()` as a projection while keeping `configSpec` and setter funcs private.
+- 2026-07-05: Generated `docs/generated/config.md` from the same config table; machine-local Billy home paths are rendered as `$BILLYHARNESS_HOME/...`.
+- 2026-07-05: Verification green:
+  - `go run ./cmd/fast-agent-harness docsgen -only config` -> wrote `docs/generated/config.md`.
+  - `go test -count=1 ./internal/config ./internal/docsgen ./internal/architecture` -> ok.
+  - `go run ./cmd/fast-agent-harness docsgen -check` -> unchanged `docs/generated/config.md`.
+  - `git diff --check` -> ok.
+
+### P0.3 Add TestDocsCurrent and generated reference indexes
+
+- 2026-07-05: Re-verified anchors: `internal/architecture/architecture_test.go` enforces docs from ordinary tests; `scripts/verify-local.sh` step list and implementation are both in one file; `llms.txt` had no Generated References section yet.
+- 2026-07-05: Added `TestDocsCurrent`, orphan detection for `docs/generated/*.md`, `docsgen -check` in `scripts/verify-local.sh`, and generated-reference index lines in `llms.txt`/`docs/README.md`.
+- 2026-07-05: Verification green:
+  - `go test -count=1 ./internal/docsgen -run TestDocsCurrent` -> ok.
+  - `go run ./cmd/fast-agent-harness docsgen -check` -> unchanged `docs/generated/config.md`.
+  - `git diff --check` -> ok.
+
+### P1.1 Ship tool catalog generator and unify risk vocabulary
+
+- 2026-07-05: Re-verified anchors after 005 moved: `internal/tools/tools.go:604` exposes `Registry.Specs()`, `internal/tools/policy.go:22` exposes `PolicyDecision`, `cmd/fast-agent-harness/tools_cmd.go:13` builds the live tool dump, `internal/config/mcp.go:356` and `internal/mcpclient/catalog.go:147` held duplicate MCP risk normalization.
+- 2026-07-05: Added `protocol.RiskClassSpecs()`, `RiskClasses()`, `ParseRisk()`, and `RiskClass()`; rewired config/mcpclient MCP risk normalization to the protocol parser while preserving conservative MCP aliases (`external` -> `external_mutation`).
+- 2026-07-05: Added `docs/generated/tools.md` from the static native tool registry via `tools.NewRegistry(config.BuiltIn())`; no live MCP manager is constructed.
+- 2026-07-05: Updated the architecture map for the intentional `config -> protocol` risk-vocabulary dependency and for `docsgen` imports.
+- 2026-07-05: Verification green:
+  - `go test -count=1 ./internal/protocol ./internal/config ./internal/mcpclient ./internal/tools ./internal/docsgen ./internal/architecture` -> ok.
+  - `go run ./cmd/fast-agent-harness docsgen -only tools` -> wrote `docs/generated/tools.md`.
+  - `go run ./cmd/fast-agent-harness docsgen -check` -> unchanged `docs/generated/config.md`, unchanged `docs/generated/tools.md`.
+  - `go run ./cmd/fast-agent-harness tools >/tmp/bh-tools.json` -> ok.
+  - `git diff --check` -> ok.
+
+### P1.2 Refactor routes() into []routeSpec and generate gateway API reference
+
+- 2026-07-05: Re-verified anchors after 005 moved: route registration now lives in `internal/gateway/routes.go:3-29`; `gateway.go` constructs the server at `NewServerWithOptionsFromSettings`; auth predicates remain in `internal/gateway/http_security.go:37-97`. The deleted `GET /v1/benchmarks` route is not present and was not resurrected.
+- 2026-07-05: Replaced literal `HandleFunc` calls with `routeSpecs()` and a range in `routes()`; added `RouteDocs()` and `AuthClassFor()` implemented through the existing gateway route/mutation predicates.
+- 2026-07-05: Added `docs/generated/gateway-api.md` from `gateway.RouteDocs()` and indexed it in `llms.txt`/`docs/README.md`.
+- 2026-07-05: Verification green:
+  - `go build ./...` -> ok.
+  - `go test -count=1 ./internal/gateway` -> ok.
+  - `go test -race -count=1 ./internal/gateway` -> ok.
+  - `go test -count=1 ./internal/docsgen ./internal/architecture` -> ok.
+  - `go run ./cmd/fast-agent-harness docsgen -only gateway-api` -> wrote `docs/generated/gateway-api.md`.
+  - `go run ./cmd/fast-agent-harness docsgen -check` -> unchanged `docs/generated/config.md`, `gateway-api.md`, and `tools.md`.
+  - `git diff --check` -> ok.
+
+### P1.3 Export doc projections for TUI actions and Telegram commands; generate commands reference
+
+- 2026-07-05: Re-verified anchors after 005 moved: `internal/clientux/actions.go:18` exposes `ActionDefinitions()`, `internal/tui/actions.go:43` owns `actionRegistry()`, `internal/tui/actions.go:779` hydrates shared definitions, `internal/telegrambot/commands.go:63` owns `telegramCommands()`, `internal/telegrambot/commands.go:216` renders `/help`, and `internal/telegrambot/command_policy.go:5` owns the command class enum.
+- 2026-07-05: Added `tui.ActionDocs()` and `telegrambot.CommandDocs()` as docs-safe projections of the runtime action/command tables; refactored Telegram `/help` to consume `CommandDocs()` and added a stable string form for command classes.
+- 2026-07-05: Added `docs/generated/commands.md` from `clientux.ActionDefinitions()`, `tui.ActionDocs()`, `telegrambot.CommandDocs()`, and built-in `commandregistry.Build()` entries only; prompt commands, profiles, and MCP prompts stay runtime-only.
+- 2026-07-05: Updated `llms.txt`, `docs/README.md`, and the `internal/docsgen` architecture row for the new commands target.
+- 2026-07-05: Verification green:
+  - `go build ./...` -> ok.
+  - `go test -count=1 ./internal/tui ./internal/telegrambot ./internal/clientux ./internal/commandregistry ./internal/docsgen` -> ok.
+  - `go run ./cmd/fast-agent-harness docsgen -only commands` -> unchanged `docs/generated/commands.md`.
+  - `go run ./cmd/fast-agent-harness docsgen -check` -> unchanged `commands.md`, `config.md`, `gateway-api.md`, and `tools.md`.
+  - `go test -count=1 ./internal/architecture` -> ok.
+  - `git diff --check` -> ok.
+
+### P1.4 Replace the CLI switch with a subcommand table and generate CLI reference
+
+- 2026-07-05: Re-verified anchors after 005 moved: `cmd/fast-agent-harness/main.go:35-79` still held the dispatch switch with `docsgen`, `usage()` was at `main.go:83-115`, and `cmd/fast-agent-harness/main_test.go:26-39` pinned the help path plus the unknown-command error string.
+- 2026-07-05: Added `clientux.CLICommandDocs()` as the doc half of the top-level command table, rewrote dispatch to attach run funcs by primary command name, and rewrote `usage()` to render from `CLICommandDocs()`.
+- 2026-07-05: Added `docs/generated/cli.md` from `clientux.CLICommandDocs()`; command-specific flags remain owned by each subcommand's `FlagSet` and are intentionally not enumerated by docsgen.
+- 2026-07-05: Verification green:
+  - `go build ./...` -> ok.
+  - `go test -count=1 ./cmd/fast-agent-harness ./internal/clientux ./internal/docsgen` -> ok.
+  - `go run ./cmd/fast-agent-harness help` -> ok; printed generated top-level command list.
+  - `go run ./cmd/fast-agent-harness nonsense-command; test $? -ne 0` -> ok; stderr kept `unknown command "nonsense-command"`.
+  - `go run ./cmd/fast-agent-harness docsgen -only cli` -> unchanged `docs/generated/cli.md`.
+  - `go run ./cmd/fast-agent-harness docsgen -check` -> unchanged `cli.md`, `commands.md`, `config.md`, `gateway-api.md`, and `tools.md`.
+  - `git diff --check` -> ok.
+
+### P1.5 Table-drive event-type vocabulary and generate protocol events reference
+
+- 2026-07-05: Re-verified anchors after 005 moved: `internal/protocol/types.go:202-242` owns the 37 `EventType` constants, `internal/protocol/envelope.go:109-161` held required-ID validation, `envelope.go:201-239` held type membership, and `internal/protocol/envelope_test.go` still pins enrichment/validation behavior.
+- 2026-07-05: Added `protocol.EventTypeDocs()` and `protocol.EventSourceDocs()`; `ValidateEventEnvelope`, `isKnownEventType`, and `isKnownEventSource` now consult the protocol-owned tables.
+- 2026-07-05: Added `docs/generated/events.md` with envelope fields, event sources, event types, required IDs, payload names, and descriptions; lifecycle semantics remain in runtime prose/eventlog.
+- 2026-07-05: Verification green:
+  - `go build ./...` -> ok.
+  - `go test -count=1 ./internal/protocol ./internal/eventlog ./internal/gateway` -> ok.
+  - `go test -count=1 ./internal/docsgen` -> ok.
+  - `go run ./cmd/fast-agent-harness docsgen -only events` -> unchanged `docs/generated/events.md`.
+  - `go run ./cmd/fast-agent-harness docsgen -check` -> unchanged `cli.md`, `commands.md`, `config.md`, `events.md`, `gateway-api.md`, and `tools.md`.
+  - `git diff --check` -> ok.
+
+### P1.6 Generate package map and reverse import index
+
+- 2026-07-05: Re-verified anchors: `docs/architecture.md:12` still starts the hand-written Package Map, `internal/architecture/architecture_test.go:212-296` still parses only table rows between `## Package Map` and the next `##`, and `go list -json ./internal/... ./cmd/...` currently yields 48 internal packages plus `cmd/fast-agent-harness`.
+- 2026-07-05: Added package `doc.go` comments for every generated package, added `docs/generated/packages.md` from `go list -json` plus stdlib `go/parser`/`go/doc`, and added a short architecture paragraph explaining intent table vs generated reality.
+- 2026-07-05: Updated the command-package architecture allowlist for the intentional P1.4 `cmd/fast-agent-harness -> internal/clientux` metadata dependency.
+- 2026-07-05: Verification green:
+  - `go build ./...` -> ok.
+  - `go vet ./...` -> ok.
+  - `go test -count=1 ./internal/docsgen ./internal/architecture` -> ok.
+  - `go run ./cmd/fast-agent-harness docsgen -only packages` -> unchanged `docs/generated/packages.md`.
+  - `go run ./cmd/fast-agent-harness docsgen -check` -> unchanged `cli.md`, `commands.md`, `config.md`, `events.md`, `gateway-api.md`, `packages.md`, and `tools.md`.
+  - `go doc ./internal/checkpoint | head -3` -> printed the new package sentence.
+  - `git diff --check` -> ok.
+
+### P2.1 Add doctor -docs generated-reference fingerprint checks
+
+- 2026-07-05: Re-verified anchors after P1 targets landed: `internal/docsgen.Target` still lived in `internal/docsgen/docsgen.go`, source hashes still come from `sourceHashFooter()`/`sourceHash()` in `render.go`, `doctorCmd` flags are in `cmd/fast-agent-harness/doctor.go:136-170`, and `collectDoctorReport()` appends checks after repo resolution.
+- 2026-07-05: Extended each docsgen target with `Fingerprint()`, added `docsgen.VerifyAgainst(dir)`, and made fingerprint tests compare live target fingerprints with generated footer hashes.
+- 2026-07-05: Added `doctor -docs` / `doctorOptions.CheckDocs`; doctor emits one `docs:<target>` check per docsgen target and reports `n/a` when `docs/generated` is absent.
+- 2026-07-05: Updated `docs/generated/README.md` to state that `doctor -docs` proves generated registry-data freshness, not prose freshness.
+- 2026-07-05: Verification green:
+  - `go build ./...` -> ok.
+  - `go test -count=1 ./internal/docsgen ./cmd/fast-agent-harness` -> ok.
+  - `go run ./cmd/fast-agent-harness doctor -docs -build=false -services=false -gateway=false` -> exited 0; all `docs:*` checks were `ok` (local auth/MCP checks failed separately with strict mode off).
+  - `go run ./cmd/fast-agent-harness docsgen -check` -> unchanged `cli.md`, `commands.md`, `config.md`, `events.md`, `gateway-api.md`, `packages.md`, and `tools.md`.
+  - `git diff --check` -> ok.
+
+### P2.2 Extract lifecycle rules where the table is honest
+
+- 2026-07-05: Re-verified anchors before editing: `LifecycleValidator` state maps are at `internal/eventlog/eventlog.go:140-153`; `Observe()` is at `eventlog.go:208` with the event-type switch at `eventlog.go:220-446`; data-dependent helpers are at `eventlog.go:547-675`; lifecycle ordering tests are at `internal/eventlog/eventlog_test.go:266-523`.
+- 2026-07-05: Paper inventory before code:
+  - `run`: structural and tableable. `run.started` creates the run; `run.completed` and `run.failed` terminate it after requiring an existing run and rejecting duplicate terminal events.
+  - `turn`: partly structural, but `turn.change_recorded` / `turn.change_reverted` tolerate a missing turn id after enrichment and only validate the turn if one is present, so a single simple start/progress/terminate shape would need a special optional-child rule.
+  - `step`: partly structural, but `step.started` has conditional `parent_step_id` validation and map-batch behavior is pinned by tests; model/assistant/provider usage events are known-step progress checks rather than step transitions.
+  - `call`: `tool.call_requested` is a clean start, but permission/audit/progress share the call while `tool.call_progress` also drives attempt pre-registration from payload phase.
+  - `attempt`: structurally coupled to call ownership and the `attemptCalls` map; `tool.call_progress` can seed an attempt on `phase=attempt_started`, and post-terminal progress is allowed only for specific payload phases.
+  - `output_ref`, `user_input`, and `hook`: existence-only or opportunistic checks, all driven by payload ids or optional call/attempt ids rather than one lifecycle state shape.
+- 2026-07-05: Escape hatch used. More than 30% of the structural cases would require hidden special fields in the proposed one-shape rule table; forcing them would recreate a second procedural validator in metadata. This loop tables only the clean `run` entity and makes `Observe()` consume that same table. The generated event reference will render the partial runtime table and state clearly that the rest of `Observe()` remains procedural and test-pinned.
+- 2026-07-05: Added `internal/eventlog/lifecycle_rules.go`; `Observe()` now routes `run.started`, `run.completed`, and `run.failed` through that same table, while the turn/step/tool/user-input/hook switch branches remain procedural.
+- 2026-07-05: Extended `docs/generated/events.md` with a partial lifecycle rules table and Mermaid diagram from `eventlog.LifecycleRules()`; regenerated `docs/generated/packages.md` because `docsgen` now imports `eventlog`.
+- 2026-07-05: Verification green:
+  - `go build ./...` -> ok.
+  - `go test -count=1 ./internal/eventlog` -> ok.
+  - `go test -race -count=1 ./internal/eventlog` -> ok.
+  - `go test -count=1 ./internal/gateway ./internal/trace` -> ok.
+  - `go run ./cmd/fast-agent-harness docsgen -only events` -> unchanged `docs/generated/events.md`.
+  - `go run ./cmd/fast-agent-harness docsgen -check` -> unchanged all generated references.
+  - `git diff --check` -> ok.
+
+### P2.3 Split doctor checks into descriptor + executor and generate the doctor reference table
+
+- 2026-07-05: Re-verified anchors after P2.1/P2.2: `doctorCmd` flags are at `cmd/fast-agent-harness/doctor.go:138-172`; `collectDoctorReport()` still resolved repo/mode/runtime before appending checks at `doctor.go:203-246`; check helpers start at `doctor.go:324`; service checks at `doctor.go:723`; gateway probes at `doctor.go:1015`; CLI docs projection is in `internal/clientux/cli_docs.go`.
+- 2026-07-05: Added `cmd/fast-agent-harness/doctor_checks.go` with `doctorCheckSpec`, `doctorContext`, a descriptor builder backed by `clientux.DoctorCheckDocs()`, and run funcs attached by check name. `collectDoctorReport()` now ranges the descriptor list after runtime collection; `git root` remains the preflight repo-resolution check.
+- 2026-07-05: Extended `clientux.DoctorCheckDocs()` to expand docsgen targets and managed services from the code-owned tables; `docs/generated/cli.md` now includes a "What Doctor Checks" table with `docs:*`, service, process, PID, unit, journal, and gateway checks.
+- 2026-07-05: Regenerated `docs/generated/cli.md` and `docs/generated/packages.md` (packages changed because docsgen now imports `serviceops`).
+- 2026-07-05: Verification green:
+  - `go build ./...` -> ok.
+  - `go test -count=1 ./cmd/fast-agent-harness ./internal/clientux ./internal/docsgen` -> ok.
+  - `go run ./cmd/fast-agent-harness doctor -build=false -services=false -gateway=false` -> exited 0; descriptor-ordered checks printed, with expected local auth/MCP/git warnings/fails because strict mode was off.
+  - `go run ./cmd/fast-agent-harness doctor -json -build=false -services=false -gateway=false | head -20` -> exited 0 and printed valid JSON header fields.
+  - `go run ./cmd/fast-agent-harness docsgen -check` -> unchanged all generated references.
+  - `git diff --check` -> ok.
+
+### P2.4 Unify settings.json behind config.BillySettings
+
+- 2026-07-05: Re-verified anchors: `resolveState.applyBillySettings()` was at `internal/config/resolved.go:465-501`; `Config.ApplyBillySettingsDefaults()` was at `internal/config/defaults.go:184-219`; the TUI private `appSettings` shape plus load/save lived at `internal/tui/settings.go:17-108`; existing settings edge-case tests were in `internal/config/config_test.go:221-267` and `:617-677`.
+- 2026-07-05: Added `config.BillySettings`, `LoadBillySettings`, `LoadBillySettingsWithDefaults`, `SaveBillySettings`, and reflected `BillySettingsFieldSpecs()`. Saving is temp+rename with mode `0600`; unknown fields are intentionally not preserved because `settings.json` is Billyharness-owned.
+- 2026-07-05: Rewired config resolution/defaults and TUI load/save to the canonical struct. TUI keeps display defaults and normalization locally, while config reads only the saved model/profile/reasoning/context fields it already consumed.
+- 2026-07-05: Extended `docs/generated/config.md` with a reflected `settings.json` table listing every `BillySettings` JSON key, Go field, type, optional marker, and writer tag.
+- 2026-07-05: Verification green:
+  - `go build ./...` -> ok.
+  - `go test -count=1 ./internal/config ./internal/tui` -> ok.
+  - `go run ./cmd/fast-agent-harness docsgen -only config` -> unchanged `docs/generated/config.md`.
+  - `go run ./cmd/fast-agent-harness docsgen -check` -> unchanged all generated references.
+  - `git diff --check` -> ok.
+
+### P2.5 Rewrite the documentation contract around the real generated layer
+
+- 2026-07-05: Re-verified target docs after all generators landed: `AGENTS.md` Documentation System starts at line 107, `.agents/rules/documentation.md` still owned the detailed docs rule, `llms.txt` had a Generated References section at line 26, `docs/README.md` had generated refs plus stale Known Documentation Gaps, and `docs/generated/README.md` only mentioned basic regeneration plus `doctor -docs`.
+- 2026-07-05: Updated the root and detailed docs rules: hand-written prose owns architecture/rationale, `docs/generated` owns code-generated inventories, generated files are never hand-edited, `TestDocsCurrent` is the committed freshness guard, and `doctor -docs` is the live-binary fingerprint check.
+- 2026-07-05: Consolidated `llms.txt`, `docs/README.md`, and `docs/generated/README.md` so generated references mention the final CLI doctor table, settings.json table, partial lifecycle table, and remaining gaps honestly. P2.2 escape hatch is copied into the Known Documentation Gaps as partial lifecycle coverage.
+- 2026-07-05: Verification green:
+  - `go run ./cmd/fast-agent-harness docsgen -check` -> unchanged all generated references.
+  - `go test -count=1 ./internal/docsgen ./internal/architecture` -> ok.
+  - `grep -rn "agent-index\|reference-plan\|documentation-system.md" AGENTS.md .agents llms.txt docs/README.md; test $? -ne 0` -> ok, no matches.
+  - `grep -rn "docsgen" AGENTS.md .agents llms.txt docs/README.md` -> only the canonical `go run ./cmd/fast-agent-harness docsgen`, `docsgen -check`, `-only <target>`, and docsgen test references.
+  - `git diff --check` -> ok.
+
+### Global verification and strict hygiene cleanup
+
+- 2026-07-05: First `./scripts/verify-local.sh` run passed diff, dependency metadata, vet, docsgen freshness, full tests, focused race tests, `govulncheck`, binary rebuild, and bench smoke, but failed strict hygiene because `internal/tui/transcript_runtime.go` had grown to 1541 LOC over the 1500 source limit.
+- 2026-07-05: Split the bottom rendering/string helper block into `internal/tui/transcript_runtime_render_helpers.go` without behavior changes. Post-split counts: `transcript_runtime.go` 1307 LOC, helper file 244 LOC; `go run ./cmd/fast-agent-harness hygiene -strict` -> ok.
+- 2026-07-05: Final global verification green:
+  - `go build ./...` -> ok.
+  - `go vet ./...` -> ok.
+  - `go test -count=1 ./...` -> ok.
+  - `go test -count=1 ./internal/architecture` -> ok.
+  - `go run ./cmd/fast-agent-harness docsgen -check` -> unchanged all generated references.
+  - `git diff --check` -> ok.
+  - `go build -buildvcs=false -o ./bin/fast-agent-harness ./cmd/fast-agent-harness` -> ok.
+  - `./scripts/verify-local.sh` -> verification passed; full-race step skipped because `--full-race` was not requested.
+
 ## Global Verification For The Implementation Loop
 
 Run after every milestone, and again before declaring the loop done:

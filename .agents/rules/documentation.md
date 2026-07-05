@@ -19,6 +19,9 @@ Do not load every doc by default. Pick the smallest set that matches the task.
 - `.agents/rules/`: detailed reusable agent behavior rules.
 - `llms.txt`: compact agent-readable navigation.
 - `docs/`: architecture canon, contracts, ADRs, and clean-room research.
+- `docs/generated/`: generated code-owned inventories; change source registries
+  and run `go run ./cmd/fast-agent-harness docsgen`, never hand-edit generated
+  markdown.
 - `loop-develop/current-todo/`: active implementation plans and evidence.
 - `loop-develop/history/`: completed loop records.
 - `ops/`: dated production runbooks and verified operator procedures.
@@ -47,6 +50,8 @@ and why they stayed unchanged.
   `docs/`.
 - Do not document unimplemented or unverified behavior as current truth.
 - Do not duplicate large generated tables in handwritten docs.
+- Do not hand-edit generated files under `docs/generated/`; commit regenerated
+  output with the registry/code change that made it stale.
 - Do not copy competitor source or proprietary text into Billyharness docs.
 - Do not move `docs/architecture.md` unless the architecture guard is updated.
 
@@ -62,6 +67,13 @@ go test -count=1 ./internal/architecture
 For code changes that also update docs, run the code verification required by
 `AGENTS.md` plus the focused docs checks above.
 
-For generated docs, regenerate to a temp directory and compare output instead of
-dirtying the worktree in-place unless the task explicitly updates generated
-files.
+For generated docs, run:
+
+```sh
+go run ./cmd/fast-agent-harness docsgen -check
+go test -count=1 ./internal/docsgen
+```
+
+When a source registry changed, regenerate in place with
+`go run ./cmd/fast-agent-harness docsgen` or `-only <target>` and commit the
+updated generated file in the same change.

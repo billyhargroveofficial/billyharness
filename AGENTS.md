@@ -115,11 +115,16 @@ Start here:
 - `.agents/rules/README.md`: detailed agent rules and when to read them.
 - `docs/README.md`: architecture documentation index.
 
-`docs/` is architecture-only. Keep durable architecture maps, package-boundary
-maps, runtime/security contracts, ADRs, and clean-room architecture research
-there. Do not put active TODOs, goal prompts, implementation checklists, setup
-runbooks, temporary investigation logs, feature notes, or completion evidence
-in `docs/`.
+`docs/` is architecture-only: hand-written prose owns architecture, contracts,
+ADRs, and design rationale. Code-owned inventories live in `docs/generated/`;
+never edit those files by hand. If a registry/table changed, run
+`go run ./cmd/fast-agent-harness docsgen` and
+`go run ./cmd/fast-agent-harness docsgen -check`, then commit generated output
+with the source change. `TestDocsCurrent` enforces committed freshness, and
+`doctor -docs` compares live-binary registry fingerprints with generated
+`source-hash` footers. Do not put active TODOs, goal prompts, implementation
+checklists, setup runbooks, temporary logs, feature notes, or completion
+evidence in `docs/`.
 
 Current implementation work belongs in `loop-develop/current-todo`; completed
 and verified loop records belong in `loop-develop/history`. When research

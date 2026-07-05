@@ -23,12 +23,28 @@
 - [Docs index](docs/README.md): architecture canon and ADR index -- the sole
   enumerated list; do not re-list docs here.
 
+## Generated References
+
+- [CLI reference](docs/generated/cli.md): generated top-level commands, aliases, summaries, and doctor check descriptors.
+- [Commands reference](docs/generated/commands.md): generated shared actions, TUI slash/keybindings, Telegram aliases, and command registry composition.
+- [Config reference](docs/generated/config.md): generated config keys, env aliases, defaults, provenance layers, and settings.json fields.
+- [Protocol events reference](docs/generated/events.md): generated event envelope fields, event types, required IDs, payload names, event sources, and table-driven lifecycle rules.
+- [Gateway API reference](docs/generated/gateway-api.md): generated HTTP routes, auth classes, and DTO names.
+- [Package index](docs/generated/packages.md): generated package doc comments, direct internal imports, and reverse import edges.
+- [Tool catalog](docs/generated/tools.md): generated native tool schemas, risk classes, parallel metadata, and MCP policy fields.
+
+Regenerate generated references with `go run ./cmd/fast-agent-harness docsgen`.
+Check committed freshness with `go run ./cmd/fast-agent-harness docsgen -check`;
+`doctor -docs` compares live-binary registry fingerprints to generated
+`source-hash` footers.
+
 ## Coverage Note
 
-This map is initial and not exhaustive. Use source code for exact CLI/API/
-config/protocol/tool surfaces. `ops/` has seed runbooks, while live unit files,
-environment, logs, and host state still need production inspection before being
-treated as verified.
+Generated references cover code-owned inventories, not all prose or operator
+truth. Command-specific flags stay in each command's `FlagSet`; non-tableable
+event lifecycle checks remain in `internal/eventlog` and architecture prose.
+`ops/` has seed runbooks, while live unit files, environment, logs, and host
+state still need production inspection before being treated as verified.
 
 ## Operations Runbooks
 

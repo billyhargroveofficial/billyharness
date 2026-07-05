@@ -8,8 +8,31 @@ Read [../llms.txt](../llms.txt) first when an agent needs the broader repo
 navigation map.
 
 This is an initial architecture index, not exhaustive reference
-documentation. For exact command flags, gateway routes, config keys, protocol
-fields, or tool schemas, inspect the source until generated references exist.
+documentation. For exact command flags or generator gaps, inspect the source
+until generated references exist.
+
+## Generated
+
+- [Generated CLI reference](generated/cli.md): top-level commands, aliases, and
+  summaries, plus doctor check descriptors.
+- [Generated commands reference](generated/commands.md): shared actions, TUI
+  slash/keybindings, Telegram aliases, and command registry composition.
+- [Generated config reference](generated/config.md): config keys, env aliases,
+  defaults, provenance layers, and settings.json fields.
+- [Generated protocol events reference](generated/events.md): event envelope
+  fields, event types, required IDs, payload names, event sources, and
+  table-driven lifecycle rules.
+- [Generated gateway API reference](generated/gateway-api.md): HTTP routes,
+  auth classes, and DTO names.
+- [Generated package index](generated/packages.md): package doc comments,
+  direct internal imports, and reverse import edges.
+- [Generated tool catalog](generated/tools.md): native tool schemas, risk
+  classes, parallel metadata, and MCP policy fields.
+
+Edit the source registry, not generated files. `TestDocsCurrent` enforces
+committed freshness; regenerate with
+`go run ./cmd/fast-agent-harness docsgen`. `doctor -docs` compares the running
+binary's registry fingerprints with generated `source-hash` footers.
 
 ## Canon
 
@@ -60,9 +83,11 @@ fields, or tool schemas, inspect the source until generated references exist.
 
 ## Known Documentation Gaps
 
-- Exact CLI, gateway API, config-key, protocol-event, tool-catalog, and
-  package-map references live in source code until a generated reference
-  workflow exists.
+- Event lifecycle diagrams currently cover only entities that are backed by a
+  runtime-consumed table; turn/step/tool/user-input/hook rules remain
+  procedural in `internal/eventlog` and described in architecture prose.
+- Command-specific flag tables are not generated; each subcommand's `FlagSet`
+  remains the source of truth.
 - `ops/` contains seed diagnostics and production-service runbooks. Live
   systemd unit contents, environment files, log routing, host state, and
   deployment history still require production-host inspection before being
