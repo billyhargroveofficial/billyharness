@@ -2014,6 +2014,34 @@ Billy asks for final verification.
   stdio process startup/tool-list success; gateway `/ready` and runtime MCP
   status remain the live dependency probes.
 
+### 2026-07-05 - P1.6 honest web search filter metadata
+
+- Completed P1.6. `web_search` result metadata now explicitly reports
+  freshness/domain filter request state, support, enforcement mode,
+  post-filtered filters, skipped filters, and result counts after filtering.
+- Native DuckDuckGo Lite search now returns pre/post local filter counts.
+  Domain filters are marked as `native_post_filter`; freshness filters are
+  marked unsupported/skipped. Tavily and Exa searches mark requested
+  freshness/domain filters as provider-enforced.
+- Backend failure fallback metadata now describes the attempted provider,
+  fallback policy, native post-filtering, skipped freshness, and before/after
+  native result counts.
+- Updated `docs/architecture/tools-mcp-and-policy.md` because native web-search
+  metadata semantics changed.
+- Verification passed:
+  `gofmt -w internal/tools/web_backend.go internal/tools/web_handlers.go internal/tools/web_search_product_test.go`;
+  `go test -count=1 ./internal/tools ./internal/webtools ./internal/architecture`;
+  `git diff --check`;
+  `go test -count=1 ./...`;
+  `go test -race -count=1 ./internal/tools`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `c30c822 Expose web search filter enforcement metadata`
+  (`c30c8223367ab2f6360f1cc4b7085d72d75fc160`).
+- Push: `origin/main` updated from `6ab80f4` to `c30c822`.
+- Blockers/residual risk: provider-backed result counts still reflect the
+  provider response after provider-side filtering; only native fallback/direct
+  search can report local before/after filter counts.
+
 ### 2026-07-04 - P1.12 verify-local temp rebuild and strict hygiene pass
 
 - Completed P1.12 slice. `scripts/verify-local.sh` now builds the CLI binary
