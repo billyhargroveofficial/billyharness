@@ -26,6 +26,9 @@ func TestStoreWritesPrivateRefWithMetadata(t *testing.T) {
 	if ref.Path == "" || ref.ID == "" || !strings.HasPrefix(ref.Path, filepath.Join(home, "tool-output")) {
 		t.Fatalf("ref = %#v", ref)
 	}
+	if !IsPortableID(ref.ID) || !strings.Contains(ref.ID, "/") {
+		t.Fatalf("ref id should be portable relative path, got %q", ref.ID)
+	}
 	if !strings.Contains(filepath.Base(ref.Path), "web_fetch-example.com_a_b") {
 		t.Fatalf("unsafe filename was not normalized: %s", filepath.Base(ref.Path))
 	}
@@ -62,6 +65,19 @@ func TestStoreWritesPrivateRefWithMetadata(t *testing.T) {
 		metadata[MetadataOutputRefPermissions] != "0600" ||
 		metadata[MetadataOutputRefPlaintext] != true {
 		t.Fatalf("metadata map = %#v", metadata)
+	}
+}
+
+func TestPortableIDValidation(t *testing.T) {
+	for _, id := range []string{"20260705/ref.txt", "ref.txt"} {
+		if !IsPortableID(id) {
+			t.Fatalf("id %q should be portable", id)
+		}
+	}
+	for _, id := range []string{"", ".", "../ref.txt", "nested/../../ref.txt", "/tmp/ref.txt"} {
+		if IsPortableID(id) {
+			t.Fatalf("id %q should not be portable", id)
+		}
 	}
 }
 

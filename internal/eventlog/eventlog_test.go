@@ -401,6 +401,16 @@ func TestLifecycleValidatorRejectsOrderingViolations(t *testing.T) {
 			want: "after terminal tool attempt",
 		},
 		{
+			name: "terminal tool result with unsettled output ref",
+			events: []protocol.Event{
+				{Type: protocol.EventRunStarted, RunID: "run-1"},
+				{Type: protocol.EventToolCallRequested, RunID: "run-1", CallID: "call-1"},
+				{Type: protocol.EventToolCallStarted, RunID: "run-1", CallID: "call-1", AttemptID: "attempt-1"},
+				{Type: protocol.EventToolCallFinished, RunID: "run-1", CallID: "call-1", AttemptID: "attempt-1", Data: protocol.ToolResult{CallID: "call-1", OutputRef: "/tmp/out"}},
+			},
+			want: "without settled output_ref event",
+		},
+		{
 			name: "duplicate terminal run event",
 			events: []protocol.Event{
 				{Type: protocol.EventRunStarted, RunID: "run-1"},

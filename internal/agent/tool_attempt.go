@@ -405,6 +405,9 @@ func (o *toolOrchestrator) EmitAttemptFinished(result toolExecutionResult) {
 	if o == nil || o.emit == nil {
 		return
 	}
+	if err := settleToolOutputRef(&result); err != nil {
+		markOutputRefUnsettled(&result, err)
+	}
 	progressStatus := toolResultProgressStatus(result.Result)
 	if result.Result.OutputRef != "" {
 		o.emit(protocol.Event{Type: protocol.EventToolOutputRefCreated, Data: toolOutputRefEvent(result)})
@@ -449,6 +452,78 @@ func (o *toolOrchestrator) EmitAttemptFinished(result toolExecutionResult) {
 		"truncated":   result.Result.Truncated,
 		"output_ref":  result.Result.OutputRef,
 	})
+}
+
+func settleToolOutputRef(result *toolExecutionResult) error {
+	if result == nil || strings.TrimSpace(result.Result.OutputRef) == "" {
+		return nil
+	}
+	if result.Result.Metadata == nil {
+		result.Result.Metadata = map[string]any{}
+	}
+	refPath := strings.TrimSpace(result.Result.OutputRef)
+	expectedID := metadataString(result.Result.Metadata, tooloutput.MetadataOutputRefID)
+	expectedBytes := metadataInt64(result.Result.Metadata, tooloutput.MetadataOutputRefBytes)
+	expectedSHA := metadataString(result.Result.Metadata, tooloutput.MetadataOutputRefSHA256)
+	expectedPermissions := metadataString(result.Result.Metadata, tooloutput.MetadataOutputRefPermissions)
+	if expectedID != "" && !tooloutput.IsPortableID(expectedID) {
+		return fmt.Errorf("output_ref_id %q is not portable", expectedID)
+	}
+	ref, err := tooloutput.Stat(refPath)
+	if err != nil {
+		return fmt.Errorf("output_ref %q is not settled: %w", refPath, err)
+	}
+	if expectedBytes > 0 && expectedBytes != ref.Bytes {
+		return fmt.Errorf("output_ref %q size mismatch: metadata=%d actual=%d", refPath, expectedBytes, ref.Bytes)
+	}
+	if expectedSHA != "" && !strings.EqualFold(expectedSHA, ref.SHA256) {
+		return fmt.Errorf("output_ref %q sha256 mismatch", refPath)
+	}
+	if expectedPermissions != "" && expectedPermissions != ref.Permissions {
+		return fmt.Errorf("output_ref %q permissions mismatch: metadata=%s actual=%s", refPath, expectedPermissions, ref.Permissions)
+	}
+	ref.AddMetadata(result.Result.Metadata)
+	result.Result.OutputRef = ref.Path
+	delete(result.Result.Metadata, tooloutput.MetadataOutputRefHashError)
+	if id := metadataString(result.Result.Metadata, tooloutput.MetadataOutputRefID); !tooloutput.IsPortableID(id) {
+		return fmt.Errorf("output_ref_id %q is not portable", id)
+	}
+	result.Result.Metadata["output_ref_settled"] = true
+	result.Result.Compact = compactForResult(*result, toolResultProgressStatus(result.Result))
+	return nil
+}
+
+func markOutputRefUnsettled(result *toolExecutionResult, err error) {
+	if result == nil {
+		return
+	}
+	if result.Result.Metadata == nil {
+		result.Result.Metadata = map[string]any{}
+	}
+	ref := strings.TrimSpace(result.Result.OutputRef)
+	result.Result.Metadata["output_ref_settled"] = false
+	result.Result.Metadata["output_ref_settlement_error"] = err.Error()
+	if ref != "" {
+		result.Result.Metadata["unsettled_output_ref"] = ref
+	}
+	delete(result.Result.Metadata, tooloutput.MetadataOutputRef)
+	delete(result.Result.Metadata, tooloutput.MetadataOutputRefID)
+	delete(result.Result.Metadata, tooloutput.MetadataOutputRefBytes)
+	delete(result.Result.Metadata, tooloutput.MetadataOutputRefSHA256)
+	delete(result.Result.Metadata, tooloutput.MetadataOutputRefPermissions)
+	delete(result.Result.Metadata, tooloutput.MetadataOutputRefPlaintext)
+	delete(result.Result.Metadata, tooloutput.MetadataOutputRefHashError)
+	result.Result.OutputRef = ""
+	result.Result.IsError = true
+	result.Result.ErrorCode = "output_ref_unsettled"
+	result.Result.Content = "Tool result could not be completed because output_ref was not settled: " + err.Error()
+	result.Result.Truncated = false
+	result.Result.Compact = compactForResult(*result, toolResultProgressStatus(result.Result))
+}
+
+func compactForResult(result toolExecutionResult, progressStatus string) *protocol.ToolCompact {
+	compact := toolResultCompact(result.Call, result.AttemptID, progressStatus, result.Result)
+	return &compact
 }
 
 func providerHelperUsageFromToolResult(result toolExecutionResult) (protocol.ProviderHelperUsageEvent, bool) {

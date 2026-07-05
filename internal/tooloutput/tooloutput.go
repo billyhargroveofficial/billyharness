@@ -63,7 +63,7 @@ func Store(req StoreRequest) (Ref, error) {
 	}
 	body := []byte(content)
 	now := time.Now().UTC()
-	root := filepath.Join(config.BillyHomeDir(), "tool-output")
+	root := outputRoot()
 	if err := ensurePrivateDir(root); err != nil {
 		return Ref{}, err
 	}
@@ -82,7 +82,7 @@ func Store(req StoreRequest) (Ref, error) {
 	}
 	return Ref{
 		Path:        path,
-		ID:          filepath.Base(path),
+		ID:          portableID(root, path),
 		Bytes:       int64(len(body)),
 		SHA256:      hex.EncodeToString(sum[:]),
 		Permissions: "0600",
@@ -111,12 +111,41 @@ func Stat(path string) (Ref, error) {
 	}
 	return Ref{
 		Path:        path,
-		ID:          filepath.Base(path),
+		ID:          portableID(outputRoot(), path),
 		Bytes:       bytes,
 		SHA256:      hex.EncodeToString(hash.Sum(nil)),
 		Permissions: fmt.Sprintf("%04o", info.Mode().Perm()),
 		Plaintext:   true,
 	}, nil
+}
+
+func IsPortableID(id string) bool {
+	id = strings.TrimSpace(filepath.ToSlash(id))
+	if id == "" || id == "." || filepath.IsAbs(id) {
+		return false
+	}
+	clean := pathClean(id)
+	return clean == id && clean != "." && clean != ".." && !strings.HasPrefix(clean, "../")
+}
+
+func outputRoot() string {
+	return filepath.Join(config.BillyHomeDir(), "tool-output")
+}
+
+func portableID(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err == nil && IsPortableID(rel) {
+		return filepath.ToSlash(rel)
+	}
+	return filepath.Base(path)
+}
+
+func pathClean(value string) string {
+	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(value)))
+	if clean == "." {
+		return strings.TrimSpace(filepath.ToSlash(value))
+	}
+	return clean
 }
 
 func Exists(path string) bool {

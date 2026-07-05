@@ -148,6 +148,7 @@ type LifecycleValidator struct {
 	attempts         map[string]struct{}
 	attemptCalls     map[string]string
 	terminalAttempts map[string]protocol.EventType
+	outputRefs       map[string]struct{}
 	userInputs       map[string]struct{}
 }
 
@@ -199,6 +200,7 @@ func (v *LifecycleValidator) Clone() *LifecycleValidator {
 		attempts:         cloneSet(v.attempts),
 		attemptCalls:     cloneStringMap(v.attemptCalls),
 		terminalAttempts: cloneEventTypeMap(v.terminalAttempts),
+		outputRefs:       cloneSet(v.outputRefs),
 		userInputs:       cloneSet(v.userInputs),
 	}
 }
@@ -394,6 +396,11 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 		if previous, ok := v.terminalAttempts[key]; ok {
 			return fmt.Errorf("duplicate terminal tool attempt event for %q: got %s after %s", attemptID, event.Type, previous)
 		}
+		if outputRef := lifecycleDataString(event.Data, "output_ref"); outputRef != "" {
+			if _, ok := v.outputRefs[key]; !ok {
+				return fmt.Errorf("%s for attempt_id %q references output_ref without settled output_ref event", event.Type, attemptID)
+			}
+		}
 		v.terminalAttempts[key] = event.Type
 	case protocol.EventToolOutputRefCreated:
 		if err := v.requireKnownCall(event.Type, runID, callID); err != nil {
@@ -402,6 +409,7 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 		if err := v.requireKnownAttemptForCall(event.Type, runID, callID, attemptID); err != nil {
 			return err
 		}
+		v.outputRefs[attemptKey(runID, attemptID)] = struct{}{}
 	case protocol.EventUserInputRequested:
 		if err := v.requireKnownCall(event.Type, runID, callID); err != nil {
 			return err
@@ -554,6 +562,20 @@ func lifecycleDataString(value any, key string) string {
 			return ""
 		}
 		return lifecycleToolProgressString(*data, key)
+	case protocol.ToolResult:
+		return lifecycleToolResultString(data, key)
+	case *protocol.ToolResult:
+		if data == nil {
+			return ""
+		}
+		return lifecycleToolResultString(*data, key)
+	case protocol.ToolOutputRefEvent:
+		return lifecycleToolOutputRefString(data, key)
+	case *protocol.ToolOutputRefEvent:
+		if data == nil {
+			return ""
+		}
+		return lifecycleToolOutputRefString(*data, key)
 	case protocol.UserInputRequestEvent:
 		return lifecycleUserInputRequestString(data, key)
 	case *protocol.UserInputRequestEvent:
@@ -591,6 +613,24 @@ func lifecycleToolProgressString(progress protocol.ToolProgressEvent, key string
 	switch key {
 	case "phase":
 		return strings.TrimSpace(progress.Phase)
+	default:
+		return ""
+	}
+}
+
+func lifecycleToolResultString(result protocol.ToolResult, key string) string {
+	switch key {
+	case "output_ref":
+		return strings.TrimSpace(result.OutputRef)
+	default:
+		return ""
+	}
+}
+
+func lifecycleToolOutputRefString(ref protocol.ToolOutputRefEvent, key string) string {
+	switch key {
+	case "output_ref":
+		return strings.TrimSpace(ref.OutputRef)
 	default:
 		return ""
 	}
@@ -664,6 +704,9 @@ func (v *LifecycleValidator) ensure() {
 	}
 	if v.terminalAttempts == nil {
 		v.terminalAttempts = map[string]protocol.EventType{}
+	}
+	if v.outputRefs == nil {
+		v.outputRefs = map[string]struct{}{}
 	}
 	if v.userInputs == nil {
 		v.userInputs = map[string]struct{}{}

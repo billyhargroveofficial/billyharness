@@ -40,7 +40,8 @@
     {
       "name": "late_output_ref",
       "summary": "Output-ref audit event arrives after the terminal tool result.",
-      "valid": true,
+      "valid": false,
+      "expect_error": "without settled output_ref event",
       "events": [
         {"schema_version":1,"seq":1,"source":"agent","ts":"2026-07-01T01:03:01Z","run_id":"run-late-output-ref","type":"run.started"},
         {"schema_version":1,"seq":2,"source":"agent","ts":"2026-07-01T01:03:02Z","run_id":"run-late-output-ref","call_id":"call-ref","type":"tool.call_requested","data":{"id":"call-ref","name":"fs_read_file","arguments":{"path":"large.log"}}},

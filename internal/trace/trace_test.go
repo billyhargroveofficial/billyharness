@@ -309,6 +309,59 @@ func TestReplayEventsAuditsToolOutputRefs(t *testing.T) {
 	}
 }
 
+func TestReplayEventsResolvesMovedBundleOutputRefID(t *testing.T) {
+	root := t.TempDir()
+	oldBundle := filepath.Join(root, "old")
+	movedBundle := filepath.Join(root, "moved")
+	body := []byte("portable output ref\n")
+	relID := filepath.ToSlash(filepath.Join("20260705", "call-output.txt"))
+	movedRef := filepath.Join(movedBundle, "tool-output", filepath.FromSlash(relID))
+	if err := os.MkdirAll(filepath.Dir(movedRef), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(movedRef, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	var out bytes.Buffer
+	writer := NewEventWriter("run-moved", &out)
+	events := []protocol.Event{
+		{Type: protocol.EventRunStarted},
+		{Type: protocol.EventToolCallRequested, CallID: "call-1", Data: protocol.ToolCall{ID: "call-1", Name: "shell_exec"}},
+		{Type: protocol.EventToolCallStarted, CallID: "call-1", AttemptID: "attempt-1", Data: "shell_exec"},
+		{
+			Type: protocol.EventToolOutputRefCreated,
+			Data: protocol.ToolOutputRefEvent{
+				CallID:          "call-1",
+				Name:            "shell_exec",
+				AttemptID:       "attempt-1",
+				OutputRef:       filepath.Join(oldBundle, "tool-output", filepath.FromSlash(relID)),
+				OutputRefID:     relID,
+				OutputRefBytes:  int64(len(body)),
+				OutputRefSHA256: hex.EncodeToString(sum[:]),
+			},
+		},
+	}
+	for _, event := range events {
+		if _, err := writer.Record("task-moved", event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(movedBundle, "events.jsonl")
+	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := ReplayEvents(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.OutputRefs != 1 || summary.MissingOutputRefs != 0 ||
+		summary.OutputRefHashMismatch != 0 || summary.OutputRefBytes != int64(len(body)) ||
+		len(summary.OutputRefWarnings) != 0 {
+		t.Fatalf("moved bundle output refs = %#v warnings=%#v", summary, summary.OutputRefWarnings)
+	}
+}
+
 func TestReplayEventsAggregatesUsageCumulativeAndEventCounters(t *testing.T) {
 	var out bytes.Buffer
 	writer := NewEventWriter("run-1", &out)

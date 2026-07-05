@@ -170,6 +170,9 @@ enforces these replay rules:
   previous call request and attempt start, bind `attempt_id` to the original
   `call_id`, and reject duplicate terminal attempt events for the same
   run/attempt key;
+- terminal tool events that carry `output_ref` require a prior
+  `tool.output_ref_created` event for the same run/attempt key, so replay does
+  not accept a terminal success that points at an unsettled artifact;
 - `tool.call_progress` events that carry an `attempt_id` must reference the
   same call as the started attempt, and `attempt_started` progress binds the
   attempt to its first call before the terminal start event arrives.
@@ -219,10 +222,21 @@ terminal lifecycle event.
 ## Output Refs And Payload Refs
 
 Tool output refs are runtime metadata for large or truncated tool results. When
-a `ToolResult` carries `OutputRef`, the agent emits `tool.output_ref_created`
-with path, ID, byte count, optional SHA-256, permissions, plaintext flag, and
-truncation state. This event is not terminal for the attempt; terminal state is
-still one of finished, failed, or aborted.
+a `ToolResult` carries `OutputRef`, the agent first settles the artifact by
+statting the file, verifying any existing byte/hash/permission metadata, and
+requiring a portable relative `output_ref_id`. Only settled refs emit
+`tool.output_ref_created` with path, ID, byte count, SHA-256, permissions,
+plaintext flag, and truncation state. If settlement fails, the agent clears the
+terminal `OutputRef` field and emits a failed tool result with
+`output_ref_unsettled` metadata instead of terminally succeeding with a broken
+artifact. The output-ref event is not terminal for the attempt; terminal state
+is still one of finished, failed, or aborted.
+
+`tooloutput.Store` writes refs under `$BILLYHARNESS_HOME/tool-output` and uses a
+relative ID under that root. `trace.ReplayEvents` resolves absolute refs first,
+then portable relative `output_ref`/`output_ref_id` candidates under the replay
+bundle directory and `tool-output/`, so copied trace bundles can still validate
+output-ref bytes and hashes after moving between machines or directories.
 
 Trace payload refs are separate benchmark persistence metadata. `trace.EventWriter`
 can write selected large protocol events to a payload directory, replace the

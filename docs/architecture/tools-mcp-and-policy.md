@@ -263,10 +263,15 @@ Output refs are used in three places:
   rechecks workspace-root and symlink constraints before restoring files.
 
 When a tool result has an output ref, `toolOrchestrator.EmitAttemptFinished` in
-`internal/agent/tool_attempt.go` emits `tool.output_ref_created` before the
-final tool result event. The output-ref event carries the same ref metadata and
-a `ToolCompact` summary. `protocol.EnrichEvent` copies call and attempt IDs
-from `ToolOutputRefEvent` into the event envelope.
+`internal/agent/tool_attempt.go` settles the artifact before any terminal tool
+event. Settlement stats the file, verifies existing byte/hash/permission
+metadata, requires a portable relative `output_ref_id`, refreshes metadata, and
+then emits `tool.output_ref_created` before the final tool result event. If
+settlement fails, the terminal result is downgraded to
+`output_ref_unsettled`, the terminal `OutputRef` field is cleared, and no
+`tool.output_ref_created` event is emitted. The output-ref event carries the
+same ref metadata and a `ToolCompact` summary. `protocol.EnrichEvent` copies
+call and attempt IDs from `ToolOutputRefEvent` into the event envelope.
 
 `fs_read_file` can read absolute paths under Billyharness tool-output even when
 they are outside workspace roots. Ordinary files under `$BILLYHARNESS_HOME`

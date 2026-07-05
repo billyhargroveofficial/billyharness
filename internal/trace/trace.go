@@ -289,6 +289,7 @@ type ReplaySummary struct {
 	ProfileHashes          []string                     `json:"profile_hashes,omitempty"`
 	Timeline               []ReplayTimelineItem         `json:"timeline,omitempty"`
 	usage                  replayUsageAccumulator
+	replayRoot             string
 }
 
 type ReplayHelperUsage struct {
@@ -355,6 +356,7 @@ func ReplayEvents(path string) (ReplaySummary, error) {
 		LegacyEventTypes:    map[string]int{},
 		Tasks:               map[string]int{},
 		HelperUsageByKind:   map[string]ReplayHelperUsage{},
+		replayRoot:          filepath.Dir(path),
 	}
 	validator := eventlog.NewRecordValidator(eventlog.RecordValidatorOptions{
 		SchemaVersion:    CurrentManifestVersion,
@@ -677,7 +679,8 @@ func (s *ReplaySummary) observeOutputRef(event protocol.Event) {
 		s.OutputRefWarnings = append(s.OutputRefWarnings, warning)
 		return
 	}
-	info, err := os.Stat(ref.OutputRef)
+	resolvedPath := s.resolveOutputRefPath(ref)
+	info, err := os.Stat(resolvedPath)
 	if err != nil {
 		warning.Reason = "missing"
 		warning.Error = err.Error()
@@ -702,7 +705,7 @@ func (s *ReplaySummary) observeOutputRef(event protocol.Event) {
 	if ref.OutputRefSHA256 == "" {
 		return
 	}
-	ok, err := fileSHA256Matches(ref.OutputRef, ref.OutputRefSHA256)
+	ok, err := fileSHA256Matches(resolvedPath, ref.OutputRefSHA256)
 	if err != nil {
 		warning.Reason = "hash_error"
 		warning.Error = err.Error()
@@ -715,6 +718,45 @@ func (s *ReplaySummary) observeOutputRef(event protocol.Event) {
 		s.OutputRefHashMismatch++
 		s.OutputRefWarnings = append(s.OutputRefWarnings, warning)
 	}
+}
+
+func (s *ReplaySummary) resolveOutputRefPath(ref protocol.ToolOutputRefEvent) string {
+	var candidates []string
+	if outputRef := strings.TrimSpace(ref.OutputRef); outputRef != "" {
+		candidates = append(candidates, outputRef)
+		if !filepath.IsAbs(outputRef) && strings.TrimSpace(s.replayRoot) != "" {
+			candidates = append(candidates, filepath.Join(s.replayRoot, filepath.FromSlash(outputRef)))
+		}
+	}
+	if id := strings.TrimSpace(ref.OutputRefID); id != "" && portableReplayRefID(id) && strings.TrimSpace(s.replayRoot) != "" {
+		rel := filepath.FromSlash(id)
+		candidates = append(candidates,
+			filepath.Join(s.replayRoot, rel),
+			filepath.Join(s.replayRoot, "tool-output", rel),
+		)
+	}
+	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate) == "" {
+			continue
+		}
+		info, err := os.Stat(candidate)
+		if err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	if len(candidates) > 0 {
+		return candidates[0]
+	}
+	return ""
+}
+
+func portableReplayRefID(id string) bool {
+	id = strings.TrimSpace(filepath.ToSlash(id))
+	if id == "" || id == "." || filepath.IsAbs(id) {
+		return false
+	}
+	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(id)))
+	return clean == id && clean != "." && clean != ".." && !strings.HasPrefix(clean, "../")
 }
 
 func (s *ReplaySummary) observeHelperUsage(usage protocol.ProviderHelperUsageEvent) {

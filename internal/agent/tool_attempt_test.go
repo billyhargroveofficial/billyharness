@@ -356,6 +356,64 @@ func TestRunMessagesDiagnosticsRunReturnsOutputRefMetadata(t *testing.T) {
 	}
 }
 
+func TestRunMessagesFailsUnsettledOutputRefBeforeTerminalEvent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.MaxToolRounds = 2
+	registry := tools.NewRegistry(cfg)
+	missingRef := filepath.Join(home, "tool-output", "missing.txt")
+	if err := registry.Register(tools.Tool{
+		Spec: protocol.ToolSpec{
+			Name:        "missing_ref",
+			Description: "Returns a missing output ref.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+			Risk:        protocol.RiskReadOnly,
+		},
+		Handler: func(context.Context, json.RawMessage) (tools.Result, error) {
+			return tools.Result{Content: "preview", OutputRef: missingRef}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prov := &scriptedProvider{steps: [][]provider.Event{
+		{
+			{Kind: provider.EventToolCallDelta, ToolIndex: 0, ToolID: "call_missing_ref", ToolName: "missing_ref", ArgsDelta: `{}`},
+			{Kind: provider.EventDone},
+		},
+		{
+			{Kind: provider.EventContent, Text: "handled"},
+			{Kind: provider.EventDone},
+		},
+	}}
+	a := New(cfg, prov, registry)
+	var events []protocol.Event
+	if _, err := a.RunMessages(context.Background(), []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "run missing ref"},
+	}, func(event protocol.Event) {
+		events = append(events, event)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if sawEvent(events, protocol.EventToolOutputRefCreated) ||
+		sawToolTerminalEvent(events, protocol.EventToolCallFinished, "call_missing_ref") {
+		t.Fatalf("unsettled output ref should not emit output_ref_created or success: %#v", events)
+	}
+	if !sawToolTerminalEvent(events, protocol.EventToolCallFailed, "call_missing_ref") {
+		t.Fatalf("missing failed terminal event: %#v", events)
+	}
+	result, ok := firstToolResult(events)
+	if !ok || result.ErrorCode != "output_ref_unsettled" || result.OutputRef != "" ||
+		result.Metadata["output_ref_settled"] != false ||
+		result.Metadata["unsettled_output_ref"] != missingRef {
+		t.Fatalf("tool result = %#v ok=%v", result, ok)
+	}
+	assertAgentLifecycleValid(t, events)
+}
+
 func TestRunMessagesToolOrchestratorEmitsSafePermissionAndAttempt(t *testing.T) {
 	cfg := config.Default()
 	cfg.MaxToolRounds = 2
