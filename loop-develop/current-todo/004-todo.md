@@ -1928,6 +1928,34 @@ Billy asks for final verification.
   writer goroutine may still wait for the underlying HTTP stack to return, but
   the run handler and run goroutine are no longer pinned by final stream drain.
 
+### 2026-07-05 - P1.3 effective dotenv persistence for DeepSeek auth
+
+- Completed P1.3. DeepSeek API-key persistence now writes to the effective
+  dotenv target used by reads: `FAST_AGENT_ENV_FILE` when set and not disabled
+  by `BILLYHARNESS_DOTENV_HOME_ONLY`, otherwise `$BILLYHARNESS_HOME/.env`.
+- Added fail-closed active dotenv validation. Directory, read-only, or otherwise
+  unwritable active dotenv targets now return an error with the active path
+  instead of silently writing a different fallback file.
+- Added config, credentials, and gateway regressions for default home dotenv
+  selection, explicit env-file selection, home-only override, missing explicit
+  env-file creation, read-only explicit env-file failure, no fallback
+  persistence after failed write, and `/v1/auth/deepseek` status provenance.
+- Updated `README.md` and `docs/architecture/config-provider-context.md`
+  because the provider auth persistence contract changed.
+- Verification passed:
+  `gofmt -w internal/config/env.go internal/config/env_backend_test.go internal/credentials/credentials.go internal/credentials/credentials_test.go internal/gateway/gateway_test.go`;
+  `go test -count=1 ./internal/config ./internal/credentials ./internal/gateway ./internal/telegrambot`;
+  `git diff --check`;
+  `go test -count=1 ./...`;
+  `go test -race -count=1 ./internal/gateway ./internal/telegrambot`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `04e2c21 Align DeepSeek auth dotenv persistence`
+  (`04e2c212c0c98a1cbdf3ab3278bafcb7fe9c8ec4`).
+- Push: `origin/main` updated from `677a824` to `04e2c21`.
+- Blockers/residual risk: no live production auth save was attempted. The
+  explicit write target is still process-environment driven, so operators must
+  keep `FAST_AGENT_ENV_FILE` consistent between gateway/TUI/Telegram services.
+
 ### 2026-07-04 - P1.12 verify-local temp rebuild and strict hygiene pass
 
 - Completed P1.12 slice. `scripts/verify-local.sh` now builds the CLI binary
