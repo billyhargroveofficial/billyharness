@@ -63,15 +63,17 @@ func (s WebSummarizer) SummarizeWeb(ctx context.Context, req webtools.SummaryReq
 	})
 	var content strings.Builder
 	var usage Usage
-	for event := range events {
-		switch event.Kind {
-		case EventContent:
-			content.WriteString(event.Text)
-		case EventUsage:
-			usage = event.Usage
-		}
-	}
-	if err := <-errs; err != nil {
+	if err := DrainStream(ctx, events, errs, StreamDrainOptions{
+		OnEvent: func(event Event) error {
+			switch event.Kind {
+			case EventContent:
+				content.WriteString(event.Text)
+			case EventUsage:
+				usage = event.Usage
+			}
+			return nil
+		},
+	}); err != nil {
 		return webtools.SummaryResult{}, err
 	}
 	text := webtools.NormalizeSummaryOutput(content.String(), settings.MaxOutputTokens)

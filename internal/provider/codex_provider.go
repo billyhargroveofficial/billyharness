@@ -480,10 +480,8 @@ func parseResponsesSSE(ctx context.Context, r io.Reader, idle time.Duration, eve
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	lines, errs := scanLines(ctx, r)
-	var timer <-chan time.Time
-	if idle > 0 {
-		timer = time.After(idle)
-	}
+	idleTimer, idleC := newStreamIdleTimer(idle)
+	defer stopStreamIdleTimer(idleTimer)
 	parser := newResponsesParser()
 	var data []string
 	flush := func() error {
@@ -504,7 +502,7 @@ func parseResponsesSSE(ctx context.Context, r io.Reader, idle time.Duration, eve
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-timer:
+		case <-idleC:
 			return errors.New("Codex provider stream idle timeout")
 		case line, ok := <-lines:
 			if !ok {
@@ -519,9 +517,7 @@ func parseResponsesSSE(ctx context.Context, r io.Reader, idle time.Duration, eve
 				}
 				return nil
 			}
-			if idle > 0 {
-				timer = time.After(idle)
-			}
+			resetStreamIdleTimer(idleTimer, idle)
 			line = strings.TrimRight(line, "\r")
 			if line == "" {
 				if err := flush(); err != nil {

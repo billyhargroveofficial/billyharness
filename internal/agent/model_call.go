@@ -200,17 +200,19 @@ func (a *Agent) collectModelCallStream(ctx context.Context, hookRunner *runtimeh
 	flushTimer := time.NewTimer(modelDeltaCoalesceMaxDelay)
 	stopModelDeltaTimer(flushTimer)
 	defer stopModelDeltaTimer(flushTimer)
-	for events != nil {
-		var flushC <-chan time.Time
-		if deltas.Pending() {
-			flushC = flushTimer.C
-		}
-		select {
-		case event, ok := <-events:
-			if !ok {
-				events = nil
-				continue
+	result.Err = provider.DrainStream(ctx, events, errs, provider.StreamDrainOptions{
+		FlushC: func() <-chan time.Time {
+			if deltas.Pending() {
+				return flushTimer.C
 			}
+			return nil
+		},
+		OnFlush: func() error {
+			deltas.FlushPending()
+			stopModelDeltaTimer(flushTimer)
+			return nil
+		},
+		OnEvent: func(event provider.Event) error {
 			wasPending := deltas.Pending()
 			a.collectModelCallEvent(ctx, hookRunner, event, turnID, stepID, &result, deltas, emit)
 			switch {
@@ -219,13 +221,10 @@ func (a *Agent) collectModelCallStream(ctx context.Context, hookRunner *runtimeh
 			case !deltas.Pending():
 				stopModelDeltaTimer(flushTimer)
 			}
-		case <-flushC:
-			deltas.FlushPending()
-			stopModelDeltaTimer(flushTimer)
-		}
-	}
+			return nil
+		},
+	})
 	deltas.FlushBoundary()
-	result.Err = <-errs
 	if result.Err != nil {
 		if metadata, ok := provider.RequestMetadataFromError(result.Err); ok {
 			result.RequestMetadata = mergeRequestMetadata(result.RequestMetadata, metadata)

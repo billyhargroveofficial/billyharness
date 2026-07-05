@@ -395,15 +395,13 @@ func parseSSE(ctx context.Context, r io.Reader, idle time.Duration, events chan<
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	lines, errs := scanLines(ctx, r)
-	var timer <-chan time.Time
-	if idle > 0 {
-		timer = time.After(idle)
-	}
+	idleTimer, idleC := newStreamIdleTimer(idle)
+	defer stopStreamIdleTimer(idleTimer)
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-timer:
+		case <-idleC:
 			return errors.New("provider stream idle timeout")
 		case line, ok := <-lines:
 			if !ok {
@@ -413,9 +411,7 @@ func parseSSE(ctx context.Context, r io.Reader, idle time.Duration, events chan<
 				}
 				return errors.New("provider stream closed before [DONE]")
 			}
-			if idle > 0 {
-				timer = time.After(idle)
-			}
+			resetStreamIdleTimer(idleTimer, idle)
 			line = strings.TrimSpace(line)
 			if !strings.HasPrefix(line, "data:") {
 				continue

@@ -332,6 +332,75 @@ func TestProviderStreamRunnerClosesErrsWithoutValueOnSuccess(t *testing.T) {
 	}
 }
 
+func TestDrainStreamNormalCompletion(t *testing.T) {
+	events := make(chan Event, 2)
+	errs := make(chan error)
+	events <- Event{Kind: EventContent, Text: "hello"}
+	events <- Event{Kind: EventDone}
+	close(events)
+	close(errs)
+
+	var got []EventKind
+	if err := DrainStream(context.Background(), events, errs, StreamDrainOptions{
+		OnEvent: func(event Event) error {
+			got = append(got, event.Kind)
+			return nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != EventContent || got[1] != EventDone {
+		t.Fatalf("events = %#v", got)
+	}
+}
+
+func TestDrainStreamReturnsErrorAfterPartialEvents(t *testing.T) {
+	events := make(chan Event)
+	errs := make(chan error, 1)
+	wantErr := errors.New("stream exploded")
+	seen := make(chan struct{})
+	go func() {
+		events <- Event{Kind: EventContent, Text: "partial"}
+		<-seen
+		errs <- wantErr
+	}()
+
+	var got strings.Builder
+	err := DrainStream(context.Background(), events, errs, StreamDrainOptions{
+		OnEvent: func(event Event) error {
+			got.WriteString(event.Text)
+			close(seen)
+			return nil
+		},
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, want %v", err, wantErr)
+	}
+	if got.String() != "partial" {
+		t.Fatalf("partial events = %q", got.String())
+	}
+}
+
+func TestDrainStreamReturnsContextWhenEventsNeverClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := DrainStream(ctx, make(chan Event), make(chan error), StreamDrainOptions{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context canceled", err)
+	}
+}
+
+func TestDrainStreamReturnsContextWhenErrChannelBlocks(t *testing.T) {
+	events := make(chan Event)
+	close(events)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := DrainStream(ctx, events, make(chan error), StreamDrainOptions{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want deadline exceeded", err)
+	}
+}
+
 func TestParseChunkEmitsReasoningContentToolAndUsage(t *testing.T) {
 	events, err := parseChunk([]byte(`{
 		"choices":[{

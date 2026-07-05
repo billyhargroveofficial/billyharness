@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -221,6 +222,29 @@ func TestRunMessagesEmitsStillRunningDuringProviderStall(t *testing.T) {
 			t.Fatalf("heartbeat polluted transcript messages: %#v", messages)
 		}
 	}
+}
+
+func TestRunMessagesReturnsWhenProviderStreamNeverClosesAfterContextCancel(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	a := New(cfg, neverClosingStreamProvider{}, tools.NewRegistry(cfg))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	_, err := a.RunMessages(ctx, []protocol.Message{
+		{Role: protocol.RoleSystem, Content: "system"},
+		{Role: protocol.RoleUser, Content: "stream"},
+	}, func(protocol.Event) {})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want deadline exceeded", err)
+	}
+}
+
+type neverClosingStreamProvider struct{}
+
+func (neverClosingStreamProvider) Stream(context.Context, provider.Request) (<-chan provider.Event, <-chan error) {
+	return make(chan provider.Event), make(chan error)
 }
 
 type blockingFirstDeltaProvider struct {

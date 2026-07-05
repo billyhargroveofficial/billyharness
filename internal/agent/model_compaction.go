@@ -55,15 +55,17 @@ func (a *Agent) applyModelCompactionSummary(ctx context.Context, messages []prot
 	})
 	var b strings.Builder
 	var usage provider.Usage
-	for event := range events {
-		switch event.Kind {
-		case provider.EventContent:
-			b.WriteString(event.Text)
-		case provider.EventUsage:
-			usage = event.Usage
-		}
-	}
-	if err := <-errs; err != nil {
+	if err := provider.DrainStream(ctx, events, errs, provider.StreamDrainOptions{
+		OnEvent: func(event provider.Event) error {
+			switch event.Kind {
+			case provider.EventContent:
+				b.WriteString(event.Text)
+			case provider.EventUsage:
+				usage = event.Usage
+			}
+			return nil
+		},
+	}); err != nil {
 		return err
 	}
 	text := compactModelSummaryText(b.String(), maxOutputTokens)
