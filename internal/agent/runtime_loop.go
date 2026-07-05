@@ -82,7 +82,7 @@ func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []pro
 	emittedContextThresholds := map[int]bool{}
 	contextEpoch := 0
 	emitContextThresholdEvents(messages, a.runtime, 0, "initial", contextEpoch, emittedContextThresholds, emit)
-	for round := 0; round < a.runtime.MaxToolRounds; round++ {
+	for round := 0; a.runtime.MaxToolRounds <= 0 || round < a.runtime.MaxToolRounds; round++ {
 		roundNum := round + 1
 		turnID := agentTurnID(roundNum)
 		turnStarted := time.Now()

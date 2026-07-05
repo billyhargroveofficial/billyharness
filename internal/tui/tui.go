@@ -19,7 +19,6 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/clientux"
 	uxprojector "github.com/billyhargroveofficial/billyharness/internal/clientux/projector"
-	"github.com/billyhargroveofficial/billyharness/internal/clipboard"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/filesearch"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
@@ -134,78 +133,83 @@ type Model struct {
 	width                   int
 	height                  int
 
-	blocks                   []transcript.Cell
-	richRenderCache          map[string]tuirender.CellCache
-	nextBlockSeq             int64
-	collapsed                map[int]bool
-	selected                 int
-	busy                     bool
-	status                   string
-	err                      string
-	events                   chan tea.Msg
-	pendingStreamEvents      []protocol.Event
-	streamBatchScheduled     bool
-	pendingUserInput         *protocol.UserInputRequestEvent
-	uxProjector              *uxprojector.Projector
-	transcriptProjector      *transcript.Projector
-	transcriptStale          bool
-	reflowCount              int
-	modelCalls               int
-	toolCalls                int
-	runStartModelCalls       int
-	runStartToolCalls        int
-	runStartInputTok         int64
-	runStartOutputTok        int64
-	runStartCacheHit         int64
-	runStartCacheMiss        int64
-	runStartReasoning        int64
-	runStartSummaryIn        int64
-	runStartSummaryOut       int64
-	runStartSummaryAPI       int64
-	runStartHelperIn         int64
-	runStartHelperOut        int64
-	runStartHelperHit        int64
-	runStartHelperMiss       int64
-	runStartHelperAPI        int64
-	runStartHelperModelCalls int
-	runStartHelperCalls      int
-	runStartHelperCost       float64
-	inputTok                 int64
-	outputTok                int64
-	cacheHitTok              int64
-	cacheMissTok             int64
-	reasoningTok             int64
-	lastInputTok             int64
-	lastOutputTok            int64
-	lastCacheHitTok          int64
-	lastCacheMissTok         int64
-	toolSummaryInTok         int64
-	toolSummaryOutTok        int64
-	toolSummaryAPITok        int64
-	helperModelInTok         int64
-	helperModelOutTok        int64
-	helperModelCacheHit      int64
-	helperModelCacheMiss     int64
-	helperModelAPITok        int64
-	helperModelCalls         int
-	helperAPICalls           int
-	helperCostUSD            float64
-	slashIndex               int
-	slashDismissed           string
-	fileResolver             *filesearch.Resolver
-	fileMentionIndex         int
-	fileMentionSeq           int64
-	fileMentionPending       int64
-	fileMentionToken         fileMentionToken
-	fileMentionResults       []filesearch.Match
-	fileMentionDismissed     string
-	fileMentionSearching     bool
-	fileMentionErr           string
-	authInputProvider        string
-	selection                tuiselection.Controller
-	runStartedAt             time.Time
-	lastRunDuration          time.Duration
-	spinnerFrame             int
+	blocks                     []transcript.Cell
+	richRenderCache            map[string]tuirender.CellCache
+	nextBlockSeq               int64
+	collapsed                  map[int]bool
+	selected                   int
+	busy                       bool
+	status                     string
+	err                        string
+	events                     chan tea.Msg
+	pendingStreamEvents        []protocol.Event
+	streamBatchScheduled       bool
+	pendingUserInput           *protocol.UserInputRequestEvent
+	uxProjector                *uxprojector.Projector
+	transcriptProjector        *transcript.Projector
+	transcriptStale            bool
+	reflowCount                int
+	modelCalls                 int
+	toolCalls                  int
+	runStartModelCalls         int
+	runStartToolCalls          int
+	runStartInputTok           int64
+	runStartOutputTok          int64
+	runStartCacheHit           int64
+	runStartCacheMiss          int64
+	runStartReasoning          int64
+	runStartSummaryIn          int64
+	runStartSummaryOut         int64
+	runStartSummaryAPI         int64
+	runStartHelperIn           int64
+	runStartHelperOut          int64
+	runStartHelperHit          int64
+	runStartHelperMiss         int64
+	runStartHelperAPI          int64
+	runStartHelperModelCalls   int
+	runStartHelperCalls        int
+	runStartHelperCost         float64
+	inputTok                   int64
+	outputTok                  int64
+	cacheHitTok                int64
+	cacheMissTok               int64
+	reasoningTok               int64
+	lastInputTok               int64
+	lastOutputTok              int64
+	lastCacheHitTok            int64
+	lastCacheMissTok           int64
+	toolSummaryInTok           int64
+	toolSummaryOutTok          int64
+	toolSummaryAPITok          int64
+	helperModelInTok           int64
+	helperModelOutTok          int64
+	helperModelCacheHit        int64
+	helperModelCacheMiss       int64
+	helperModelAPITok          int64
+	helperModelCalls           int
+	helperAPICalls             int
+	helperCostUSD              float64
+	slashIndex                 int
+	slashDismissed             string
+	fileResolver               *filesearch.Resolver
+	fileMentionIndex           int
+	fileMentionSeq             int64
+	fileMentionPending         int64
+	fileMentionToken           fileMentionToken
+	fileMentionResults         []filesearch.Match
+	fileMentionDismissed       string
+	fileMentionSearching       bool
+	fileMentionErr             string
+	authInputProvider          string
+	selection                  tuiselection.Controller
+	runStartedAt               time.Time
+	lastRunDuration            time.Duration
+	spinnerFrame               int
+	codexRateLimits            codexRateLimitSnapshot
+	codexRateLimitsErr         string
+	codexRateLimitsFetchedAt   time.Time
+	codexRateLimitsRefreshing  bool
+	codexRateLimitsNextRefresh time.Time
 }
 
 type streamEventMsg struct {
@@ -271,8 +275,9 @@ type clipboardCopiedMsg struct {
 
 type tickMsg time.Time
 type eventBatchTickMsg time.Time
+type codexRateLimitsTickMsg time.Time
 
-var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+var spinnerFrames = []string{"✦", "✧", "✶", "✺", "✹", "✷"}
 
 const defaultTextareaPlaceholder = "Message billyharness. Type / for commands."
 const streamEventBatchInterval = 25 * time.Millisecond
@@ -463,21 +468,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.resize(m.followOutput)
 	case tea.KeyPressMsg:
-		// Ctrl+V: try clipboard image paste first; if no image, fall through to normal text paste
-		if msg.String() == "ctrl+v" && m.authInputProvider == "" && !m.busy {
-			if ok, err := m.pasteImageFromClipboard(); ok {
-				m.reflow(m.followOutput)
-				skipTextareaUpdate = true
-				break
-			} else if !errors.Is(err, clipboard.ErrNoImage) {
-				// Real error, not just empty clipboard
-				m.status = "paste: " + err.Error()
-				m.reflow(m.followOutput)
-				skipTextareaUpdate = true
-				break
-			}
-			// No image in clipboard — fall through to textarea paste
-		}
 		if m.authInputProvider != "" && msg.String() == "esc" {
 			m.cancelAuthInput()
 			skipTextareaUpdate = true
@@ -570,6 +560,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if len(msg.messages) > 0 {
 			m.messages = msg.messages
+			if m.syncLastAssistantMessage(msg.messages) {
+				reflow = true
+				gotoBottom = m.followOutput
+			}
 		}
 		m.status = fmt.Sprintf("gateway replayed %d events", len(msg.events))
 		_ = m.saveCurrentSession()
@@ -601,6 +595,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.runStartedAt = time.Time{}
 		if len(msg.messages) > 0 {
 			m.messages = msg.messages
+			if m.syncLastAssistantMessage(msg.messages) {
+				reflow = true
+				gotoBottom = m.followOutput
+			}
 		}
 		if msg.err != nil {
 			m.err = msg.err.Error()
@@ -742,6 +740,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			reflow = true
 			gotoBottom = m.followOutput
 		}
+	case codexRateLimitsMsg:
+		m.codexRateLimitsRefreshing = false
+		m.codexRateLimitsFetchedAt = msg.fetchedAt
+		if msg.err != nil {
+			m.codexRateLimitsErr = msg.err.Error()
+			m.codexRateLimitsNextRefresh = time.Now().Add(codexRateLimitsErrorInterval)
+			cmds = append(cmds, m.codexRateLimitsTickCmd(codexRateLimitsErrorInterval))
+		} else {
+			m.codexRateLimits = msg.snapshot
+			m.codexRateLimitsErr = ""
+			m.codexRateLimitsNextRefresh = time.Now().Add(codexRateLimitsSuccessInterval)
+			cmds = append(cmds, m.codexRateLimitsTickCmd(codexRateLimitsSuccessInterval))
+		}
+	case codexRateLimitsTickMsg:
+		if cmd := m.maybeCodexRateLimitsCmd(time.Time(msg)); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	var cmd tea.Cmd
@@ -768,6 +783,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if reflow {
 		m.reflow(gotoBottom)
 	}
+	if cmd := m.maybeCodexRateLimitsCmd(time.Now()); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	return m, tea.Batch(cmds...)
 }
 
@@ -780,7 +798,7 @@ func (m Model) View() tea.View {
 	styles := m.styles()
 	ta := m.textarea
 	ta.SetStyles(styles.textarea)
-	input := styles.input.Width(m.inputContentWidth(styles)).Render(ta.View())
+	input := m.inputView(styles)
 	attachments := m.attachmentChipsView()
 	popup := m.inputPopupView()
 	runStatus := m.runStatusView()
@@ -797,7 +815,6 @@ func (m Model) View() tea.View {
 	}
 	parts = append(parts, input, status)
 	v := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, parts...))
-	v.BackgroundColor = lipgloss.Color(styles.background)
 	v.ForegroundColor = lipgloss.Color(styles.foreground)
 	m.applyTerminalMode(&v)
 	return v
@@ -824,7 +841,7 @@ func (m *Model) resize(gotoBottom bool) {
 	m.textarea.SetHeight(m.inputHeight(inputContentW))
 	ta := m.textarea
 	ta.SetStyles(styles.textarea)
-	inputH := lipgloss.Height(styles.input.Width(inputContentW).Render(ta.View()))
+	inputH := lipgloss.Height(m.inputView(styles))
 	runStatusH := lipgloss.Height(m.runStatusView())
 	attachmentsH := lipgloss.Height(m.attachmentChipsView())
 	statusH := lipgloss.Height(styles.status.Width(m.statusContentWidth(styles)).Render(m.inlineStatusView()))
@@ -857,6 +874,28 @@ func (m Model) inputHeight(contentWidth int) int {
 func (m Model) inputContentWidth(styles themeStyles) int {
 	outer := max(24, m.width-2)
 	return max(20, outer-styles.input.GetHorizontalFrameSize())
+}
+
+func (m Model) inputView(styles themeStyles) string {
+	contentWidth := m.inputContentWidth(styles)
+	ta := m.textarea
+	ta.SetWidth(contentWidth)
+	ta.SetStyles(styles.textarea)
+	return renderInputFrame(ta.View(), contentWidth, styles.inputBorder)
+}
+
+func renderInputFrame(body string, contentWidth int, border lipgloss.Style) string {
+	contentWidth = max(1, contentWidth)
+	top := border.Render("┌" + strings.Repeat("─", contentWidth+2) + "┐")
+	bottom := border.Render("└" + strings.Repeat("─", contentWidth+2) + "┘")
+	lines := strings.Split(body, "\n")
+	framed := make([]string, 0, len(lines)+2)
+	framed = append(framed, top)
+	for _, line := range lines {
+		framed = append(framed, border.Render("│")+" "+padRight(line, contentWidth)+" "+border.Render("│"))
+	}
+	framed = append(framed, bottom)
+	return strings.Join(framed, "\n")
 }
 
 func (m Model) statusContentWidth(styles themeStyles) int {
@@ -902,8 +941,9 @@ func (m Model) footerView() string {
 }
 
 type statusSegment struct {
-	text  string
-	style lipgloss.Style
+	text     string
+	style    lipgloss.Style
+	rendered string
 }
 
 func (m Model) contextTokens() int64 {

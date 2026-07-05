@@ -37,7 +37,7 @@ func TestContextThresholdEventRendersContextBlock(t *testing.T) {
 	}
 }
 
-func TestRunStatusShowsSpinnerAndInlineStatusShowsElapsedWhileBusy(t *testing.T) {
+func TestRunStatusShowsSpinnerWorkingAndElapsedWhileBusy(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 160
 	m.busy = true
@@ -46,8 +46,10 @@ func TestRunStatusShowsSpinnerAndInlineStatusShowsElapsedWhileBusy(t *testing.T)
 	m.spinnerFrame = 3
 
 	status := m.inlineStatusView()
-	if !strings.Contains(status, "running 3s") {
-		t.Fatalf("status %q should show elapsed seconds", status)
+	for _, notWant := range []string{"● 3s", "working", "running tool shell"} {
+		if strings.Contains(status, notWant) {
+			t.Fatalf("inline status %q should omit run strip text %q", status, notWant)
+		}
 	}
 	for _, frame := range spinnerFrames {
 		if strings.Contains(status, frame) {
@@ -56,8 +58,19 @@ func TestRunStatusShowsSpinnerAndInlineStatusShowsElapsedWhileBusy(t *testing.T)
 	}
 
 	runStatus := m.runStatusView()
-	if !strings.Contains(runStatus, "running tool shell") || !strings.Contains(runStatus, "3s") {
-		t.Fatalf("run status %q should show live state and elapsed seconds", runStatus)
+	if strings.HasPrefix(stripANSITest(runStatus), " ") {
+		t.Fatalf("run status %q should align without leading padding", runStatus)
+	}
+	if !strings.Contains(runStatus, "working") {
+		t.Fatalf("run status %q should show working", runStatus)
+	}
+	if !strings.Contains(runStatus, "3s") {
+		t.Fatalf("run status %q should show elapsed seconds", runStatus)
+	}
+	for _, notWant := range []string{"running tool shell", "agent"} {
+		if strings.Contains(runStatus, notWant) {
+			t.Fatalf("run status %q should omit noisy state %q", runStatus, notWant)
+		}
 	}
 	foundSpinner := false
 	for _, frame := range spinnerFrames {

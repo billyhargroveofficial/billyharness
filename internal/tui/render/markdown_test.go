@@ -194,11 +194,26 @@ func TestRenderAssistantMarkdownStreamingTableHoldbackUntilBoundary(t *testing.T
 	}
 }
 
+func TestTerminalMarkdownCodeUsesForegroundOnly(t *testing.T) {
+	rendered := RenderTerminalMarkdown(strings.Join([]string{
+		"Inline `code`.",
+		"```go",
+		"fmt.Println(1)",
+		"```",
+	}, "\n"), 80, testMarkdownStyles())
+
+	if strings.Contains(rendered, "48;2;") {
+		t.Fatalf("markdown code should not paint an opaque background, rendered=%q", rendered)
+	}
+	if !strings.Contains(rendered, "38;2;34;34;34") {
+		t.Fatalf("markdown code should keep explicit foreground color, rendered=%q", rendered)
+	}
+}
+
 func testMarkdownStyles() TerminalMarkdownStyles {
 	return TerminalMarkdownStyleSet(MarkdownTheme{
 		AssistantForeground: "#111111",
 		ToolForeground:      "#222222",
-		ToolBackground:      "#eeeeee",
 		ToolBorder:          "#333333",
 		BlockBorder:         "#444444",
 		MutedForeground:     "#777777",

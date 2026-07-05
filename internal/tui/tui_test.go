@@ -81,7 +81,7 @@ func TestGoldenTraceProjectsIntoTUI(t *testing.T) {
 	if m.inputTok != 2100 || m.outputTok != 135 || m.cacheHitTok != 1100 || m.cacheMissTok != 1000 || m.reasoningTok != 20 {
 		t.Fatalf("usage = input %d output %d hit %d miss %d reasoning %d", m.inputTok, m.outputTok, m.cacheHitTok, m.cacheMissTok, m.reasoningTok)
 	}
-	var assistant, reasoning, web, mcp, shell, compaction, summary bool
+	var assistant, reasoning, web, mcp, shell, compaction bool
 	for _, block := range m.blocks {
 		if block.CellType == cellTypeAssistantFinal && strings.Contains(block.Content, "Final answer: web context") {
 			assistant = true
@@ -101,12 +101,12 @@ func TestGoldenTraceProjectsIntoTUI(t *testing.T) {
 		if block.CellType == cellTypeCompaction && strings.Contains(block.Content, "compact-golden-001") {
 			compaction = true
 		}
-		if block.CellType == cellTypeRunSummary && strings.Contains(block.Content, "completed") {
-			summary = true
+		if block.CellType == cellTypeRunSummary {
+			t.Fatalf("routine run summary should not be kept in transcript: %#v", block)
 		}
 	}
-	if !assistant || !reasoning || !web || !mcp || !shell || !compaction || !summary {
-		t.Fatalf("golden trace cells assistant=%v reasoning=%v web=%v mcp=%v shell=%v compaction=%v summary=%v blocks=%#v", assistant, reasoning, web, mcp, shell, compaction, summary, m.blocks)
+	if !assistant || !reasoning || !web || !mcp || !shell || !compaction {
+		t.Fatalf("golden trace cells assistant=%v reasoning=%v web=%v mcp=%v shell=%v compaction=%v blocks=%#v", assistant, reasoning, web, mcp, shell, compaction, m.blocks)
 	}
 }
 
@@ -414,6 +414,10 @@ func TestActionRegistryBacksKeybindingsAndHelp(t *testing.T) {
 	if !ok || action.id != "message.send" {
 		t.Fatalf("enter action = %#v ok=%t", action, ok)
 	}
+	action, ok = actionForKey(tea.KeyPressMsg{Code: 'v', Text: "v", Mod: tea.ModAlt})
+	if !ok || action.id != "message.paste_image" {
+		t.Fatalf("alt+v action = %#v ok=%t", action, ok)
+	}
 }
 
 func TestActionRegistryDispatchesSlashAliases(t *testing.T) {
@@ -682,6 +686,29 @@ func TestTUIDropsReplayEventsAtOrBeforeCursor(t *testing.T) {
 	}
 	if got := m.lastGatewayEventSeq; got != 8 {
 		t.Fatalf("lastGatewayEventSeq = %d, want 8", got)
+	}
+}
+
+func TestTUIRunDoneSyncsAssistantWhenStreamSeqIsStale(t *testing.T) {
+	m := newTestModel(t)
+	m.lastGatewayEventSeq = 10694
+	m.busy = true
+	m.addBlock("user", "USER", "ну че")
+
+	updated, _ := m.Update(streamEventMsg{event: protocol.Event{Seq: 15, Type: protocol.EventAssistantDelta, Data: "mock: ну че"}})
+	m = updated.(Model)
+	updated, _ = m.Update(runDoneMsg{messages: []protocol.Message{
+		{Role: protocol.RoleUser, Content: "ну че"},
+		{Role: protocol.RoleAssistant, Content: "mock: ну че"},
+	}})
+	m = updated.(Model)
+
+	if len(m.blocks) < 2 {
+		t.Fatalf("blocks = %#v", m.blocks)
+	}
+	last := m.blocks[len(m.blocks)-1]
+	if last.Kind != "assistant" || last.Content != "mock: ну че" {
+		t.Fatalf("last block = %#v", last)
 	}
 }
 

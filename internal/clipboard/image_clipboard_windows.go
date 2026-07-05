@@ -187,7 +187,7 @@ func readDIBFromClipboard() (image.Image, error) {
 		ret2, _, _ = procIsClipboardFormatAvailable.Call(uintptr(format))
 	}
 	if ret2 == 0 {
-		return nil, errors.New("no image in clipboard")
+		return nil, ErrNoImage
 	}
 
 	handle, _, err := procGetClipboardData.Call(uintptr(format))

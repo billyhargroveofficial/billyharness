@@ -39,8 +39,8 @@ func TestAPIKeyFallsBackToDotenv(t *testing.T) {
 func TestDefaultRuntimeLimits(t *testing.T) {
 	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
 	cfg := Default()
-	if cfg.MaxToolRounds != 100 {
-		t.Fatalf("MaxToolRounds = %d, want 100", cfg.MaxToolRounds)
+	if cfg.MaxToolRounds != 0 {
+		t.Fatalf("MaxToolRounds = %d, want unlimited default 0", cfg.MaxToolRounds)
 	}
 	if cfg.ContextCompactTokens != 600_000 {
 		t.Fatalf("ContextCompactTokens = %d, want 600000", cfg.ContextCompactTokens)
@@ -131,11 +131,28 @@ func TestContextCompactionOverrideAboveWindowIsClampedToDerived(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := resolved.Config.ContextCompactTokens; got != 153_600 {
-		t.Fatalf("ContextCompactTokens = %d, want model-derived 153600", got)
+	if got := resolved.Config.ContextCompactTokens; got != 230_400 {
+		t.Fatalf("ContextCompactTokens = %d, want model-derived 230400", got)
 	}
 	if resolved.Config.ContextCompactExplicitOverride() || resolved.Config.ContextCompactSourceLabel() != "derived" {
 		t.Fatalf("clamped compact threshold should be derived, got source %q", resolved.Config.ContextCompactSourceLabel())
+	}
+}
+
+func TestContextCompactionExplicitCodexSixtyPercentOverrideIsPreserved(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	t.Setenv("FAST_AGENT_MODEL", "gpt-5.5")
+	t.Setenv("FAST_AGENT_CONTEXT_COMPACT_TOKENS", "153600")
+	resolved, err := Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolved.Config.ContextCompactTokens; got != 153_600 {
+		t.Fatalf("ContextCompactTokens = %d, want explicit override 153600", got)
+	}
+	if !resolved.Config.ContextCompactExplicitOverride() || resolved.Config.ContextCompactSourceLabel() != "override" {
+		t.Fatalf("explicit compact threshold should stay override, got source %q", resolved.Config.ContextCompactSourceLabel())
 	}
 }
 
@@ -493,13 +510,13 @@ func TestApplyModelProviderDefaultsSelectsProviderFromModel(t *testing.T) {
 func TestApplyModelProviderDefaultsUsesCodexModelContextWindows(t *testing.T) {
 	cfg := Config{Provider: "deepseek", Model: "gpt-5.5", ContextWindowTokens: 1_000_000, ContextCompactTokens: 600_000}
 	cfg.ApplyModelProviderDefaults()
-	if cfg.Provider != "openai-codex" || cfg.ContextWindowTokens != 256_000 || cfg.ContextCompactTokens != 153_600 {
+	if cfg.Provider != "openai-codex" || cfg.ContextWindowTokens != 256_000 || cfg.ContextCompactTokens != 230_400 {
 		t.Fatalf("gpt-5.5 defaults = provider:%q context:%d compact:%d", cfg.Provider, cfg.ContextWindowTokens, cfg.ContextCompactTokens)
 	}
 
 	cfg = Config{Provider: "deepseek", Model: "gpt-5.4-mini", ContextWindowTokens: 1_000_000, ContextCompactTokens: 600_000}
 	cfg.ApplyModelProviderDefaults()
-	if cfg.Provider != "openai-codex" || cfg.ContextWindowTokens != 256_000 || cfg.ContextCompactTokens != 153_600 {
+	if cfg.Provider != "openai-codex" || cfg.ContextWindowTokens != 256_000 || cfg.ContextCompactTokens != 230_400 {
 		t.Fatalf("gpt-5.4-mini defaults = provider:%q context:%d compact:%d", cfg.Provider, cfg.ContextWindowTokens, cfg.ContextCompactTokens)
 	}
 
@@ -660,8 +677,8 @@ func TestResolveIgnoresStaleSettingsContextWindowForCodex(t *testing.T) {
 	if got := resolved.Config.ContextWindowTokens; got != 256_000 {
 		t.Fatalf("ContextWindowTokens = %d, want model-derived 256000", got)
 	}
-	if got := resolved.Config.ContextCompactTokens; got != 153_600 {
-		t.Fatalf("ContextCompactTokens = %d, want model-derived 153600", got)
+	if got := resolved.Config.ContextCompactTokens; got != 230_400 {
+		t.Fatalf("ContextCompactTokens = %d, want model-derived 230400", got)
 	}
 	if resolved.Config.ContextCompactExplicitOverride() || resolved.Config.ContextCompactSourceLabel() != "derived" {
 		t.Fatalf("stale settings compact threshold should be derived, got source %q", resolved.Config.ContextCompactSourceLabel())
@@ -673,6 +690,30 @@ func TestResolveIgnoresStaleSettingsContextWindowForCodex(t *testing.T) {
 	value, ok = resolved.Value("context_compact_tokens")
 	if !ok || value.Source != SourceDerived {
 		t.Fatalf("context_compact_tokens value = %#v, want derived", value)
+	}
+}
+
+func TestResolveUpgradesStaleCodexSixtyPercentCompactSetting(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	body := []byte(`{"last_selected_model":"gpt-5.5","context_window_tokens":256000,"context_compact_tokens":153600}`)
+	if err := os.WriteFile(filepath.Join(home, "settings.json"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolved.Config.ContextWindowTokens; got != 256_000 {
+		t.Fatalf("ContextWindowTokens = %d, want model-derived 256000", got)
+	}
+	if got := resolved.Config.ContextCompactTokens; got != 230_400 {
+		t.Fatalf("ContextCompactTokens = %d, want model-derived 230400", got)
+	}
+	if resolved.Config.ContextCompactExplicitOverride() || resolved.Config.ContextCompactSourceLabel() != "derived" {
+		t.Fatalf("stale 60%% compact threshold should be derived, got source %q", resolved.Config.ContextCompactSourceLabel())
 	}
 }
 

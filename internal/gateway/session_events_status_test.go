@@ -808,7 +808,8 @@ func TestGatewaySessionContextUsesEffectiveSessionModelWindow(t *testing.T) {
 	if want := modelinfo.Lookup("gpt-5.5").ContextWindowTokens; got.ContextWindowTokens != want {
 		t.Fatalf("context window = %d, want %d: %#v", got.ContextWindowTokens, want, got)
 	}
-	if got.ContextCompactTokens != int64(got.ContextWindowTokens*60/100) || got.ContextWindowSource != "model" {
+	wantCompact := int64(config.DefaultContextCompactTokens("gpt-5.5", "openai-codex", got.ContextWindowTokens))
+	if got.ContextCompactTokens != wantCompact || got.ContextWindowSource != "model" {
 		t.Fatalf("context compact/source = compact:%d source:%q response=%#v", got.ContextCompactTokens, got.ContextWindowSource, got)
 	}
 	if got.Runtime.Provider != "openai-codex" || got.Runtime.Model != "gpt-5.5" || got.Runtime.Profile != "billy" || got.Runtime.AccessMode != config.AccessModeBuild {
@@ -869,7 +870,8 @@ func TestGatewaySessionSnapshotsUseEffectiveSessionModelWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if offline.ContextWindowTokens != wantWindow || offline.ContextCompactTokens != int64(wantWindow*60/100) {
+	wantCompact := int64(config.DefaultContextCompactTokens("gpt-5.5", "openai-codex", wantWindow))
+	if offline.ContextWindowTokens != wantWindow || offline.ContextCompactTokens != wantCompact {
 		t.Fatalf("offline context limits = window:%d compact:%d want window:%d", offline.ContextWindowTokens, offline.ContextCompactTokens, wantWindow)
 	}
 }

@@ -452,8 +452,15 @@ func safeFileName(name string) string {
 }
 
 func rejectSymlinkComponents(abs string) error {
+	clean := filepath.Clean(abs)
+	volume := filepath.VolumeName(clean)
 	current := string(os.PathSeparator)
-	rel := strings.TrimPrefix(filepath.Clean(abs), string(os.PathSeparator))
+	rel := strings.TrimPrefix(clean, string(os.PathSeparator))
+	if volume != "" {
+		current = volume + string(os.PathSeparator)
+		rel = strings.TrimPrefix(clean, volume)
+		rel = strings.TrimPrefix(rel, string(os.PathSeparator))
+	}
 	for _, part := range strings.Split(rel, string(os.PathSeparator)) {
 		if part == "" {
 			continue

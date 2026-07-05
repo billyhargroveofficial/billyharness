@@ -80,10 +80,48 @@ func (c *Config) applyContextCompactDefault() {
 	if c.contextCompactExplicitOverride && c.ContextCompactTokens > 0 && int64(c.ContextCompactTokens) < c.ContextWindowTokens {
 		return
 	}
-	if c.ContextCompactTokens <= 0 || int64(c.ContextCompactTokens) >= c.ContextWindowTokens {
-		c.ContextCompactTokens = int(c.ContextWindowTokens * 60 / 100)
+	defaultTokens := c.defaultContextCompactTokens()
+	if defaultTokens <= 0 {
+		return
+	}
+	if c.ContextCompactTokens <= 0 || int64(c.ContextCompactTokens) >= c.ContextWindowTokens || c.isKnownDerivedContextCompactTokens(c.ContextCompactTokens) {
+		c.ContextCompactTokens = defaultTokens
 		c.contextCompactExplicitOverride = false
 	}
+}
+
+func (c Config) defaultContextCompactTokens() int {
+	return DefaultContextCompactTokens(c.Model, c.Provider, c.ContextWindowTokens)
+}
+
+func (c Config) isKnownDerivedContextCompactTokens(tokens int) bool {
+	return tokens == contextCompactTokensAtPercent(c.ContextWindowTokens, 60) ||
+		tokens == contextCompactTokensAtPercent(c.ContextWindowTokens, 90)
+}
+
+// DefaultContextCompactTokens returns the derived compaction threshold for a model.
+func DefaultContextCompactTokens(model, provider string, contextWindow int64) int {
+	return contextCompactTokensAtPercent(contextWindow, DefaultContextCompactPercent(model, provider))
+}
+
+// DefaultContextCompactPercent returns the default compaction percentage for a model.
+func DefaultContextCompactPercent(model, provider string) int {
+	model = modelinfo.NormalizeAlias(model)
+	info := modelinfo.Lookup(model)
+	provider = modelinfo.NormalizeProvider(provider)
+	if info.Provider == modelinfo.ProviderOpenAICodex ||
+		modelinfo.IsCodexModel(model) ||
+		(model == "" && provider == modelinfo.ProviderOpenAICodex) {
+		return 90
+	}
+	return 60
+}
+
+func contextCompactTokensAtPercent(contextWindow int64, percent int) int {
+	if contextWindow <= 0 || percent <= 0 {
+		return 0
+	}
+	return int(contextWindow * int64(percent) / 100)
 }
 
 func (c Config) ContextCompactExplicitOverride() bool {
@@ -94,7 +132,7 @@ func (c Config) ContextCompactSourceLabel() string {
 	if c.ContextCompactExplicitOverride() {
 		return "override"
 	}
-	if c.ContextWindowTokens > 0 && c.ContextCompactTokens == int(c.ContextWindowTokens*60/100) {
+	if c.ContextCompactTokens > 0 && c.ContextCompactTokens == c.defaultContextCompactTokens() {
 		return "derived"
 	}
 	if c.ContextCompactTokens > 0 {
@@ -226,11 +264,11 @@ func builtInConfig() Config {
 		ReasoningEffort:           "high",
 		DisableSpark:              false,
 		MaxTokens:                 8192,
-		MaxToolRounds:             100,
+		MaxToolRounds:             0,
 		MaxParallelTools:          4,
 		ProviderMaxRetries:        2,
 		ContextWindowTokens:       defaultContextWindow,
-		ContextCompactTokens:      int(defaultContextWindow * 60 / 100),
+		ContextCompactTokens:      DefaultContextCompactTokens(defaultModel, "deepseek", defaultContextWindow),
 		ContextCompactKeep:        32,
 		ContextCompactMaxChars:    120_000,
 		ContextCompactStrategy:    "deterministic",

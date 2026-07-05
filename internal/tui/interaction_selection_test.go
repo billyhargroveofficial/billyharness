@@ -19,8 +19,8 @@ func TestTranscriptSelectionText(t *testing.T) {
 	m.height = 24
 	m.addBlock("assistant", "ASSISTANT", "alpha\nbeta\ngamma")
 	m.resize(true)
-	m.selection.Start = tuiselection.Point{Row: 0, Col: 1}
-	m.selection.End = tuiselection.Point{Row: 1, Col: 4}
+	m.selection.Start = tuiselection.Point{Row: 1, Col: 1}
+	m.selection.End = tuiselection.Point{Row: 2, Col: 4}
 	got := stripANSITest(m.selectedTranscriptText())
 	if !strings.Contains(got, "lpha") || !strings.Contains(got, "bet") {
 		t.Fatalf("selected text = %q", got)
@@ -55,8 +55,8 @@ func TestTranscriptSelectionIsVisiblyHighlighted(t *testing.T) {
 	m.addBlock("assistant", "ASSISTANT", "alpha\nbeta\ngamma")
 	m.resize(true)
 	base := m.viewport.View()
-	m.selection.Start = tuiselection.Point{Row: 0, Col: 1}
-	m.selection.End = tuiselection.Point{Row: 0, Col: 4}
+	m.selection.Start = tuiselection.Point{Row: 1, Col: 1}
+	m.selection.End = tuiselection.Point{Row: 1, Col: 4}
 	m.applySelectionHighlight()
 	highlighted := m.viewport.View()
 	if highlighted == base {
@@ -79,15 +79,23 @@ func TestTranscriptSelectionHighlightBothThemes(t *testing.T) {
 			m.height = 24
 			m.addBlock("assistant", "ASSISTANT", "alpha\nbeta")
 			m.resize(true)
-			firstLine := strings.Split(m.viewport.GetContent(), "\n")[0]
-			visible := stripANSITest(firstLine)
-			startByte := strings.Index(visible, "alpha")
-			if startByte < 0 {
-				t.Fatalf("rendered line missing alpha: %q", visible)
+			targetRow := -1
+			targetCol := 0
+			for row, line := range strings.Split(m.viewport.GetContent(), "\n") {
+				visible := stripANSITest(line)
+				startByte := strings.Index(visible, "alpha")
+				if startByte < 0 {
+					continue
+				}
+				targetRow = row
+				targetCol = xansi.StringWidth(visible[:startByte])
+				break
 			}
-			startCol := xansi.StringWidth(visible[:startByte])
-			m.selection.Start = tuiselection.Point{Row: 0, Col: startCol}
-			m.selection.End = tuiselection.Point{Row: 0, Col: startCol + len("alpha")}
+			if targetRow < 0 {
+				t.Fatalf("rendered transcript missing alpha: %q", stripANSITest(m.viewport.GetContent()))
+			}
+			m.selection.Start = tuiselection.Point{Row: targetRow, Col: targetCol}
+			m.selection.End = tuiselection.Point{Row: targetRow, Col: targetCol + len("alpha")}
 
 			highlighted := m.selectionHighlightedContent()
 			if got := selectionBackgroundText(highlighted); got != "alpha" {
@@ -297,8 +305,8 @@ func TestReflowPreservesSelectionHighlightDuringLiveUpdate(t *testing.T) {
 	m.addBlock("assistant", "ASSISTANT", "alpha\nbeta\ngamma")
 	m.resize(true)
 	target := "bet"
-	m.selection.Start = tuiselection.Point{Row: 1, Col: 1}
-	m.selection.End = tuiselection.Point{Row: 1, Col: 1 + len(target)}
+	m.selection.Start = tuiselection.Point{Row: 2, Col: 0}
+	m.selection.End = tuiselection.Point{Row: 2, Col: len(target)}
 	m.applySelectionHighlight()
 
 	m.applyEvent(protocol.Event{Type: protocol.EventAssistantDelta, Data: "\ndelta"})

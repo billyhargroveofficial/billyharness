@@ -3,10 +3,12 @@ param(
     [string]$Addr = "127.0.0.1:8765",
     [string]$HomeDir = "",
     [switch]$RealProvider,
+    [switch]$Mock,
     [switch]$NoBuild,
     [switch]$KillExisting,
     [switch]$NoDevLoopback,
     [switch]$NewWindow,
+    [switch]$Background,
     [switch]$Child
 )
 
@@ -66,6 +68,44 @@ function Stop-ExistingBillyHarness {
     }
 }
 
+function Test-GatewayHealth {
+    param([string]$GatewayURL)
+
+    $health = Get-GatewayHealth -GatewayURL $GatewayURL
+    return $null -ne $health
+}
+
+function Get-GatewayHealth {
+    param([string]$GatewayURL)
+
+    try {
+        $health = Invoke-RestMethod -Uri "$GatewayURL/health" -TimeoutSec 2 -ErrorAction Stop
+        if ($health.ok -eq $true) {
+            return $health
+        }
+    } catch {
+    }
+    return $null
+}
+
+function Test-GatewayProviderMatches {
+    param(
+        [string]$GatewayURL,
+        [bool]$WantRealProvider
+    )
+
+    $health = Get-GatewayHealth -GatewayURL $GatewayURL
+    if ($null -eq $health) {
+        return $false
+    }
+
+    $provider = [string]$health.provider
+    if ($WantRealProvider) {
+        return $provider -ne "mock"
+    }
+    return $provider -eq "mock"
+}
+
 function Get-GatewayURL {
     param(
         [string]$Address,
@@ -112,8 +152,95 @@ function Get-CurrentPowerShell {
     return $powershell.Source
 }
 
+function Get-ResolvedProviderSummary {
+    param(
+        [string]$Binary,
+        [bool]$UseMockProvider
+    )
+
+    if ($UseMockProvider) {
+        return [pscustomobject]@{
+            Provider = "mock"
+            Model    = "mock"
+        }
+    }
+
+    try {
+        $raw = & $Binary config inspect -json 2>$null
+        if ($LASTEXITCODE -eq 0 -and $raw) {
+            $parsed = ($raw -join [Environment]::NewLine) | ConvertFrom-Json
+            return [pscustomobject]@{
+                Provider = [string]$parsed.config.provider
+                Model    = [string]$parsed.config.model
+            }
+        }
+    } catch {
+    }
+
+    return [pscustomobject]@{
+        Provider = "configured provider"
+        Model    = ""
+    }
+}
+
+function Start-GatewayBackground {
+    param(
+        [string]$Binary,
+        [string[]]$GatewayArgs,
+        [string]$WorkingDirectory,
+        [string]$GatewayURL,
+        [string]$HomeDir
+    )
+
+    $outLog = Join-Path $HomeDir "gateway-dev.out.log"
+    $errLog = Join-Path $HomeDir "gateway-dev.err.log"
+    Remove-Item -LiteralPath $outLog, $errLog -ErrorAction SilentlyContinue
+
+    Write-Host "Starting gateway in the background..."
+    $proc = Start-Process `
+        -FilePath $Binary `
+        -ArgumentList $GatewayArgs `
+        -WorkingDirectory $WorkingDirectory `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $outLog `
+        -RedirectStandardError $errLog `
+        -PassThru
+
+    for ($i = 0; $i -lt 40; $i++) {
+        Start-Sleep -Milliseconds 250
+        if ($proc.HasExited) {
+            Write-Host "Gateway exited immediately. Logs:"
+            Write-Host "  stdout: $outLog"
+            Write-Host "  stderr: $errLog"
+            throw "Gateway exited with code $($proc.ExitCode)"
+        }
+        $health = Get-GatewayHealth -GatewayURL $GatewayURL
+        if ($null -ne $health) {
+            Write-Host "Gateway is running in the background."
+            Write-Host "  PID:  $($proc.Id)"
+            Write-Host "  URL:  $GatewayURL"
+            Write-Host "  Home: $HomeDir"
+            Write-Host "  Provider: $($health.provider)"
+            Write-Host "  Model:    $($health.model)"
+            Write-Host "  Logs: $outLog"
+            Write-Host "        $errLog"
+            return
+        }
+    }
+
+    Write-Host "Gateway did not become healthy. Logs:"
+    Write-Host "  stdout: $outLog"
+    Write-Host "  stderr: $errLog"
+    throw "Gateway health check failed."
+}
+
 $scriptRoot = Split-Path -Parent $PSCommandPath
 Set-Location $scriptRoot
+
+if ($RealProvider -and $Mock) {
+    throw "Use either -RealProvider or -Mock, not both."
+}
+$useMockProvider = $Mock.IsPresent
 
 if ([string]::IsNullOrWhiteSpace($HomeDir)) {
     if ([string]::IsNullOrWhiteSpace($env:BILLYHARNESS_HOME)) {
@@ -151,22 +278,40 @@ if ($listeners.Count -gt 0) {
         $nonBilly = @($listeners | Where-Object { $_.ProcessName -ne "fast-agent-harness" })
         if ($nonBilly.Count -eq 0) {
             $gatewayURL = Get-GatewayURL -Address $Addr -Port $port
-            Write-Host "Gateway is already running on port ${port}:"
-            $listeners | Format-Table -AutoSize | Out-String | Write-Host
-            Write-Host "  URL:  $gatewayURL"
-            Write-Host "  Home: $env:BILLYHARNESS_HOME"
-            Write-Host ""
-            Write-TUICommand -GatewayURL $gatewayURL
-            Write-Host ""
-            Write-Host "Restart it with: .\dev.ps1 -KillExisting"
-            return
+            if (-not (Test-GatewayHealth -GatewayURL $gatewayURL)) {
+                Write-Host "Existing fast-agent-harness on port $port is not healthy; restarting it..."
+                Stop-ExistingBillyHarness -Listeners $listeners
+                Start-Sleep -Milliseconds 300
+                $listeners = @(Get-Listeners -Port $port)
+            }
+            if ($listeners.Count -gt 0 -and -not (Test-GatewayProviderMatches -GatewayURL $gatewayURL -WantRealProvider (-not $useMockProvider))) {
+                $desiredLabel = if ($useMockProvider) { "mock" } else { "configured provider" }
+                Write-Host "Existing fast-agent-harness on port $port is not running $desiredLabel; restarting it..."
+                Stop-ExistingBillyHarness -Listeners $listeners
+                Start-Sleep -Milliseconds 300
+                $listeners = @(Get-Listeners -Port $port)
+            }
+
+            if ($listeners.Count -gt 0) {
+                Write-Host "Gateway is already running on port ${port}:"
+                $listeners | Format-Table -AutoSize | Out-String | Write-Host
+                Write-Host "  URL:  $gatewayURL"
+                Write-Host "  Home: $env:BILLYHARNESS_HOME"
+                Write-Host ""
+                Write-TUICommand -GatewayURL $gatewayURL
+                Write-Host ""
+                Write-Host "Restart it with: .\dev.ps1 -KillExisting"
+                return
+            }
         }
 
-        Write-Host "Port $port is already in use:"
-        $listeners | Format-Table -AutoSize | Out-String | Write-Host
-        Write-Host "Use another port: .\dev.ps1 -Addr 127.0.0.1:9876"
-        Write-Host "Or stop an existing Billyharness gateway: .\dev.ps1 -KillExisting"
-        throw "Gateway port is busy."
+        if ($listeners.Count -gt 0) {
+            Write-Host "Port $port is already in use:"
+            $listeners | Format-Table -AutoSize | Out-String | Write-Host
+            Write-Host "Use another port: .\dev.ps1 -Addr 127.0.0.1:9876"
+            Write-Host "Or stop an existing Billyharness gateway: .\dev.ps1 -KillExisting"
+            throw "Gateway port is busy."
+        }
     }
 }
 
@@ -184,6 +329,9 @@ if ($NewWindow -and -not $Child) {
     if ($RealProvider) {
         $childArgs += "-RealProvider"
     }
+    if ($useMockProvider) {
+        $childArgs += "-Mock"
+    }
     if ($NoDevLoopback) {
         $childArgs += "-NoDevLoopback"
     }
@@ -195,7 +343,7 @@ if ($NewWindow -and -not $Child) {
 }
 
 $gatewayArgs = @("gateway", "-addr", $Addr)
-if (-not $RealProvider) {
+if ($useMockProvider) {
     $gatewayArgs += "-mock"
 }
 if (-not $NoDevLoopback) {
@@ -203,13 +351,30 @@ if (-not $NoDevLoopback) {
 }
 
 $gatewayURL = Get-GatewayURL -Address $Addr -Port $port
-$providerLabel = if ($RealProvider) { "configured provider" } else { "mock" }
+$providerSummary = Get-ResolvedProviderSummary -Binary $binary -UseMockProvider $useMockProvider
+$providerLabel = $providerSummary.Provider
+$modelLabel = $providerSummary.Model
+
+if ($Background) {
+    Start-GatewayBackground `
+        -Binary $binary `
+        -GatewayArgs $gatewayArgs `
+        -WorkingDirectory $scriptRoot `
+        -GatewayURL $gatewayURL `
+        -HomeDir $env:BILLYHARNESS_HOME
+    Write-Host ""
+    Write-TUICommand -GatewayURL $gatewayURL
+    return
+}
 
 Write-Host ""
 Write-Host "Billyharness gateway"
 Write-Host "  URL:      $gatewayURL"
 Write-Host "  Home:     $env:BILLYHARNESS_HOME"
 Write-Host "  Provider: $providerLabel"
+if (-not [string]::IsNullOrWhiteSpace($modelLabel)) {
+    Write-Host "  Model:    $modelLabel"
+}
 Write-Host ""
 Write-TUICommand -GatewayURL $gatewayURL
 Write-Host ""

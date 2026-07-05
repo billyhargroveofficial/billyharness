@@ -1252,6 +1252,7 @@ func normalizeSessionOwner(owner gatewayapi.SessionOwner) gatewayapi.SessionOwne
 }
 
 func (s *Server) runSettingsForRequest(ctx context.Context, req RunRequest) (runSettings, error) {
+	mayOverrideProviderModel := s.requestMayOverrideProviderModel(ctx)
 	overrides := s.runOverrideSettingsForRequest(ctx, req)
 	if err := s.validateRunProviderModelOverride(overrides); err != nil {
 		return runSettings{}, err
@@ -1259,6 +1260,9 @@ func (s *Server) runSettingsForRequest(ctx context.Context, req RunRequest) (run
 	settings, err := config.RuntimeDiffSettingsWithRunOverrides(s.runtimeDiffSettings(), overrides)
 	if err != nil {
 		return runSettings{}, err
+	}
+	if !mayOverrideProviderModel {
+		settings.Provider = s.providerBinding
 	}
 	return runSettingsFromRuntimeDiffSettings(settings), nil
 }

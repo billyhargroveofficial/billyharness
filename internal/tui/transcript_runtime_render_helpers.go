@@ -216,7 +216,11 @@ func renderStatusSegments(width int, segments []statusSegment, separator lipglos
 func renderStatusParts(segments []statusSegment, sep string) string {
 	parts := make([]string, 0, len(segments))
 	for _, segment := range segments {
-		parts = append(parts, segment.style.Render(segment.text))
+		if segment.rendered != "" {
+			parts = append(parts, segment.rendered)
+		} else {
+			parts = append(parts, segment.style.Render(segment.text))
+		}
 	}
 	return strings.Join(parts, sep)
 }

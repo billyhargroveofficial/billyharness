@@ -5,7 +5,7 @@ projection, client UX metadata, rendering, selection/copy behavior, saved local
 chat state, and the local runtime adapter.
 
 Status note: this document was reviewed against the dirty current worktree on
-2026-07-04. Claims describe this checkout, not necessarily a clean release
+2026-07-05. Claims describe this checkout, not necessarily a clean release
 commit.
 
 The main rule is that UI surfaces are projections of protocol events and saved
@@ -91,8 +91,8 @@ internals.
 `Model.applyEvent` ignores already-seen sequenced events, applies the
 `clientux/projector` accounting snapshot, uses
 `projector.EventPresentationPolicy` to decide whether an event should affect
-the transcript, updates status/run-summary state, and leaves rendering for the
-later reflow step.
+the transcript, updates status/failure-summary state, and leaves rendering for
+the later reflow step.
 
 ## Projection Versus Rendering
 
@@ -110,7 +110,9 @@ transcript cells.
 `transcript.Cell` values. Assistant and reasoning deltas append to live cells;
 run start/completion/failure finalizes live cells; tool results are matched by
 call ID; tool batch step events are matched by step ID; compaction, context,
-turn-change, audit, and run-summary events become typed status/tool cells.
+turn-change, audit, and failed run summaries become typed status/tool cells.
+Routine run start/completion status stays in the status/footer projections so
+successful runs do not leave persistent transcript noise.
 
 `internal/tui/render` receives already-derived cell text and view settings. It
 does not inspect protocol events, invoke tools, or query runtime state.
@@ -145,8 +147,9 @@ persisted DTO intentionally stores the semantic fields and collapse state, not
 runtime-only timestamps or live-render state.
 
 `internal/tui/transcript/index.go` builds lookup maps for tool call IDs,
-step IDs, and the run-summary cell. Projectors use this to upsert cells rather
-than append duplicate lifecycle noise.
+step IDs, and the diagnostic run-summary cell. Projectors use this to upsert
+cells rather than append duplicate lifecycle noise. The TUI filters routine
+successful run summaries when saving or restoring local transcript blocks.
 
 ## Saved Sessions
 
@@ -204,13 +207,34 @@ Rich rendering and raw rendering are different views of the same cells:
   `internal/tui/render.RenderAssistantMarkdown`, renders user/assistant blocks
   as content, and renders tool/status/reasoning/error blocks through
   `internal/tui/render.RenderActivityBlock`.
+- User and assistant cells add compact role markers in the TUI render layer
+  (`you` and `assistant`) so dialogue turns are visually separable without
+  changing saved cell content, raw copy, or transcript exports.
 - Tool/thinking collapsed and hidden modes are rendering and selection choices;
   they do not alter the underlying transcript cells.
+
+Theme styles intentionally set deterministic foreground colors without painting
+ordinary terminal backgrounds. This keeps light/dark Billyharness themes from
+fighting the user's terminal theme; the explicit yellow mouse-selection
+highlight is the normal exception.
 
 The render cache key includes cell identity/content, live state, event
 identity, collapse state, terminal width, theme, and view modes. That keeps
 terminal rendering deterministic without coupling the renderer to protocol
 events.
+
+The normal inline status line is intentionally dense and Claude-like: workspace,
+git branch/diff, model/reasoning, and active context only. Detailed cache,
+helper API, cost, version, profile, and session counters stay in `/status`,
+`/context`, exports, or debug surfaces rather than the always-visible footer.
+When the selected provider is the Codex/OpenAI subscription path, the status
+line may append Codex quota windows from the Codex app-server account rate-limit
+read method: the primary window label/percent/reset first, then the secondary
+percent/reset. That quota segment is optional and drops before the core
+workspace/git/model/context segment at narrow terminal widths.
+The transient run strip above the input is even smaller: a spinner,
+`working`, and elapsed time, with tool names and lifecycle details kept in
+transcript/status surfaces.
 
 ## Selection, Copy, And Export Boundaries
 
@@ -260,6 +284,10 @@ and `internal/tui/commands.go`. That includes key bindings, slash arguments,
 command palette behavior, settings mutation, chat resume/fork/new behavior,
 copy commands, transcript find, gateway reconnect, and viewport/block
 navigation.
+
+Image input is also a TUI input concern. `/attach PATH` imports a local image
+file, while `Alt+V` reads raw image bytes from the system clipboard, stores them
+as a private attachment ref, and leaves `Ctrl+V` for normal text paste.
 
 The command registry composes shared action metadata with prompt commands,
 profile metadata, and MCP prompt metadata. The TUI may display/search that

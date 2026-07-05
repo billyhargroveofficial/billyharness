@@ -653,7 +653,11 @@ func (s *resolveState) finalizeDerivedValues() {
 		s.recordSavedContextWindowOverrideWarning()
 	}
 	if s.cfg.ContextCompactTokens != beforeCompactTokens {
-		s.record("context_compact_tokens", s.cfg.ContextCompactTokens, SourceDerived, "", "context_window_tokens", false, "clamped to context window for "+s.cfg.Model, "")
+		warning := "derived from context window for " + s.cfg.Model
+		if s.cfg.ContextWindowTokens > 0 && int64(beforeCompactTokens) >= s.cfg.ContextWindowTokens {
+			warning = "clamped to context window for " + s.cfg.Model
+		}
+		s.record("context_compact_tokens", s.cfg.ContextCompactTokens, SourceDerived, "", "context_window_tokens", false, warning, "")
 	}
 	beforeWebProvider := s.cfg.WebSummaryProvider
 	beforeWebModel := s.cfg.WebSummaryModel

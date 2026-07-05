@@ -117,7 +117,7 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 		report.Config.ProviderCapability.ValidationError != "" {
 		t.Fatalf("provider capability diagnostics = %#v", report.Config.ProviderCapability)
 	}
-	if report.Config.MaxToolRounds == 0 || report.Config.MCPAllowedServers == "" || report.Config.WebSummaryMode == "" {
+	if report.Config.MCPAllowedServers == "" || report.Config.WebSummaryMode == "" {
 		t.Fatalf("runtime/tool diagnostics = %#v", report.Config.RuntimeToolSnapshot)
 	}
 	if report.Runtime.Provider != "deepseek" || report.Runtime.Model != "deepseek-v4-pro" || report.Runtime.GatewayURL == "" {

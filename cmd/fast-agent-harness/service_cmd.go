@@ -31,7 +31,7 @@ func tuiCmd(args []string) error {
 	gatewayURL := fs.String("gateway", "", "gateway base URL override; auto-discovered when omitted")
 	model := fs.String("model", "", "initial model: deepseek-v4-flash or deepseek-v4-pro")
 	dangerous := fs.Bool("dangerous", true, "enable write and shell tools for local TUI runs")
-	maxRounds := fs.Int("max-rounds", 0, "max model/tool rounds per request; 0 uses config default")
+	maxRounds := fs.Int("max-rounds", 0, "max model/tool rounds per request; 0 means unlimited")
 	accessMode := fs.String("access-mode", "", "run access mode: build, guarded, or plan")
 	plain := fs.Bool("plain", false, "compatibility mode for SSH/dumb terminals: no alt-screen, mouse, or bracketed paste")
 	if err := fs.Parse(args); err != nil {
@@ -93,7 +93,7 @@ func telegramCmd(args []string) error {
 	pollTimeout := fs.Int("poll-timeout-sec", envIntAnyDefault(30, "BILLYHARNESS_TELEGRAM_POLL_TIMEOUT_SEC", "TELEGRAM_POLL_TIMEOUT_SEC"), "Telegram long poll timeout")
 	editIntervalMS := fs.Int("edit-interval-ms", envIntAnyDefault(700, "BILLYHARNESS_TELEGRAM_EDIT_INTERVAL_MS", "TELEGRAM_EDIT_INTERVAL_MS"), "minimum interval between live edits per message")
 	processWatchIntervalSec := fs.Int("process-watch-interval-sec", envIntAnyDefault(10, "BILLYHARNESS_TELEGRAM_PROCESS_WATCH_INTERVAL_SEC", "TELEGRAM_PROCESS_WATCH_INTERVAL_SEC"), "managed process notification poll interval; 0 disables")
-	maxRounds := fs.Int("max-rounds", cfg.MaxToolRounds, "max model/tool rounds per Telegram request")
+	maxRounds := fs.Int("max-rounds", cfg.MaxToolRounds, "max model/tool rounds per Telegram request; 0 means unlimited")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

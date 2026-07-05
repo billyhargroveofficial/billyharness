@@ -41,7 +41,7 @@ func benchRunCmd(args []string) error {
 	mock := fs.Bool("mock", false, "use mock provider")
 	model := fs.String("model", "", "model override")
 	timeoutSec := fs.Int("timeout-sec", 0, "per-task timeout override")
-	maxRounds := fs.Int("max-rounds", 100, "max model/tool rounds per task")
+	maxRounds := fs.Int("max-rounds", 0, "max model/tool rounds per task; 0 means unlimited")
 	allowDangerous := fs.Bool("dangerous", false, "enable write and shell tools for benchmark tasks")
 	scriptedRounds := fs.Int("scripted-rounds", 0, "mock-only scripted tool rounds for loop/compaction stress")
 	contextCompactTokens := fs.Int("context-compact-tokens", 0, "override context compaction trigger tokens")

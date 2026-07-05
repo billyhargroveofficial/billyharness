@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/billyhargroveofficial/billyharness/internal/clipboard"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -123,6 +126,67 @@ func TestAttachImageBytesAddsAttachment(t *testing.T) {
 	}
 	if chip := m.attachmentChipsView(); !strings.Contains(chip, "clipboard-test.png") {
 		t.Fatalf("chip = %q", chip)
+	}
+}
+
+func TestAltVPastesRawClipboardImageAsPendingAttachment(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.height = 24
+	img := image.NewRGBA(image.Rect(0, 0, 2, 3))
+	img.Set(0, 0, color.RGBA{255, 0, 0, 255})
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	oldRead := readClipboardImage
+	readClipboardImage = func() ([]byte, string, error) {
+		return buf.Bytes(), "clipboard-raw.png", nil
+	}
+	t.Cleanup(func() { readClipboardImage = oldRead })
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v", Mod: tea.ModAlt})
+	updated := next.(Model)
+	if cmd != nil {
+		t.Fatalf("cmd = %#v", cmd)
+	}
+	if len(updated.attachments) != 1 || updated.attachments[0].FileName != "clipboard-raw.png" ||
+		updated.attachments[0].Width != 2 || updated.attachments[0].Height != 3 {
+		t.Fatalf("attachments = %#v", updated.attachments)
+	}
+	if updated.textarea.Value() != "" {
+		t.Fatalf("Alt+V should not insert text, textarea=%q", updated.textarea.Value())
+	}
+	if len(updated.blocks) != 0 || updated.busy {
+		t.Fatalf("Alt+V should attach without submitting: blocks=%#v busy=%v", updated.blocks, updated.busy)
+	}
+	if chip := updated.attachmentChipsView(); !strings.Contains(chip, "vision image clipboard-raw.png 2x3") {
+		t.Fatalf("chip = %q", chip)
+	}
+}
+
+func TestAltVNoImageDoesNotInsertText(t *testing.T) {
+	m := newTestModel(t)
+	m.textarea.SetValue("draft")
+	oldRead := readClipboardImage
+	readClipboardImage = func() ([]byte, string, error) {
+		return nil, "", clipboard.ErrNoImage
+	}
+	t.Cleanup(func() { readClipboardImage = oldRead })
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v", Mod: tea.ModAlt})
+	updated := next.(Model)
+	if cmd != nil {
+		t.Fatalf("cmd = %#v", cmd)
+	}
+	if updated.textarea.Value() != "draft" {
+		t.Fatalf("Alt+V with no image should preserve draft, textarea=%q", updated.textarea.Value())
+	}
+	if len(updated.attachments) != 0 {
+		t.Fatalf("attachments = %#v", updated.attachments)
+	}
+	if !strings.Contains(updated.status, "no image in clipboard") {
+		t.Fatalf("status = %q", updated.status)
 	}
 }
 

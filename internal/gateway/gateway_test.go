@@ -829,6 +829,7 @@ func TestGatewayRunRequestPrivilegeClamps(t *testing.T) {
 	devSettings, err := server.runSettingsForRequest(context.Background(), RunRequest{
 		Provider:        "openai-codex",
 		Model:           "gpt-5.5",
+		Profile:         "billy",
 		Thinking:        "enabled",
 		ReasoningEffort: "xhigh",
 		MaxToolRounds:   2,
@@ -842,6 +843,9 @@ func TestGatewayRunRequestPrivilegeClamps(t *testing.T) {
 		devSettings.provider.Model.Thinking != server.providerBinding.Model.Thinking ||
 		devSettings.provider.Model.ReasoningEffort != server.providerBinding.Model.ReasoningEffort {
 		t.Fatalf("unauthenticated provider/model override was not clamped: %#v", devSettings.provider)
+	}
+	if devSettings.profile.Profile != "billy" {
+		t.Fatalf("profile override should remain available: %#v", devSettings.profile)
 	}
 	if devSettings.runtime.MaxToolRounds != 2 || devSettings.toolPolicy.AccessMode != config.AccessModePlan {
 		t.Fatalf("safe clamps should still allow stricter request knobs: runtime=%#v policy=%#v", devSettings.runtime, devSettings.toolPolicy)

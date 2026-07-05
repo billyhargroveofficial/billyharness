@@ -1,12 +1,14 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/billyhargroveofficial/billyharness/internal/clientux"
+	"github.com/billyhargroveofficial/billyharness/internal/clipboard"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/memory"
 	"github.com/billyhargroveofficial/billyharness/internal/promptcommands"
@@ -65,6 +67,31 @@ func actionRegistry() []actionSpec {
 			keyRun: func(m *Model, _ tea.KeyPressMsg) keyActionResult {
 				m.textarea.InsertString("\n")
 				return keyActionResult{skipTextareaUpdate: true}
+			},
+		},
+		{
+			id:         "message.paste_image",
+			title:      "Paste Image",
+			category:   "message",
+			keybinding: "alt+v",
+			keySummary: "paste image from clipboard",
+			summary:    "paste image from clipboard",
+			keyRun: func(m *Model, _ tea.KeyPressMsg) keyActionResult {
+				if m.authInputProvider != "" {
+					return keyActionResult{skipTextareaUpdate: true}
+				}
+				if m.busy {
+					m.status = "paste image unavailable while running"
+					return keyActionResult{reflow: true, skipTextareaUpdate: true}
+				}
+				if ok, err := m.pasteImageFromClipboard(); ok {
+					return keyActionResult{reflow: true, gotoBottom: m.followOutput, skipTextareaUpdate: true}
+				} else if errors.Is(err, clipboard.ErrNoImage) {
+					m.status = "paste image: no image in clipboard"
+				} else {
+					m.status = "paste image: " + err.Error()
+				}
+				return keyActionResult{reflow: true, skipTextareaUpdate: true}
 			},
 		},
 		{
@@ -902,7 +929,22 @@ func keyPressNames(msg tea.KeyPressMsg) []string {
 			names = append(names, "enter")
 		}
 	}
+	if msg.Mod.Contains(tea.ModAlt) && msg.Code != tea.KeyEnter {
+		if key := printableKeyName(msg); key != "" {
+			names = append(names, "alt+"+key)
+		}
+	}
 	return names
+}
+
+func printableKeyName(msg tea.KeyPressMsg) string {
+	if text := strings.ToLower(strings.TrimSpace(msg.Text)); text != "" {
+		return text
+	}
+	if msg.Code >= 32 && msg.Code <= 126 {
+		return strings.ToLower(string(rune(msg.Code)))
+	}
+	return ""
 }
 
 func (m *Model) handleKeyAction(msg tea.KeyPressMsg) (keyActionResult, bool) {

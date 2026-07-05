@@ -3,9 +3,54 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/tui/transcript"
 )
+
+func TestApplyChatSessionDropsRoutineRunSummaryBlocks(t *testing.T) {
+	m := newTestModel(t)
+	session := chatSession{
+		ID:        newChatID(),
+		Title:     "saved noise",
+		CreatedAt: time.Now().UTC(),
+		Blocks: []savedBlock{
+			{
+				Kind:      "status",
+				CellType:  transcript.CellTypeRunSummary,
+				Title:     "Run done · gpt-5.5 · xhigh · 5s",
+				Content:   "state: completed\nelapsed: 5s\nagent turns: 1 / session 1\ntools: 0 / session 0\ncontext: 6.0k / 256k\nsubscription",
+				EventType: protocol.EventRunCompleted,
+				RawCopy:   "state: completed",
+			},
+			{
+				Kind:     "assistant",
+				CellType: transcript.CellTypeAssistantFinal,
+				Title:    "ASSISTANT",
+				Content:  "actual answer",
+				RawCopy:  "actual answer",
+			},
+		},
+	}
+
+	m.applyChatSession(session)
+	if summaries := countCells(m.blocks, cellTypeRunSummary); summaries != 0 {
+		t.Fatalf("routine run summaries should be dropped on restore, got %d: %#v", summaries, m.blocks)
+	}
+	if len(m.blocks) != 1 || m.blocks[0].Content != "actual answer" {
+		t.Fatalf("restore should keep non-summary transcript blocks: %#v", m.blocks)
+	}
+	saved, err := loadChatSession(m.sessionsDir, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, block := range saved.Blocks {
+		if block.CellType == transcript.CellTypeRunSummary {
+			t.Fatalf("routine run summary should not be saved again: %#v", saved.Blocks)
+		}
+	}
+}
 
 func TestResumeChatRestoresProjectedUsageSnapshot(t *testing.T) {
 	m := newTestModel(t)
@@ -82,17 +127,17 @@ func TestResumeChatRestoresProjectedUsageSnapshot(t *testing.T) {
 
 	status := stripANSITest(restored.inlineStatusView())
 	for _, want := range []string{
-		"Context 150/1.0m 0.0% used",
-		"cache hit 50",
-		"cache miss 75",
-		"websum 30→8",
-		"helper 40→10",
-		"sumapi 50",
-		"helper API calls 2",
-		"helper API cost $0.0045",
+		"📁",
+		"🤖 v4-flash high",
+		"0.0% 150",
 	} {
 		if !strings.Contains(status, want) {
 			t.Fatalf("restored status %q missing %q", status, want)
+		}
+	}
+	for _, bad := range []string{"cache hit", "cache miss", "websum", "helper ", "sumapi", "helper API"} {
+		if strings.Contains(status, bad) {
+			t.Fatalf("restored inline status should omit noisy segment %q: %q", bad, status)
 		}
 	}
 

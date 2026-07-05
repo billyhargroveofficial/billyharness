@@ -13,6 +13,8 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/toolrender"
 )
 
+var readClipboardImage = clipboard.ReadImage
+
 func (m *Model) attachImage(path string) (bool, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -41,7 +43,7 @@ func (m *Model) attachImageBytes(data []byte, fileName string) (bool, error) {
 // attaches it. Returns true on success. On failure (no image in clipboard,
 // unsupported platform, etc.) it returns false with an error.
 func (m *Model) pasteImageFromClipboard() (bool, error) {
-	data, name, err := clipboard.ReadImage()
+	data, name, err := readClipboardImage()
 	if err != nil {
 		return false, err
 	}

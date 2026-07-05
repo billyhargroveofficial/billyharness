@@ -115,8 +115,10 @@ but per-run request overrides are intentionally narrower.
 reasoning effort, max tool rounds, and access mode. In the gateway,
 `runOverrideSettingsForRequest` drops provider/model/thinking/reasoning
 overrides unless mutation auth is disabled or the request was authenticated
-with the mutation bearer token. `clampMaxToolRoundsOverride` prevents a run from
-raising max tool rounds above the configured limit, and
+with the mutation bearer token. Max tool rounds default to `0`, which means no
+round cap for normal runtime loops. When a positive configured cap exists,
+`clampMaxToolRoundsOverride` prevents a run from raising max tool rounds above
+that configured limit, and
 `clampAccessModeOverride` prevents a request from escalating above the
 configured access mode.
 
@@ -188,8 +190,10 @@ construction, and context-window derivation.
 Config normalization applies `modelinfo.NormalizeAlias`, `ProviderForModel`,
 model-derived context windows, and context compaction defaults. The default
 runtime is DeepSeek `deepseek-v4-flash` with a model-derived 1,000,000-token
-context window and a 60 percent compaction threshold. Codex-family models route
-to `openai-codex`; DeepSeek-family models route to `deepseek`. If an explicit
+context window and a 60 percent compaction threshold. Codex/GPT subscription
+models default compaction to 90 percent of their selected context window unless
+`context_compact_tokens` is explicitly overridden. Codex-family models route to
+`openai-codex`; DeepSeek-family models route to `deepseek`. If an explicit
 provider conflicts with a known model family, the model wins and the resolver
 records a warning. When `DisableSpark` is true and the selected shorthand alias
 is `spark`, the model is replaced with `gpt-5.4-mini`.
@@ -330,7 +334,8 @@ Current hardening that is already implemented:
 - memory prompt injection is summary-only, capped, path-confined, and sanitizes
   prompt-like summaries;
 - project context exposes env variable names, not env values;
-- per-run gateway overrides cannot raise max rounds or access privilege, and
+- per-run gateway overrides cannot raise positive max-round caps or access
+  privilege, and
   provider/model overrides are gated when mutation auth is required;
 - skills discovery is local, bounded, and support-file reads are path-confined.
 

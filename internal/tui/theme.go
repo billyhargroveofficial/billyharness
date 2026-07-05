@@ -121,6 +121,7 @@ type themeStyles struct {
 	status          lipgloss.Style
 	footer          lipgloss.Style
 	input           lipgloss.Style
+	inputBorder     lipgloss.Style
 	runStatus       lipgloss.Style
 	popup           lipgloss.Style
 	popupLine       lipgloss.Style
@@ -150,13 +151,10 @@ type themeStyles struct {
 func newThemeStyles(theme tuiTheme) themeStyles {
 	text := lipgloss.Color(theme.foreground)
 	inputText := lipgloss.Color(theme.inputFg)
-	inputBg := lipgloss.Color(theme.inputBg)
 	muted := lipgloss.Color(theme.mutedFg)
-	statusBg := lipgloss.Color(theme.statusBg)
-	block := func(fg, bg, border string) lipgloss.Style {
+	block := func(fg, border string) lipgloss.Style {
 		return lipgloss.NewStyle().
 			Foreground(lipgloss.Color(fg)).
-			Background(lipgloss.Color(bg)).
 			Border(lipgloss.NormalBorder(), false, false, false, true).
 			BorderForeground(lipgloss.Color(border)).
 			Padding(0, 0).
@@ -164,20 +162,15 @@ func newThemeStyles(theme tuiTheme) themeStyles {
 	}
 	textareaStyles := textarea.DefaultLightStyles()
 	baseInput := lipgloss.NewStyle().
-		Foreground(inputText).
-		Background(inputBg)
+		Foreground(inputText)
 	textareaStyles.Focused.Base = baseInput
 	textareaStyles.Focused.Text = baseInput
 	textareaStyles.Focused.CursorLine = baseInput
 	textareaStyles.Focused.Placeholder = lipgloss.NewStyle().
-		Foreground(muted).
-		Background(inputBg)
+		Foreground(muted)
 	textareaStyles.Focused.Prompt = lipgloss.NewStyle().
-		Foreground(muted).
-		Background(inputBg)
-	textareaStyles.Focused.EndOfBuffer = lipgloss.NewStyle().
-		Foreground(inputBg).
-		Background(inputBg)
+		Foreground(muted)
+	textareaStyles.Focused.EndOfBuffer = lipgloss.NewStyle()
 	textareaStyles.Focused.LineNumber = baseInput
 	textareaStyles.Focused.CursorLineNumber = baseInput
 	textareaStyles.Blurred = textareaStyles.Focused
@@ -187,67 +180,51 @@ func newThemeStyles(theme tuiTheme) themeStyles {
 		foreground: theme.foreground,
 		header: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(theme.headerFg)).
-			Background(lipgloss.Color(theme.headerBg)).
 			Bold(true),
 		status: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(theme.statusFg)).
-			Background(statusBg).
-			Padding(0, 1),
+			Foreground(lipgloss.Color(theme.statusFg)),
 		footer: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(theme.footerFg)).
-			Background(lipgloss.Color(theme.footerBg)).
 			Padding(0, 1),
 		input: lipgloss.NewStyle().
 			Foreground(inputText).
-			Background(inputBg).
-			Border(lipgloss.RoundedBorder()).
+			Border(lipgloss.NormalBorder(), true, true, true, true).
 			BorderForeground(lipgloss.Color(theme.inputBorder)).
-			Padding(0, 0),
+			Padding(0, 1),
+		inputBorder: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(theme.inputBorder)),
 		runStatus: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(theme.statusFg)).
-			Background(statusBg).
 			Bold(true),
 		popup: lipgloss.NewStyle().
 			Foreground(text).
-			Background(lipgloss.Color(theme.inputBg)).
 			Border(lipgloss.NormalBorder()).
 			BorderForeground(lipgloss.Color(theme.inputBorder)).
 			Padding(0, 0),
 		popupLine: lipgloss.NewStyle().
-			Foreground(text).
-			Background(lipgloss.Color(theme.inputBg)),
+			Foreground(text),
 		popupMuted: lipgloss.NewStyle().
-			Foreground(muted).
-			Background(lipgloss.Color(theme.inputBg)),
+			Foreground(muted),
 		popupSelected: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(theme.headerFg)).
-			Background(lipgloss.Color(theme.headerBg)).
-			Bold(false),
+			Bold(true),
 		statusState: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFFFFF")).
-			Background(statusBg).
+			Foreground(lipgloss.Color(theme.statusFg)).
 			Bold(true),
 		statusModel: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#BFE7FF")).
-			Background(statusBg),
+			Foreground(lipgloss.Color(theme.toolFg)),
 		statusReasoning: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(theme.reasoningBorder)).
-			Background(statusBg),
+			Foreground(lipgloss.Color(theme.reasoningFg)),
 		statusAccess: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(theme.userBorder)).
-			Background(statusBg),
+			Foreground(lipgloss.Color(theme.footerFg)),
 		statusUsage: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#E7D7A9")).
-			Background(statusBg),
+			Foreground(lipgloss.Color(theme.reasoningFg)),
 		statusCost: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#B7E4C7")).
-			Background(statusBg),
+			Foreground(lipgloss.Color(theme.toolFg)),
 		statusDim: lipgloss.NewStyle().
-			Foreground(muted).
-			Background(statusBg),
+			Foreground(muted),
 		statusSeparator: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#666666")).
-			Background(statusBg),
+			Foreground(muted),
 		selection: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#050505")).
 			Background(lipgloss.Color("#FFD166")).
@@ -273,18 +250,17 @@ func newThemeStyles(theme tuiTheme) themeStyles {
 		markdown: tuirender.TerminalMarkdownStyleSet(tuirender.MarkdownTheme{
 			AssistantForeground: theme.assistantFg,
 			ToolForeground:      theme.toolFg,
-			ToolBackground:      theme.toolBg,
 			ToolBorder:          theme.toolBorder,
 			BlockBorder:         theme.blockBorder,
 			MutedForeground:     theme.mutedFg,
 		}),
 		textarea:    textareaStyles,
-		block:       block(theme.foreground, theme.blockBg, theme.blockBorder),
-		user:        block(theme.userFg, theme.userBg, theme.userBorder),
-		assistant:   block(theme.assistantFg, theme.assistantBg, theme.assistantBorder),
-		reasoning:   block(theme.reasoningFg, theme.reasoningBg, theme.reasoningBorder),
-		tool:        block(theme.toolFg, theme.toolBg, theme.toolBorder),
-		error:       block(theme.errorFg, theme.errorBg, theme.errorBorder),
-		statusBlock: block(theme.statusFg, theme.statusBg, theme.statusFg),
+		block:       block(theme.foreground, theme.blockBorder),
+		user:        block(theme.userFg, theme.userBorder),
+		assistant:   block(theme.assistantFg, theme.assistantBorder),
+		reasoning:   block(theme.reasoningFg, theme.reasoningBorder),
+		tool:        block(theme.toolFg, theme.toolBorder),
+		error:       block(theme.errorFg, theme.errorBorder),
+		statusBlock: block(theme.statusFg, theme.statusFg),
 	}
 }

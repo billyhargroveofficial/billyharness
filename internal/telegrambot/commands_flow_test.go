@@ -194,7 +194,7 @@ func TestTelegramModelCommandAndStatusShowInputCapability(t *testing.T) {
 	if !strings.Contains(html, "context window: <code>256.0k</code>") {
 		t.Fatalf("status html should use gpt-5.5 model context window: %q", html)
 	}
-	if !strings.Contains(html, "compact threshold: <code>153.6k</code> (60%)") {
+	if !strings.Contains(html, "compact threshold: <code>230.4k</code> (90%)") {
 		t.Fatalf("status html should use gpt-5.5 compact threshold: %q", html)
 	}
 	for _, notWant := range []string{"allowed chats:", "event cursor:"} {
@@ -207,7 +207,7 @@ func TestTelegramModelCommandAndStatusShowInputCapability(t *testing.T) {
 	if !strings.Contains(html, "context window: <code>256.0k</code>") {
 		t.Fatalf("status html should use mini model context window: %q", html)
 	}
-	if !strings.Contains(html, "compact threshold: <code>153.6k</code> (60%)") {
+	if !strings.Contains(html, "compact threshold: <code>230.4k</code> (90%)") {
 		t.Fatalf("status html should use mini model compact threshold: %q", html)
 	}
 }
@@ -228,8 +228,10 @@ func TestStatusHTMLContextWindowFollowsModelInfo(t *testing.T) {
 			if !strings.Contains(html, line) {
 				t.Fatalf("status html = %q, want %q", html, line)
 			}
-			threshold := modelinfo.Lookup(model).ContextWindowTokens * 60 / 100
-			thresholdLine := "compact threshold: <code>" + compactInt(threshold) + "</code> (60%)"
+			window := modelinfo.Lookup(model).ContextWindowTokens
+			threshold := int64(config.DefaultContextCompactTokens(model, "", window))
+			percent := formatThresholdPercent(float64(config.DefaultContextCompactPercent(model, "")))
+			thresholdLine := "compact threshold: <code>" + compactInt(threshold) + "</code> (" + percent + ")"
 			if !strings.Contains(html, thresholdLine) {
 				t.Fatalf("status html = %q, want %q", html, thresholdLine)
 			}
@@ -250,8 +252,19 @@ func TestStatusHTMLLabelsExplicitContextWindowOverride(t *testing.T) {
 	if !strings.Contains(html, "context window: <code>1.00M</code> (override)") {
 		t.Fatalf("status html should label explicit override: %q", html)
 	}
-	if !strings.Contains(html, "compact threshold: <code>600.0k</code> (60%)") {
-		t.Fatalf("status html should show compact threshold for override: %q", html)
+	if !strings.Contains(html, "compact threshold: <code>900.0k</code> (90%)") {
+		t.Fatalf("status html should derive gpt compact threshold from explicit context window: %q", html)
+	}
+
+	html = StatusHTML(ChatState{Model: "gpt-5.5"}, Options{
+		Model:                "gpt-5.5",
+		ContextWindow:        1_000_000,
+		ContextWindowSource:  "override",
+		ContextCompact:       600_000,
+		ContextCompactSource: "override",
+	})
+	if !strings.Contains(html, "compact threshold: <code>600.0k</code> (60%) override") {
+		t.Fatalf("status html should show explicit compact threshold override: %q", html)
 	}
 }
 

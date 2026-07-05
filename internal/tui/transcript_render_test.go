@@ -495,8 +495,8 @@ func TestTranscriptBlocksCarryTypedCellMetadata(t *testing.T) {
 	if m.blocks[assistantIndex].CellType != cellTypeAssistantFinal || m.blocks[assistantIndex].Live || m.blocks[assistantIndex].RenderCacheKey == streamKey {
 		t.Fatalf("assistant final cell = %#v", m.blocks[assistantIndex])
 	}
-	if got := m.blocks[len(m.blocks)-1].CellType; got != cellTypeRunSummary {
-		t.Fatalf("run summary cellType = %q", got)
+	if summaries := countCells(m.blocks, cellTypeRunSummary); summaries != 0 {
+		t.Fatalf("routine run completion should not add summary cells, got %d: %#v", summaries, m.blocks)
 	}
 
 	m.applyEvent(protocol.Event{Type: protocol.EventAssistantReasoning, Data: "hidden"})
@@ -820,33 +820,27 @@ func TestPrintableInputDoesNotReflowTranscript(t *testing.T) {
 	}
 }
 
-func TestRunSummaryCellUpdatesByRunLifecycle(t *testing.T) {
+func TestRoutineRunLifecycleDoesNotAddTranscriptSummary(t *testing.T) {
 	m := newTestModel(t)
 	m.runStartedAt = time.Now().Add(-2 * time.Second)
 	m.modelCalls = 4
 	m.toolCalls = 7
 	m.applyEvent(protocol.Event{Type: protocol.EventRunStarted})
-	if len(m.blocks) != 1 || m.blocks[0].CellType != cellTypeRunSummary {
-		t.Fatalf("run start should create one summary cell: %#v", m.blocks)
-	}
-	if !strings.Contains(m.blocks[0].Title, "Run running") {
-		t.Fatalf("run start title = %q", m.blocks[0].Title)
+	if summaries := countCells(m.blocks, cellTypeRunSummary); summaries != 0 {
+		t.Fatalf("run start should stay out of transcript, got %d summaries: %#v", summaries, m.blocks)
 	}
 	m.applyEvent(protocol.Event{Type: protocol.EventModelCallStarted})
 	m.applyEvent(protocol.Event{Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{ID: "call-1", Name: "fs_read_file"}})
 	m.applyEvent(protocol.Event{Type: protocol.EventRunCompleted})
 
-	if summaries := countCells(m.blocks, cellTypeRunSummary); summaries != 1 {
-		t.Fatalf("run completion should update summary cell, got %d summaries: %#v", summaries, m.blocks)
+	if summaries := countCells(m.blocks, cellTypeRunSummary); summaries != 0 {
+		t.Fatalf("run completion should stay out of transcript, got %d summaries: %#v", summaries, m.blocks)
 	}
-	summary := m.blocks[0]
-	if !strings.Contains(summary.Title, "Run done") {
-		t.Fatalf("run completion title = %q", summary.Title)
+	if m.status != "completed" {
+		t.Fatalf("run completion should still update status, got %q", m.status)
 	}
-	for _, want := range []string{"agent turns: 1 / session 5", "tools: 1 / session 8", "context:"} {
-		if !strings.Contains(summary.Content, want) {
-			t.Fatalf("run summary missing %q:\n%s", want, summary.Content)
-		}
+	if len(m.blocks) != 1 || m.blocks[0].CellType != cellTypeToolCall {
+		t.Fatalf("tool transcript block should remain, blocks=%#v", m.blocks)
 	}
 }
 
@@ -913,19 +907,25 @@ func TestToolBlocksCompactLongWebFetchURL(t *testing.T) {
 	}
 }
 
-func TestUserAndAssistantBlocksRenderWithoutRoleLabels(t *testing.T) {
+func TestUserAndAssistantBlocksRenderCompactRoleMarkers(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 100
-	user := m.renderBlock(0, transcript.Cell{Kind: "user", Title: "USER", Content: "hello"})
-	assistant := m.renderBlock(1, transcript.Cell{Kind: "assistant", Title: "ASSISTANT", Content: "world"})
-	if strings.Contains(strings.ToLower(user), "user") {
-		t.Fatalf("user block should not render role label: %q", user)
+	user := stripANSITest(m.renderBlock(0, transcript.Cell{Kind: "user", Title: "USER", Content: "hello"}))
+	assistant := stripANSITest(m.renderBlock(1, transcript.Cell{Kind: "assistant", Title: "ASSISTANT", Content: "world"}))
+	for _, want := range []string{"❯ you", "hello"} {
+		if !strings.Contains(user, want) {
+			t.Fatalf("user block missing %q: %q", want, user)
+		}
 	}
-	if strings.Contains(strings.ToLower(assistant), "assistant") {
-		t.Fatalf("assistant block should not render role label: %q", assistant)
+	for _, want := range []string{"● assistant", "world"} {
+		if !strings.Contains(assistant, want) {
+			t.Fatalf("assistant block missing %q: %q", want, assistant)
+		}
 	}
-	if !strings.Contains(user, "hello") || !strings.Contains(assistant, "world") {
-		t.Fatalf("blocks should render content, got user=%q assistant=%q", user, assistant)
+	for _, rendered := range []string{user, assistant} {
+		if strings.Contains(rendered, "┌") || strings.Contains(rendered, "╭") {
+			t.Fatalf("dialogue marker should stay compact, rendered=%q", rendered)
+		}
 	}
 }
 

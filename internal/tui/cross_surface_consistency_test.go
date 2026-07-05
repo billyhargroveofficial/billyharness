@@ -187,9 +187,14 @@ func assertTUIGoldenStatus(t *testing.T, model Model) {
 		t.Fatalf("tui model accounting drifted: %#v", model)
 	}
 	status := stripANSITest(model.inlineStatusView())
-	for _, want := range []string{"Context 500/1.0k", "cache hit 200", "cache miss 220", "websum 200→25", "sumapi 100", "helper API calls 1", "helper API cost $0.0030", "agent turns 1", "tools 1"} {
+	for _, want := range []string{"📁", "⎇", "🤖 v4-flash high", "50.0% 500"} {
 		if !strings.Contains(status, want) {
 			t.Fatalf("tui status missing %q:\n%s", want, status)
+		}
+	}
+	for _, bad := range []string{"cache hit", "cache miss", "websum", "sumapi", "helper API", "agent turns", "tools 1"} {
+		if strings.Contains(status, bad) {
+			t.Fatalf("tui status should omit noisy segment %q:\n%s", bad, status)
 		}
 	}
 	transcriptText := tuiGoldenTranscriptText(model)

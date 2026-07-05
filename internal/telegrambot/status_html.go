@@ -75,7 +75,7 @@ type statusFields struct {
 func statusHTMLFields(state ChatState, opts Options, runtime gatewayapi.SessionStatus) statusFields {
 	model := fallback(state.Model, opts.Model)
 	contextWindow := resolveContextWindowForModel(model, opts.ContextWindow, opts.ContextWindowSource)
-	compactThreshold := resolveCompactThreshold(contextWindow.Tokens, opts.ContextCompact, opts.ContextCompactSource)
+	compactThreshold := resolveCompactThreshold(model, contextWindow.Tokens, opts.ContextCompact, opts.ContextCompactSource)
 	var allowedChats []string
 	for chat := range opts.AllowedChatIDs {
 		allowedChats = append(allowedChats, strconv.FormatInt(chat, 10))
@@ -134,7 +134,7 @@ type compactThresholdResolution struct {
 	Source  string
 }
 
-func resolveCompactThreshold(contextWindow int64, configured int, source string) compactThresholdResolution {
+func resolveCompactThreshold(model string, contextWindow int64, configured int, source string) compactThresholdResolution {
 	source = strings.TrimSpace(source)
 	if source == "override" && configured > 0 {
 		out := compactThresholdResolution{Tokens: int64(configured), Source: "override"}
@@ -149,7 +149,7 @@ func resolveCompactThreshold(contextWindow int64, configured int, source string)
 		}
 		return compactThresholdResolution{}
 	}
-	tokens := contextWindow * 60 / 100
+	tokens := int64(config.DefaultContextCompactTokens(model, "", contextWindow))
 	return compactThresholdResolution{
 		Tokens:  tokens,
 		Percent: float64(tokens) / float64(contextWindow) * 100,

@@ -44,12 +44,17 @@ func TestProviderUsageUpdateDeduplicatesCumulativeSnapshots(t *testing.T) {
 		t.Fatalf("contextTokens = %d, want current snapshot input+output 150", got)
 	}
 	status := m.inlineStatusView()
-	if !strings.Contains(status, "cache hit 50") || !strings.Contains(status, "cache miss 75") {
-		t.Fatalf("status should show last cache snapshot, got %q", status)
+	if !strings.Contains(status, "0.0% 150") {
+		t.Fatalf("status should show compact context snapshot, got %q", status)
 	}
 	for _, bad := range []string{"cache hit 90", "cache miss 135", "reasoning 7", "157 used"} {
 		if strings.Contains(status, bad) {
 			t.Fatalf("status should not show cumulative raw counter %q: %q", bad, status)
+		}
+	}
+	for _, bad := range []string{"cache hit", "cache miss"} {
+		if strings.Contains(status, bad) {
+			t.Fatalf("inline status should omit cache counter %q: %q", bad, status)
 		}
 	}
 }

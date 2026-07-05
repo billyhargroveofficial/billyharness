@@ -13,6 +13,7 @@ import (
 
 	uxprojector "github.com/billyhargroveofficial/billyharness/internal/clientux/projector"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/displayfmt"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
@@ -220,7 +221,7 @@ func TestSlashPopupEscDismissesUntilTextChanges(t *testing.T) {
 	}
 }
 
-func TestInlineStatusShowsModelAccessCacheCostAndSession(t *testing.T) {
+func TestInlineStatusShowsOnlyCompactCoreSegments(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 180
 	m.version = "0.1.0"
@@ -237,34 +238,41 @@ func TestInlineStatusShowsModelAccessCacheCostAndSession(t *testing.T) {
 	m.toolSummaryOutTok = 900
 	m.toolSummaryAPITok = 0
 
-	status := m.inlineStatusView()
+	status := stripANSITest(m.inlineStatusView())
+	if strings.HasPrefix(status, " ") {
+		t.Fatalf("inline status should align without leading padding: %q", status)
+	}
 	for _, want := range []string{
-		"deepseek-v4-flash",
-		"🧠 high",
-		"Full Access",
-		"Context",
-		"model cost $",
-		"cache hit",
-		"cache miss",
-		"websum",
-		"20k→900",
-		"sumapi 0",
-		"agent turns",
-		"v0.1.0",
-		"theme dark",
-		"profile billy",
-		"Main [",
+		"📁 billyharness",
+		"⎇ ",
+		"🤖 v4-flash high",
+		"0.1% 1.5k",
 	} {
 		if !strings.Contains(status, want) {
 			t.Fatalf("status %q does not contain %q", status, want)
 		}
 	}
-	if strings.Count(status, "\n") != 1 {
-		t.Fatalf("status should be two lines, got %q", status)
+	if strings.Contains(status, "\n") {
+		t.Fatalf("status should be one line, got %q", status)
 	}
-	for _, bad := range []string{"reasoning 0", "1.5k used", "cached "} {
+	for _, bad := range []string{
+		"Full Access",
+		"model cost",
+		"cache hit",
+		"cache miss",
+		"websum",
+		"sumapi",
+		"agent turns",
+		"tools ",
+		"v0.1.0",
+		"theme dark",
+		"profile billy",
+		"Main [",
+		"used",
+		"cached ",
+	} {
 		if strings.Contains(status, bad) {
-			t.Fatalf("status should not contain raw provider counter %q: %q", bad, status)
+			t.Fatalf("status should not contain old noisy segment %q: %q", bad, status)
 		}
 	}
 }
@@ -285,19 +293,100 @@ func TestInlineStatusContextWindowFollowsModelInfo(t *testing.T) {
 			if !m.setModel(model) {
 				t.Fatalf("setModel(%q) failed: %s", model, m.status)
 			}
-			wantWindow := compactNumber(modelinfo.Lookup(model).ContextWindowTokens)
+			window := modelinfo.Lookup(model).ContextWindowTokens
+			wantPercent := displayfmt.FixedPercentValue(float64(128)/float64(window)*100, 1)
 			status := stripANSITest(m.inlineStatusView())
-			if !strings.Contains(status, "Context 128/"+wantWindow) {
-				t.Fatalf("inline status = %q, want context denominator %s", status, wantWindow)
+			if !strings.Contains(status, wantPercent+" 128") {
+				t.Fatalf("inline status = %q, want context %s 128", status, wantPercent)
 			}
-			wantCompact := compactNumber(modelinfo.Lookup(model).ContextWindowTokens * 60 / 100)
-			if !strings.Contains(status, "Compact "+wantCompact+" 60%") {
-				t.Fatalf("inline status = %q, want compact threshold %s", status, wantCompact)
-			}
-			if strings.Contains(status, "override") {
-				t.Fatalf("model-derived inline status should not be labeled override: %q", status)
+			if strings.Contains(status, "/") || strings.Contains(status, "Compact") || strings.Contains(status, "override") {
+				t.Fatalf("inline status should omit denominator/compact/override noise: %q", status)
 			}
 		})
+	}
+}
+
+func TestInlineStatusKeepsGPTPrefixAndCodexQuota(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 260
+	m.lastInputTok = 6000
+	m.lastOutputTok = 100
+	if !m.setModel("gpt") {
+		t.Fatalf("setModel(gpt) failed: %s", m.status)
+	}
+	if !m.setReasoning("xhigh") {
+		t.Fatalf("setReasoning(xhigh) failed: %s", m.status)
+	}
+	now := time.Now()
+	m.codexRateLimits = codexRateLimitSnapshot{
+		Primary: &codexRateLimitWindow{
+			UsedPercent:        95,
+			WindowDurationMins: 300,
+			ResetsAt:           now.Add(65 * time.Minute),
+		},
+		Secondary: &codexRateLimitWindow{
+			UsedPercent:        18,
+			WindowDurationMins: 10080,
+			ResetsAt:           now.Add(73*time.Hour + 15*time.Minute),
+		},
+	}
+
+	status := stripANSITest(m.inlineStatusView())
+	for _, want := range []string{
+		"🤖 gpt 5.5 xhigh 2.4% 6.1k",
+		"● 5h 95.0%",
+		"● 18.0%",
+	} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status %q does not contain %q", status, want)
+		}
+	}
+	for _, bad := range []string{"🤖 5.5", "xhigh · 2.4%"} {
+		if strings.Contains(status, bad) {
+			t.Fatalf("status should not contain %q: %q", bad, status)
+		}
+	}
+}
+
+func TestCodexRateLimitStatusFormatting(t *testing.T) {
+	m := newTestModel(t)
+	if !m.setModel("gpt") {
+		t.Fatalf("setModel(gpt) failed: %s", m.status)
+	}
+	now := time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC)
+	m.codexRateLimits = codexRateLimitSnapshot{
+		Primary: &codexRateLimitWindow{
+			UsedPercent:        95,
+			WindowDurationMins: 300,
+			ResetsAt:           now.Add(65 * time.Minute),
+		},
+		Secondary: &codexRateLimitWindow{
+			UsedPercent:        18,
+			WindowDurationMins: 10080,
+			ResetsAt:           now.Add(73*time.Hour + 15*time.Minute),
+		},
+	}
+
+	want := "● 5h 95.0% 1hr 5m  ● 18.0% 3d 1hr 15m"
+	if got := m.codexRateLimitsStatusText(now); got != want {
+		t.Fatalf("codex rate limit status = %q, want %q", got, want)
+	}
+}
+
+func TestCodexRateLimitStatusHiddenForNonCodexProvider(t *testing.T) {
+	m := newTestModel(t)
+	if !m.setModel("deepseek-v4-flash") {
+		t.Fatalf("setModel(deepseek-v4-flash) failed: %s", m.status)
+	}
+	m.codexRateLimits = codexRateLimitSnapshot{
+		Primary: &codexRateLimitWindow{
+			UsedPercent:        95,
+			WindowDurationMins: 300,
+			ResetsAt:           time.Now().Add(time.Hour),
+		},
+	}
+	if got := m.codexRateLimitsStatusText(time.Now()); got != "" {
+		t.Fatalf("non-Codex provider should hide Codex quota, got %q", got)
 	}
 }
 
@@ -309,11 +398,13 @@ func TestInlineStatusLabelsExplicitContextWindowOverride(t *testing.T) {
 	m.runtime.ContextWindowSource = "override"
 	m.runtime.ContextCompactTokens = 600_000
 	status := stripANSITest(m.inlineStatusView())
-	if !strings.Contains(status, "Context 128/1.0m 0.0% override used") {
-		t.Fatalf("inline status should label explicit override: %q", status)
+	if !strings.Contains(status, "0.0% 128") {
+		t.Fatalf("inline status should show compact context usage: %q", status)
 	}
-	if !strings.Contains(status, "Compact 600k 60%") {
-		t.Fatalf("inline status should show compact threshold: %q", status)
+	for _, bad := range []string{"override", "Compact", "/1.0m", "used"} {
+		if strings.Contains(status, bad) {
+			t.Fatalf("inline status should omit %q noise: %q", bad, status)
+		}
 	}
 }
 
@@ -334,15 +425,15 @@ func TestInlineStatusIsWidthAware(t *testing.T) {
 		m.toolSummaryOutTok = 2500
 		status := m.inlineStatusView()
 		lines := strings.Split(status, "\n")
-		if len(lines) != 2 {
-			t.Fatalf("width %d: status should render as two lines, got %q", width, status)
+		if len(lines) != 1 {
+			t.Fatalf("width %d: status should render as one line, got %q", width, status)
 		}
 		for _, line := range lines {
 			if got := xansi.StringWidth(stripANSITest(line)); got > width {
 				t.Fatalf("width %d: status line width=%d exceeds viewport: %q", width, got, line)
 			}
 		}
-		for _, want := range []string{"completed", "deepseek-v4-flash", "Context"} {
+		for _, want := range []string{"📁", "🤖", "%"} {
 			if !strings.Contains(status, want) {
 				t.Fatalf("width %d: status missing priority segment %q: %q", width, want, status)
 			}
@@ -477,8 +568,8 @@ func TestAccessModeSlashCommandUpdatesRunRequest(t *testing.T) {
 	if got := m.gatewayRunRequest("inspect").AccessMode; got != config.AccessModePlan {
 		t.Fatalf("gateway run access mode = %q", got)
 	}
-	if status := m.inlineStatusView(); !strings.Contains(status, "Plan") {
-		t.Fatalf("status missing Plan: %q", status)
+	if status := m.inlineStatusView(); strings.Contains(status, "Plan") {
+		t.Fatalf("inline status should omit access-mode noise: %q", status)
 	}
 }
 
@@ -592,7 +683,7 @@ func TestResumeChatDoesNotTreatLifetimeTokensAsContextUsage(t *testing.T) {
 	}
 }
 
-func TestInlineStatusLabelsCacheCountersWhenLargerThanContext(t *testing.T) {
+func TestInlineStatusOmitsCacheCountersWhenLargerThanContext(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 220
 	m.lastInputTok = 100
@@ -601,31 +692,33 @@ func TestInlineStatusLabelsCacheCountersWhenLargerThanContext(t *testing.T) {
 	m.lastCacheMissTok = 50
 
 	status := stripANSITest(m.inlineStatusView())
-	for _, want := range []string{"Context 120/", "cache hit 900", "cache miss 50"} {
+	for _, want := range []string{"0.0% 120", "🤖"} {
 		if !strings.Contains(status, want) {
 			t.Fatalf("status missing %q: %q", want, status)
 		}
 	}
-	if strings.Contains(status, "cached context") || strings.Contains(status, " · miss 50") {
-		t.Fatalf("status should label cache counters clearly: %q", status)
+	for _, bad := range []string{"cache hit", "cache miss", "cached context", "miss 50"} {
+		if strings.Contains(status, bad) {
+			t.Fatalf("inline status should omit cache counter %q: %q", bad, status)
+		}
 	}
 }
 
-func TestInlineStatusShowsHelperAPICallsAndCost(t *testing.T) {
+func TestInlineStatusOmitsHelperAPICallsAndCost(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 240
 	m.helperAPICalls = 2
 	m.helperCostUSD = 0.0045
 
 	status := stripANSITest(m.inlineStatusView())
-	for _, want := range []string{"helper API calls 2", "helper API cost $0.0045"} {
-		if !strings.Contains(status, want) {
-			t.Fatalf("status missing %q: %q", want, status)
+	for _, bad := range []string{"helper API calls", "helper API cost"} {
+		if strings.Contains(status, bad) {
+			t.Fatalf("inline status should omit helper API noise %q: %q", bad, status)
 		}
 	}
 }
 
-func TestInlineStatusSeparatesSubscriptionFromHelperAPICost(t *testing.T) {
+func TestInlineStatusOmitsSubscriptionAndHelperCost(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 240
 	handled, _ := m.handleSlashCommand("/model gpt")
@@ -635,12 +728,12 @@ func TestInlineStatusSeparatesSubscriptionFromHelperAPICost(t *testing.T) {
 	m.helperCostUSD = 0.0045
 
 	status := stripANSITest(m.inlineStatusView())
-	for _, want := range []string{"subscription", "helper API cost $0.0045"} {
-		if !strings.Contains(status, want) {
-			t.Fatalf("status missing %q: %q", want, status)
+	for _, bad := range []string{"subscription", "helper API cost", "model cost"} {
+		if strings.Contains(status, bad) {
+			t.Fatalf("inline status should omit cost noise %q: %q", bad, status)
 		}
 	}
-	if strings.Contains(status, "model cost $0.0045") || m.costText() != "subscription" {
+	if m.costText() != "subscription" {
 		t.Fatalf("helper API cost should not become main model cost: costText=%q status=%q", m.costText(), status)
 	}
 }
@@ -662,11 +755,10 @@ func TestTUIToolCountUsesRequestedCalls(t *testing.T) {
 		t.Fatalf("tui tool calls = %d, projector = %d", m.toolCalls, snapshot.ToolCalls)
 	}
 	status := stripANSITest(m.inlineStatusView())
-	if !strings.Contains(status, "tools 3") {
-		t.Fatalf("status missing requested-count tool total: %q", status)
-	}
-	if strings.Contains(status, "tools 4") {
-		t.Fatalf("status counted started-only tool: %q", status)
+	for _, bad := range []string{"tools 3", "tools 4"} {
+		if strings.Contains(status, bad) {
+			t.Fatalf("inline status should omit tool count %q: %q", bad, status)
+		}
 	}
 }
 
@@ -686,11 +778,79 @@ func toolCountSemanticsEvents() []protocol.Event {
 	}
 }
 
-func TestLightThemeStatusLineUsesThemeBackground(t *testing.T) {
+func TestLightThemeTextSurfacesUseForegroundOnly(t *testing.T) {
 	styles := newThemeStyles(tuiThemes["light"])
-	rendered := styles.status.Render("status")
-	if !strings.Contains(rendered, "48;2;221;232;215") {
-		t.Fatalf("light status should use theme status bg, rendered=%q", rendered)
+	surfaces := map[string]string{
+		"status":        styles.status.Render("status"),
+		"runStatus":     styles.runStatus.Render("working"),
+		"input":         styles.input.Render("prompt"),
+		"popup":         styles.popup.Render("popup"),
+		"popupSelected": styles.popupSelected.Render("selected"),
+		"assistant":     styles.assistant.Render("assistant"),
+		"tool":          styles.tool.Render("tool"),
+		"error":         styles.error.Render("error"),
+	}
+	for name, rendered := range surfaces {
+		if strings.Contains(rendered, "48;2;") {
+			t.Fatalf("%s should not paint an opaque background, rendered=%q", name, rendered)
+		}
+	}
+	if !strings.Contains(surfaces["status"], "38;2;45;53;36") {
+		t.Fatalf("light status should keep explicit foreground color, rendered=%q", surfaces["status"])
+	}
+}
+
+func TestViewLeavesTerminalBackgroundUnspecified(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.height = 24
+	m.resize(true)
+
+	view := m.View()
+	if view.BackgroundColor != nil {
+		t.Fatalf("view should leave terminal background to the user's terminal theme, got %#v", view.BackgroundColor)
+	}
+	if view.ForegroundColor == nil {
+		t.Fatal("view should keep an explicit foreground color")
+	}
+}
+
+func TestViewInputBorderHasVisibleLeftEdge(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.height = 24
+	m.resize(true)
+
+	view := stripANSITest(m.View().Content)
+	lines := strings.Split(view, "\n")
+	inputTop := -1
+	for i, line := range lines {
+		if strings.HasPrefix(line, "┌") && strings.Contains(line, "┐") {
+			inputTop = i
+			break
+		}
+	}
+	if inputTop < 0 {
+		t.Fatalf("input top border not found in view:\n%s", view)
+	}
+	if inputTop+2 >= len(lines) {
+		t.Fatalf("input border truncated near line %d in view:\n%s", inputTop, view)
+	}
+	for _, tc := range []struct {
+		name string
+		line string
+		want string
+	}{
+		{name: "top", line: lines[inputTop], want: "┌"},
+		{name: "body", line: lines[inputTop+1], want: "│"},
+		{name: "bottom", line: lines[inputTop+2], want: "└"},
+	} {
+		if !strings.HasPrefix(tc.line, tc.want) {
+			t.Fatalf("input %s line should start with %q, got %q", tc.name, tc.want, tc.line)
+		}
+	}
+	if strings.HasPrefix(lines[inputTop+3], " ") {
+		t.Fatalf("status line should align with input border, got %q", lines[inputTop+3])
 	}
 }
 

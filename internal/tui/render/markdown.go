@@ -26,7 +26,6 @@ type TerminalMarkdownStyles struct {
 type MarkdownTheme struct {
 	AssistantForeground string
 	ToolForeground      string
-	ToolBackground      string
 	ToolBorder          string
 	BlockBorder         string
 	MutedForeground     string
@@ -669,11 +668,9 @@ func TerminalMarkdownStyleSet(theme MarkdownTheme) TerminalMarkdownStyles {
 		emphasis: lipgloss.NewStyle().
 			Italic(true),
 		code: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(theme.ToolForeground)).
-			Background(lipgloss.Color(theme.ToolBackground)),
+			Foreground(lipgloss.Color(theme.ToolForeground)),
 		codeBlock: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(theme.ToolForeground)).
-			Background(lipgloss.Color(theme.ToolBackground)).
 			Border(lipgloss.NormalBorder(), false, false, false, true).
 			BorderForeground(lipgloss.Color(theme.ToolBorder)).
 			PaddingLeft(1),
@@ -688,7 +685,7 @@ func TerminalMarkdownStyleSet(theme MarkdownTheme) TerminalMarkdownStyles {
 			Foreground(lipgloss.Color(theme.ToolBorder)).
 			Bold(true),
 		link: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#BFE7FF")).
+			Foreground(lipgloss.Color(theme.ToolForeground)).
 			Underline(true),
 		rule: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(theme.BlockBorder)),

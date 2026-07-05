@@ -58,8 +58,12 @@ Windows local smoke path:
 go build -buildvcs=false -o .\bin\fast-agent-harness.exe .\cmd\fast-agent-harness
 $env:BILLYHARNESS_HOME = "$HOME\billyharness"
 .\bin\fast-agent-harness.exe gateway -mock -addr 127.0.0.1:8765 -dev-allow-unauthenticated-loopback-mutations
-# or use the local PowerShell helper:
+# or use the local PowerShell helper with the configured provider/settings:
 .\dev.ps1
+# or start a background real-provider gateway and open the TUI:
+.\tui.ps1
+# for a no-auth local smoke run:
+.\dev.ps1 -Mock
 ```
 
 Running `bin/fast-agent-harness` with no subcommand starts the gateway. The gateway uses the model and

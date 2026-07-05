@@ -1,8 +1,14 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/displayfmt"
@@ -11,66 +17,38 @@ import (
 
 func (m Model) inlineStatusView() string {
 	styles := m.styles()
-	access := "Build"
-	switch m.currentAccessMode() {
-	case "plan":
-		access = "Plan"
-	case "guarded":
-		access = "Guarded"
-	default:
-	}
-	if access == "Build" && (m.dangerous || m.toolPolicy.AutoApproveDangerous) {
-		access = "Full Access"
-	}
-	top := []statusSegment{
-		{m.runStateText(), styles.statusState},
-		{m.currentModel(), styles.statusModel},
-		{"🧠 " + m.currentThinking().effortLabel(), styles.statusReasoning},
-		{"Context " + m.contextText() + " used", styles.statusUsage},
-	}
-	if compactText := m.contextCompactText(); compactText != "" {
-		top = append(top, statusSegment{"Compact " + compactText, styles.statusUsage})
-	}
-	top = append(top,
-		statusSegment{access, styles.statusAccess},
-		statusSegment{m.costText(), styles.statusCost},
-	)
-	bottom := []statusSegment{}
-	if m.lastCacheHitTok+m.lastCacheMissTok > 0 {
-		bottom = append(bottom,
-			statusSegment{"cache hit " + compactNumber(m.lastCacheHitTok), styles.statusUsage},
-			statusSegment{"cache miss " + compactNumber(m.lastCacheMissTok), styles.statusUsage},
-		)
-	}
-	if m.toolSummaryInTok > 0 || m.toolSummaryOutTok > 0 {
-		bottom = append(bottom, statusSegment{
-			"websum " + compactNumber(m.toolSummaryInTok) + "→" + compactNumber(m.toolSummaryOutTok),
-			styles.statusUsage,
-		})
-	}
-	if m.helperModelInTok > 0 || m.helperModelOutTok > 0 {
-		bottom = append(bottom, statusSegment{"helper " + compactNumber(m.helperModelInTok) + "→" + compactNumber(m.helperModelOutTok), styles.statusDim})
-	}
-	if m.toolSummaryInTok > 0 || m.toolSummaryOutTok > 0 || m.helperModelAPITok > 0 {
-		bottom = append(bottom, statusSegment{"sumapi " + compactNumber(m.helperModelAPITok), styles.statusDim})
-	}
-	if m.helperAPICalls > 0 {
-		bottom = append(bottom, statusSegment{"helper API calls " + strconv.Itoa(m.helperAPICalls), styles.statusDim})
-	}
-	if m.helperCostUSD > 0 {
-		bottom = append(bottom, statusSegment{fmt.Sprintf("helper API cost $%.4f", m.helperCostUSD), styles.statusDim})
-	}
-	bottom = append(bottom,
-		statusSegment{"agent turns " + strconv.Itoa(m.modelCalls), styles.statusDim},
-		statusSegment{"tools " + strconv.Itoa(m.toolCalls), styles.statusDim},
-		statusSegment{"v" + m.version, styles.statusDim},
-		statusSegment{"theme " + m.theme, styles.statusDim},
-		statusSegment{"profile " + m.currentProfile(), styles.statusDim},
-		statusSegment{"Main [" + shortID(m.localChatID) + "]", styles.statusDim},
-	)
 	width := max(1, m.statusContentWidth(styles))
-	return renderStatusSegments(width, top, styles.statusSeparator) + "\n" +
-		renderStatusSegments(width, bottom, styles.statusSeparator)
+	modelSegment := m.inlineStatusModelSegment(styles, "")
+	base := []statusSegment{
+		{text: statusWorkspaceText(), style: styles.statusDim},
+		{text: statusGitText(), style: styles.statusAccess},
+		modelSegment,
+	}
+	if quota := m.codexRateLimitsStatusText(time.Now()); quota != "" {
+		withQuota := append([]statusSegment(nil), base...)
+		withQuota[2] = m.inlineStatusModelSegment(styles, quota)
+		rendered := renderStatusSegments(width, withQuota, styles.statusSeparator)
+		if strings.Contains(rendered, quota) {
+			return rendered
+		}
+	}
+	return renderStatusSegments(width, base, styles.statusSeparator)
+}
+
+func (m Model) inlineStatusModelSegment(styles themeStyles, quota string) statusSegment {
+	model := "🤖 " + statusModelText(m.currentModel(), m.currentThinking().effortLabel())
+	context := m.statusContextText()
+	text := model
+	rendered := styles.statusModel.Render(model)
+	if context != "" {
+		text += " " + context
+		rendered += " " + styles.statusUsage.Render(context)
+	}
+	if quota != "" {
+		text += "  " + quota
+		rendered += "  " + styles.statusUsage.Render(quota)
+	}
+	return statusSegment{text: text, rendered: rendered}
 }
 
 func (m Model) runStatusView() string {
@@ -78,15 +56,10 @@ func (m Model) runStatusView() string {
 		return ""
 	}
 	styles := m.styles()
-	elapsed := "0s"
+	text := m.spinner() + " working"
 	if !m.runStartedAt.IsZero() {
-		elapsed = compactDuration(time.Since(m.runStartedAt))
+		text += " · " + compactDuration(time.Since(m.runStartedAt))
 	}
-	state := m.status
-	if state == "" || state == "running" {
-		state = "agent working"
-	}
-	text := " " + m.spinner() + " " + state + " · " + elapsed
 	return styles.runStatus.Width(m.statusContentWidth(styles)).Render(text)
 }
 
@@ -152,6 +125,165 @@ func (m Model) contextPercentText() string {
 		return compactNumber(used)
 	}
 	return displayfmt.ContextPercent(used, window)
+}
+
+func (m Model) statusContextText() string {
+	used := m.contextTokens()
+	window := m.runtime.ContextWindowTokens
+	if window <= 0 {
+		return displayfmt.CompactContext(used)
+	}
+	percent := float64(used) / float64(window) * 100
+	return displayfmt.FixedPercentValue(percent, 1) + " " + displayfmt.CompactContext(used)
+}
+
+func statusModelText(model, effort string) string {
+	model = strings.TrimSpace(statusModelDisplay(model))
+	effort = strings.TrimSpace(effort)
+	if model == "" {
+		model = "model"
+	}
+	if effort == "" || effort == "off" {
+		return model
+	}
+	return model + " " + effort
+}
+
+func statusModelDisplay(model string) string {
+	model = strings.TrimSpace(model)
+	if strings.HasPrefix(strings.ToLower(model), "gpt-") {
+		return strings.ReplaceAll(model, "-", " ")
+	}
+	return shortModel(model)
+}
+
+func statusWorkspaceText() string {
+	info := cachedStatusGitInfo()
+	name := info.rootName
+	if name == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			name = filepath.Base(cwd)
+		}
+	}
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		name = "workspace"
+	}
+	return "📁 " + name
+}
+
+func statusGitText() string {
+	info := cachedStatusGitInfo()
+	if info.branch == "" {
+		return ""
+	}
+	text := "⎇ " + info.branch
+	if info.added > 0 || info.deleted > 0 {
+		text += fmt.Sprintf("(+%d,-%d)", info.added, info.deleted)
+	}
+	return text
+}
+
+type statusGitInfo struct {
+	rootName string
+	branch   string
+	added    int
+	deleted  int
+}
+
+var statusGitInfoCache = struct {
+	sync.Mutex
+	cwd     string
+	expires time.Time
+	info    statusGitInfo
+}{}
+
+func cachedStatusGitInfo() statusGitInfo {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return statusGitInfo{}
+	}
+	now := time.Now()
+	statusGitInfoCache.Lock()
+	if statusGitInfoCache.cwd == cwd && now.Before(statusGitInfoCache.expires) {
+		info := statusGitInfoCache.info
+		statusGitInfoCache.Unlock()
+		return info
+	}
+	statusGitInfoCache.Unlock()
+
+	info := loadStatusGitInfo(cwd)
+
+	statusGitInfoCache.Lock()
+	statusGitInfoCache.cwd = cwd
+	statusGitInfoCache.expires = now.Add(2 * time.Second)
+	statusGitInfoCache.info = info
+	statusGitInfoCache.Unlock()
+	return info
+}
+
+func loadStatusGitInfo(cwd string) statusGitInfo {
+	root, branch, ok := statusGitRootAndBranch(cwd)
+	if !ok {
+		return statusGitInfo{rootName: filepath.Base(cwd)}
+	}
+	added, deleted := statusGitDiff(root)
+	return statusGitInfo{
+		rootName: filepath.Base(filepath.FromSlash(root)),
+		branch:   branch,
+		added:    added,
+		deleted:  deleted,
+	}
+}
+
+func statusGitRootAndBranch(cwd string) (string, string, bool) {
+	out, ok := runStatusGit(cwd, "rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD")
+	if !ok {
+		return "", "", false
+	}
+	lines := strings.Split(strings.ReplaceAll(strings.TrimSpace(out), "\r\n", "\n"), "\n")
+	if len(lines) < 2 {
+		return "", "", false
+	}
+	root := strings.TrimSpace(lines[0])
+	branch := strings.TrimSpace(lines[1])
+	if branch == "HEAD" || branch == "" {
+		branch = "detached"
+	}
+	return root, branch, root != ""
+}
+
+func statusGitDiff(root string) (int, int) {
+	out, ok := runStatusGit(root, "diff", "--numstat", "HEAD", "--")
+	if !ok {
+		return 0, 0
+	}
+	var added, deleted int
+	for _, line := range strings.Split(strings.ReplaceAll(out, "\r\n", "\n"), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] == "-" || fields[1] == "-" {
+			continue
+		}
+		a, errA := strconv.Atoi(fields[0])
+		d, errD := strconv.Atoi(fields[1])
+		if errA == nil {
+			added += a
+		}
+		if errD == nil {
+			deleted += d
+		}
+	}
+	return added, deleted
+}
+
+func runStatusGit(dir string, args ...string) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.Output()
+	if err != nil || ctx.Err() != nil {
+		return "", false
+	}
+	return string(out), true
 }
 
 func (m Model) costText() string {

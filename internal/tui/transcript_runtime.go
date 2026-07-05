@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/lipgloss/v2"
+
 	uxprojector "github.com/billyhargroveofficial/billyharness/internal/clientux/projector"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
@@ -34,11 +36,36 @@ func (m *Model) saveSettings() error {
 }
 
 func encodeBlocks(blocks []transcript.Cell) []savedBlock {
-	return transcript.EncodeCells(blocks)
+	return transcript.EncodeCells(filterRoutineRunSummaryBlocks(blocks))
 }
 
 func decodeBlocks(blocks []savedBlock) []transcript.Cell {
-	return transcript.DecodeCells(blocks)
+	return filterRoutineRunSummaryBlocks(transcript.DecodeCells(blocks))
+}
+
+func filterRoutineRunSummaryBlocks(blocks []transcript.Cell) []transcript.Cell {
+	var out []transcript.Cell
+	for _, block := range blocks {
+		if isRoutineRunSummaryBlock(block) {
+			continue
+		}
+		out = append(out, block)
+	}
+	if len(out) == len(blocks) {
+		return blocks
+	}
+	return out
+}
+
+func isRoutineRunSummaryBlock(block transcript.Cell) bool {
+	if block.CellType != cellTypeRunSummary {
+		return false
+	}
+	if block.EventType == protocol.EventRunFailed {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(block.Title + "\n" + block.Content))
+	return !strings.Contains(text, "run failed") && !strings.Contains(text, "error:")
 }
 
 func (m *Model) newBlock(kind, title, content string) transcript.Cell {
@@ -211,6 +238,59 @@ func (m *Model) addInfoBlock(title, content string) {
 	m.addBlock("status", title, content)
 }
 
+func (m *Model) syncLastAssistantMessage(messages []protocol.Message) bool {
+	content := lastAssistantMessageContent(messages)
+	if content == "" {
+		return false
+	}
+	lastUser := lastBlockIndexByKind(m.blocks, "user")
+	lastAssistant := lastBlockIndexByKind(m.blocks, "assistant")
+	if lastAssistant > lastUser {
+		if strings.TrimSpace(m.blocks[lastAssistant].Content) == content {
+			return false
+		}
+		current := strings.TrimSpace(m.blocks[lastAssistant].Content)
+		if current != "" && strings.HasPrefix(content, current) {
+			m.blocks[lastAssistant].Content = content
+			m.blocks[lastAssistant].RawCopy = content
+			m.blocks[lastAssistant].Live = false
+			m.blocks[lastAssistant].Updated = time.Now().UTC()
+			m.refreshBlockDerivedFields(lastAssistant)
+			m.markTranscriptProjectorStale()
+			return true
+		}
+	}
+	b := m.newBlock("assistant", "ASSISTANT", content)
+	b.CellType = cellTypeAssistantFinal
+	b.Live = false
+	refreshBlockDerivedFields(&b)
+	m.blocks = append(m.blocks, b)
+	m.selected = len(m.blocks) - 1
+	m.markTranscriptProjectorStale()
+	return true
+}
+
+func lastAssistantMessageContent(messages []protocol.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != protocol.RoleAssistant {
+			continue
+		}
+		if content := strings.TrimSpace(messages[i].Content); content != "" {
+			return content
+		}
+	}
+	return ""
+}
+
+func lastBlockIndexByKind(blocks []transcript.Cell, kind string) int {
+	for i := len(blocks) - 1; i >= 0; i-- {
+		if blocks[i].Kind == kind {
+			return i
+		}
+	}
+	return -1
+}
+
 func (m Model) statusText() string {
 	mode := "local"
 	gateway := "none"
@@ -234,8 +314,12 @@ func (m Model) statusText() string {
 	if m.followOutput {
 		follow = "on"
 	}
+	maxRounds := "unlimited"
+	if m.maxRounds > 0 {
+		maxRounds = fmt.Sprintf("%d", m.maxRounds)
+	}
 	return fmt.Sprintf(
-		"mode: %s\nchat: %s\nprovider: %s\nselected model: %s\nactive runtime model: %s\nprofile: %s\naccess mode: %s\nreasoning: %s / %s\nthinking blocks: %s\ntool blocks: %s\ntranscript: %s\ntheme: %s\ngateway: %s\ngateway session: %s\nlocal settings: %s\ntools: %s, max rounds %d\ncalls: model %d, tools %d\ntokens: input %d, output %d\ncontext: %s\ncost: %s\nfollow output: %s",
+		"mode: %s\nchat: %s\nprovider: %s\nselected model: %s\nactive runtime model: %s\nprofile: %s\naccess mode: %s\nreasoning: %s / %s\nthinking blocks: %s\ntool blocks: %s\ntranscript: %s\ntheme: %s\ngateway: %s\ngateway session: %s\nlocal settings: %s\ntools: %s, max rounds %s\ncalls: model %d, tools %d\ntokens: input %d, output %d\ncontext: %s\ncost: %s\nfollow output: %s",
 		mode,
 		m.localChatID,
 		m.currentProvider(),
@@ -253,7 +337,7 @@ func (m Model) statusText() string {
 		session,
 		m.settingsPath,
 		toolsMode,
-		m.maxRounds,
+		maxRounds,
 		m.modelCalls,
 		m.toolCalls,
 		m.inputTok,
@@ -498,7 +582,7 @@ func (m *Model) applyEvent(event protocol.Event) {
 		if m.runStartedAt.IsZero() {
 			m.runStartedAt = time.Now()
 		}
-		m.upsertRunSummaryBlock(event.Type, "running", "")
+		m.removeRoutineRunSummaryBlocks()
 	case protocol.EventModelCallStarted:
 		m.status = fmt.Sprintf("model call %d", m.modelCalls)
 	case protocol.EventAssistantReasoning:
@@ -539,7 +623,7 @@ func (m *Model) applyEvent(event protocol.Event) {
 	case protocol.EventRunCompleted:
 		m.pendingUserInput = nil
 		m.status = "completed"
-		m.upsertRunSummaryBlock(event.Type, "completed", "")
+		m.removeRoutineRunSummaryBlocks()
 	case protocol.EventRunFailed:
 		m.pendingUserInput = nil
 		m.upsertRunSummaryBlock(event.Type, "failed", fmt.Sprint(event.Data))
@@ -608,6 +692,31 @@ func (m *Model) upsertRunSummaryBlock(eventType protocol.EventType, state, errTe
 		return
 	}
 	m.selected = selectedAfterTranscriptProjection(previous, m.blocks, selected)
+}
+
+func (m *Model) removeRoutineRunSummaryBlocks() bool {
+	selectedID := ""
+	if m.selected >= 0 && m.selected < len(m.blocks) {
+		selectedID = m.blocks[m.selected].ID
+	}
+	filtered := filterRoutineRunSummaryBlocks(m.blocks)
+	if len(filtered) == len(m.blocks) {
+		return false
+	}
+	m.clearTranscriptSelection()
+	m.blocks = filtered
+	if selectedID != "" {
+		for i, block := range m.blocks {
+			if block.ID == selectedID {
+				m.selected = i
+				m.markTranscriptProjectorStale()
+				return true
+			}
+		}
+	}
+	m.selected = min(max(0, m.selected), max(0, len(m.blocks)-1))
+	m.markTranscriptProjectorStale()
+	return true
 }
 
 func (m Model) runSummaryBlockIndex() (int, bool) {
@@ -1243,6 +1352,12 @@ func (m Model) renderBlock(i int, b transcript.Cell) string {
 	if b.Kind == "assistant" {
 		body = tuirender.RenderAssistantMarkdown(body, width, styles.markdown, b.Live)
 	}
+	if b.Kind == "user" {
+		return renderDialogueBlock("❯ you", body, width, style, styles.statusAccess)
+	}
+	if b.Kind == "assistant" {
+		return renderDialogueBlock("● assistant", body, width, style, styles.statusModel)
+	}
 	if b.Kind == "user" || b.Kind == "assistant" {
 		return style.Width(width).Render(body)
 	}
@@ -1251,6 +1366,15 @@ func (m Model) renderBlock(i int, b transcript.Cell) string {
 		Title: b.Title,
 		Body:  body,
 	}, width, styles.activity)
+}
+
+func renderDialogueBlock(header, body string, width int, bodyStyle, headerStyle lipgloss.Style) string {
+	header = strings.TrimSpace(header)
+	body = strings.TrimRight(body, "\n")
+	if body == "" {
+		return headerStyle.Render(header)
+	}
+	return headerStyle.Render(header) + "\n" + bodyStyle.Width(width).Render(body)
 }
 
 func (m Model) toolCollapsed(i int) bool {
