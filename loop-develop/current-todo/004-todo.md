@@ -1867,6 +1867,36 @@ Billy asks for final verification.
   to redacted counts/status and startup diagnostics; no production deploy,
   restart, or live post-deploy `/ready` probe was run for this slice.
 
+### 2026-07-05 - P1.1 defensive provider stream drain helper
+
+- Completed P1.1. Added `provider.DrainStream`, a reusable stream-drain helper
+  that selects over provider events, terminal errors, context cancellation, and
+  an optional flush channel. `agent.collectModelCallStream`, model compaction
+  summaries, and web summaries now use it instead of ranging events before
+  reading `errs`.
+- Replaced per-line `time.After` idle resets in DeepSeek and Codex SSE parsers
+  with reusable timers.
+- Added focused tests for normal stream completion, partial events followed by
+  terminal error, never-closing event channels, blocked error channels, and an
+  agent regression where a provider never closes either stream channel after
+  context cancellation.
+- Docs checked: `docs/architecture/config-provider-context.md` and
+  `docs/architecture/runtime-event-system.md`. No docs changed because this
+  hardens internal stream-drain plumbing without changing public CLI, gateway,
+  provider configuration, event schema, or operator behavior.
+- Verification passed:
+  `gofmt -w internal/provider/stream.go internal/provider/provider.go internal/provider/codex_provider.go internal/provider/web_summary.go internal/provider/provider_test.go internal/agent/model_call.go internal/agent/model_call_test.go internal/agent/model_compaction.go`;
+  `go test -count=1 ./internal/agent ./internal/provider ./internal/tools`;
+  `go test -race -count=1 ./internal/agent ./internal/provider`;
+  `git diff --check`;
+  `go test -count=1 ./...`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `233f670 Add defensive provider stream drain` (`233f6708682bbda3da74606a73feb878f6d76360`).
+- Push: `origin/main` updated from `8cadfa2` to `233f670`.
+- Blockers/residual risk: this does not add separate watchdog timing for every
+  possible third-party provider implementation; bounded shutdown now depends on
+  the caller's context/deadline when a provider violates the stream contract.
+
 ### 2026-07-04 - P1.12 verify-local temp rebuild and strict hygiene pass
 
 - Completed P1.12 slice. `scripts/verify-local.sh` now builds the CLI binary
