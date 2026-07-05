@@ -976,53 +976,17 @@ go test -count=1 ./internal/architecture
 
 ## P1 Milestone 6 - Documentation And Docguard Hardening
 
-### P1.17 Fix Stop-hook docguard coverage gaps
+### ~~P1.17 Fix Stop-hook docguard coverage gaps~~
 
-Finding: docguard can miss staged-only whitespace/active-work additions because
-some checks use plain `git diff`. Deletions may also be under-checked.
+Cancelled before implementation. A later solo-simplification loop supersedes
+this task by deleting the docsgen/docguard meta-documentation layer and its
+turn-blocking Stop hook instead of hardening it.
 
-Target files:
+### ~~P1.18 Reconcile docs that still describe implemented hook/docguard as future~~
 
-- `.agents/rules/stop-hook-docguard.md`
-- hook implementation/config files under `.codex` or repo hook scripts if any
-- docguard tests if present
-
-Checklist:
-
-- Use `git diff --check HEAD --` for turn-end whitespace checks.
-- Scan added lines from `git diff HEAD --unified=0`.
-- Include deletion/rename cases where relevant.
-- Add focused hook tests for staged-only changes, unstaged changes, docs active
-  TODO language, loop-develop active TODO language, deletion, and rename.
-
-Verification:
-
-```sh
-git diff --check
-go test -count=1 ./...
-```
-
-### P1.18 Reconcile docs that still describe implemented hook/docguard as future
-
-Finding: docs disagree on Stop hook status. Some docs still say planned/future
-after the hook was installed and smoke-tested.
-
-Checklist:
-
-- Read:
-  - `docs/documentation-system.md`;
-  - `.agents/rules/README.md`;
-  - `.agents/rules/stop-hook-docguard.md`;
-  - `AGENTS.md`.
-- Update only durable status/routing facts.
-- Do not put active TODOs or smoke evidence in `docs/`.
-
-Verification:
-
-```sh
-rg -n "planned|future|not implemented|Stop hook|docguard" AGENTS.md .agents docs loop-develop
-git diff --check
-```
+Cancelled before implementation. A later solo-simplification loop supersedes
+this task by removing the docguard/manifest layer rather than reconciling
+future-tense docs for a system that should not stay.
 
 ### P1.19 Fix loop history metadata drift
 
@@ -1043,25 +1007,11 @@ sed -n '1,40p' loop-develop/history/003-todo.md
 git diff --check
 ```
 
-### P1.20 Refresh manifest/source metadata or clarify semantics
+### ~~P1.20 Refresh manifest/source metadata or clarify semantics~~
 
-Finding: `agent-index/docs-manifest.json` source commit may be stale compared
-with current head, and generated repo map may be a manual seed.
-
-Checklist:
-
-- Decide whether `source_commit` means generation commit or current docs source.
-- Refresh manifest if tooling exists.
-- Otherwise rename/clarify semantics in metadata/docs.
-- Mark `agent-index/generated/repo-map.md` as generated only if it is actually
-  generated; otherwise make its seed/manual status explicit.
-
-Verification:
-
-```sh
-jq . agent-index/docs-manifest.json >/dev/null
-git diff --check
-```
+Cancelled before implementation. A later solo-simplification loop supersedes
+this task by deleting `agent-index/` and the manifest-check ceremony instead of
+refreshing or clarifying stale metadata.
 
 ### P1.21 Keep README/docs research files clearly historical
 
@@ -2110,6 +2060,19 @@ Billy asks for final verification.
   reviewed allowlist of existing CLI front-door imports, not a deeper semantic
   layering model. Future generated package/reference docs may let this become
   less hand-maintained.
+
+### 2026-07-05 - P1.17/P1.18/P1.20 cancelled by later simplification loop
+
+- Verified these 004 tasks were not implemented: no implementation Evidence Log
+  entries existed for P1.17, P1.18, or P1.20.
+- Confirmed the target layer is still present before cancellation:
+  `.codex/hooks/docguard_stop.py`, `docs/documentation-system.md`,
+  `agent-index/docs-manifest.json`, and
+  `agent-index/generated/reference-plan.md` still exist.
+- Marked P1.17, P1.18, and P1.20 as cancelled/superseded because
+  later solo-simplification work deletes the docsgen/docguard/manifest ceremony
+  instead of hardening or refreshing it. This keeps 004 complete without
+  requiring the next loop's untracked TODO files to be pushed in this 004 slice.
 
 ### 2026-07-04 - P1.19 loop history metadata drift
 
