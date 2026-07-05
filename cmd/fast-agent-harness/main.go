@@ -58,6 +58,8 @@ func run() error {
 		return benchCmd(os.Args[2:])
 	case "sessions", "session":
 		return sessionsCmd(os.Args[2:])
+	case "attachments", "attachment":
+		return attachmentsCmd(os.Args[2:])
 	case "inspect-session":
 		return sessionsInspectCommand(os.Args[2:], os.Stdout)
 	case "memory":
@@ -68,8 +70,6 @@ func run() error {
 		return printTools()
 	case "doctor", "health":
 		return doctorCmd(os.Args[2:])
-	case "incident":
-		return incidentCmd(os.Args[2:])
 	case "hygiene":
 		return hygieneCmd(os.Args[2:])
 	default:
@@ -92,7 +92,6 @@ func usage() {
 	fmt.Println("  serve|gateway [-mock] [-addr 127.0.0.1:8765]")
 	fmt.Println("  mcp")
 	fmt.Println("  config inspect [-json]")
-	fmt.Println("  config mcp-migrate [-file FILE] [-json]")
 	fmt.Println("  sessions list [-dir DIR] [-json]")
 	fmt.Println("  sessions inspect [-dir DIR] [-json] SESSION_ID")
 	fmt.Println("  sessions debug [-gateway http://127.0.0.1:8765] [-json] SESSION_ID")
@@ -102,6 +101,7 @@ func usage() {
 	fmt.Println("  sessions index rebuild|show|delete [-dir DIR] [-json]")
 	fmt.Println("  sessions search|tools|errors|usage|runs [-dir DIR] [-limit N] [-json]")
 	fmt.Println("  sessions import [-input FILE] [-format auto|jsonl|markdown] [-json]")
+	fmt.Println("  attachments gc [-max-age=720h] [-max-bytes=1073741824] [-dry-run]")
 	fmt.Println("  memory list|search|read|add|replace|remove")
 	fmt.Println("  commands list|search [-limit N] [-json]")
 	fmt.Println("  bench run -tasks tasks.jsonl -out runs [-model deepseek-v4-flash] [-max-rounds 100]")
@@ -109,6 +109,5 @@ func usage() {
 	fmt.Println("  bench terminal-bench import -dataset tb-dataset [-out tasks.jsonl]")
 	fmt.Println("  tools")
 	fmt.Println("  doctor|health [-deep] [-json] [-strict] [-build=true] [-services=true] [-gateway=true]")
-	fmt.Println("  incident collect -session SESSION_ID -out DIR [-dir SESSION_DIR] [-repo DIR] [-logs=true] [-mcp=true] [-json]")
 	fmt.Println("  hygiene [-json] [-strict] [-repo DIR]")
 }

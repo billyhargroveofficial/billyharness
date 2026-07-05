@@ -149,17 +149,19 @@ func docsIndexHash(settings config.InstructionSettings) string {
 			continue
 		}
 		seen[root] = true
-		path := filepath.Join(root, "agent-index", "docs-manifest.json")
-		body, err := os.ReadFile(path)
-		if err != nil {
-			continue
+		for _, rel := range []string{"llms.txt", filepath.Join("docs", "README.md")} {
+			path := filepath.Join(root, rel)
+			body, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			sum := sha256.Sum256(body)
+			entries = append(entries, docsIndexEntry{
+				Path:   filepath.ToSlash(path),
+				SHA256: hex.EncodeToString(sum[:]),
+				Bytes:  len(body),
+			})
 		}
-		sum := sha256.Sum256(body)
-		entries = append(entries, docsIndexEntry{
-			Path:   filepath.ToSlash(path),
-			SHA256: hex.EncodeToString(sum[:]),
-			Bytes:  len(body),
-		})
 	}
 	if len(entries) == 0 {
 		return ""

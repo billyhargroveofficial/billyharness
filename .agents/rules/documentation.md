@@ -8,13 +8,8 @@ documentation stale.
 1. Read `AGENTS.md`.
 2. Read `llms.txt` if you need a repo/documentation map.
 3. Read `docs/README.md` for architecture docs routing.
-4. Read `docs/documentation-system.md` for durable documentation rules.
-5. Read `agent-index/docs-manifest.json` when you need machine-readable
-   metadata, read triggers, or freshness hints.
-6. Read `agent-index/generated/reference-plan.md` when creating or changing
-   generated-reference, docsgen, or docguard strategy.
-7. Read the specific canonical doc, ADR, active TODO, or generated reference
-   that owns the area you are changing.
+4. Read the specific canonical doc, ADR, active TODO, or operator runbook that
+   owns the area you are changing.
 
 Do not load every doc by default. Pick the smallest set that matches the task.
 
@@ -23,14 +18,10 @@ Do not load every doc by default. Pick the smallest set that matches the task.
 - `AGENTS.md`: short durable agent contract and routing.
 - `.agents/rules/`: detailed reusable agent behavior rules.
 - `llms.txt`: compact agent-readable navigation.
-- `agent-index/`: machine-readable indexes and generated repo maps.
 - `docs/`: architecture canon, contracts, ADRs, and clean-room research.
 - `loop-develop/current-todo/`: active implementation plans and evidence.
 - `loop-develop/history/`: completed loop records.
 - `ops/`: dated production runbooks and verified operator procedures.
-- `reference/` or `agent-index/generated/`: generated reference material.
-  The generated-reference and docguard strategy lives in
-  `agent-index/generated/reference-plan.md`.
 
 ## Update Triggers
 
@@ -74,7 +65,3 @@ For code changes that also update docs, run the code verification required by
 For generated docs, regenerate to a temp directory and compare output instead of
 dirtying the worktree in-place unless the task explicitly updates generated
 files.
-
-Generated references should record source globs, source commit, source hash, and
-`dirty_at_generation` metadata as described in
-`agent-index/generated/reference-plan.md`.

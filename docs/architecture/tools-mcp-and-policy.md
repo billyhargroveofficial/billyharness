@@ -21,7 +21,7 @@ rendering. It documents current behavior verified against code paths on
   gateway/TUI/Telegram surfaces.
 - `internal/webtools/` owns the public-host-safe HTTP client, web backend
   clients, and model-summary request contracts.
-- `internal/tooloutput/` owns plaintext output-ref storage and metadata.
+- `internal/tools/output_ref.go` owns plaintext output-ref storage and metadata.
 - `internal/toolrender/` owns presentation-neutral tool labels and summaries for
   TUI and Telegram.
 - `internal/commandregistry/` owns searchable command metadata, including MCP
@@ -244,7 +244,7 @@ bounded input/output token settings, and record helper usage metadata.
 
 ## Output Refs
 
-`internal/tooloutput` writes plaintext artifacts under
+`internal/tools/output_ref.go` writes plaintext artifacts under
 `$BILLYHARNESS_HOME/tool-output/<YYYYMMDD>/`. Directories are `0700`; files are
 `0600`. Metadata includes path, basename ID, byte count, SHA-256, permissions,
 and plaintext status.
@@ -257,7 +257,7 @@ Output refs are used in three places:
   `MaxToolOutputBytes` after any handler returns. Oversized output is replaced
   by a bounded preview plus an output-ref note; original content is stored if
   the handler did not already provide an output ref.
-- Checkpoint change records use `tooloutput.Store` for patch/change evidence
+- Checkpoint change records use `tools.StoreOutput` for patch/change evidence
   and attach patch output-ref metadata to `turn.change_recorded` events.
   Gateway undo/redo verifies the recorded patch output-ref SHA-256 and then
   rechecks workspace-root and symlink constraints before restoring files.

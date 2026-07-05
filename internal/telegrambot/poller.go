@@ -14,6 +14,7 @@ func (b *Bot) Run(ctx context.Context) error {
 			return err
 		}
 	}
+	b.startManagedProcessWatch(ctx)
 	for {
 		select {
 		case <-ctx.Done():
@@ -49,6 +50,10 @@ func (b *Bot) handlePolledUpdate(ctx context.Context, update Update) {
 		b.ackIgnoredUpdate(update, "command_handled")
 		return
 	}
+	if telegramMessageHasUnsupportedMedia(msg) {
+		b.rejectPolledUpdate(ctx, update, telegramUnsupportedMediaInput(msg))
+		return
+	}
 	if !telegramMessageHasMedia(msg) {
 		answered, answerErr := b.answerPendingUserInput(ctx, msg, update.UpdateID)
 		if answered {
@@ -80,10 +85,6 @@ func (b *Bot) handlePolledUpdate(ctx context.Context, update Update) {
 }
 
 func (b *Bot) ackIgnoredUpdate(update Update, reason string) {
-	if err := b.admit.RecordIgnored(update, reason); err != nil {
-		log.Printf("telegram ignored-update admission failed update=%d reason=%s: %v", update.UpdateID, reason, err)
-		return
-	}
 	b.ackOffset(update.UpdateID)
 }
 

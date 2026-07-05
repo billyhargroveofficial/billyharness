@@ -61,6 +61,14 @@ unless Billy explicitly asks for parallel tracks. A current TODO should include:
 - verification commands;
 - a copy-ready Codex `/goal` prompt.
 
+Prefer several small, single-slice `NNN-todo.md` files over one large
+multi-milestone document. When research would produce more than roughly 10
+checklist items or spans multiple P0-P2 milestones, split it into separate
+numbered TODOs by milestone or theme instead of concatenating one giant file.
+Before adding a checklist item sourced from external framework or compliance
+research, state the concrete Billy-facing failure or daily-use problem it fixes
+in this solo harness, or drop the item.
+
 Every copy-ready Codex `/goal` prompt for an implementation task must instruct
 the implementation agent to create a git commit and push the branch after the
 task is complete and verification passes.
@@ -79,6 +87,23 @@ The normal loop is:
 When moving a TODO to history, append the final status, evidence, commands run,
 commit/push state if relevant, and remaining blockers if any.
 
+## Loop Research Workflow
+
+Loop research is separate from loop development and lives in `loop-research`.
+Use it when Billy asks for a long-running research loop, asks to keep searching
+for better solutions, or explicitly says to add a star after each completed
+task.
+
+Use `$loop-research` for prompt generation and guarded loop starts. Keep the
+template details in `.agents/skills/loop-research/SKILL.md`, not in this file.
+
+`loop-research/iterations` is hook-owned. Agents must not add stars manually.
+During an active loop, end each completed research iteration with
+`ITERATION_DONE: <one concrete finding>` and let the Stop hook update the
+counter and append the raw iteration body to `loop-research/NNN-raw.md`. The
+hook binds only to an armed `loop-research/.hook-state.json` and the matching
+Codex `session_id`, so normal chats should not enter the loop.
+
 ## Documentation System
 
 Keep root `AGENTS.md` short: it is the project contract and router, not the
@@ -89,8 +114,6 @@ Start here:
 - `llms.txt`: agent-readable repo/documentation index.
 - `.agents/rules/README.md`: detailed agent rules and when to read them.
 - `docs/README.md`: architecture documentation index.
-- `docs/documentation-system.md`: durable rules for the documentation system.
-- `agent-index/docs-manifest.json`: machine-readable docs metadata.
 
 `docs/` is architecture-only. Keep durable architecture maps, package-boundary
 maps, runtime/security contracts, ADRs, and clean-room architecture research

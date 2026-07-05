@@ -10,7 +10,6 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	diag "github.com/billyhargroveofficial/billyharness/internal/diagnostics"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
-	"github.com/billyhargroveofficial/billyharness/internal/tooloutput"
 )
 
 func (r *Registry) addDiagnostics() {
@@ -75,7 +74,7 @@ func (r *Registry) handleDiagnosticsRun(ctx context.Context, args json.RawMessag
 
 	var outputRef string
 	if result.RawOutput != "" {
-		ref, err := tooloutput.Store(tooloutput.StoreRequest{
+		ref, err := StoreOutput(OutputStoreRequest{
 			Parts:                 []string{"diagnostics", result.Name},
 			Content:               result.RawOutput,
 			EnsureTrailingNewline: true,

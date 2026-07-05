@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/attachments"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
@@ -69,6 +70,7 @@ type doctorRuntimeStatus struct {
 	ServiceBinary       doctorFileStatus    `json:"service_binary"`
 	GatewaySessionStore doctorPathUsage     `json:"gateway_session_store"`
 	ToolOutputStore     doctorPathUsage     `json:"tool_output_store"`
+	AttachmentsStore    doctorPathUsage     `json:"attachments_store"`
 	StrictHygiene       doctorHygieneStatus `json:"strict_hygiene"`
 }
 
@@ -231,6 +233,7 @@ func collectDoctorReport(ctx context.Context, cfg config.Config, opts doctorOpti
 	report.Checks = append(report.Checks, doctorConfigChecks(cfg, report.Runtime.Auth)...)
 	report.Checks = append(report.Checks, doctorToolCatalogStatus(cfg))
 	report.Checks = append(report.Checks, doctorSessionStoreAccessCheck(report.GatewaySessionDir))
+	report.Checks = append(report.Checks, doctorAttachmentsStoreUsageCheck(report.Runtime.AttachmentsStore))
 	report.Checks = append(report.Checks, doctorGitStatus(ctx, repoDir, opts, runner))
 	report.Checks = append(report.Checks, doctorBuildStatus(ctx, repoDir, opts, runner))
 	report.Checks = append(report.Checks, doctorServiceStatuses(ctx, opts, runner)...)
@@ -252,6 +255,7 @@ func collectDoctorRuntime(ctx context.Context, cfg config.Config, repoDir string
 		ServiceBinary:       doctorFileStatusFor(filepath.Join(repoDir, "bin", "fast-agent-harness"), time.Now()),
 		GatewaySessionStore: doctorPathUsageFor(gateway.DefaultSessionStoreDir()),
 		ToolOutputStore:     doctorPathUsageFor(filepath.Join(config.BillyHomeDir(), "tool-output")),
+		AttachmentsStore:    doctorPathUsageFor(attachments.DefaultStoreRoot()),
 		StrictHygiene:       doctorStrictHygieneStatus(ctx, repoDir, opts, runner),
 	}
 }
@@ -459,6 +463,28 @@ func doctorSessionStoreAccessCheck(path string) doctorCheck {
 		check.Status = "fail"
 		check.Detail = "not writable: " + detail
 	}
+	return check
+}
+
+func doctorAttachmentsStoreUsageCheck(usage doctorPathUsage) doctorCheck {
+	check := doctorCheck{Name: "attachments store usage"}
+	if strings.TrimSpace(usage.Error) != "" {
+		check.Status = "warn"
+		check.Detail = usage.Error
+		return check
+	}
+	if !usage.Exists {
+		check.Status = "ok"
+		check.Detail = "missing; created on first attachment"
+		return check
+	}
+	if usage.SizeBytes > defaultAttachmentsGCMaxBytes {
+		check.Status = "warn"
+		check.Detail = fmt.Sprintf("%s > %s; run attachments gc", humanBytes(usage.SizeBytes), humanBytes(defaultAttachmentsGCMaxBytes))
+		return check
+	}
+	check.Status = "ok"
+	check.Detail = fmt.Sprintf("%s <= %s", humanBytes(usage.SizeBytes), humanBytes(defaultAttachmentsGCMaxBytes))
 	return check
 }
 
@@ -967,7 +993,7 @@ func doctorGatewayEndpointStatus(ctx context.Context, cfg config.Config, opts do
 }
 
 func doctorProbeGatewayEndpoint(ctx context.Context, baseURL string, path string, timeout time.Duration) (string, string, bool) {
-	baseURL = gateway.NormalizeBaseURL(baseURL)
+	baseURL = gatewayapi.NormalizeBaseURL(baseURL)
 	if baseURL == "" {
 		return "fail", "empty gateway URL", false
 	}
@@ -980,7 +1006,7 @@ func doctorProbeGatewayEndpoint(ctx context.Context, baseURL string, path string
 	if err != nil {
 		return "fail", err.Error(), false
 	}
-	gateway.SetAuthHeaderFromEnv(req)
+	gatewayapi.SetAuthHeaderFromEnv(req)
 	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
 		return "fail", baseURL + path + ": " + err.Error(), false
@@ -1106,7 +1132,7 @@ func printDoctorReport(w io.Writer, report doctorReport) {
 		report.Config.ProviderCapability.CostMode,
 		doctorCapabilityValidationSummary(report.Config.ProviderCapability),
 	)
-	fmt.Fprintf(w, "runtime: provider=%s model=%s gateway=%s strict_hygiene=%s service_binary=%s age=%s sessions=%s tool_output=%s\n",
+	fmt.Fprintf(w, "runtime: provider=%s model=%s gateway=%s strict_hygiene=%s service_binary=%s age=%s sessions=%s tool_output=%s attachments=%s\n",
 		report.Runtime.Provider,
 		report.Runtime.Model,
 		report.Runtime.GatewayURL,
@@ -1115,6 +1141,7 @@ func printDoctorReport(w io.Writer, report doctorReport) {
 		doctorAgeSummary(report.Runtime.ServiceBinary.AgeSeconds),
 		doctorPathUsageSummary(report.Runtime.GatewaySessionStore),
 		doctorPathUsageSummary(report.Runtime.ToolOutputStore),
+		doctorPathUsageSummary(report.Runtime.AttachmentsStore),
 	)
 	fmt.Fprintf(w, "auth: provider=%s model=%s cost_mode=%s api_key_env=%s credential_file=%s codex_auth=%s\n",
 		report.Runtime.Auth.Provider,

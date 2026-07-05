@@ -106,7 +106,7 @@ func actionRegistry() []actionSpec {
 				switch strings.TrimSpace(arg) {
 				case "":
 				case "debug":
-					m.addInfoBlock("STATUS DEBUG", m.debugStatusText())
+					m.addInfoBlock("STATUS DEBUG", m.debugFullText())
 					m.status = "status debug shown"
 					return true, nil
 				default:
@@ -542,6 +542,45 @@ func actionRegistry() []actionSpec {
 			},
 		},
 		{
+			id:         "transcript.find",
+			title:      "Find Transcript",
+			category:   "ui",
+			keybinding: "ctrl+f",
+			keyAliases: []string{"alt+f"},
+			keySummary: "search transcript",
+			slash:      "/find",
+			slashArgs:  "[query]",
+			summary:    "search transcript",
+			run: func(m *Model, arg string) (bool, tea.Cmd) {
+				count, err := m.applyFindQuery(arg)
+				if err != nil {
+					m.status = "invalid find query"
+					return false, nil
+				}
+				if count == 0 {
+					m.status = fmt.Sprintf("no matches for '%s'", strings.TrimSpace(arg))
+					return false, nil
+				}
+				m.status = fmt.Sprintf("match 1/%d for '%s'", count, m.findQuery)
+				return true, nil
+			},
+			keyRun: func(m *Model, msg tea.KeyPressMsg) keyActionResult {
+				if strings.TrimSpace(m.findQuery) == "" {
+					m.textarea.SetValue("/find ")
+					m.slashIndex = 0
+					m.slashDismissed = ""
+					m.status = "find transcript"
+					return keyActionResult{reflow: true, gotoBottom: m.followOutput, skipTextareaUpdate: true}
+				}
+				if strings.EqualFold(msg.String(), "alt+f") {
+					m.moveFindMatch(-1)
+				} else {
+					m.moveFindMatch(1)
+				}
+				return keyActionResult{skipTextareaUpdate: true, skipViewportUpdate: true}
+			},
+		},
+		{
 			id:       "chat.new",
 			title:    "New Chat",
 			category: "chat",
@@ -556,7 +595,7 @@ func actionRegistry() []actionSpec {
 			title:     "Resume Chat",
 			category:  "chat",
 			slash:     "/resume",
-			slashArgs: "[id-prefix]",
+			slashArgs: "[id-prefix|text]",
 			summary:   "list or resume local chats",
 			args: func(m Model) []slashArg {
 				return m.sessionArgs(true)
@@ -570,7 +609,7 @@ func actionRegistry() []actionSpec {
 			title:     "Fork Chat",
 			category:  "chat",
 			slash:     "/fork",
-			slashArgs: "[id-prefix]",
+			slashArgs: "[id-prefix|text]",
 			summary:   "fork current or named chat",
 			args: func(m Model) []slashArg {
 				return m.sessionArgs(false)

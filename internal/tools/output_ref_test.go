@@ -1,4 +1,4 @@
-package tooloutput
+package tools
 
 import (
 	"crypto/sha256"
@@ -14,7 +14,7 @@ import (
 func TestStoreWritesPrivateRefWithMetadata(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", home)
-	ref, err := Store(StoreRequest{
+	ref, err := StoreOutput(OutputStoreRequest{
 		Parts:                 []string{"web_fetch", "https://example.com/a/b?secret=x"},
 		Content:               "  important body  ",
 		TrimSpace:             true,
@@ -48,7 +48,7 @@ func TestStoreWritesPrivateRefWithMetadata(t *testing.T) {
 	assertMode(t, filepath.Dir(ref.Path), 0o700)
 	assertMode(t, ref.Path, 0o600)
 
-	stat, err := Stat(ref.Path)
+	stat, err := StatOutputRef(ref.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestPortableIDValidation(t *testing.T) {
 
 func TestArtifactMetadataMapAndAttach(t *testing.T) {
 	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
-	ref, err := Store(StoreRequest{
+	ref, err := StoreOutput(OutputStoreRequest{
 		Parts:   []string{"shell_exec", "call_1"},
 		Content: "full output",
 	})
@@ -131,7 +131,7 @@ func TestArtifactMetadataMapAndAttach(t *testing.T) {
 
 func TestStoreEmptyAndExists(t *testing.T) {
 	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
-	ref, err := Store(StoreRequest{Content: "   ", TrimSpace: true})
+	ref, err := StoreOutput(OutputStoreRequest{Content: "   ", TrimSpace: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,16 +148,5 @@ func TestStoreEmptyAndExists(t *testing.T) {
 	dir := t.TempDir()
 	if Exists(dir) {
 		t.Fatal("directory ref should not count as existing")
-	}
-}
-
-func assertMode(t *testing.T, path string, want os.FileMode) {
-	t.Helper()
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := info.Mode().Perm(); got != want {
-		t.Fatalf("%s mode = %o, want %o", path, got, want)
 	}
 }

@@ -10,7 +10,6 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
-	"github.com/billyhargroveofficial/billyharness/internal/tooloutput"
 )
 
 func TestShellExecForegroundStoresLargeOutputRefByDefault(t *testing.T) {
@@ -55,9 +54,9 @@ func TestShellExecForegroundStoresLargeOutputRefByDefault(t *testing.T) {
 		anyInt64(result.Metadata["returned_output_bytes"]) != int64(len(result.Content)) ||
 		anyInt64(result.Metadata["inline_budget_bytes"]) != defaultShellInlineOutput ||
 		result.Metadata["inline_budget_enforced"] != true ||
-		result.Metadata[tooloutput.MetadataOutputRef] != result.OutputRef ||
-		result.Metadata[tooloutput.MetadataOutputRefPermissions] != "0600" ||
-		result.Metadata[tooloutput.MetadataOutputRefPlaintext] != true {
+		result.Metadata[MetadataOutputRef] != result.OutputRef ||
+		result.Metadata[MetadataOutputRefPermissions] != "0600" ||
+		result.Metadata[MetadataOutputRefPlaintext] != true {
 		t.Fatalf("metadata = %#v", result.Metadata)
 	}
 	assertMode(t, filepath.Join(home, "tool-output"), 0o700)

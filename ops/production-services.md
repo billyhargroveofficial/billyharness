@@ -1,10 +1,10 @@
 # Production Services
 
-Last verified: 2026-07-04. Command shapes here were checked against
+Last verified: 2026-07-05. Command shapes here were checked against
 `README.md`, `go run ./cmd/fast-agent-harness help`,
 `go run ./cmd/fast-agent-harness doctor -h`, `internal/gatewaybase`, and the
 current service and doctor command sources. Live production service facts were
-checked over SSH in `ops/production-inventory-2026-07-04.md`.
+checked over SSH; re-check them live before changing production.
 
 This runbook records production operation steps. It does not define
 architecture and it does not include systemd unit contents.
@@ -12,9 +12,7 @@ architecture and it does not include systemd unit contents.
 ## Production Entrypoint
 
 Production is described by the project contract as `root@82.23.163.16` under
-`/root/billyharness`. The current dated inventory is
-`ops/production-inventory-2026-07-04.md`; verify host identity again before
-changing production:
+`/root/billyharness`. Verify host identity live before changing production:
 
 ```sh
 ssh root@82.23.163.16
@@ -59,8 +57,8 @@ Both run as `root`, use `WorkingDirectory=/root/billyharness`, load
 `EnvironmentFile=-/root/billyharness/.env`, set
 `Environment=FAST_AGENT_ENV_FILE=/root/billyharness/.env`, restart with
 `Restart=always` and `RestartSec=2`, and log to journald with
-`StandardOutput=journal`. See the dated inventory for binary checksum, commit,
-doctor output, and route probe details.
+`StandardOutput=journal`. Re-run `doctor -json` and `systemctl cat` on the host
+for current binary checksum, commit, doctor output, and route probe details.
 
 For fresh unit contents, environment files, `WorkingDirectory`, restart policy,
 and log routing, inspect the live host:
@@ -78,36 +76,51 @@ tokens, provider keys, or bearer tokens into tickets.
 
 ## Deploy-Time Checks
 
-The repo-owned production deploy model is a source checkout rebuild in-place on
-`/root/billyharness`. Use the guarded script for normal deploys:
+The primary repo-owned deploy lane is a SHA-named binary plus a stable
+`bin/fast-agent-harness-current` symlink. On the production host, the systemd
+unit files must point at the symlink instead of the fixed binary path:
+
+```sh
+ExecStart=/root/billyharness/bin/fast-agent-harness-current gateway ...
+ExecStart=/root/billyharness/bin/fast-agent-harness-current telegram ...
+```
+
+Unit file contents live on the host, not in this repo. Inspect and edit them on
+the VPS with `systemctl cat` / `systemctl edit`, then run `systemctl daemon-reload`.
+After that host-side switch, use:
+
+```sh
+scripts/deploy.sh
+```
+
+`scripts/deploy.sh` builds `bin/fast-agent-harness-$(git rev-parse --short
+HEAD)`, records the previous `bin/fast-agent-harness-current` target in
+`bin/.previous-release`, repoints the symlink, restarts
+`billyharness-gateway.service` and `billyharness-telegram.service`, then gates
+on:
+
+```sh
+./bin/fast-agent-harness-current doctor -mode=production
+curl -sf http://127.0.0.1:8765/health
+curl -sf http://127.0.0.1:8765/ready
+```
+
+If verification fails, the script restores the previous symlink target,
+restarts services again, and exits non-zero. It appends verified releases to
+`bin/.release-history` and keeps the last
+`${BILLYHARNESS_DEPLOY_KEEP_RELEASES:-5}` SHA binaries.
+
+Do not run this symlink lane against production until the production doctor and
+`/ready` checks are confirmed stable there. The older source-checkout deploy
+script remains available when you need commit checkout, test, build-provenance,
+and manifest evidence in one command:
 
 ```sh
 scripts/production-deploy.sh deploy --yes
 ```
 
-By default the script fetches `origin`, checks out `origin/main` by exact
-commit, runs `go test -count=1 ./...`, builds
-`./bin/fast-agent-harness` with commit and UTC build-time provenance embedded
-through `-ldflags`, restarts `billyharness-gateway.service` and
-`billyharness-telegram.service`, then gates on:
-
-```sh
-./bin/fast-agent-harness doctor -mode=production -strict
-curl -fsS http://127.0.0.1:8765/health
-curl -fsS http://127.0.0.1:8765/ready
-```
-
-The script writes predeploy/postdeploy facts, sanitized doctor JSON, build
-provenance, and a copy-ready rollback command under
-`${BILLYHARNESS_DEPLOY_LOG_DIR:-/var/log/billyharness/deploy}`. To deploy a
-specific ref:
-
-```sh
-scripts/production-deploy.sh deploy --yes --ref COMMIT_OR_REF
-```
-
 For manual broad runtime changes, `README.md` lists this test and rebuild
-shape. Prefer the script above when changing production:
+shape. Prefer one of the guarded scripts above when changing production:
 
 ```sh
 /root/.local/go/bin/go test -count=1 ./...
@@ -128,7 +141,7 @@ GO_BIN=/root/.local/go/bin/go ./scripts/verify-deps.sh
 After restart, run:
 
 ```sh
-./bin/fast-agent-harness doctor -mode=production
+./bin/fast-agent-harness-current doctor -mode=production
 curl http://127.0.0.1:8765/health
 curl http://127.0.0.1:8765/ready
 ```
@@ -136,19 +149,32 @@ curl http://127.0.0.1:8765/ready
 For machine-readable evidence:
 
 ```sh
-./bin/fast-agent-harness doctor -mode=production -json
+./bin/fast-agent-harness-current doctor -mode=production -json
 ```
 
 ## Rollback Pattern
 
-Use the deploy script's manifest first. It records the previous commit and a
+Use the symlink rollback script first:
+
+```sh
+scripts/rollback.sh
+```
+
+It reads `bin/.previous-release`, repoints
+`bin/fast-agent-harness-current`, then runs the same restart, doctor, `/health`,
+and `/ready` helper as deploy. If rollback verification fails, it restores the
+symlink to the target that was active before the rollback attempt.
+
+If the host has not switched its unit files to
+`/root/billyharness/bin/fast-agent-harness-current`, use the older source
+checkout script's manifest instead. It records the previous commit and a
 copy-ready command:
 
 ```sh
 scripts/production-deploy.sh rollback --yes --to PREVIOUS_GOOD_COMMIT
 ```
 
-Rollback uses the same source checkout rebuild model, embedded build
+That rollback uses the source checkout rebuild model, embedded build
 provenance, service restart, strict doctor gate, and `/health` plus `/ready`
 probes as deploy.
 

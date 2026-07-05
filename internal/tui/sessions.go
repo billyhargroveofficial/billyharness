@@ -43,6 +43,11 @@ type chatSession struct {
 	ProjectedUsage   *savedProjectedUsage `json:"projected_usage,omitempty"`
 }
 
+type sessionMatch struct {
+	session chatSession
+	snippet string
+}
+
 type savedBlock = transcript.PersistedCell
 
 type savedProjectedUsage struct {
@@ -82,12 +87,7 @@ func loadChatSession(dir, prefix string) (chatSession, error) {
 	if err != nil {
 		return chatSession{}, err
 	}
-	var matches []chatSession
-	for _, session := range sessions {
-		if session.ID == prefix || strings.HasPrefix(session.ID, prefix) {
-			matches = append(matches, session)
-		}
-	}
+	matches := matchByIDPrefix(sessions, prefix)
 	if len(matches) == 0 {
 		return chatSession{}, fmt.Errorf("session not found: %s", prefix)
 	}
@@ -95,6 +95,128 @@ func loadChatSession(dir, prefix string) (chatSession, error) {
 		return chatSession{}, fmt.Errorf("session id prefix is ambiguous: %s", prefix)
 	}
 	return matches[0], nil
+}
+
+func matchByIDPrefix(sessions []chatSession, prefix string) []chatSession {
+	prefix = strings.TrimSpace(prefix)
+	var matches []chatSession
+	for _, session := range sessions {
+		if session.ID == prefix || strings.HasPrefix(session.ID, prefix) {
+			matches = append(matches, session)
+		}
+	}
+	return matches
+}
+
+func resolveChatSession(dir, query string) (chatSession, []sessionMatch, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return chatSession{}, nil, fmt.Errorf("session id or text required")
+	}
+	sessions, err := listChatSessions(dir)
+	if err != nil {
+		return chatSession{}, nil, err
+	}
+	idMatches := matchByIDPrefix(sessions, query)
+	if len(idMatches) == 1 {
+		return idMatches[0], nil, nil
+	}
+	if len(idMatches) > 1 {
+		return chatSession{}, nil, fmt.Errorf("session id prefix is ambiguous: %s", query)
+	}
+	matches, err := searchChatSessionsFromList(sessions, query)
+	if err != nil {
+		return chatSession{}, nil, err
+	}
+	if len(matches) == 0 {
+		return chatSession{}, nil, fmt.Errorf("session not found: %s", query)
+	}
+	if len(matches) > 1 {
+		return chatSession{}, matches, nil
+	}
+	return matches[0].session, nil, nil
+}
+
+func searchChatSessions(dir, query string) ([]sessionMatch, error) {
+	sessions, err := listChatSessions(dir)
+	if err != nil {
+		return nil, err
+	}
+	return searchChatSessionsFromList(sessions, query)
+}
+
+func searchChatSessionsFromList(sessions []chatSession, query string) ([]sessionMatch, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, nil
+	}
+	var matches []sessionMatch
+	for _, session := range sessions {
+		if snippet, ok := sessionSearchSnippet(session, query); ok {
+			matches = append(matches, sessionMatch{session: session, snippet: snippet})
+		}
+	}
+	return matches, nil
+}
+
+func sessionSearchSnippet(session chatSession, query string) (string, bool) {
+	if snippet, ok := snippetIfMatches(session.Title, query); ok {
+		return snippet, true
+	}
+	for _, message := range session.Messages {
+		if snippet, ok := snippetIfMatches(message.Content, query); ok {
+			return snippet, true
+		}
+		for _, part := range message.Parts {
+			if snippet, ok := snippetIfMatches(part.Text, query); ok {
+				return snippet, true
+			}
+		}
+	}
+	return "", false
+}
+
+func snippetIfMatches(text, query string) (string, bool) {
+	if strings.TrimSpace(text) == "" {
+		return "", false
+	}
+	if strings.Contains(strings.ToLower(text), strings.ToLower(query)) {
+		return snippetAround(text, query, 36), true
+	}
+	return "", false
+}
+
+func snippetAround(text, query string, radius int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	query = strings.TrimSpace(query)
+	if text == "" {
+		return ""
+	}
+	if radius <= 0 {
+		radius = 36
+	}
+	lowerText := strings.ToLower(text)
+	lowerQuery := strings.ToLower(query)
+	idx := strings.Index(lowerText, lowerQuery)
+	if idx < 0 {
+		return oneLinePreview(text, radius*2)
+	}
+	start := idx - radius
+	if start < 0 {
+		start = 0
+	}
+	end := idx + len(query) + radius
+	if end > len(text) {
+		end = len(text)
+	}
+	snippet := strings.TrimSpace(text[start:end])
+	if start > 0 {
+		snippet = "..." + snippet
+	}
+	if end < len(text) {
+		snippet += "..."
+	}
+	return snippet
 }
 
 func listChatSessions(dir string) ([]chatSession, error) {
@@ -204,10 +326,15 @@ func (m *Model) resumeChat(prefix string) tea.Cmd {
 		m.status = "chats listed"
 		return nil
 	}
-	session, err := loadChatSession(m.sessionsDir, prefix)
+	session, matches, err := resolveChatSession(m.sessionsDir, prefix)
 	if err != nil {
 		m.status = err.Error()
 		m.addBlock("error", "ERROR", err.Error())
+		return nil
+	}
+	if len(matches) > 1 {
+		m.addInfoBlock("CHATS", formatSessionMatches(matches))
+		m.status = fmt.Sprintf("%d chats match %s", len(matches), prefix)
 		return nil
 	}
 	m.applyChatSession(session)
@@ -231,10 +358,15 @@ func (m *Model) forkChat(prefix string) tea.Cmd {
 		prefix = ""
 	}
 	if strings.TrimSpace(prefix) != "" {
-		session, err := loadChatSession(m.sessionsDir, prefix)
+		session, matches, err := resolveChatSession(m.sessionsDir, prefix)
 		if err != nil {
 			m.status = err.Error()
 			m.addBlock("error", "ERROR", err.Error())
+			return nil
+		}
+		if len(matches) > 1 {
+			m.addInfoBlock("CHATS", formatSessionMatches(matches))
+			m.status = fmt.Sprintf("%d chats match %s", len(matches), prefix)
 			return nil
 		}
 		m.applyChatSession(session)
@@ -355,6 +487,26 @@ func (m Model) sessionsText() string {
 			session.InputTokens,
 			session.OutputTokens,
 			session.ToolCalls,
+		))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatSessionMatches(matches []sessionMatch) string {
+	if len(matches) == 0 {
+		return "no saved chats"
+	}
+	var lines []string
+	for _, match := range matches {
+		title := match.session.Title
+		if title == "" {
+			title = "untitled"
+		}
+		lines = append(lines, fmt.Sprintf("%s  %s  %s -- matched: %s",
+			shortID(match.session.ID),
+			match.session.UpdatedAt.Local().Format("2006-01-02 15:04"),
+			title,
+			match.snippet,
 		))
 	}
 	return strings.Join(lines, "\n")

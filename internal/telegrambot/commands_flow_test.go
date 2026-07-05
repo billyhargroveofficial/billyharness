@@ -197,6 +197,11 @@ func TestTelegramModelCommandAndStatusShowInputCapability(t *testing.T) {
 	if !strings.Contains(html, "compact threshold: <code>153.6k</code> (60%)") {
 		t.Fatalf("status html should use gpt-5.5 compact threshold: %q", html)
 	}
+	for _, notWant := range []string{"allowed chats:", "event cursor:"} {
+		if strings.Contains(html, notWant) {
+			t.Fatalf("default status html leaked debug field %q: %q", notWant, html)
+		}
+	}
 
 	html = StatusHTML(ChatState{Model: "gpt-5.4-mini"}, Options{Model: "deepseek-v4-flash", ContextWindow: 1_000_000})
 	if !strings.Contains(html, "context window: <code>256.0k</code>") {
@@ -271,6 +276,9 @@ func TestStatusHTMLShowsUnknownRuntimeModelWhenUnavailable(t *testing.T) {
 	if !strings.Contains(html, "active runtime model: <code>unknown</code>") {
 		t.Fatalf("status html should show unknown runtime model: %q", html)
 	}
+	if strings.Contains(html, "allowed chats:") || strings.Contains(html, "event cursor:") {
+		t.Fatalf("default status html should omit debug fields: %q", html)
+	}
 }
 
 type statusReportingHarness struct {
@@ -322,6 +330,140 @@ func TestTelegramStatusCommandFetchesRuntimeModel(t *testing.T) {
 		if !strings.Contains(sentText, want) {
 			t.Fatalf("status command text = %q, want %q", sentText, want)
 		}
+	}
+	for _, notWant := range []string{"allowed chats:", "allowed users:", "event cursor:"} {
+		if strings.Contains(sentText, notWant) {
+			t.Fatalf("plain status leaked debug field %q: %q", notWant, sentText)
+		}
+	}
+}
+
+func TestTelegramStatusCommandDebugSplitsInternalFields(t *testing.T) {
+	var sent []string
+	client := newTelegramAPIClient(t, "bottoken", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			text, _ := payload["text"].(string)
+			sent = append(sent, text)
+			writeTelegramResult(w, SentMessage{MessageID: len(sent), Chat: Chat{ID: 123}})
+		},
+	})
+	harness := &statusReportingHarness{status: gatewayapi.SessionStatus{Model: "deepseek-v4-flash"}}
+	bot, err := New(Options{
+		BotToken:          "bottoken",
+		StatePath:         t.TempDir() + "/state.json",
+		Model:             "deepseek-v4-flash",
+		Profile:           "billy",
+		AllowedChatIDs:    map[int64]bool{123: true},
+		AllowedUserIDs:    map[int64]bool{1001: true},
+		SendEnabled:       true,
+		DryRunDefault:     false,
+		AllowUserInGroups: true,
+	}, client, harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := bot.chatState(chatKey(123, 0))
+	state.SessionID = "session-1"
+	state.LastEventSeq = 42
+	bot.setChatState(chatKey(123, 0), state)
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/status"})
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/status debug"})
+	if len(sent) != 2 {
+		t.Fatalf("sent = %#v", sent)
+	}
+	for _, notWant := range []string{"allowed chats:", "allowed users:", "event cursor:"} {
+		if strings.Contains(sent[0], notWant) {
+			t.Fatalf("plain status leaked debug field %q: %q", notWant, sent[0])
+		}
+	}
+	for _, want := range []string{
+		"<b>Status Debug</b>",
+		"allowed chats: <code>123</code>",
+		"allowed users: <code>1001</code>",
+		"event cursor: <code>42</code>",
+	} {
+		if !strings.Contains(sent[1], want) {
+			t.Fatalf("debug status = %q, want %q", sent[1], want)
+		}
+	}
+}
+
+func TestTelegramStatusCommandRejectsUnknownView(t *testing.T) {
+	var sentText string
+	var parseMode string
+	client := newTelegramAPIClient(t, "bottoken", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			sentText, _ = payload["text"].(string)
+			parseMode, _ = payload["parse_mode"].(string)
+			writeTelegramResult(w, SentMessage{MessageID: 12, Chat: Chat{ID: 123}})
+		},
+	})
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      t.TempDir() + "/state.json",
+		Model:          "deepseek-v4-flash",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, scriptedHarness{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/status bogus"})
+	if parseMode != "" || sentText != "Unknown status view bogus" {
+		t.Fatalf("unknown status reply parse=%q text=%q", parseMode, sentText)
+	}
+	if strings.Contains(sentText, "<b>Status</b>") {
+		t.Fatalf("unknown status view should not send status body: %q", sentText)
+	}
+}
+
+func TestTelegramModelsCommandListsCatalogAndMarksCurrent(t *testing.T) {
+	var sent []string
+	client := newTelegramAPIClient(t, "bottoken", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			text, _ := payload["text"].(string)
+			sent = append(sent, text)
+			writeTelegramResult(w, SentMessage{MessageID: len(sent), Chat: Chat{ID: 123}})
+		},
+	})
+	bot, err := New(Options{
+		BotToken:       "bottoken",
+		StatePath:      t.TempDir() + "/state.json",
+		Model:          "gpt-5.5",
+		Profile:        "billy",
+		AllowedChatIDs: map[int64]bool{123: true},
+		SendEnabled:    true,
+		DryRunDefault:  false,
+	}, client, scriptedHarness{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := bot.chatState(chatKey(123, 0))
+	state.Model = "deepseek-v4-flash"
+	bot.setChatState(chatKey(123, 0), state)
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/models"})
+	state = bot.chatState(chatKey(123, 0))
+	state.Model = ""
+	bot.setChatState(chatKey(123, 0), state)
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/models"})
+	if len(sent) != 2 {
+		t.Fatalf("sent = %#v", sent)
+	}
+	for _, text := range sent {
+		if !strings.Contains(text, "deepseek-v4-flash") || !strings.Contains(text, "gpt-5.5") {
+			t.Fatalf("models output missing catalog entries: %q", text)
+		}
+	}
+	if !strings.Contains(sent[0], "* deepseek-v4-flash (deepseek, text-only)") {
+		t.Fatalf("models output did not mark chat state model: %q", sent[0])
+	}
+	if !strings.Contains(sent[1], "* gpt-5.5 (openai-codex, vision-capable)") {
+		t.Fatalf("models output did not mark fallback option model: %q", sent[1])
 	}
 }
 
@@ -484,6 +626,18 @@ func TestTelegramModeCommandSetsPlanModeRunRequest(t *testing.T) {
 	}
 	if len(sentTexts) == 0 || !strings.Contains(sentTexts[0], "Access mode: plan") {
 		t.Fatalf("mode command response = %#v", sentTexts)
+	}
+
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/mode safe"})
+	if state := bot.chatState(chatKey(123, 0)); state.AccessMode != config.AccessModeGuarded {
+		t.Fatalf("safe alias access mode = %q", state.AccessMode)
+	}
+	bot.handleMessage(context.Background(), Message{Chat: Chat{ID: 123}, Text: "/mode unknown"})
+	if state := bot.chatState(chatKey(123, 0)); state.AccessMode != config.AccessModeGuarded {
+		t.Fatalf("unknown mode should not change access mode: %q", state.AccessMode)
+	}
+	if got := sentTexts[len(sentTexts)-1]; !strings.Contains(got, "Unknown access mode. Use build, guarded, or plan.") {
+		t.Fatalf("unknown mode response = %#v", sentTexts)
 	}
 }
 

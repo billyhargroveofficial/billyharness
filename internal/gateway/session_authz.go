@@ -17,7 +17,15 @@ const (
 )
 
 func (s *Server) sessionForRequest(w http.ResponseWriter, r *http.Request, access sessionAccessKind) (*Session, bool) {
-	session, ok := s.session(r.PathValue("id"))
+	session, ok, err := s.sessionWithError(r.PathValue("id"))
+	if err != nil {
+		message := err.Error()
+		if s != nil && s.store != nil {
+			message = sanitizeSessionStoreLoadError(s.store.dir, message)
+		}
+		writeError(w, http.StatusInternalServerError, "session load failed: "+message)
+		return nil, false
+	}
 	if !ok {
 		writeError(w, http.StatusNotFound, "session not found")
 		return nil, false

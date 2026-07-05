@@ -46,7 +46,7 @@ type GatewayClient struct {
 
 func NewGatewayClient(baseURL string) *GatewayClient {
 	return &GatewayClient{
-		BaseURL: gatewayclient.NormalizeBaseURL(baseURL),
+		BaseURL: gatewayapi.NormalizeBaseURL(baseURL),
 		Client:  &http.Client{Timeout: 0},
 	}
 }
@@ -108,12 +108,12 @@ func (c *GatewayClient) RedoSession(ctx context.Context, sessionID string) (gate
 }
 
 func (c *GatewayClient) MCPStatus(ctx context.Context) (string, error) {
-	resp, err := gatewayclient.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
+	resp, err := gatewayapi.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/mcp", nil)
 		if err != nil {
 			return nil, err
 		}
-		gatewayclient.SetAuthHeaderFromEnv(req)
+		gatewayapi.SetAuthHeaderFromEnv(req)
 		return req, nil
 	})
 	if err != nil {
@@ -132,12 +132,12 @@ func (c *GatewayClient) MCPStatus(ctx context.Context) (string, error) {
 }
 
 func (c *GatewayClient) ConfigStatus(ctx context.Context) (string, error) {
-	resp, err := gatewayclient.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
+	resp, err := gatewayapi.DoWithReadyRetry(ctx, c.client(), c.BaseURL, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/config", nil)
 		if err != nil {
 			return nil, err
 		}
-		gatewayclient.SetAuthHeaderFromEnv(req)
+		gatewayapi.SetAuthHeaderFromEnv(req)
 		return req, nil
 	})
 	if err != nil {
@@ -171,14 +171,22 @@ func (c *GatewayClient) ContextStatus(ctx context.Context, sessionID string) (st
 }
 
 func (c *GatewayClient) ProcessStatus(ctx context.Context) (string, error) {
-	var out gatewayapi.ManagedProcessResponse
-	if err := c.gatewayJSON(ctx, http.MethodGet, "/v1/processes?include_exited=true", nil, &out); err != nil {
+	out, err := c.ProcessSnapshot(ctx)
+	if err != nil {
 		return "", err
 	}
 	if strings.TrimSpace(out.Text) != "" {
 		return out.Text, nil
 	}
 	return "no managed shell processes", nil
+}
+
+func (c *GatewayClient) ProcessSnapshot(ctx context.Context) (gatewayapi.ManagedProcessResponse, error) {
+	var out gatewayapi.ManagedProcessResponse
+	if err := c.gatewayJSON(ctx, http.MethodGet, "/v1/processes?include_exited=true", nil, &out); err != nil {
+		return gatewayapi.ManagedProcessResponse{}, err
+	}
+	return out, nil
 }
 
 func (c *GatewayClient) AuthStatus(ctx context.Context) (credentials.Status, error) {

@@ -1,4 +1,4 @@
-package session
+package gateway
 
 import (
 	"context"
@@ -43,7 +43,7 @@ type promptHistoryDiscarder interface {
 	DiscardPromptHistory() bool
 }
 
-type Session struct {
+type runThread struct {
 	mu          sync.Mutex
 	messages    []protocol.Message
 	cancel      context.CancelFunc
@@ -52,45 +52,45 @@ type Session struct {
 	idle        chan struct{}
 }
 
-func New(messages []protocol.Message) *Session {
-	return NewWithOptions(messages, Options{})
+func newRunThread(messages []protocol.Message) *runThread {
+	return newRunThreadWithOptions(messages, Options{})
 }
 
-func NewWithOptions(messages []protocol.Message, opts Options) *Session {
+func newRunThreadWithOptions(messages []protocol.Message, opts Options) *runThread {
 	policy := opts.InputPolicy
 	if policy == "" {
 		policy = InputPolicyRejectWhileActive
 	}
-	return &Session{messages: cloneMessages(messages), inputPolicy: policy}
+	return &runThread{messages: cloneMessages(messages), inputPolicy: policy}
 }
 
-func (s *Session) Messages() []protocol.Message {
+func (s *runThread) Messages() []protocol.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return cloneMessages(s.messages)
 }
 
-func (s *Session) Running() bool {
+func (s *runThread) Running() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.running
 }
 
-func (s *Session) InputPolicy() InputPolicy {
+func (s *runThread) InputPolicy() InputPolicy {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.inputPolicy
 }
 
-func (s *Session) Run(ctx context.Context, runner Runner, prompt string, emit func(protocol.Event)) error {
+func (s *runThread) Run(ctx context.Context, runner Runner, prompt string, emit func(protocol.Event)) error {
 	return s.RunMessage(ctx, runner, protocol.Message{Role: protocol.RoleUser, Content: prompt}, emit)
 }
 
-func (s *Session) RunInput(ctx context.Context, runner Runner, prompt string, attachments []protocol.AttachmentRef, emit func(protocol.Event)) error {
+func (s *runThread) RunInput(ctx context.Context, runner Runner, prompt string, attachments []protocol.AttachmentRef, emit func(protocol.Event)) error {
 	return s.RunMessage(ctx, runner, protocol.UserMessage(prompt, attachments), emit)
 }
 
-func (s *Session) RunMessage(ctx context.Context, runner Runner, userMessage protocol.Message, emit func(protocol.Event)) error {
+func (s *runThread) RunMessage(ctx context.Context, runner Runner, userMessage protocol.Message, emit func(protocol.Event)) error {
 	if runner == nil {
 		return errors.New("session runner is nil")
 	}
@@ -127,7 +127,7 @@ func (s *Session) RunMessage(ctx context.Context, runner Runner, userMessage pro
 	return err
 }
 
-func (s *Session) Cancel() bool {
+func (s *runThread) Cancel() bool {
 	s.mu.Lock()
 	cancel := s.cancel
 	s.mu.Unlock()
@@ -138,7 +138,7 @@ func (s *Session) Cancel() bool {
 	return true
 }
 
-func (s *Session) CancelAndWait(ctx context.Context) (bool, error) {
+func (s *runThread) CancelAndWait(ctx context.Context) (bool, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -174,7 +174,7 @@ func discardPromptHistory(err error) bool {
 	return errors.As(err, &discard) && discard.DiscardPromptHistory()
 }
 
-func (s *Session) startRun(cancel context.CancelFunc) ([]protocol.Message, InputDecision) {
+func (s *runThread) startRun(cancel context.CancelFunc) ([]protocol.Message, InputDecision) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	decision := InputDecision{Policy: s.inputPolicy, Running: s.running}
@@ -190,7 +190,7 @@ func (s *Session) startRun(cancel context.CancelFunc) ([]protocol.Message, Input
 	return cloneMessages(s.messages), decision
 }
 
-func (s *Session) waitStartRun(ctx context.Context, cancel context.CancelFunc) ([]protocol.Message, InputDecision, error) {
+func (s *runThread) waitStartRun(ctx context.Context, cancel context.CancelFunc) ([]protocol.Message, InputDecision, error) {
 	queued := false
 	for {
 		base, decision := s.startRun(cancel)
@@ -219,7 +219,7 @@ func (s *Session) waitStartRun(ctx context.Context, cancel context.CancelFunc) (
 	}
 }
 
-func (s *Session) activeWaitChannel() <-chan struct{} {
+func (s *runThread) activeWaitChannel() <-chan struct{} {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.running {
@@ -228,7 +228,7 @@ func (s *Session) activeWaitChannel() <-chan struct{} {
 	return s.idle
 }
 
-func (s *Session) finishRun(next, fallback []protocol.Message) {
+func (s *runThread) finishRun(next, fallback []protocol.Message) {
 	s.mu.Lock()
 	if len(next) > 0 {
 		s.messages = cloneMessages(next)

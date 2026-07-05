@@ -1,8 +1,9 @@
 # Doctor And Diagnostics
 
-Last verified: 2026-07-04. Command shapes here were checked against
+Last verified: 2026-07-05. Command shapes here were checked against
 `README.md`, `go run ./cmd/fast-agent-harness help`,
-`go run ./cmd/fast-agent-harness doctor -h`, and the current
+`go run ./cmd/fast-agent-harness doctor -h`,
+`go run ./cmd/fast-agent-harness attachments gc -h`, and the current
 `cmd/fast-agent-harness` and `internal/gateway` sources.
 
 This runbook is operational. It records how to inspect a live or local
@@ -10,13 +11,13 @@ Billyharness checkout without making architecture claims.
 
 ## Redaction
 
-`doctor`, `config inspect`, `sessions export`, `incident collect`, and
-`/v1/auth/status` are designed to report paths, provider/model state,
-credential presence, transcripts, and session diagnostics without returning
-obvious secret values. Still review output before sharing it. Paths can reveal
-usernames and deployment layout, dirty git status can include sensitive
-filenames, and redaction is a leak-reduction layer rather than proof that user
-content is safe to disclose.
+`doctor`, `config inspect`, `sessions inspect`, `sessions context`,
+`sessions export`, and `/v1/auth/status` are designed to report paths,
+provider/model state, credential presence, transcripts, and session diagnostics
+without returning obvious secret values. Still review output before sharing it.
+Paths can reveal usernames and deployment layout, dirty git status can include
+sensitive filenames, and redaction is a leak-reduction layer rather than proof
+that user content is safe to disclose.
 
 Never share raw `$BILLYHARNESS_HOME/.env`,
 `$BILLYHARNESS_HOME/auth/credentials.json`,
@@ -61,36 +62,60 @@ The current doctor implementation reports config/runtime paths, provider/model
 state, provider capability validation, credential presence, binary version,
 build commit, UTC build time, gateway bind mode, native tool catalog state, MCP
 allowlist availability, gateway session storage readability/writability,
-tool-output storage, git status, a lightweight CLI build check, systemd service
-activity, duplicate gateway/telegram processes, pid-file staleness, gateway
-`/health` liveness, and gateway `/ready` readiness. It records `mode` in text
-and JSON output. `auto` mode resolves `/root/billyharness` as `production` and
-other checkouts as `local`; production mode also adds selected systemd unit
-metadata and recent journal crash/error signal summaries.
+tool-output storage, attachment storage, git status, a lightweight CLI build
+check, systemd service activity, duplicate gateway/telegram processes, pid-file
+staleness, gateway `/health` liveness, and gateway `/ready` readiness. It
+records `mode` in text and JSON output. `auto` mode resolves `/root/billyharness`
+as `production` and other checkouts as `local`; production mode also adds
+selected systemd unit metadata and recent journal crash/error signal summaries.
 
-## Incident Bundles
+Doctor JSON includes `runtime.attachments_store` beside
+`runtime.tool_output_store`. The attachments usage check warns when the store is
+larger than `1073741824` bytes (`1 GiB`), matching the default
+`attachments gc -max-bytes` budget. This warning is maintenance visibility only:
+even `doctor -strict` treats it as non-failing unless some other check fails.
 
-Collect a local bundle for a specific persisted session:
+## Attachment Store GC
+
+Image attachments are stored under `$BILLYHARNESS_HOME/attachments`.
+Inspect current usage without deleting files:
 
 ```sh
-./bin/fast-agent-harness incident collect -session SESSION_ID -out /tmp/billyharness-incident
+./bin/fast-agent-harness attachments gc -dry-run
 ```
 
-Useful editing-time variant that skips live systemd, gateway, MCP, and journal
-probes:
+Prune with the default budget:
 
 ```sh
-./bin/fast-agent-harness incident collect -session SESSION_ID -out /tmp/billyharness-incident -build=false -services=false -gateway=false -mcp=false -logs=false
+./bin/fast-agent-harness attachments gc
 ```
 
-The bundle includes redacted `doctor` output, config/auth summaries, optional
-MCP status, session inspection/context, rich and raw transcript exports, a
-redacted session event JSONL copy, optional `journalctl` tails for the managed
-gateway and Telegram services, and `incident-manifest.json`.
+The default policy deletes stored attachments older than `720h` and then evicts
+the oldest remaining files until total regular-file usage is at or below
+`1073741824` bytes (`1 GiB`). Override either bound when needed:
 
-The command uses strict runtime config resolution and refuses to continue when
-the target session cannot be inspected. Optional MCP and journal failures are
-recorded as error artifacts and warnings in the manifest.
+```sh
+./bin/fast-agent-harness attachments gc -max-age=168h -max-bytes=536870912
+```
+
+Set `-max-age=0` to disable age-based pruning or `-max-bytes=0` to disable the
+size budget. In-flight `.tmp-attachment-*` files created by atomic attachment
+writes are ignored by pruning.
+
+## Session Diagnostics
+
+Inspect and export a specific persisted session directly:
+
+```sh
+./bin/fast-agent-harness sessions inspect SESSION_ID
+./bin/fast-agent-harness sessions context SESSION_ID
+./bin/fast-agent-harness sessions export -mode rich SESSION_ID
+./bin/fast-agent-harness sessions export -mode raw -json SESSION_ID
+```
+
+Use `doctor -json` beside these commands when you need machine-readable runtime
+state for the same investigation. For service logs, inspect the live host with
+`journalctl` and redact secrets before sharing output.
 
 ## Config Inspection
 
@@ -101,17 +126,11 @@ Inspect resolved config and sanitized provenance:
 ./bin/fast-agent-harness config inspect -json
 ```
 
-Inspect external MCP config migration state:
-
-```sh
-./bin/fast-agent-harness config mcp-migrate -json
-./bin/fast-agent-harness config mcp-migrate -file /path/to/config.toml -json
-```
-
 The default Billyharness state root is `$BILLYHARNESS_HOME`, falling back to
 `~/billyharness`. Important operational paths include `settings.json`, `.env`,
 `mcp.config.toml`, `auth/credentials.json`, `auth/codex.json`,
-`gateway-sessions`, `tool-output`, `gateway.pid`, and `telegram.pid`.
+`gateway-sessions`, `tool-output`, `attachments`, `gateway.pid`, and
+`telegram.pid`.
 
 ## Gateway Liveness And Readiness
 

@@ -7,9 +7,9 @@ handling, while gateway sessions, admission, replay, authorization, and runtime
 execution stay behind the typed gateway APIs.
 
 Status note: this document was reviewed against the current implementation on
-2026-07-04 for Telegram operator command policy and secret-bearing auth command
-semantics. Claims describe this checkout, not necessarily a clean release
-commit.
+2026-07-05 for Telegram operator command policy, secret-bearing auth command
+semantics, and media rejection behavior. Claims describe this checkout, not
+necessarily a clean release commit.
 
 The decision record is [ADR 0006](../adr/0006-telegram-is-a-gateway-client.md).
 The shared event/replay rules are in
@@ -23,9 +23,7 @@ The shared event/replay rules are in
 - Telegram Bot API long polling, send/edit/delete calls, per-chat rate limiting,
   Bot API retry-after backoff, and Telegram token redaction in client errors
   ([client.go](../../internal/telegrambot/client.go)).
-- Per-chat state and admission records
-  ([store.go](../../internal/telegrambot/store.go),
-  [admission_store.go](../../internal/telegrambot/admission_store.go)).
+- Per-chat state ([store.go](../../internal/telegrambot/store.go)).
 - Telegram command dispatch, message admission, rendering, progress edits,
   rich-message final delivery, and media attachment ingestion
   ([commands.go](../../internal/telegrambot/commands.go),
@@ -59,7 +57,8 @@ It resolves runtime config first, then configures the Telegram adapter with:
 - initial model, profile, reasoning effort, access mode, max tool rounds,
   context window, and compact threshold from runtime config and flags;
 - state path, allowed chat IDs, allowed user IDs, allowed operator user IDs,
-  live-send/dry-run mode, polling timeout, and live-edit interval.
+  live-send/dry-run mode, polling timeout, live-edit interval, and managed
+  process watch interval.
 
 The default Telegram state path is
 `$BILLYHARNESS_HOME/telegram/state.json`, falling back to
@@ -132,7 +131,7 @@ status values.
 Gateway transport auth is separate from the Telegram allowlist. The shared
 gateway client attaches a bearer token from `BILLYHARNESS_GATEWAY_AUTH_TOKEN`
 or legacy `FAST_AGENT_GATEWAY_AUTH_TOKEN` when present
-([gatewaybase.go](../../internal/gatewaybase/gatewaybase.go)). The gateway
+([gatewayapi/net.go](../../internal/gatewayapi/net.go)). The gateway
 security middleware requires authenticated mutating `/v1/` routes unless the
 server is explicitly running in its development loopback-bypass mode
 ([http_security.go](../../internal/gateway/http_security.go)).
@@ -191,33 +190,27 @@ unowned sessions. Forking a readable legacy session creates a new owned session.
 
 The poller handles only Telegram `message` updates
 ([poller.go](../../internal/telegrambot/poller.go)). Empty or unsupported
-updates are recorded as ignored admission records before their update offset is
-acknowledged.
+updates are logged as ignored before their update offset is acknowledged.
 
 Normal prompt flow:
 
 1. Check allowlist.
 2. Route slash commands directly.
-3. If a user-input request is pending and the update is a plain non-media
+3. Reject unsupported voice, audio, video-note, and video messages with a
+   user-facing reply after allowlist/command routing.
+4. If a user-input request is pending and the update is a plain non-media
    message, answer it instead of admitting a new prompt.
-4. Interrupt any active run for the same chat/thread/user before admitting the
+5. Interrupt any active run for the same chat/thread/user before admitting the
    replacement prompt.
-5. Resolve or create an owned gateway session.
-6. Prepare image attachments, if present.
-7. Admit the prompt to the gateway with stable input ID
+6. Resolve or create an owned gateway session.
+7. Prepare image attachments, if present.
+8. Admit the prompt to the gateway with stable input ID
    `telegram-update-<update_id>`, `client_type=telegram`, a scoped client ID,
    metadata, and interrupt policy `interrupt`.
-8. Persist the pending gateway input in Telegram state, append a Telegram
-   admission record, acknowledge the Telegram update offset, and start the
-   session run.
-
-Admission records are stored next to the state file as
-`<state-base>.admissions.jsonl`. They include sequence number, update/message
-identity, chat/thread/user identity, session/input identity, duplicate state,
-attachment count, and a SHA-256 of the prompt. They do not store the prompt text
-itself ([admission_store.go](../../internal/telegrambot/admission_store.go)).
-The JSONL helper creates private directories and files and fsyncs each append
-([eventlog/jsonl.go](../../internal/eventlog/jsonl.go)).
+9. Persist the pending gateway input in Telegram state, acknowledge the Telegram
+   update offset, and start the session run. Ignored, admitted, and abandoned
+   update outcomes are logged with `log.Printf`; gateway input durability remains
+   behind the gateway session-input APIs.
 
 If gateway admission fails or Telegram media download fails, the update offset
 is not advanced so the poller can retry. If the gateway reports a duplicate
@@ -232,12 +225,11 @@ local persistence error.
 
 On startup, Telegram reconciles durable chat states that still contain a pending
 gateway input. When the gateway session is reachable, Telegram terminally
-completes that input as `abandoned_after_restart`, records the returned gateway
-state in the admission ledger, clears the local pending fields, and saves state.
-If the gateway session is missing, Telegram records a terminal local admission
-reason of `gateway_session_missing_after_restart`; other gateway completion
-errors fail startup so the adapter does not silently acknowledge an ambiguous
-input.
+completes that input as `abandoned_after_restart`, logs the returned gateway
+state, clears the local pending fields, and saves state. If the gateway session
+is missing, Telegram logs `gateway_session_missing_after_restart`; other gateway
+completion errors fail startup so the adapter does not silently acknowledge an
+ambiguous input.
 
 The run request carries the admitted input ID, client ID, Telegram client type,
 prompt, attachment refs, selected model/profile/reasoning/access mode, max tool
@@ -312,10 +304,16 @@ largest Telegram photo size by file size or dimensions. For documents, it
 requires an image MIME type when Telegram provides one
 ([media.go](../../internal/telegrambot/media.go)).
 
+Voice, audio, video-note, and video messages are processable only so they can be
+rejected explicitly. After allowlist and command checks, the adapter sends
+"not supported yet" guidance, logs the ignored reason such as
+`voice_unsupported`, and advances the update offset; it does not admit a
+gateway input.
+
 Before downloading media, the adapter checks that the selected model supports
 vision input through [internal/modelinfo](../../internal/modelinfo). Unsupported
 vision input is a durable rejection: Telegram sends a user-facing explanation,
-records an ignored admission reason, and advances the update offset.
+logs an ignored-update reason, and advances the update offset.
 
 Downloaded media is bounded by the attachment store size limit and validated as
 PNG, JPEG, or GIF image data before storage. The image bytes are written to the
@@ -325,8 +323,8 @@ run receives only `protocol.AttachmentRef` metadata
 [protocol/message_parts.go](../../internal/protocol/message_parts.go)).
 
 Transient Telegram download failures are retryable and do not advance the
-update offset. Durable invalid media errors are acknowledged after a user-facing
-message and ignored-admission record.
+update offset. Durable invalid media errors and unsupported-media messages are
+acknowledged after a user-facing message and ignored-update log entry.
 
 ## Command Surface
 
@@ -351,6 +349,14 @@ Telegram commands are:
 - `/diff`: preview the latest gateway session turn-change restore operation.
 - `/undo`, `/redo`: operator-only gateway session turn-change restore
   operations.
+
+The bot also has one outbound-without-inbound-trigger path: when live sending
+is enabled and a process watch interval is configured, a Telegram-side watcher
+polls `GET /v1/processes?include_exited=true` through the gateway client and
+sends a redacted message to configured operator/allowed chats when a managed
+shell process first appears exited or transitions from running to exited. The
+gateway process does not receive the Telegram bot token, and `internal/tools`
+does not import Telegram.
 - `/auth`, `/auth deepseek ...`, `/auth codex`: owner-only auth status,
   DeepSeek API-key persistence, or local Codex OAuth import. Secret-bearing
   `/auth deepseek ...` requires private owner chat.

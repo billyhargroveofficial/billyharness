@@ -115,7 +115,7 @@ func (p *Projector) appendToolText(event protocol.Event, title, text string) {
 	if strings.TrimSpace(text) == "" {
 		text = "[no output]"
 	}
-	callID := eventCallID(event)
+	callID := protocol.EventCallID(event)
 	idx := BuildIndex(p.cells)
 	i, ok := idx.ToolCall(callID)
 	if !ok {
@@ -133,7 +133,7 @@ func (p *Projector) appendToolAudit(event protocol.Event, text string) {
 	if text == "" {
 		return
 	}
-	callID := eventCallID(event)
+	callID := protocol.EventCallID(event)
 	idx := BuildIndex(p.cells)
 	i, ok := idx.ToolCall(callID)
 	if !ok {
@@ -155,7 +155,7 @@ func (p *Projector) appendToolResult(event protocol.Event) {
 	if strings.TrimSpace(text) == "" {
 		text = "[no output]"
 	}
-	callID := eventCallID(event)
+	callID := protocol.EventCallID(event)
 	idx := BuildIndex(p.cells)
 	i, ok := idx.ToolCall(callID)
 	if !ok {
@@ -563,11 +563,6 @@ func toolMetaLines(args map[string]any, keys ...string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
-}
-
-func eventCallID(event protocol.Event) string {
-	event = protocol.EnrichEvent(event, protocol.EventEnvelope{})
-	return strings.TrimSpace(event.CallID)
 }
 
 func oneLineJSON(value any) string {

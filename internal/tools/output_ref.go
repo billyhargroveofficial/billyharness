@@ -1,4 +1,4 @@
-package tooloutput
+package tools
 
 import (
 	"crypto/sha256"
@@ -15,14 +15,14 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 )
 
-type StoreRequest struct {
+type OutputStoreRequest struct {
 	Parts                 []string
 	Content               string
 	TrimSpace             bool
 	EnsureTrailingNewline bool
 }
 
-type Ref struct {
+type OutputRef struct {
 	Path        string
 	ID          string
 	Bytes       int64
@@ -50,13 +50,13 @@ type ArtifactMetadata struct {
 	OutputRefPlaintext   bool   `json:"output_ref_plaintext,omitempty"`
 }
 
-func Store(req StoreRequest) (Ref, error) {
+func StoreOutput(req OutputStoreRequest) (OutputRef, error) {
 	content := req.Content
 	if req.TrimSpace {
 		content = strings.TrimSpace(content)
 	}
 	if content == "" {
-		return Ref{}, nil
+		return OutputRef{}, nil
 	}
 	if req.EnsureTrailingNewline && !strings.HasSuffix(content, "\n") {
 		content += "\n"
@@ -65,22 +65,22 @@ func Store(req StoreRequest) (Ref, error) {
 	now := time.Now().UTC()
 	root := outputRoot()
 	if err := ensurePrivateDir(root); err != nil {
-		return Ref{}, err
+		return OutputRef{}, err
 	}
 	dir := filepath.Join(root, now.Format("20060102"))
 	if err := ensurePrivateDir(dir); err != nil {
-		return Ref{}, err
+		return OutputRef{}, err
 	}
 	sum := sha256.Sum256(body)
 	name := fileName(now, req.Parts, sum)
 	path := filepath.Join(dir, name)
 	if err := os.WriteFile(path, body, 0o600); err != nil {
-		return Ref{}, err
+		return OutputRef{}, err
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
-		return Ref{}, err
+		return OutputRef{}, err
 	}
-	return Ref{
+	return OutputRef{
 		Path:        path,
 		ID:          portableID(root, path),
 		Bytes:       int64(len(body)),
@@ -90,26 +90,26 @@ func Store(req StoreRequest) (Ref, error) {
 	}, nil
 }
 
-func Stat(path string) (Ref, error) {
+func StatOutputRef(path string) (OutputRef, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return Ref{}, fmt.Errorf("output ref path required")
+		return OutputRef{}, fmt.Errorf("output ref path required")
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return Ref{}, err
+		return OutputRef{}, err
 	}
 	defer file.Close()
 	hash := sha256.New()
 	bytes, err := io.Copy(hash, file)
 	if err != nil {
-		return Ref{}, err
+		return OutputRef{}, err
 	}
 	info, err := file.Stat()
 	if err != nil {
-		return Ref{}, err
+		return OutputRef{}, err
 	}
-	return Ref{
+	return OutputRef{
 		Path:        path,
 		ID:          portableID(outputRoot(), path),
 		Bytes:       bytes,
@@ -157,7 +157,7 @@ func Exists(path string) bool {
 }
 
 func StatMetadata(path string) (ArtifactMetadata, error) {
-	ref, err := Stat(path)
+	ref, err := StatOutputRef(path)
 	if err != nil {
 		return ArtifactMetadata{}, err
 	}
@@ -177,7 +177,7 @@ func AddMetadataForPath(metadata map[string]any, path string) error {
 	return nil
 }
 
-func (r Ref) ArtifactMetadata() ArtifactMetadata {
+func (r OutputRef) ArtifactMetadata() ArtifactMetadata {
 	if r.Path == "" {
 		return ArtifactMetadata{}
 	}
@@ -191,7 +191,7 @@ func (r Ref) ArtifactMetadata() ArtifactMetadata {
 	}
 }
 
-func (r Ref) Metadata() map[string]any {
+func (r OutputRef) Metadata() map[string]any {
 	return r.ArtifactMetadata().Map()
 }
 
@@ -218,7 +218,7 @@ func (m ArtifactMetadata) AddTo(metadata map[string]any) {
 	}
 }
 
-func (r Ref) AddMetadata(metadata map[string]any) {
+func (r OutputRef) AddMetadata(metadata map[string]any) {
 	r.ArtifactMetadata().AddTo(metadata)
 }
 

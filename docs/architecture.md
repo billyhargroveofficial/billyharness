@@ -13,9 +13,9 @@ exceptions are allowed only when they name the phase that removes them.
 
 | Package | Responsibility | Allowed internal imports | Forbidden imports and owner notes |
 | --- | --- | --- | --- |
-| `internal/agent` | Runtime loop, model calls, tool orchestration, compaction, and event emission. | `checkpoint`, `config`, `hooks`, `instructions`, `mcpclient`, `memory`, `modelinfo`, `projectcontext`, `protocol`, `provider`, `runstate`, `tooloutput`, `tools` | Should shrink behind runtime/toolexec seams in P1.1. Do not add presentation imports. |
+| `internal/agent` | Runtime loop, model calls, tool orchestration, compaction, and event emission. | `checkpoint`, `config`, `hooks`, `instructions`, `mcpclient`, `memory`, `modelinfo`, `projectcontext`, `protocol`, `provider`, `runstate`, `tools` | Should shrink behind runtime/toolexec seams in P1.1. Do not add presentation imports. |
 | `internal/architecture` | Test-only import graph guard. | none | Guard package must not become runtime code. |
-| `internal/attachments` | Attachment metadata, image validation, hashing, private local storage, and ref resolution. | `config`, `protocol` | Must not import provider, gateway, agent, tools, TUI, or Telegram packages; store refs and metadata only, never raw image bytes in JSONL. |
+| `internal/attachments` | Attachment metadata, image validation, hashing, private local storage, ref resolution, and store usage/prune operations surfaced by the CLI adapter. | `config`, `protocol` | Must not import provider, gateway, agent, tools, TUI, or Telegram packages; store refs and metadata only, never raw image bytes in JSONL. |
 | `internal/bench` | Benchmark runners, local-loop tasks, provider comparison, replay verification. | `agent`, `config`, `modelinfo`, `protocol`, `provider`, `runstate`, `runtimehost`, `trace` | Bench can compose broad runtime pieces, but should not become a shared runtime dependency. |
 | `internal/checkpoint` | Turn-scoped filesystem snapshots, compact diffs, preview, and conflict-safe restore records for mutating tool steps. | none | Must not write user `.git` state or import runtime, gateway, tools, provider, TUI, or Telegram packages. |
 | `internal/clientux` | Client-facing context projection helpers shared by TUI, gateway, and future projector code. | `config`, `gatewayapi`, `protocol`, `secrets` | May import `secrets` only for shared redaction of debug/incident payloads. Must not import gateway server, agent, provider, tools, TUI, or Telegram. |
@@ -28,10 +28,9 @@ exceptions are allowed only when they name the phase that removes them.
 | `internal/displayfmt` | Leaf display formatting helpers for compact numbers and percentages shared by client surfaces. | none | Must remain presentation-neutral and must not import clients, gateway, provider, tools, or runtime packages. |
 | `internal/eventlog` | Event record validation, lifecycle validation, JSONL helpers, and corruption diagnostics. | `protocol` | Guarded: no `agent`, `gateway`, `trace`, `tui`, or `telegrambot` imports. |
 | `internal/filesearch` | On-demand workspace file resolver for fuzzy relative-path lookup using git, ripgrep, and walk fallbacks. | none | Must stay local and rebuildable; no watchers, databases, shell history, or file-content injection. |
-| `internal/gateway` | HTTP adapter for sessions, benchmark artifacts, session persistence, replay, and inspection. | `agent`, `attachments`, `checkpoint`, `clientux`, `clientux/projector`, `config`, `credentials`, `eventlog`, `gatewayapi`, `gatewaybase`, `mcpstatus`, `modelinfo`, `protocol`, `provider`, `runstate`, `runtimehost`, `secrets`, `session`, `tools`, `trace` | Should keep lifecycle semantics in `eventlog`. Server DTOs and client helpers belong to `gatewayapi`/`gatewayclient`. Stored-session inspection may use the shared client UX projector, not a gateway-local projector. |
-| `internal/gatewayapi` | Shared gateway HTTP request/response DTOs. | `config`, `protocol` | Must not import gateway server, clients, runtime, provider, tools, TUI, or Telegram. |
-| `internal/gatewaybase` | Gateway URL normalization, readiness, auth header, and unavailable-hint helpers shared by gateway and clients. | `config`, `serviceops` | Must stay transport-helper only; no gateway server, HTTP client wrappers, runtime, provider, TUI, or Telegram imports. |
-| `internal/gatewayclient` | Shared gateway HTTP client helpers, typed status errors, session JSON/NDJSON methods, and client-side context formatting. | `config`, `displayfmt`, `gatewayapi`, `gatewaybase`, `protocol` | Must not import gateway server, agent, provider, tools, TUI, or Telegram. |
+| `internal/gateway` | HTTP adapter for sessions, benchmark artifacts, session run locking, session persistence, replay, and inspection. | `agent`, `attachments`, `checkpoint`, `clientux`, `clientux/projector`, `config`, `credentials`, `eventlog`, `gatewayapi`, `mcpstatus`, `modelinfo`, `protocol`, `provider`, `runstate`, `runtimehost`, `secrets`, `tools`, `trace` | Must directly import `eventlog` and keep lifecycle semantics there. Server DTOs and shared client transport helpers belong to `gatewayapi`/`gatewayclient`. Stored-session inspection may use the shared client UX projector, not a gateway-local projector. |
+| `internal/gatewayapi` | Shared gateway HTTP request/response DTOs, URL normalization, readiness, auth header, and unavailable-hint helpers. | `config`, `protocol`, `serviceops` | Must not import gateway server, clients, runtime, provider, tools, TUI, or Telegram. |
+| `internal/gatewayclient` | Shared gateway HTTP client helpers, typed status errors, session JSON/NDJSON methods, and client-side context formatting. | `displayfmt`, `gatewayapi`, `protocol` | Must not import gateway server, agent, provider, tools, TUI, or Telegram. |
 | `internal/hooks` | Hook process execution and hook event payloads. | `config`, `protocol`, `secrets` | Must not import agent, tools, provider, or presentation packages. |
 | `internal/instructions` | Instruction file discovery and initial instruction assembly. | `config`, `protocol` | Must stay independent of runtime adapters and provider implementations. |
 | `internal/mcpclient` | Managed MCP stdio clients, server lifecycle, tool discovery, and status. | `config`, `protocol`, `secrets` | Must not depend on agent, gateway, TUI, or Telegram. |
@@ -47,16 +46,14 @@ exceptions are allowed only when they name the phase that removes them.
 | `internal/runtimehost` | Shared runtime assembly host for resolved settings, provider construction, model capability lookup, tool registry assembly, MCP attachment, and agent creation. | `agent`, `config`, `mcpstatus`, `modelinfo`, `protocol`, `provider`, `tools` | Must stay a small composition package; no gateway server, TUI, Telegram, benchmark policy, command parsing, or presentation imports. |
 | `internal/secrets` | Secret discovery and redaction helpers. | none | Must remain a leaf utility package. |
 | `internal/serviceops` | Managed service names, subcommands, unit paths, and pid-file metadata shared by operator tooling. | none | Must remain a leaf metadata package; no systemd calls, process inspection, config loading, gateway, TUI, Telegram, or runtime imports. |
-| `internal/session` | Session message state, run locking, and runner abstraction. | `protocol` | Must not import agent or gateway. |
 | `internal/skills` | Local SKILL.md discovery, frontmatter parsing, bounded viewing of support files, and explicit local import metadata for compatibility skills. | `config` | Must not import tools, provider, gateway, TUI, Telegram, remote marketplaces, or network clients. |
 | `internal/telegrambot` | Telegram adapter, rendering, command handling, gateway client wrapper, and Telegram media attachment ingestion. | `attachments`, `clientux`, `clientux/projector`, `commandregistry`, `config`, `credentials`, `displayfmt`, `eventlog`, `gatewayapi`, `gatewayclient`, `mcpstatus`, `memory`, `modelinfo`, `protocol`, `secrets`, `toolrender` | Must not import gateway server internals. |
 | `internal/testkit` | Shared test helpers for HTTP servers, JWTs, and future cross-package fixtures. | none | Must remain test-support only and must not become a runtime dependency. |
 | `internal/testkit/fakeprovider` | Shared scripted provider test helper for replay, retry, malformed-stream, and cancellation regressions. | `provider` | Must remain test-support only and must not become a runtime dependency. |
-| `internal/tooloutput` | Shared plaintext output-ref storage, metadata, and existence checks. | `config` | Must stay independent of agent, tools, gateway, TUI, and Telegram. |
 | `internal/toolrender` | Shared tool display labels, argument summaries, output-ref evidence lines, and compact tool result text for clients. | `displayfmt`, `protocol` | Must not import TUI, Telegram, gateway, or tools. |
-| `internal/tools` | Tool registry, schemas, central tool policy, filesystem/shell/MCP/web tools, skills wrappers, output refs, cache. | `config`, `diagnostics`, `filesearch`, `mcpclient`, `memory`, `protocol`, `skills`, `tooloutput`, `tools/discovery`, `webtools` | Guarded: must not import `provider`; model web summaries are injected through `webtools.Summarizer`. |
+| `internal/tools` | Tool registry, schemas, central tool policy, filesystem/shell/MCP/web tools, skills wrappers, output refs, cache. | `config`, `diagnostics`, `filesearch`, `mcpclient`, `memory`, `protocol`, `skills`, `tools/discovery`, `webtools` | Guarded: must not import `provider`; model web summaries are injected through `webtools.Summarizer`. |
 | `internal/tools/discovery` | Shared native/MCP tool search, filtering, namespaces, and schema-budget shaping. | `protocol` | Must stay independent of registry execution, provider, gateway, TUI, and Telegram. |
-| `internal/trace` | Benchmark event writer, payload refs, replay summaries, and timeline projection. | `eventlog`, `protocol` | Guarded: replay must use `eventlog`; must not reintroduce separate lifecycle validation. |
+| `internal/trace` | Benchmark event writer, payload refs, replay summaries, and timeline projection. | `eventlog`, `protocol` | Must directly import `eventlog`; replay must use it and must not reintroduce separate lifecycle validation. |
 | `internal/tui` | Bubble Tea terminal UI, gateway session mode, rendering, input handling, and persisted chat blocks. | `attachments`, `clientux`, `clientux/projector`, `commandregistry`, `config`, `credentials`, `displayfmt`, `filesearch`, `gatewayapi`, `gatewayclient`, `mcpstatus`, `memory`, `modelinfo`, `promptcommands`, `protocol`, `toolrender`, `tui/render`, `tui/runtimeclient`, `tui/selection`, `tui/transcript` | Must not import gateway server internals, agent, provider, or tools directly. Local runtime mode goes through `tui/runtimeclient`. |
 | `internal/tui/render` | TUI render cache keys, cached cell rendering, terminal markdown rendering, and activity/tool/status cell rendering. | none | Must not import billyharness runtime packages. Rendering should remain downstream of transcript cells. |
 | `internal/tui/runtimeclient` | Local runtime adapter for TUI normal operation: initial messages, local agent runs, and local MCP status. | `config`, `mcpstatus`, `protocol`, `runtimehost` | This is the only TUI subpackage allowed to ask the shared runtime host for local mode. Keep Bubble Tea state and rendering out. |
@@ -82,31 +79,14 @@ for `_test.go` files. `fast-agent-harness hygiene` reports tracked source files
 over those budgets from `git ls-files` and reports ignored runtime artifacts
 separately.
 
-Current exceptions:
+The enforced exception list lives in
+`cmd/fast-agent-harness/hygiene.go` as `hygieneLargeFileExceptions`; this table
+is human-readable context only.
 
-| File | Current exception owner | Split plan |
-| --- | --- | --- |
-| `internal/telegrambot/commands_flow_test.go` | P1 Telegram/operator verification follow-up. | Split command-flow coverage by auth policy, session commands, rendering/status commands, and secret-bearing command cases. |
-| `internal/gateway/gateway_test.go` | P1.2/P1.10 gateway behavior follow-up. | Split gateway tests by auth/browser boundary, liveness/readiness, run admission, and owner-scope behavior. |
-| `internal/mcpclient/client_test.go` | P1.7/P1.8 MCP schema and structured-output work. | Split MCP lifecycle, catalog/schema, reconnect/backoff, structured output, and error-redaction tests. |
-
-Add any future exception here with an owner, removal phase, and split plan before
-depending on it in strict hygiene.
-
-## Guarded Rules
-
-- `internal/protocol` has no billyharness internal imports.
-- `internal/eventlog` may import `protocol`, but not runtime, replay callers, or presentation adapters.
-- `internal/clientux` may import `config`, `gatewayapi`, `protocol`, and `secrets`, but not gateway server, runtime, provider, tools, or presentation adapters. The `secrets` import is limited to shared redaction of debug/incident payloads.
-- `internal/clientux/projector` may import `protocol`, but not gateway server, runtime, provider, tools, presentation adapters, or renderers.
-- `internal/gatewayapi` may import `config` and `protocol`, but not gateway server, clients, runtime, provider, or presentation adapters.
-- `internal/gatewayclient` may import `config`, `displayfmt`, `gatewayapi`, `gatewaybase`, and `protocol`, but not gateway server, runtime, provider, tools, or presentation adapters.
-- `internal/gatewaybase` may import `config` and `serviceops`, but not gateway server, clients, runtime, provider, tools, or presentation adapters.
-- `internal/tui/render` has no billyharness internal imports while it owns render cache keys, cached cell rendering, terminal markdown rendering, and activity/tool/status cell rendering.
-- `internal/tui/runtimeclient` may import `config`, `mcpstatus`, `protocol`, and `runtimehost`; TUI itself must not.
-- `internal/tui/selection` has no billyharness internal imports.
-- `internal/tui/transcript` may import `displayfmt`, `protocol`, and `toolrender`, but not Bubble Tea, lipgloss, gateway, provider, tools, agent, renderers, or presentation adapters.
-- `internal/trace` and `internal/gateway` must directly import `eventlog`.
-- `internal/tools` must not import `provider`.
-- `internal/telegrambot` must not import `gateway`.
-- `internal/tui` must not import `gateway`, `agent`, `provider`, or `tools`.
+| Path | Reason |
+| --- | --- |
+| `internal/tools/tools.go` | Historical registry surface kept close together until tool registration is split by family. |
+| `internal/gateway/gateway.go` | Historical gateway surface kept while route handlers continue moving into focused files. |
+| `internal/telegrambot/commands_flow_test.go` | Telegram/operator command-flow coverage spans auth policy, session commands, rendering/status commands, and secret-bearing cases. |
+| `internal/gateway/gateway_test.go` | Gateway behavior coverage still mixes auth/browser boundary, liveness/readiness, run admission, and owner-scope cases. |
+| `internal/mcpclient/client_test.go` | MCP lifecycle, catalog/schema, reconnect/backoff, structured output, and redaction coverage still share fixtures. |

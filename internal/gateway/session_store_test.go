@@ -16,6 +16,7 @@ import (
 
 	clientprojector "github.com/billyhargroveofficial/billyharness/internal/clientux/projector"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/eventlog"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
@@ -199,10 +200,40 @@ func TestGatewaySessionStoreRestoresSessionAfterRestart(t *testing.T) {
 	}
 
 	restarted := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+	restarted.mu.Lock()
+	stub := restarted.sessions[created.ID]
+	restarted.mu.Unlock()
+	if stub == nil || !stub.manifestOnly || stub.Thread != nil {
+		t.Fatalf("restarted session should be manifest-only before direct read: %#v", stub)
+	}
+	listAfterRestart := httptest.NewRecorder()
+	restarted.Handler().ServeHTTP(listAfterRestart, httptest.NewRequest(http.MethodGet, "/v1/sessions", nil))
+	if listAfterRestart.Code != http.StatusOK {
+		t.Fatalf("list after restart = %d body=%s", listAfterRestart.Code, listAfterRestart.Body.String())
+	}
+	var summaries SessionListResponse
+	if err := json.Unmarshal(listAfterRestart.Body.Bytes(), &summaries); err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries.Sessions) != 1 ||
+		summaries.Sessions[0].ID != created.ID ||
+		summaries.Sessions[0].RunSeq != 1 ||
+		summaries.Sessions[0].Provider != "mock" ||
+		summaries.Sessions[0].Model != "mock" ||
+		summaries.Sessions[0].LastEvent != string(protocol.EventRunCompleted) ||
+		summaries.Sessions[0].MessageCount != manifest.MessageCount {
+		t.Fatalf("list summary after restart = %#v", summaries.Sessions)
+	}
 	get := httptest.NewRecorder()
 	restarted.Handler().ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/v1/sessions/"+created.ID, nil))
 	if get.Code != http.StatusOK {
 		t.Fatalf("get status = %d body=%s", get.Code, get.Body.String())
+	}
+	restarted.mu.Lock()
+	materialized := restarted.sessions[created.ID]
+	restarted.mu.Unlock()
+	if materialized == nil || materialized.manifestOnly || materialized.Thread == nil {
+		t.Fatalf("restarted session should materialize after direct read: %#v", materialized)
 	}
 	var got struct {
 		Messages []protocol.Message `json:"messages"`
@@ -365,7 +396,7 @@ func TestSessionStoreAppendRejectsMalformedEnvelopeBeforeDurableWrite(t *testing
 	}
 }
 
-func TestSessionStoreLoadAllSurfacesCorruptSessions(t *testing.T) {
+func TestSessionStoreLoadAllDefersCorruptSessionReplay(t *testing.T) {
 	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
 	goodSession := newGatewaySession("good-session", time.Now().UTC(), []protocol.Message{
 		{Role: protocol.RoleSystem, Content: "system"},
@@ -382,21 +413,26 @@ func TestSessionStoreLoadAllSurfacesCorruptSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded) != 1 || loaded[0].ID != goodSession.ID {
+	if len(loaded) != 2 {
 		t.Fatalf("loaded sessions = %#v", loaded)
 	}
-	if !diagnostics.Enabled || diagnostics.LoadedCount != 1 || diagnostics.ErrorCount != 1 || diagnostics.CorruptCount != 1 {
+	if !diagnostics.Enabled || diagnostics.LoadedCount != 2 || diagnostics.ErrorCount != 0 || diagnostics.CorruptCount != 0 {
 		t.Fatalf("diagnostics = %#v", diagnostics)
 	}
-	got := diagnostics.Errors[0]
-	if got.SessionID != corruptID || got.SessionIDHash != hashSessionIDForDiagnostics(corruptID) || !got.Corrupt {
-		t.Fatalf("load error identity = %#v", got)
+	ids := map[string]bool{}
+	for _, session := range loaded {
+		ids[session.ID] = true
+		if !session.manifestOnly || session.Thread != nil {
+			t.Fatalf("startup session should be manifest-only: %#v", session)
+		}
 	}
-	if got.Entry != corruptID || got.EntryType != "session_dir" || got.Line != 1 || got.RecordNo != 1 {
-		t.Fatalf("load error metadata = %#v", got)
+	if !ids[goodSession.ID] || !ids[corruptID] {
+		t.Fatalf("loaded ids = %#v", ids)
 	}
-	if strings.Contains(got.Error, storeDir) {
-		t.Fatalf("load error leaked store path: %#v", got)
+	_, err = newSessionStore(storeDir).loadSessionID(corruptID)
+	var corrupt *eventlog.CorruptionError
+	if err == nil || !errors.As(err, &corrupt) || corrupt.Line != 1 || corrupt.RecordNo != 1 {
+		t.Fatalf("lazy load corrupt error = %#v", err)
 	}
 }
 
@@ -426,7 +462,7 @@ func TestGatewayReadinessSurfacesStartupSessionStoreCorruption(t *testing.T) {
 	if err := json.Unmarshal(list.Body.Bytes(), &listed); err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Sessions) != 1 || listed.Sessions[0].ID != goodSession.ID {
+	if len(listed.Sessions) != 2 {
 		t.Fatalf("listed sessions = %#v", listed.Sessions)
 	}
 
@@ -445,24 +481,27 @@ func TestGatewayReadinessSurfacesStartupSessionStoreCorruption(t *testing.T) {
 
 	ready := httptest.NewRecorder()
 	server.Handler().ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/ready", nil))
-	if ready.Code != http.StatusServiceUnavailable {
+	if ready.Code != http.StatusOK {
 		t.Fatalf("ready status = %d body=%s", ready.Code, ready.Body.String())
 	}
 	var readiness ReadinessResponse
 	if err := json.Unmarshal(ready.Body.Bytes(), &readiness); err != nil {
 		t.Fatal(err)
 	}
-	if readiness.OK {
-		t.Fatalf("readiness OK with corrupt startup store: %#v", readiness)
+	if !readiness.OK {
+		t.Fatalf("readiness not OK with manifest-only startup: %#v", readiness)
 	}
-	if readiness.SessionStore == nil || readiness.SessionStore.LoadedCount != 1 || readiness.SessionStore.ErrorCount != 1 || readiness.SessionStore.CorruptCount != 1 {
+	if readiness.SessionStore == nil || readiness.SessionStore.LoadedCount != 2 || readiness.SessionStore.ErrorCount != 0 || readiness.SessionStore.CorruptCount != 0 {
 		t.Fatalf("ready session store = %#v", readiness.SessionStore)
 	}
-	if len(readiness.SessionStore.Errors) != 1 || readiness.SessionStore.Errors[0].SessionID != corruptID {
-		t.Fatalf("ready errors = %#v", readiness.SessionStore.Errors)
+
+	corruptGet := httptest.NewRecorder()
+	server.Handler().ServeHTTP(corruptGet, httptest.NewRequest(http.MethodGet, "/v1/sessions/"+corruptID, nil))
+	if corruptGet.Code != http.StatusInternalServerError || !strings.Contains(corruptGet.Body.String(), "session load failed") {
+		t.Fatalf("corrupt get status = %d body=%s", corruptGet.Code, corruptGet.Body.String())
 	}
-	if strings.Contains(ready.Body.String(), storeDir) {
-		t.Fatalf("ready leaked store path: %s", ready.Body.String())
+	if strings.Contains(ready.Body.String(), storeDir) || strings.Contains(corruptGet.Body.String(), storeDir) {
+		t.Fatalf("store path leaked: ready=%s corrupt_get=%s", ready.Body.String(), corruptGet.Body.String())
 	}
 }
 
@@ -1056,14 +1095,11 @@ func TestStoredSessionResumeKeepsLargeOutputRefPreviewAndWarnsMissingArtifact(t 
 		t.Fatal(err)
 	}
 
-	loaded, err := newSessionStore(storeDir).LoadAll()
+	loadedSession, err := newSessionStore(storeDir).loadSessionID(session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded) != 1 {
-		t.Fatalf("loaded sessions = %d", len(loaded))
-	}
-	messages := loaded[0].messages()
+	messages := loadedSession.messages()
 	if len(messages) != 4 {
 		t.Fatalf("messages = %#v", messages)
 	}

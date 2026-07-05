@@ -23,10 +23,10 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/agent"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
-	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
@@ -174,7 +174,7 @@ func TestGatewaySessionCancelEndpointCancelsActiveThread(t *testing.T) {
 	cfg.Provider = "mock"
 	cfg.Model = "mock"
 	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: filepath.Join(t.TempDir(), "gateway-sessions")})
-	thread := sessionpkg.New([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	thread := newRunThread([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
 	server.sessions["test-session"] = &Session{
 		ID:      "test-session",
 		Created: time.Now().UTC(),
@@ -184,7 +184,7 @@ func TestGatewaySessionCancelEndpointCancelsActiveThread(t *testing.T) {
 	started := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- thread.Run(context.Background(), sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, _ func(protocol.Event)) ([]protocol.Message, error) {
+		done <- thread.Run(context.Background(), RunnerFunc(func(ctx context.Context, messages []protocol.Message, _ func(protocol.Event)) ([]protocol.Message, error) {
 			close(started)
 			<-ctx.Done()
 			return messages, ctx.Err()
@@ -228,7 +228,7 @@ func TestGatewayShutdownAbortRecordsActiveSessionFailure(t *testing.T) {
 	done := make(chan error, 1)
 	runID := "run-shutdown-abort"
 	go func() {
-		done <- session.Thread.Run(context.Background(), sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
+		done <- session.Thread.Run(context.Background(), RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
 			emit(protocol.Event{Type: protocol.EventRunStarted, RunID: runID})
 			close(started)
 			<-ctx.Done()
@@ -863,7 +863,7 @@ func TestGatewayServeUsesPreboundListener(t *testing.T) {
 	go func() {
 		errs <- server.Serve(ctx, listener)
 	}()
-	if !WaitForReady(context.Background(), NormalizeBaseURL(listener.Addr().String()), time.Second) {
+	if !gatewayapi.WaitForReady(context.Background(), gatewayapi.NormalizeBaseURL(listener.Addr().String()), time.Second) {
 		cancel()
 		select {
 		case <-errs:

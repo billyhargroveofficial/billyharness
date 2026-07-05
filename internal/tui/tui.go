@@ -123,6 +123,13 @@ type Model struct {
 	// ANSI styling over this copy so repeated drag events do not stack styles.
 	viewportContent         string
 	viewportSelectableLines []bool
+	reflowSignature         string
+	reflowVisibleKeys       []string
+	reflowParts             []string
+	lastReflowBlockCount    int
+	findQuery               string
+	findMatches             [][]int
+	findMatchIndex          int
 	width                   int
 	height                  int
 
@@ -1111,11 +1118,9 @@ func (m Model) loadConfigSummary() (string, error) {
 		}
 		return config.FormatSummary(out.Values, out.Warnings), nil
 	}
-	base, err := config.Resolve()
-	if err != nil {
-		return "", err
-	}
-	resolved, err := config.Resolve(config.RuntimeDiffOverridesFromSettings(base.Config, m.runtimeDiffSettings(), config.SourceGateway)...)
+	_, resolved, err := config.ResolveEffectiveFromBase(func(base config.Config) []config.ResolveOverride {
+		return config.RuntimeDiffOverridesFromSettings(base, m.runtimeDiffSettings(), config.SourceGateway)
+	})
 	if err != nil {
 		return "", err
 	}

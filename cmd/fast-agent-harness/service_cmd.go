@@ -15,6 +15,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpserver"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
@@ -50,7 +51,7 @@ func tuiCmd(args []string) error {
 			if candidates := gatewayURLCandidates(cfg); len(candidates) > 0 {
 				target = candidates[0]
 			}
-			gatewayNotice = gateway.UnavailableHint(target) + "; local mode active"
+			gatewayNotice = gatewayapi.UnavailableHint(target) + "; local mode active"
 		}
 	} else {
 		*gatewayURL = normalizeGatewayURL(*gatewayURL)
@@ -92,6 +93,7 @@ func telegramCmd(args []string) error {
 	dryRun := fs.Bool("dry-run", envBoolAnyDefault(false, "BILLYHARNESS_TELEGRAM_DRY_RUN", "TELEGRAM_DRY_RUN"), "log Telegram sends without sending")
 	pollTimeout := fs.Int("poll-timeout-sec", envIntAnyDefault(30, "BILLYHARNESS_TELEGRAM_POLL_TIMEOUT_SEC", "TELEGRAM_POLL_TIMEOUT_SEC"), "Telegram long poll timeout")
 	editIntervalMS := fs.Int("edit-interval-ms", envIntAnyDefault(700, "BILLYHARNESS_TELEGRAM_EDIT_INTERVAL_MS", "TELEGRAM_EDIT_INTERVAL_MS"), "minimum interval between live edits per message")
+	processWatchIntervalSec := fs.Int("process-watch-interval-sec", envIntAnyDefault(10, "BILLYHARNESS_TELEGRAM_PROCESS_WATCH_INTERVAL_SEC", "TELEGRAM_PROCESS_WATCH_INTERVAL_SEC"), "managed process notification poll interval; 0 disables")
 	maxRounds := fs.Int("max-rounds", cfg.MaxToolRounds, "max model/tool rounds per Telegram request")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -150,6 +152,7 @@ func telegramCmd(args []string) error {
 		ContextCompactSource:   cfg.ContextCompactSourceLabel(),
 		PollTimeoutSec:         *pollTimeout,
 		EditInterval:           time.Duration(*editIntervalMS) * time.Millisecond,
+		ProcessWatchInterval:   time.Duration(*processWatchIntervalSec) * time.Second,
 		AllowedChatIDs:         allowed,
 		AllowedUserIDs:         allowedUsers,
 		AllowedOperatorUserIDs: operatorUsers,
@@ -177,7 +180,7 @@ func discoverGatewayURL(ctx context.Context, cfg config.Config) (string, bool) {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		for _, baseURL := range gatewayURLCandidates(cfg) {
-			if gateway.WaitForReady(ctx, baseURL, 0) {
+			if gatewayapi.WaitForReady(ctx, baseURL, 0) {
 				return baseURL, true
 			}
 		}
@@ -221,7 +224,7 @@ func gatewayURLCandidates(cfg config.Config) []string {
 }
 
 func normalizeGatewayURL(value string) string {
-	return gateway.NormalizeBaseURL(value)
+	return gatewayapi.NormalizeBaseURL(value)
 }
 
 func lookupEnvAny(keys ...string) string {
@@ -305,7 +308,7 @@ func serve(args []string) error {
 		*addr = cfg.GatewayAddr
 	}
 	if strings.TrimSpace(*authToken) == "" {
-		*authToken = gateway.AuthTokenFromEnv()
+		*authToken = gatewayapi.AuthTokenFromEnv()
 	}
 	*authToken = strings.TrimSpace(*authToken)
 	listener, err := net.Listen("tcp", *addr)
@@ -315,7 +318,7 @@ func serve(args []string) error {
 	defer listener.Close()
 	authRequired := gateway.RequiresAuthForAddr(listener.Addr().String())
 	if *authToken == "" && (authRequired || !*devAllowLoopbackMutationNoAuth) {
-		return fmt.Errorf("gateway auth token required for mutating routes on listen address %q; set %s or pass -dev-allow-unauthenticated-loopback-mutations for loopback-only development", *addr, gateway.GatewayAuthTokenEnv)
+		return fmt.Errorf("gateway auth token required for mutating routes on listen address %q; set %s or pass -dev-allow-unauthenticated-loopback-mutations for loopback-only development", *addr, gatewayapi.GatewayAuthTokenEnv)
 	}
 	ctx, stop := processContext()
 	defer stop()

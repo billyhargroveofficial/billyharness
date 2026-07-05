@@ -257,8 +257,8 @@ filesystem tools even when they are under a workspace root.
 absolute paths under `$BILLYHARNESS_HOME/tool-output` because tool-output refs
 are how large web/tool artifacts are stored out of band. Ordinary files under
 `$BILLYHARNESS_HOME` remain blocked unless they are also under an allowed
-workspace root. [internal/tooloutput](../../internal/tooloutput) writes
-tool-output directories as `0700` and files as `0600`.
+workspace root. [internal/tools/output_ref.go](../../internal/tools/output_ref.go)
+writes tool-output directories as `0700` and files as `0600`.
 
 This is a path boundary, not an OS sandbox. A shell command that is allowed to
 run can still exercise normal process privileges within its working directory
@@ -408,7 +408,6 @@ described as clean-release behavior until the hardening files are committed.
 Documentation-only verification for this page should include:
 
 ```sh
-jq empty agent-index/docs-manifest.json
 git diff --check
 go test -count=1 ./internal/architecture
 ```

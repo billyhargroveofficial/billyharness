@@ -205,7 +205,7 @@ func (m *Model) handleSlashCommand(prompt string) (bool, tea.Cmd) {
 	action, ok := actionForSlash(command)
 	if ok && m.actionEnabled(action) && action.run != nil {
 		arg := strings.ToLower(rawArg)
-		if action.id == "vision.attach" || action.id == "transcript.export" {
+		if action.id == "vision.attach" || action.id == "transcript.export" || action.id == "transcript.find" {
 			arg = rawArg
 		}
 		return action.run(m, arg)

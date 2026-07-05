@@ -66,21 +66,6 @@ func AccountIDFromClaims(claims map[string]any) string {
 	return ""
 }
 
-func FedRAMPFromClaims(claims map[string]any) bool {
-	if len(claims) == 0 {
-		return false
-	}
-	if value, ok := claims["chatgpt_account_is_fedramp"].(bool); ok {
-		return value
-	}
-	if auth, _ := claims["https://api.openai.com/auth"].(map[string]any); auth != nil {
-		if value, ok := auth["chatgpt_account_is_fedramp"].(bool); ok {
-			return value
-		}
-	}
-	return false
-}
-
 func ExpirationFromJWT(token string) time.Time {
 	return ExpirationFromClaims(Claims(token))
 }

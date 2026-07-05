@@ -5,9 +5,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ROOT=$(git rev-parse --show-toplevel 2>/dev/null) && /usr/bin/env python3 \"$ROOT/.codex/hooks/docguard_stop.py\" || true",
+            "command": "ROOT=$(git rev-parse --show-toplevel 2>/dev/null) && /usr/bin/env python3 \"$ROOT/.codex/hooks/loop_research_stop.py\" || true",
             "timeout": 30,
-            "statusMessage": "Checking documentation drift"
+            "statusMessage": "Checking loop research progress"
           }
         ]
       }

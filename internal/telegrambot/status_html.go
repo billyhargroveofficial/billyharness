@@ -35,6 +35,44 @@ func StatusHTML(state ChatState, opts Options) string {
 }
 
 func StatusHTMLWithRuntime(state ChatState, opts Options, runtime gatewayapi.SessionStatus) string {
+	fields := statusHTMLFields(state, opts, runtime)
+	return "<b>Status</b>\n" + strings.Join(fields.short, "\n")
+}
+
+func StatusDebugHTMLWithRuntime(state ChatState, opts Options, runtime gatewayapi.SessionStatus) string {
+	fields := statusHTMLFields(state, opts, runtime)
+	return "<b>Status Debug</b>\n" + strings.Join(fields.debug, "\n")
+}
+
+func statusHTMLFull(state ChatState, opts Options, runtime gatewayapi.SessionStatus) string {
+	fields := statusHTMLFields(state, opts, runtime)
+	lines := []string{
+		fields.short[0],
+		fields.short[1],
+		fields.short[2],
+		fields.short[3],
+		fields.short[4],
+		fields.short[5],
+		fields.debug[0],
+		fields.debug[1],
+		fields.debug[2],
+		fields.debug[3],
+		fields.short[6],
+		fields.short[7],
+		fields.short[8],
+		fields.debug[4],
+		fields.debug[5],
+		fields.debug[6],
+	}
+	return "<b>Status</b>\n" + strings.Join(lines, "\n")
+}
+
+type statusFields struct {
+	short []string
+	debug []string
+}
+
+func statusHTMLFields(state ChatState, opts Options, runtime gatewayapi.SessionStatus) statusFields {
 	model := fallback(state.Model, opts.Model)
 	contextWindow := resolveContextWindowForModel(model, opts.ContextWindow, opts.ContextWindowSource)
 	compactThreshold := resolveCompactThreshold(contextWindow.Tokens, opts.ContextCompact, opts.ContextCompactSource)
@@ -56,23 +94,28 @@ func StatusHTMLWithRuntime(state ChatState, opts Options, runtime gatewayapi.Ses
 	if len(allowedUsers) == 0 {
 		allowedUsers = []string{"not configured"}
 	}
-	return "<b>Status</b>\n" +
-		"session: <code>" + esc(short(state.SessionID)) + "</code>\n" +
-		"selected model: <code>" + esc(modelWithCapability(model)) + "</code>\n" +
-		"active runtime model: <code>" + esc(runtimeModelLabel(runtime)) + "</code>\n" +
-		"profile: <code>" + esc(fallback(state.Profile, opts.Profile)) + "</code>\n" +
-		"access mode: <code>" + esc(config.NormalizeAccessMode(fallback(state.AccessMode, opts.AccessMode))) + "</code>\n" +
-		"reasoning: <code>" + esc(fallback(state.ReasoningEffort, opts.ReasoningEffort)) + "</code>\n" +
-		"agent turns: <code>" + esc(strconv.Itoa(state.AgentTurns)) + "</code>\n" +
-		"tools: <code>" + esc(strconv.Itoa(state.ToolCalls)) + "</code>\n" +
-		"event cursor: <code>" + esc(strconv.FormatInt(state.LastEventSeq, 10)) + "</code>\n" +
-		"pending input: <code>" + esc(statusPendingInput(state)) + "</code>\n" +
-		"selected context window: <code>" + esc(compactInt(contextWindow.Tokens)) + "</code>" + esc(contextWindowStatusSuffix(contextWindow.Source)) + "\n" +
-		"selected compact threshold: <code>" + esc(compactInt(compactThreshold.Tokens)) + "</code> (" + esc(formatThresholdPercent(compactThreshold.Percent)) + ")" + esc(contextCompactStatusSuffix(compactThreshold.Source)) + "\n" +
-		"send: <code>" + esc(fmt.Sprint(opts.SendEnabled && !opts.DryRunDefault)) + "</code>\n" +
-		"allowed chats: <code>" + esc(strings.Join(allowedChats, ",")) + "</code>\n" +
-		"allowed users: <code>" + esc(strings.Join(allowedUsers, ",")) + "</code>\n" +
-		"allowed user scope: <code>" + esc(allowedUserScope(opts)) + "</code>"
+	return statusFields{
+		short: []string{
+			"session: <code>" + esc(short(state.SessionID)) + "</code>",
+			"selected model: <code>" + esc(modelWithCapability(model)) + "</code>",
+			"active runtime model: <code>" + esc(runtimeModelLabel(runtime)) + "</code>",
+			"profile: <code>" + esc(fallback(state.Profile, opts.Profile)) + "</code>",
+			"access mode: <code>" + esc(config.NormalizeAccessMode(fallback(state.AccessMode, opts.AccessMode))) + "</code>",
+			"reasoning: <code>" + esc(fallback(state.ReasoningEffort, opts.ReasoningEffort)) + "</code>",
+			"selected context window: <code>" + esc(compactInt(contextWindow.Tokens)) + "</code>" + esc(contextWindowStatusSuffix(contextWindow.Source)),
+			"selected compact threshold: <code>" + esc(compactInt(compactThreshold.Tokens)) + "</code> (" + esc(formatThresholdPercent(compactThreshold.Percent)) + ")" + esc(contextCompactStatusSuffix(compactThreshold.Source)),
+			"send: <code>" + esc(fmt.Sprint(opts.SendEnabled && !opts.DryRunDefault)) + "</code>",
+		},
+		debug: []string{
+			"agent turns: <code>" + esc(strconv.Itoa(state.AgentTurns)) + "</code>",
+			"tools: <code>" + esc(strconv.Itoa(state.ToolCalls)) + "</code>",
+			"event cursor: <code>" + esc(strconv.FormatInt(state.LastEventSeq, 10)) + "</code>",
+			"pending input: <code>" + esc(statusPendingInput(state)) + "</code>",
+			"allowed chats: <code>" + esc(strings.Join(allowedChats, ",")) + "</code>",
+			"allowed users: <code>" + esc(strings.Join(allowedUsers, ",")) + "</code>",
+			"allowed user scope: <code>" + esc(allowedUserScope(opts)) + "</code>",
+		},
+	}
 }
 
 func allowedUserScope(opts Options) string {

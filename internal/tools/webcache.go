@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
-	"github.com/billyhargroveofficial/billyharness/internal/tooloutput"
 )
 
 const webCacheSchemaVersion = 1
@@ -306,7 +305,7 @@ func (crawl *compactCrawlOutput) applyWebCache(key string, hit bool, age time.Du
 }
 
 func webOutputRefExists(path string) bool {
-	return tooloutput.Exists(path)
+	return Exists(path)
 }
 
 func ensurePrivateWebCacheDir(path string) error {

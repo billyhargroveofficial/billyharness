@@ -20,8 +20,7 @@ func TestReadCodexAuthFileParsesCodexCLIAuthJSON(t *testing.T) {
 	accessJWT := testkit.JWT(t, map[string]any{
 		"exp": exp,
 		"https://api.openai.com/auth": map[string]any{
-			"chatgpt_account_id":         "acct_123",
-			"chatgpt_account_is_fedramp": true,
+			"chatgpt_account_id": "acct_123",
 		},
 	})
 	path := writeJSONFile(t, map[string]any{
@@ -46,9 +45,6 @@ func TestReadCodexAuthFileParsesCodexCLIAuthJSON(t *testing.T) {
 	if auth.AccountID != "acct_123" {
 		t.Fatalf("AccountID = %q", auth.AccountID)
 	}
-	if !auth.FedRAMP {
-		t.Fatalf("FedRAMP = false")
-	}
 	if auth.ExpiresAt.Unix() != exp {
 		t.Fatalf("ExpiresAt = %v", auth.ExpiresAt)
 	}
@@ -62,7 +58,7 @@ func TestReadCodexAuthFileParsesPersonalAccessToken(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer at-test" {
 			t.Fatalf("Authorization = %q", got)
 		}
-		_, _ = w.Write([]byte(`{"chatgpt_account_id":"acct_pat","chatgpt_account_is_fedramp":false}`))
+		_, _ = w.Write([]byte(`{"chatgpt_account_id":"acct_pat"}`))
 	}))
 	t.Cleanup(server.Close)
 	path := writeJSONFile(t, map[string]any{
@@ -110,8 +106,7 @@ func TestLoadCodexAuthRefreshesExpiredAuthJSONAndPersistsTokens(t *testing.T) {
 	})
 	idJWT := testkit.JWT(t, map[string]any{
 		"https://api.openai.com/auth": map[string]any{
-			"chatgpt_account_id":         "acct_new",
-			"chatgpt_account_is_fedramp": true,
+			"chatgpt_account_id": "acct_new",
 		},
 	})
 	path := writeJSONFile(t, map[string]any{
@@ -172,9 +167,6 @@ func TestLoadCodexAuthRefreshesExpiredAuthJSONAndPersistsTokens(t *testing.T) {
 	if auth.AccountID != "acct_new" {
 		t.Fatalf("AccountID = %q", auth.AccountID)
 	}
-	if !auth.FedRAMP {
-		t.Fatalf("FedRAMP = false")
-	}
 
 	var disk map[string]any
 	raw, err := os.ReadFile(path)
@@ -211,7 +203,7 @@ func TestLoadCodexAuthHydratesPATFromEnv(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer at-env" {
 			t.Fatalf("Authorization = %q", got)
 		}
-		_, _ = w.Write([]byte(`{"chatgpt_account_id":"acct_env","chatgpt_account_is_fedramp":true}`))
+		_, _ = w.Write([]byte(`{"chatgpt_account_id":"acct_env"}`))
 	}))
 	t.Cleanup(server.Close)
 
@@ -219,7 +211,7 @@ func TestLoadCodexAuthHydratesPATFromEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if auth.AccountID != "acct_env" || !auth.FedRAMP || !auth.PAT {
+	if auth.AccountID != "acct_env" || !auth.PAT {
 		t.Fatalf("auth = %#v", auth)
 	}
 }
@@ -282,7 +274,6 @@ func TestLoadCodexAuthUsesEnvTokenBeforeAuthFileAndEnvAccountID(t *testing.T) {
 	envJWT := testkit.JWT(t, map[string]any{
 		"exp":                         time.Now().Add(time.Hour).Unix(),
 		"chatgpt_account_id":          "acct_claim",
-		"chatgpt_account_is_fedramp":  true,
 		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct_nested"},
 	})
 	t.Setenv("CODEX_ACCESS_TOKEN", envJWT)
@@ -303,9 +294,6 @@ func TestLoadCodexAuthUsesEnvTokenBeforeAuthFileAndEnvAccountID(t *testing.T) {
 	}
 	if auth.AccountID != "acct_env" {
 		t.Fatalf("AccountID = %q", auth.AccountID)
-	}
-	if !auth.FedRAMP {
-		t.Fatalf("FedRAMP = false")
 	}
 }
 

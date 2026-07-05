@@ -3,7 +3,6 @@ package skills
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,7 +101,7 @@ metadata:
 	}
 }
 
-func TestImportCopiesSelectedCompatibilitySkillWithMetadata(t *testing.T) {
+func TestImportCopiesSelectedCompatibilitySkill(t *testing.T) {
 	home := t.TempDir()
 	hermes := t.TempDir()
 	skillBody := "# Arxiv\nBody\n"
@@ -129,17 +128,9 @@ func TestImportCopiesSelectedCompatibilitySkillWithMetadata(t *testing.T) {
 	if string(body) != skillBody {
 		t.Fatalf("copied body = %q", body)
 	}
-	var meta map[string]any
-	metaBody, err := os.ReadFile(filepath.Join(home, "skills", "arxiv", "billyharness.skill.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(metaBody, &meta); err != nil {
-		t.Fatal(err)
-	}
 	sum := sha256.Sum256([]byte(skillBody))
-	if meta["source"] != SourceHermesRuntime || meta["sha256"] != hex.EncodeToString(sum[:]) {
-		t.Fatalf("metadata = %#v", meta)
+	if result.Source != SourceHermesRuntime || result.SHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("import source/hash = %#v", result)
 	}
 	if _, err := Import(opts, ImportRequest{Name: "arxiv", Source: "hermes_runtime"}); err == nil {
 		t.Fatal("expected duplicate destination error")

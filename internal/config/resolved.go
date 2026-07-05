@@ -67,6 +67,40 @@ type configSpec struct {
 }
 
 func Resolve(overrides ...ResolveOverride) (ResolvedConfig, error) {
+	state, err := loadResolveState()
+	if err != nil {
+		return ResolvedConfig{}, err
+	}
+	return state.resolve(overrides...)
+}
+
+func ResolveEffective(overrides ...ResolveOverride) (base, effective ResolvedConfig, err error) {
+	return ResolveEffectiveFromBase(func(Config) []ResolveOverride {
+		return append([]ResolveOverride(nil), overrides...)
+	})
+}
+
+func ResolveEffectiveFromBase(buildOverrides func(Config) []ResolveOverride) (base, effective ResolvedConfig, err error) {
+	state, err := loadResolveState()
+	if err != nil {
+		return ResolvedConfig{}, ResolvedConfig{}, err
+	}
+	base, err = state.clone().resolve()
+	if err != nil {
+		return ResolvedConfig{}, ResolvedConfig{}, err
+	}
+	var overrides []ResolveOverride
+	if buildOverrides != nil {
+		overrides = buildOverrides(base.Config)
+	}
+	effective, err = state.clone().resolve(overrides...)
+	if err != nil {
+		return ResolvedConfig{}, ResolvedConfig{}, err
+	}
+	return base, effective, nil
+}
+
+func loadResolveState() (resolveState, error) {
 	state := resolveState{
 		cfg:    builtInConfig(),
 		values: map[string]ResolvedValue{},
@@ -75,28 +109,58 @@ func Resolve(overrides ...ResolveOverride) (ResolvedConfig, error) {
 		state.record(spec.Key, displayConfigValue(spec.get(state.cfg)), SourceBuiltIn, "", spec.Key, spec.Redacted, "", "")
 	}
 	if err := state.applyTOML(DefaultConfigFile(), SourceHomeConfig); err != nil {
-		return ResolvedConfig{}, err
+		return resolveState{}, err
 	}
 	if path := findProjectConfigFile(); path != "" {
 		if err := state.applyTOML(path, SourceProject); err != nil {
-			return ResolvedConfig{}, err
+			return resolveState{}, err
 		}
 	}
 	state.applyBillySettings()
 	state.applyDotenv()
 	state.applyEnvironment()
+	return state, nil
+}
+
+func (s resolveState) resolve(overrides ...ResolveOverride) (ResolvedConfig, error) {
 	for _, override := range overrides {
-		state.applyOverride(override)
+		s.applyOverride(override)
 	}
-	if err := state.applyProfileMetadata(); err != nil {
+	if err := s.applyProfileMetadata(); err != nil {
 		return ResolvedConfig{}, err
 	}
-	state.finalizeDerivedValues()
+	s.finalizeDerivedValues()
 	return ResolvedConfig{
-		Config:   state.cfg,
-		Values:   state.sortedValues(),
-		Warnings: append([]string(nil), state.warnings...),
+		Config:   cloneConfigForResolve(s.cfg),
+		Values:   s.sortedValues(),
+		Warnings: append([]string(nil), s.warnings...),
 	}, nil
+}
+
+func (s resolveState) clone() resolveState {
+	values := make(map[string]ResolvedValue, len(s.values))
+	for key, value := range s.values {
+		values[key] = value
+	}
+	return resolveState{
+		cfg:      cloneConfigForResolve(s.cfg),
+		values:   values,
+		warnings: append([]string(nil), s.warnings...),
+	}
+}
+
+func cloneConfigForResolve(cfg Config) Config {
+	cfg.WebHermesEnvFiles = cloneStrings(cfg.WebHermesEnvFiles)
+	cfg.WorkspaceRoots = cloneStrings(cfg.WorkspaceRoots)
+	cfg.ProjectDocFallbacks = cloneStrings(cfg.ProjectDocFallbacks)
+	cfg.DiagnosticsConfigFiles = cloneStrings(cfg.DiagnosticsConfigFiles)
+	cfg.DiagnosticsCommands = cloneDiagnosticCommands(cfg.DiagnosticsCommands)
+	cfg.MCPConfigFiles = cloneStrings(cfg.MCPConfigFiles)
+	cfg.MCPAllowedServers = cloneStrings(cfg.MCPAllowedServers)
+	cfg.MCPServers = cloneMCPServers(cfg.MCPServers)
+	cfg.HookConfigFiles = cloneStrings(cfg.HookConfigFiles)
+	cfg.Hooks = cloneHooks(cfg.Hooks)
+	return cfg
 }
 
 func ResolveStrict(overrides ...ResolveOverride) (ResolvedConfig, error) {

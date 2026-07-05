@@ -77,24 +77,14 @@ func (s *managedServer) start(ctx context.Context, reconnect bool) ([]protocol.T
 		err := fmt.Errorf("MCP %s cannot reconnect with transport %s", s.server.Name, mcpTransport(s.server))
 		s.recordFailureLocked(mcpStateFailed, err, false)
 		catalogChanged := s.clearCatalogLocked()
-		status := cloneStatus(s.status)
-		s.mu.Unlock()
-		s.publishStatus(status)
-		if catalogChanged {
-			s.publishCatalogChanged()
-		}
+		s.commitLocked(catalogChanged)
 		return nil, nil, "", err
 	}
 	if s.closed {
 		err := fmt.Errorf("MCP %s manager is closed", s.server.Name)
 		s.recordFailureLocked(mcpStateDisconnected, err, false)
 		catalogChanged := s.clearCatalogLocked()
-		status := cloneStatus(s.status)
-		s.mu.Unlock()
-		s.publishStatus(status)
-		if catalogChanged {
-			s.publishCatalogChanged()
-		}
+		s.commitLocked(catalogChanged)
 		return nil, nil, "", err
 	}
 	return s.startLocked(ctx, reconnect)
@@ -105,12 +95,7 @@ func (s *managedServer) ensureConnected(ctx context.Context) (*stdioClient, erro
 	status, statusChanged, catalogChanged := s.absorbClientLocked()
 	if statusChanged || catalogChanged {
 		s.mu.Unlock()
-		if statusChanged {
-			s.publishStatus(status)
-		}
-		if catalogChanged {
-			s.publishCatalogChanged()
-		}
+		s.publishAbsorbed(status, statusChanged, catalogChanged)
 		s.mu.Lock()
 	}
 	if s.closed {
@@ -173,12 +158,7 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 	if reconnect {
 		s.status.RetryCount++
 	}
-	restartingStatus := cloneStatus(s.status)
-	s.mu.Unlock()
-	s.publishStatus(restartingStatus)
-	if catalogChanged {
-		s.publishCatalogChanged()
-	}
+	s.commitLocked(catalogChanged)
 
 	if oldClient != nil {
 		oldClient.close()
@@ -190,12 +170,7 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 		closedErr := fmt.Errorf("MCP %s manager is closed", s.server.Name)
 		s.recordFailureLocked(mcpStateDisconnected, closedErr, false)
 		catalogChanged := s.clearCatalogLocked()
-		status := cloneStatus(s.status)
-		s.mu.Unlock()
-		s.publishStatus(status)
-		if catalogChanged {
-			s.publishCatalogChanged()
-		}
+		s.commitLocked(catalogChanged)
 		if client != nil {
 			client.close()
 		}
@@ -207,12 +182,7 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 		if mcpCatalogErrorIsToolsList(err) {
 			s.recordCatalogFetchFailureLocked(err)
 		}
-		status := cloneStatus(s.status)
-		s.mu.Unlock()
-		s.publishStatus(status)
-		if catalogChanged {
-			s.publishCatalogChanged()
-		}
+		s.commitLocked(catalogChanged)
 		return nil, nil, "", err
 	}
 	s.client = client
@@ -241,10 +211,7 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 	s.status.StderrTail = ""
 	s.status.NextRetryAt = nil
 	s.status.RetryBackoffMS = 0
-	status := cloneStatus(s.status)
-	s.mu.Unlock()
-	s.publishStatus(status)
-	s.publishCatalogChanged()
+	s.commitLocked(true)
 	return specs, prompts, instructions, nil
 }
 
@@ -263,12 +230,7 @@ func (s *managedServer) callToolResult(ctx context.Context, name string, args js
 		s.mu.Lock()
 		status, changed, catalogChanged := s.absorbClientLocked()
 		s.mu.Unlock()
-		if changed {
-			s.publishStatus(status)
-		}
-		if catalogChanged {
-			s.publishCatalogChanged()
-		}
+		s.publishAbsorbed(status, changed, catalogChanged)
 	}
 	return result, err
 }
@@ -289,10 +251,7 @@ func (s *managedServer) markCatalogStale() {
 	}
 	s.status.CatalogState = mcpCatalogStateCatalogStale
 	s.status.Diagnostics = []StatusDiagnostic{statusDiagnostic("catalog_stale", "warning", "MCP tools/list_changed notification received; catalog refresh pending")}
-	status := cloneStatus(s.status)
-	s.mu.Unlock()
-	s.publishStatus(status)
-	s.publishCatalogChanged()
+	s.commitLocked(true)
 }
 
 func (s *managedServer) refreshCatalogFromNotification() {
@@ -333,12 +292,7 @@ func (s *managedServer) refreshCatalog(ctx context.Context) error {
 			s.mu.Lock()
 			status, changed, catalogChanged := s.absorbClientLocked()
 			s.mu.Unlock()
-			if changed {
-				s.publishStatus(status)
-			}
-			if catalogChanged {
-				s.publishCatalogChanged()
-			}
+			s.publishAbsorbed(status, changed, catalogChanged)
 		}
 		return err
 	}
@@ -347,12 +301,7 @@ func (s *managedServer) refreshCatalog(ctx context.Context) error {
 		s.mu.Lock()
 		status, changed, catalogChanged := s.absorbClientLocked()
 		s.mu.Unlock()
-		if changed {
-			s.publishStatus(status)
-		}
-		if catalogChanged {
-			s.publishCatalogChanged()
-		}
+		s.publishAbsorbed(status, changed, catalogChanged)
 		return err
 	}
 
@@ -372,10 +321,7 @@ func (s *managedServer) refreshCatalog(ctx context.Context) error {
 		s.status.Diagnostics = nil
 	}
 	s.status.LastEventAt = timePtr(time.Now().UTC())
-	status := cloneStatus(s.status)
-	s.mu.Unlock()
-	s.publishStatus(status)
-	s.publishCatalogChanged()
+	s.commitLocked(true)
 	return nil
 }
 
@@ -386,12 +332,7 @@ func (s *managedServer) snapshot() ServerStatus {
 	s.mu.Lock()
 	status, changed, catalogChanged := s.absorbClientLocked()
 	s.mu.Unlock()
-	if changed {
-		s.publishStatus(status)
-	}
-	if catalogChanged {
-		s.publishCatalogChanged()
-	}
+	s.publishAbsorbed(status, changed, catalogChanged)
 	return status
 }
 
@@ -429,12 +370,7 @@ func (s *managedServer) close() {
 	s.status.RetryBackoffMS = 0
 	s.status.CatalogState = mcpCatalogStateDisconnected
 	s.status.Diagnostics = nil
-	status := cloneStatus(s.status)
-	s.mu.Unlock()
-	s.publishStatus(status)
-	if catalogChanged {
-		s.publishCatalogChanged()
-	}
+	s.commitLocked(catalogChanged)
 	if client != nil {
 		client.close()
 	}
@@ -450,9 +386,7 @@ func (s *managedServer) recordStaticErrorState(state string, err error) {
 	if state == mcpStateUnsupported {
 		s.status.CatalogState = mcpCatalogStateUnsupported
 	}
-	status := cloneStatus(s.status)
-	s.mu.Unlock()
-	s.publishStatus(status)
+	s.commitLocked(false)
 }
 
 func (s *managedServer) recordFailureLocked(state string, err error, retryable bool) {
@@ -543,6 +477,26 @@ func mcpCatalogHealthyState(toolCount int) string {
 
 func mcpCatalogErrorIsToolsList(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "tools/list")
+}
+
+// commitLocked publishes the current status and unlocks s.mu. Callers must not
+// touch s.mu again after calling it.
+func (s *managedServer) commitLocked(catalogChanged bool) {
+	status := cloneStatus(s.status)
+	s.mu.Unlock()
+	s.publishStatus(status)
+	if catalogChanged {
+		s.publishCatalogChanged()
+	}
+}
+
+func (s *managedServer) publishAbsorbed(status ServerStatus, statusChanged, catalogChanged bool) {
+	if statusChanged {
+		s.publishStatus(status)
+	}
+	if catalogChanged {
+		s.publishCatalogChanged()
+	}
 }
 
 func (s *managedServer) publishStatus(status ServerStatus) {

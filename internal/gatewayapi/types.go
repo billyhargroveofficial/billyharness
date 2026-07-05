@@ -418,24 +418,3 @@ type SessionUndoResponse struct {
 	Conflicts      []string                 `json:"conflicts,omitempty"`
 	Change         protocol.TurnChangeEvent `json:"change,omitempty"`
 }
-
-type BenchmarkListResponse struct {
-	Dir  string                `json:"dir"`
-	Runs []BenchmarkRunSummary `json:"runs"`
-}
-
-type BenchmarkRunSummary struct {
-	RunID           string    `json:"run_id"`
-	CreatedAt       time.Time `json:"created_at"`
-	Harness         string    `json:"harness,omitempty"`
-	ProfileHash     string    `json:"profile_hash,omitempty"`
-	TasksPath       string    `json:"tasks_path,omitempty"`
-	TaskCount       int       `json:"task_count,omitempty"`
-	ManifestJSON    string    `json:"manifest_json"`
-	ResultsJSONL    string    `json:"results_jsonl,omitempty"`
-	EventsJSONL     string    `json:"events_jsonl,omitempty"`
-	PayloadsDir     string    `json:"payloads_dir,omitempty"`
-	ResultsPresent  bool      `json:"results_present"`
-	EventsPresent   bool      `json:"events_present"`
-	PayloadsPresent bool      `json:"payloads_present"`
-}

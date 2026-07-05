@@ -53,6 +53,7 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	writeTestFile(t, repo, "bin/fast-agent-harness", "binary\n")
 	writeTestFile(t, billyHome, "gateway-sessions/session/events.jsonl", "{}\n")
 	writeTestFile(t, billyHome, "tool-output/ref.txt", "output\n")
+	writeTestFile(t, billyHome, "attachments/ref.png", "image\n")
 	writeTestFile(t, billyHome, "auth/credentials.json", "{}\n")
 	writeTestFile(t, billyHome, "auth/codex.json", "{}\n")
 
@@ -140,6 +141,9 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	if !report.Runtime.ToolOutputStore.Exists || report.Runtime.ToolOutputStore.SizeBytes == 0 {
 		t.Fatalf("Runtime tool output store = %#v", report.Runtime.ToolOutputStore)
 	}
+	if !report.Runtime.AttachmentsStore.Exists || report.Runtime.AttachmentsStore.SizeBytes == 0 {
+		t.Fatalf("Runtime attachments store = %#v", report.Runtime.AttachmentsStore)
+	}
 	if report.Runtime.StrictHygiene.Status != "ok" || report.Runtime.StrictHygiene.TrackedGoFiles != 1 {
 		t.Fatalf("Runtime strict hygiene = %#v", report.Runtime.StrictHygiene)
 	}
@@ -151,6 +155,7 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	assertDoctorCheck(t, report, "auth configured", "ok")
 	assertDoctorCheck(t, report, "tool catalog", "ok")
 	assertDoctorCheck(t, report, "session store access", "ok")
+	assertDoctorCheck(t, report, "attachments store usage", "ok")
 	assertDoctorCheck(t, report, "service billyharness-gateway.service", "ok")
 	assertDoctorCheck(t, report, "service billyharness-telegram.service", "ok")
 	assertDoctorCheck(t, report, "gateway /health", "skip")
@@ -164,7 +169,7 @@ func TestCollectDoctorReportIncludesProjectHealth(t *testing.T) {
 	var buf bytes.Buffer
 	printDoctorReport(&buf, report)
 	out := buf.String()
-	for _, want := range []string{"billyharness doctor", "build: commit=", "mode: local", "model=deepseek-v4-pro", "settings:", "capability:", "validation=ok", "runtime:", "strict_hygiene=ok", "tool_output=", "auth:", "cost_mode=metered", "auth status:", "credential=redacted", "checks:"} {
+	for _, want := range []string{"billyharness doctor", "build: commit=", "mode: local", "model=deepseek-v4-pro", "settings:", "capability:", "validation=ok", "runtime:", "strict_hygiene=ok", "tool_output=", "attachments=", "auth:", "cost_mode=metered", "auth status:", "credential=redacted", "checks:"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("formatted report missing %q:\n%s", want, out)
 		}
@@ -272,6 +277,21 @@ func TestDoctorReportTracksFailuresForStrictMode(t *testing.T) {
 	report = doctorReport{Runtime: doctorRuntimeStatus{StrictHygiene: doctorHygieneStatus{Status: "fail"}}}
 	if !doctorHasFailures(report) {
 		t.Fatal("doctorHasFailures ignored strict hygiene failure")
+	}
+}
+
+func TestDoctorAttachmentsStoreUsageWarnsOnlyAboveThreshold(t *testing.T) {
+	check := doctorAttachmentsStoreUsageCheck(doctorPathUsage{
+		Path:      "/tmp/attachments",
+		Exists:    true,
+		SizeBytes: defaultAttachmentsGCMaxBytes + 1,
+	})
+	if check.Status != "warn" || !strings.Contains(check.Detail, "run attachments gc") {
+		t.Fatalf("attachments usage check = %#v", check)
+	}
+	report := doctorReport{Checks: []doctorCheck{check}}
+	if doctorHasFailures(report) {
+		t.Fatal("warning-only attachments check should not fail strict doctor")
 	}
 }
 

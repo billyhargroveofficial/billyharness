@@ -3,7 +3,6 @@ package skills
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -11,7 +10,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 )
@@ -106,16 +104,6 @@ type ImportResult struct {
 	SHA256      string `json:"sha256"`
 	FilesCopied int    `json:"files_copied"`
 	BytesCopied int64  `json:"bytes_copied"`
-}
-
-type importMetadata struct {
-	SchemaVersion int       `json:"schema_version"`
-	ImportedAt    time.Time `json:"imported_at"`
-	Name          string    `json:"name"`
-	Source        string    `json:"source"`
-	SourcePath    string    `json:"source_path"`
-	SourceDir     string    `json:"source_dir"`
-	SHA256        string    `json:"sha256"`
 }
 
 type sourceDir struct {
@@ -599,22 +587,6 @@ func importSkill(opts Options, skill Skill, force bool) (ImportResult, error) {
 	}
 	sha, err := fileSHA256(skill.Path)
 	if err != nil {
-		return ImportResult{}, err
-	}
-	meta := importMetadata{
-		SchemaVersion: 1,
-		ImportedAt:    time.Now().UTC(),
-		Name:          skill.Name,
-		Source:        skill.Source,
-		SourcePath:    skill.Path,
-		SourceDir:     skill.Dir,
-		SHA256:        sha,
-	}
-	metaBody, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return ImportResult{}, err
-	}
-	if err := os.WriteFile(filepath.Join(destDir, "billyharness.skill.json"), append(metaBody, '\n'), 0o600); err != nil {
 		return ImportResult{}, err
 	}
 	return ImportResult{

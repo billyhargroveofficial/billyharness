@@ -1,4 +1,4 @@
-package session
+package gateway
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 )
 
 func TestRunPreservesHistoryAcrossPrompts(t *testing.T) {
-	s := New([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	s := newRunThread([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
 	runner := RunnerFunc(func(_ context.Context, messages []protocol.Message, _ func(protocol.Event)) ([]protocol.Message, error) {
 		last := messages[len(messages)-1]
 		return append(messages, protocol.Message{Role: protocol.RoleAssistant, Content: "ok: " + last.Content}), nil
@@ -35,7 +35,7 @@ func TestRunPreservesHistoryAcrossPrompts(t *testing.T) {
 }
 
 func TestRunInputAppendsAttachmentParts(t *testing.T) {
-	s := New([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	s := newRunThread([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
 	ref := protocol.AttachmentRef{
 		ID:         "att_test",
 		Kind:       protocol.AttachmentKindImage,
@@ -67,7 +67,7 @@ func TestRunInputAppendsAttachmentParts(t *testing.T) {
 }
 
 func TestRunInputTextOnlyPreservesLegacyMessageShape(t *testing.T) {
-	s := New(nil)
+	s := newRunThread(nil)
 	if err := s.RunInput(context.Background(), RunnerFunc(func(_ context.Context, messages []protocol.Message, _ func(protocol.Event)) ([]protocol.Message, error) {
 		if len(messages) != 1 || messages[0].Content != "hello" || len(messages[0].Parts) != 0 {
 			t.Fatalf("text-only message = %#v", messages)
@@ -79,7 +79,7 @@ func TestRunInputTextOnlyPreservesLegacyMessageShape(t *testing.T) {
 }
 
 func TestRunReturnsBusyForConcurrentRun(t *testing.T) {
-	s := New([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	s := newRunThread([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
 	if s.InputPolicy() != InputPolicyRejectWhileActive {
 		t.Fatalf("input policy = %q", s.InputPolicy())
 	}
@@ -120,7 +120,7 @@ func TestRunReturnsBusyForConcurrentRun(t *testing.T) {
 }
 
 func TestNewWithOptionsSetsInputPolicy(t *testing.T) {
-	s := NewWithOptions(nil, Options{InputPolicy: InputPolicyRejectWhileActive})
+	s := newRunThreadWithOptions(nil, Options{InputPolicy: InputPolicyRejectWhileActive})
 	if s.InputPolicy() != InputPolicyRejectWhileActive {
 		t.Fatalf("input policy = %q", s.InputPolicy())
 	}
@@ -132,7 +132,7 @@ func TestNewWithOptionsSetsInputPolicy(t *testing.T) {
 }
 
 func TestRunQueuesFollowUpWhenPolicyAllows(t *testing.T) {
-	s := NewWithOptions([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}}, Options{InputPolicy: InputPolicyQueueWhileActive})
+	s := newRunThreadWithOptions([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}}, Options{InputPolicy: InputPolicyQueueWhileActive})
 	firstStarted := make(chan struct{})
 	secondStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
@@ -197,7 +197,7 @@ func TestRunQueuesFollowUpWhenPolicyAllows(t *testing.T) {
 }
 
 func TestCancelStopsActiveRun(t *testing.T) {
-	s := New([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	s := newRunThread([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
 	started := make(chan struct{})
 	runner := RunnerFunc(func(ctx context.Context, messages []protocol.Message, _ func(protocol.Event)) ([]protocol.Message, error) {
 		close(started)
@@ -237,7 +237,7 @@ func TestCancelStopsActiveRun(t *testing.T) {
 }
 
 func TestCancelAndWaitWaitsForIdle(t *testing.T) {
-	s := New([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	s := newRunThread([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
 	started := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
@@ -268,7 +268,7 @@ func TestCancelAndWaitWaitsForIdle(t *testing.T) {
 }
 
 func TestCancelAndWaitReturnsContextErrorWhenRunDoesNotStop(t *testing.T) {
-	s := New([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	s := newRunThread([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
 	started := make(chan struct{})
 	release := make(chan struct{})
 	done := make(chan error, 1)
@@ -295,7 +295,7 @@ func TestCancelAndWaitReturnsContextErrorWhenRunDoesNotStop(t *testing.T) {
 }
 
 func TestCancelDropsPromptWhenRunnerReturnsNilAfterContextCancelled(t *testing.T) {
-	s := New([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+	s := newRunThread([]protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
 	started := make(chan struct{})
 	runner := RunnerFunc(func(ctx context.Context, messages []protocol.Message, _ func(protocol.Event)) ([]protocol.Message, error) {
 		close(started)
@@ -325,7 +325,7 @@ func TestCancelDropsPromptWhenRunnerReturnsNilAfterContextCancelled(t *testing.T
 }
 
 func TestRunDiscardsPromptHistoryWhenRunnerRequestsDiscard(t *testing.T) {
-	s := New(nil)
+	s := newRunThread(nil)
 	runner := RunnerFunc(func(_ context.Context, messages []protocol.Message, _ func(protocol.Event)) ([]protocol.Message, error) {
 		if len(messages) != 1 || messages[0].Content != "blocked prompt" {
 			t.Fatalf("run messages = %#v", messages)
@@ -343,7 +343,7 @@ func TestRunDiscardsPromptHistoryWhenRunnerRequestsDiscard(t *testing.T) {
 }
 
 func TestMessagesReturnsDeepCopy(t *testing.T) {
-	s := New([]protocol.Message{{
+	s := newRunThread([]protocol.Message{{
 		Role: protocol.RoleAssistant,
 		ToolCalls: []protocol.ToolCall{{
 			ID:        "call-1",

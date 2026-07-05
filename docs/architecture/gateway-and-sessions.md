@@ -1,9 +1,10 @@
 # Gateway and Sessions Architecture
 
 Status note: this document is written against the current worktree on
-2026-07-04. Mutation-auth hardening, session-owner header scoping,
-stored-session projector inspection, and fail-closed persistence behavior are
-current worktree contracts, not assumptions from older releases.
+2026-07-05. Mutation-auth hardening, session-owner header scoping,
+stored-session projector inspection, fail-closed persistence behavior, and
+manifest-only session startup are current worktree contracts, not assumptions
+from older releases.
 
 Code anchors:
 
@@ -16,22 +17,22 @@ Code anchors:
   `gateway.stream_gap`, redacted JSON responses.
 - `internal/gateway/session_events.go`: gateway session wrapper, event hub,
   status projection, recording and publishing of run events.
+- `internal/gateway/run_thread.go`: presentation-neutral message state,
+  single-run locking, cancellation, and rollback for gateway sessions.
 - `internal/gateway/session_store.go`: durable session manifest, history,
-  event replay, legacy snapshot compatibility, private file permissions.
+  lazy materialization, event replay, legacy snapshot compatibility, private
+  file permissions.
 - `internal/gateway/session_inputs.go`: durable input admission and
   idempotency state.
 - `internal/gateway/http_security.go`: HTTP bearer, mutation, origin, host,
   content-type, and privilege-clamping rules.
 - `internal/gateway/session_authz.go`: session-owner header parsing and
   read/mutation authorization.
-- `internal/gatewayapi/types.go`: shared request/response DTOs and owner header
-  names.
+- `internal/gatewayapi/types.go` and `net.go`: shared request/response DTOs,
+  owner header names, URL/auth-token helpers, readiness probe, and unavailable
+  hints.
 - `internal/gatewayclient/client.go`: shared HTTP client helpers, owner header
   injection, session methods, NDJSON decoder, sequence-gap detection.
-- `internal/gatewaybase/gatewaybase.go`: gateway URL normalization, auth-token
-  environment lookup, readiness probe, unavailable hints.
-- `internal/session/session.go`: presentation-neutral message state, single-run
-  locking, cancellation, and rollback.
 - `internal/clientux/context.go`: client-facing context/status projection from
   messages plus replayed events.
 
@@ -44,7 +45,7 @@ and remote clients. It owns:
 - session creation, listing, status, context, event replay, input admission,
   run, cancel, undo, redo, and user-input routes;
 - durable session persistence when `ServerOptions.SessionStoreDir` is set;
-- startup reload of durable sessions into the in-memory session map;
+- startup manifest indexing of durable sessions into the in-memory session map;
 - event recording before live fanout for session runs;
 - gateway-level security checks before handlers see mutating requests;
 - owner/scope filtering for session reads and mutations in the current
@@ -53,7 +54,7 @@ and remote clients. It owns:
 
 It does not own client rendering. Shared transport DTOs belong in
 `internal/gatewayapi`; client request helpers belong in `internal/gatewayclient`;
-URL/auth/readiness helpers belong in `internal/gatewaybase`; neutral projection
+URL/auth/readiness helpers belong in `internal/gatewayapi`; neutral projection
 logic belongs in `internal/clientux`.
 
 ## HTTP Surface
@@ -69,7 +70,6 @@ Future agents should update this section from that route table, not from memory.
 | `POST /v1/auth/deepseek` | persist a DeepSeek API key through the credentials manager |
 | `POST /v1/auth/codex/import` | import or save Codex auth JSON through the credentials manager |
 | `GET /v1/config` | sanitized resolved config plus diagnostics |
-| `GET /v1/benchmarks` | benchmark artifact listing |
 | `GET /v1/tools` | registry tool specs |
 | `GET /v1/mcp` | runtime MCP status, prompts, and server instructions |
 | `GET /v1/processes` | managed shell-process status from the tools registry |
@@ -96,9 +96,8 @@ secret-looking strings are redacted before they leave the gateway.
 
 ## Session Model
 
-The gateway `Session` wraps `internal/session.Session`. The lower-level
-`internal/session` package owns only message state, single-active-run locking,
-and cancellation/rollback:
+The gateway `Session` wraps a gateway-local `runThread`. The lower-level thread
+owns only message state, single-active-run locking, and cancellation/rollback:
 
 - `RunMessage` clones the pre-run message list, appends the user message for
   the runner, and stores the runner result on success.
@@ -155,10 +154,13 @@ Durability is enabled only when `ServerOptions.SessionStoreDir` is non-empty.
 `DefaultSessionStoreDir()` resolves to `config.BillyHomeDir()/gateway-sessions`,
 but construction decides whether the server actually uses a store.
 
-When a store is configured, `NewServerWithOptionsFromSettings` loads existing
-session directories, restores status from replayed events when possible, marks
-promoted-but-not-completed inputs as ambiguous after restart, attaches the
-session event recorder, and places sessions in the in-memory map.
+When a store is configured, `NewServerWithOptionsFromSettings` loads only
+`manifest.json` from each existing session directory, marks promoted-but-not-
+completed inputs as ambiguous after restart, attaches the session event
+recorder, and places manifest-only stubs in the in-memory map. Startup and
+`GET /v1/sessions` do not replay `history.jsonl` or `events.jsonl`; routes that
+need messages or full live state materialize exactly one session through the
+`s.session` choke point by replaying that session's history and status files.
 
 Current store layout:
 
@@ -182,7 +184,10 @@ snapshot.
 Store semantics:
 
 - `manifest.json` records schema version, session id, file names, history/event
-  sequence numbers, message count, owner, and history hash.
+  sequence numbers, message count, attachment/image counts, owner, history
+  hash, and the latest listing/status fields needed for `GET /v1/sessions`
+  (provider/model/profile/reasoning/access mode, run sequence, last event,
+  last error, model/tool calls, dropped events).
 - `history.jsonl` stores full message snapshots, not individual message deltas.
   A new record is appended when the message hash changes.
 - `events.jsonl` stores protocol events enriched by the gateway with monotonic
@@ -198,10 +203,13 @@ Store semantics:
 - store directories are forced to `0700`; manifest, snapshots, legacy
   snapshots, and JSONL append targets are written privately.
 
-Replay is strict. `replaySessionHistory`, `lastSessionEventSeq`,
-`replaySessionStatus`, `replaySessionEventsAfter`, and `replaySessionInputs`
-validate schema version, monotonic sequence, expected `session_id`, event type,
-and lifecycle where applicable through `internal/eventlog`.
+Replay is strict when a session is materialized, inspected, streamed, or
+mutated. `replaySessionHistory`, `lastSessionEventSeq`, `replaySessionStatus`,
+`replaySessionEventsAfter`, and `replaySessionInputs` validate schema version,
+monotonic sequence, expected `session_id`, event type, and lifecycle where
+applicable through `internal/eventlog`. Startup session listing intentionally
+defers history/event corruption to the first route that needs that specific
+session's replay.
 Session event replay allows open active runs, turns, steps, and tool attempts;
 closed-lifecycle checks are reserved for callers that know an artifact is
 complete.
@@ -316,11 +324,11 @@ memory root/profile state from the durable session bundle alone.
 Run admission records a broader session-locked context epoch before the agent
 run is persisted. The epoch stores only hashes: effective config, tool catalog,
 MCP catalog/status, profile instructions, prompt inventory, AGENTS, memory,
-project context, optional `agent-index/docs-manifest.json`, and promoted MCP
-instructions when present. `session.status` and `run.started` both carry the
-run epoch plus `context_epoch_drift`; follow-up runs compare the first locked
-epoch with a freshly rendered ambient epoch and emit changed-field warnings
-instead of silently mixing AGENTS, memory, docs-index, MCP, or config drift.
+project context, and promoted MCP instructions when present. `session.status`
+and `run.started` both carry the run epoch plus `context_epoch_drift`; follow-up
+runs compare the first locked epoch with a freshly rendered ambient epoch and
+emit changed-field warnings instead of silently mixing AGENTS, memory, MCP, or
+config drift.
 Stored-session context rebuilds the same drift state from `events.jsonl`, so
 offline replay/fork inspection does not need to trust the current filesystem.
 
@@ -348,7 +356,7 @@ the gateway server or client packages.
 `internal/gatewayclient` is the shared HTTP client package for TUI, Telegram,
 CLI helpers, and future client surfaces. It:
 
-- normalizes base URLs through `gatewaybase`;
+- normalizes base URLs through `gatewayapi`;
 - injects bearer auth from `BILLYHARNESS_GATEWAY_AUTH_TOKEN` or legacy
   `FAST_AGENT_GATEWAY_AUTH_TOKEN`;
 - retries once around readiness on connection refused;
@@ -360,8 +368,8 @@ CLI helpers, and future client surfaces. It:
 - decodes NDJSON protocol events and reports sequence gaps or run failures as
   typed errors.
 
-Client surfaces should import `gatewayapi`, `gatewayclient`, `gatewaybase`, and
-`clientux` as needed. They should not import `internal/gateway` server internals.
+Client surfaces should import `gatewayapi`, `gatewayclient`, and `clientux` as
+needed. They should not import `internal/gateway` server internals.
 
 ## Security and Scope
 

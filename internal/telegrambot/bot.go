@@ -26,6 +26,7 @@ type Options struct {
 	ContextCompactSource   string
 	PollTimeoutSec         int
 	EditInterval           time.Duration
+	ProcessWatchInterval   time.Duration
 	AllowedChatIDs         map[int64]bool
 	AllowedUserIDs         map[int64]bool
 	AllowedOperatorUserIDs map[int64]bool
@@ -41,7 +42,6 @@ type Bot struct {
 	client  *Client
 	harness Harness
 	store   Store
-	admit   *telegramAdmissionStore
 	state   State
 
 	mu       sync.Mutex
@@ -87,8 +87,7 @@ func New(opts Options, client *Client, harness Harness) (*Bot, error) {
 	if err != nil {
 		return nil, err
 	}
-	admit := newTelegramAdmissionStore(opts.StatePath)
-	if err := reconcilePendingInputsOnStartup(context.Background(), &state, store, admit, harness); err != nil {
+	if err := reconcilePendingInputsOnStartup(context.Background(), &state, store, harness); err != nil {
 		return nil, err
 	}
 	return &Bot{
@@ -96,7 +95,6 @@ func New(opts Options, client *Client, harness Harness) (*Bot, error) {
 		client:   client,
 		harness:  harness,
 		store:    store,
-		admit:    admit,
 		state:    state,
 		chatMux:  map[string]*sync.Mutex{},
 		cancel:   map[string]context.CancelFunc{},

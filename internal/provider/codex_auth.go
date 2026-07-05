@@ -29,7 +29,6 @@ type codexAuth struct {
 	AccountID    string
 	ExpiresAt    time.Time
 	LastRefresh  time.Time
-	FedRAMP      bool
 	PAT          bool
 	AuthFile     string
 	filePayload  map[string]any
@@ -53,7 +52,6 @@ func loadCodexAuth(ctx context.Context, authSettings config.AuthSettings, client
 			auth.AccountID = codexauth.AccountIDFromClaims(claims)
 		}
 		auth.ExpiresAt = codexauth.ExpirationFromClaims(claims)
-		auth.FedRAMP = codexauth.FedRAMPFromClaims(claims)
 		return auth, nil
 	}
 
@@ -138,15 +136,9 @@ func (a *codexAuth) refresh(ctx context.Context, authSettings config.AuthSetting
 		if idAccount := codexauth.AccountIDFromClaims(idClaims); idAccount != "" {
 			a.AccountID = idAccount
 		}
-		if idFedRAMP := codexauth.FedRAMPFromClaims(idClaims); idFedRAMP {
-			a.FedRAMP = true
-		}
 	}
 	if a.AccountID == "" {
 		a.AccountID = codexauth.AccountIDFromClaims(claims)
-	}
-	if !a.FedRAMP {
-		a.FedRAMP = codexauth.FedRAMPFromClaims(claims)
 	}
 	a.ExpiresAt = codexauth.ExpirationFromClaims(claims)
 	if a.ExpiresAt.IsZero() && out.ExpiresIn > 0 {
@@ -216,7 +208,6 @@ func readCodexAuthFile(ctx context.Context, authSettings config.AuthSettings, cl
 		if auth.AccountID == "" {
 			auth.AccountID = codexauth.AccountIDFromClaims(idClaims)
 		}
-		auth.FedRAMP = codexauth.FedRAMPFromClaims(idClaims)
 	}
 	if auth.PAT {
 		if err := auth.hydratePAT(ctx, authSettings, client); err != nil {
@@ -227,9 +218,6 @@ func readCodexAuthFile(ctx context.Context, authSettings config.AuthSettings, cl
 	claims := codexauth.Claims(auth.AccessToken)
 	if auth.AccountID == "" {
 		auth.AccountID = codexauth.AccountIDFromClaims(claims)
-	}
-	if !auth.FedRAMP {
-		auth.FedRAMP = codexauth.FedRAMPFromClaims(claims)
 	}
 	auth.ExpiresAt = codexauth.ExpirationFromClaims(claims)
 	return auth, nil
@@ -254,7 +242,6 @@ func (a *codexAuth) hydratePAT(ctx context.Context, authSettings config.AuthSett
 	}
 	var meta struct {
 		AccountID string `json:"chatgpt_account_id"`
-		FedRAMP   bool   `json:"chatgpt_account_is_fedramp"`
 	}
 	if err := json.Unmarshal(body, &meta); err != nil {
 		return fmt.Errorf("invalid personal access token metadata JSON: %w", err)
@@ -263,7 +250,6 @@ func (a *codexAuth) hydratePAT(ctx context.Context, authSettings config.AuthSett
 		return fmt.Errorf("personal access token metadata did not include chatgpt_account_id")
 	}
 	a.AccountID = meta.AccountID
-	a.FedRAMP = meta.FedRAMP
 	return nil
 }
 

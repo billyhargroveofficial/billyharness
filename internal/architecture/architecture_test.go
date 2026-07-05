@@ -60,9 +60,9 @@ func TestInternalPackageBoundaries(t *testing.T) {
 func TestRequiredInternalImports(t *testing.T) {
 	pkgs := internalPackages(t)
 	required := map[string][]string{
-		"gateway":           {"eventlog", "gatewayapi", "gatewaybase", "runtimehost"},
-		"gatewaybase":       {"serviceops"},
-		"gatewayclient":     {"gatewayapi", "gatewaybase"},
+		"gateway":           {"eventlog", "gatewayapi", "runtimehost"},
+		"gatewayapi":        {"config", "protocol", "serviceops"},
+		"gatewayclient":     {"gatewayapi"},
 		"runtimehost":       {"agent", "provider", "tools"},
 		"telegrambot":       {"gatewayapi", "gatewayclient"},
 		"tools":             {"tools/discovery", "webtools"},
@@ -88,13 +88,13 @@ func TestRequiredInternalImports(t *testing.T) {
 
 func TestCommandPackagesRemainAdapters(t *testing.T) {
 	allowed := map[string]bool{
+		"attachments":     true,
 		"bench":           true,
 		"commandregistry": true,
 		"config":          true,
 		"credentials":     true,
 		"gateway":         true,
 		"gatewayapi":      true,
-		"gatewaybase":     true,
 		"gatewayclient":   true,
 		"mcpserver":       true,
 		"mcpstatus":       true,
@@ -106,7 +106,6 @@ func TestCommandPackagesRemainAdapters(t *testing.T) {
 		"runtimehost":     true,
 		"secrets":         true,
 		"serviceops":      true,
-		"session":         true,
 		"telegrambot":     true,
 		"tools":           true,
 		"tui":             true,

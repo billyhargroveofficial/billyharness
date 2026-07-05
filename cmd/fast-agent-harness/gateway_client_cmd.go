@@ -13,6 +13,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -60,13 +61,13 @@ func gatewayCreateSession(ctx context.Context, baseURL, profile string) (string,
 	if err != nil {
 		return "", err
 	}
-	resp, err := gateway.DoWithReadyRetry(ctx, http.DefaultClient, baseURL, func() (*http.Request, error) {
+	resp, err := gatewayapi.DoWithReadyRetry(ctx, http.DefaultClient, baseURL, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/v1/sessions", bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
-		gateway.SetAuthHeaderFromEnv(req)
+		gatewayapi.SetAuthHeaderFromEnv(req)
 		return req, nil
 	})
 	if err != nil {
@@ -92,13 +93,13 @@ func gatewayCreateSession(ctx context.Context, baseURL, profile string) (string,
 func gatewayRun(ctx context.Context, baseURL, path string, runReq gateway.RunRequest, emit func(protocol.Event)) error {
 	baseURL = normalizeGatewayURL(baseURL)
 	body, _ := json.Marshal(runReq)
-	resp, err := gateway.DoWithReadyRetry(ctx, http.DefaultClient, baseURL, func() (*http.Request, error) {
+	resp, err := gatewayapi.DoWithReadyRetry(ctx, http.DefaultClient, baseURL, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+path, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
-		gateway.SetAuthHeaderFromEnv(req)
+		gatewayapi.SetAuthHeaderFromEnv(req)
 		return req, nil
 	})
 	if err != nil {

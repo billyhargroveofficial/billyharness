@@ -18,6 +18,9 @@ Use monotonically increasing four-digit numbers:
 
 Never reuse a number.
 
+0004 and 0005 were never assigned; the sequence resumes at 0006 by design. The
+next new ADR is 0009.
+
 ## Records
 
 - [ADR 0001](0001-jsonl-event-log-source-of-truth.md): accepted; JSONL event
@@ -41,11 +44,8 @@ Never reuse a number.
 ```md
 # ADR NNNN - Title
 
-Status: proposed | accepted | superseded | deprecated
 Date: YYYY-MM-DD
 Owners: billy
-Supersedes: none
-Superseded by: none
 
 ## Context
 
@@ -69,6 +69,7 @@ Commands, tests, or code paths that prove the decision is reflected in the repo.
 - Keep ADRs short.
 - Do not use ADRs as TODO lists.
 - Do not rewrite accepted ADRs when a decision changes; create a new ADR and
-  mark the old one superseded.
+  add a Status/Supersedes note to both files only when that first supersede
+  actually happens.
 - Link accepted ADRs from `docs/README.md` and from the canonical architecture
   doc that relies on them.

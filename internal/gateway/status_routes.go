@@ -40,12 +40,9 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleConfigStatus(w http.ResponseWriter, _ *http.Request) {
-	base, err := config.Resolve()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	resolved, err := config.Resolve(config.RuntimeDiffOverridesFromSettings(base.Config, s.runtimeDiffSettings(), config.SourceGateway)...)
+	_, resolved, err := config.ResolveEffectiveFromBase(func(base config.Config) []config.ResolveOverride {
+		return config.RuntimeDiffOverridesFromSettings(base, s.runtimeDiffSettings(), config.SourceGateway)
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

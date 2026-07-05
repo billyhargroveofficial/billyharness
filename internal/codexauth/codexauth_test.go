@@ -7,22 +7,18 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/testkit"
 )
 
-func TestJWTClaimsExtractAccountFedRAMPAndExpiration(t *testing.T) {
+func TestJWTClaimsExtractAccountAndExpiration(t *testing.T) {
 	exp := time.Now().Add(time.Hour).Unix()
 	token := testkit.JWT(t, map[string]any{
 		"exp": exp,
 		"https://api.openai.com/auth": map[string]any{
-			"chatgpt_account_id":         "acct_nested",
-			"chatgpt_account_is_fedramp": true,
+			"chatgpt_account_id": "acct_nested",
 		},
 	})
 	claims := Claims(token)
 
 	if AccountIDFromClaims(claims) != "acct_nested" || AccountIDFromJWT(token) != "acct_nested" {
 		t.Fatalf("account claims = %#v", claims)
-	}
-	if !FedRAMPFromClaims(claims) {
-		t.Fatalf("FedRAMPFromClaims = false")
 	}
 	if ExpirationFromClaims(claims).Unix() != exp || ExpirationFromJWT(token).Unix() != exp {
 		t.Fatalf("expiration = %v claims=%#v", ExpirationFromClaims(claims), claims)

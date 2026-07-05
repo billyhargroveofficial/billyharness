@@ -66,6 +66,20 @@ type sessionManifest struct {
 	MessageCount              int                     `json:"message_count"`
 	Owner                     gatewayapi.SessionOwner `json:"owner,omitempty"`
 	HistorySHA256             string                  `json:"history_sha256,omitempty"`
+	AttachmentCount           int                     `json:"attachment_count,omitempty"`
+	ImageSubmissions          int                     `json:"image_submissions,omitempty"`
+	Model                     string                  `json:"model,omitempty"`
+	Provider                  string                  `json:"provider,omitempty"`
+	Profile                   string                  `json:"profile,omitempty"`
+	ReasoningEffort           string                  `json:"reasoning_effort,omitempty"`
+	AccessMode                string                  `json:"access_mode,omitempty"`
+	LastEvent                 string                  `json:"last_event,omitempty"`
+	LastEventAt               time.Time               `json:"last_event_at,omitempty"`
+	LastError                 string                  `json:"last_error,omitempty"`
+	ModelCalls                int                     `json:"model_calls,omitempty"`
+	ToolCalls                 int                     `json:"tool_calls,omitempty"`
+	DroppedEvents             int64                   `json:"dropped_events,omitempty"`
+	RunSeq                    int64                   `json:"run_seq,omitempty"`
 }
 
 type sessionStoreSnapshots struct {
@@ -118,6 +132,66 @@ func cloneSnapshotMap(value map[string]any) map[string]any {
 		return nil
 	}
 	return out
+}
+
+func applySessionStatusToManifest(manifest *sessionManifest, status SessionStatus) {
+	if manifest == nil {
+		return
+	}
+	if status.ID != "" {
+		manifest.SessionID = status.ID
+	}
+	if !status.Created.IsZero() {
+		manifest.CreatedAt = status.Created
+	}
+	if status.Owner != (gatewayapi.SessionOwner{}) {
+		manifest.Owner = status.Owner
+	}
+	if status.MessageCount > 0 || manifest.MessageCount == 0 {
+		manifest.MessageCount = status.MessageCount
+	}
+	manifest.AttachmentCount = status.AttachmentCount
+	manifest.ImageSubmissions = status.ImageSubmissions
+	manifest.Model = status.Model
+	manifest.Provider = status.Provider
+	manifest.Profile = status.Profile
+	manifest.ReasoningEffort = status.ReasoningEffort
+	manifest.AccessMode = status.AccessMode
+	manifest.LastEvent = status.LastEvent
+	manifest.LastEventAt = status.LastEventAt
+	manifest.LastError = status.LastError
+	manifest.ModelCalls = status.ModelCalls
+	manifest.ToolCalls = status.ToolCalls
+	manifest.DroppedEvents = status.DroppedEvents
+	manifest.RunSeq = status.RunSeq
+}
+
+func sessionStatusFromManifest(manifest sessionManifest) SessionStatus {
+	created := manifest.CreatedAt
+	if created.IsZero() {
+		created = manifest.UpdatedAt
+	}
+	return SessionStatus{
+		ID:               manifest.SessionID,
+		Created:          created,
+		Running:          false,
+		RunSeq:           manifest.RunSeq,
+		LastEvent:        manifest.LastEvent,
+		LastEventAt:      manifest.LastEventAt,
+		Model:            manifest.Model,
+		Provider:         manifest.Provider,
+		Profile:          manifest.Profile,
+		ReasoningEffort:  manifest.ReasoningEffort,
+		AccessMode:       manifest.AccessMode,
+		Owner:            manifest.Owner,
+		MessageCount:     manifest.MessageCount,
+		AttachmentCount:  manifest.AttachmentCount,
+		ImageSubmissions: manifest.ImageSubmissions,
+		ModelCalls:       manifest.ModelCalls,
+		ToolCalls:        manifest.ToolCalls,
+		DroppedEvents:    manifest.DroppedEvents,
+		LastError:        manifest.LastError,
+	}
 }
 
 type sessionHistoryRecord struct {
@@ -194,7 +268,7 @@ func (s *sessionStore) LoadAllWithDiagnostics() ([]*Session, gatewayapi.SessionS
 			continue
 		}
 		entryName := entry.Name()
-		session, err := s.loadSessionDir(filepath.Join(s.dir, entryName))
+		session, err := s.loadSessionManifestOnly(filepath.Join(s.dir, entryName))
 		if err == nil && session != nil {
 			sessions = append(sessions, session)
 			loaded[session.ID] = struct{}{}
@@ -392,6 +466,12 @@ func (s *sessionStore) AppendEvent(session *Session, event protocol.Event) (prot
 	}
 	s.eventSeq[id] = seq
 	s.eventState[id] = sessionEventAppendState{seq: seq, lifecycle: nextLifecycle}
+	manifest.EventSeq = seq
+	manifest.UpdatedAt = now
+	applySessionStatusToManifest(&manifest, status)
+	if err := writeSessionManifest(manifestPath, manifest); err != nil {
+		return event, err
+	}
 	return storedEvent, nil
 }
 
@@ -566,9 +646,11 @@ func (s *sessionStore) saveLocked(session *Session) error {
 		return err
 	}
 	historyPath := filepath.Join(sessionDir, sessionFileName(manifest.HistoryJSONL, sessionHistoryJSONLName))
-	history, err := replaySessionHistory(historyPath, id)
-	if err != nil {
-		return err
+	history := replayedSessionHistory{
+		lastSeq:       manifest.HistorySeq,
+		created:       manifest.CreatedAt,
+		updated:       manifest.UpdatedAt,
+		historySHA256: manifest.HistorySHA256,
 	}
 	if history.lastSeq == 0 || history.historySHA256 != historySHA256 {
 		kind := sessionHistorySnapshot
@@ -600,6 +682,9 @@ func (s *sessionStore) saveLocked(session *Session) error {
 	eventsPath := filepath.Join(sessionDir, sessionFileName(manifest.EventsJSONL, sessionEventsJSONLName))
 	eventSeq := s.eventSeq[id]
 	if eventSeq == 0 {
+		eventSeq = manifest.EventSeq
+	}
+	if eventSeq == 0 {
 		eventSeq, err = lastSessionEventSeq(eventsPath, id)
 		if err != nil {
 			return err
@@ -628,6 +713,7 @@ func (s *sessionStore) saveLocked(session *Session) error {
 		}
 	}
 
+	status := session.Status()
 	manifest = sessionManifest{
 		SchemaVersion:             gatewaySessionSchemaVersion,
 		SessionID:                 id,
@@ -646,6 +732,7 @@ func (s *sessionStore) saveLocked(session *Session) error {
 		Owner:                     session.Owner,
 		HistorySHA256:             history.historySHA256,
 	}
+	applySessionStatusToManifest(&manifest, status)
 	if err := writeSessionManifest(manifestPath, manifest); err != nil {
 		return err
 	}
@@ -693,12 +780,62 @@ func (s *sessionStore) loadSessionDir(dir string) (*Session, error) {
 	}
 	if ok {
 		session.restoreStatus(status)
+	} else {
+		session.restoreStatus(sessionStatusFromManifest(manifest))
 	}
 	inputsPath := filepath.Join(dir, sessionFileName(manifest.InputsJSONL, sessionInputsJSONLName))
 	if err := markPromotedSessionInputsAmbiguous(inputsPath, id); err != nil {
 		return nil, err
 	}
 	return session, nil
+}
+
+func (s *sessionStore) loadSessionID(sessionID string) (*Session, error) {
+	id, err := cleanSessionID(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return s.loadSessionDir(filepath.Join(s.dir, id))
+}
+
+func (s *sessionStore) loadSessionManifestOnly(dir string) (*Session, error) {
+	manifest, err := readSessionManifest(filepath.Join(dir, sessionManifestName))
+	if err != nil {
+		return nil, err
+	}
+	id, err := cleanSessionID(manifest.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	created := manifest.CreatedAt
+	if created.IsZero() {
+		created = manifest.UpdatedAt
+	}
+	if created.IsZero() {
+		created = time.Now().UTC()
+	}
+	status := sessionStatusFromManifest(manifest)
+	if status.ID == "" {
+		status.ID = id
+	}
+	if status.Created.IsZero() {
+		status.Created = created
+	}
+	if status.Owner == (gatewayapi.SessionOwner{}) {
+		status.Owner = manifest.Owner
+	}
+	inputsPath := filepath.Join(dir, sessionFileName(manifest.InputsJSONL, sessionInputsJSONLName))
+	if err := markPromotedSessionInputsAmbiguous(inputsPath, id); err != nil {
+		return nil, err
+	}
+	return &Session{
+		ID:           id,
+		Created:      created,
+		Owner:        normalizeSessionOwner(manifest.Owner),
+		manifestOnly: true,
+		events:       newEventHub(),
+		status:       status,
+	}, nil
 }
 
 func (s *sessionStore) loadLegacySnapshot(path string) (*Session, error) {

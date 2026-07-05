@@ -14,7 +14,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
@@ -38,6 +40,12 @@ type Store struct {
 type Resolved struct {
 	Ref  protocol.AttachmentRef
 	Path string
+}
+
+type storeFile struct {
+	Path    string
+	Size    int64
+	ModTime time.Time
 }
 
 func DefaultStore() Store {
@@ -174,6 +182,61 @@ func (s Store) Read(ref protocol.AttachmentRef) ([]byte, protocol.AttachmentRef,
 	return data, resolved.Ref, nil
 }
 
+func (s Store) Usage() (fileCount int, totalBytes int64, err error) {
+	files, err := s.files()
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, file := range files {
+		fileCount++
+		totalBytes += file.Size
+	}
+	return fileCount, totalBytes, nil
+}
+
+func (s Store) Prune(maxAge time.Duration, maxTotalBytes int64) (removed int, removedBytes int64, err error) {
+	files, err := s.files()
+	if err != nil {
+		return 0, 0, err
+	}
+	now := time.Now()
+	var kept []storeFile
+	var total int64
+	for _, file := range files {
+		if maxAge > 0 && file.ModTime.Before(now.Add(-maxAge)) {
+			if err := os.Remove(file.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return removed, removedBytes, err
+			}
+			removed++
+			removedBytes += file.Size
+			continue
+		}
+		kept = append(kept, file)
+		total += file.Size
+	}
+	if maxTotalBytes <= 0 || total <= maxTotalBytes {
+		return removed, removedBytes, nil
+	}
+	sort.Slice(kept, func(i, j int) bool {
+		if kept[i].ModTime.Equal(kept[j].ModTime) {
+			return kept[i].Path < kept[j].Path
+		}
+		return kept[i].ModTime.Before(kept[j].ModTime)
+	})
+	for _, file := range kept {
+		if total <= maxTotalBytes {
+			break
+		}
+		if err := os.Remove(file.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return removed, removedBytes, err
+		}
+		removed++
+		removedBytes += file.Size
+		total -= file.Size
+	}
+	return removed, removedBytes, nil
+}
+
 func (s Store) imageRef(fileName string, data []byte, detail protocol.AttachmentDetail) (protocol.AttachmentRef, string, error) {
 	if max := s.maxImageBytes(); max > 0 && int64(len(data)) > max {
 		return protocol.AttachmentRef{}, "", fmt.Errorf("attachment %q is %d bytes; max is %d", safeFileName(fileName), len(data), max)
@@ -248,6 +311,40 @@ func (s Store) storagePath(storageRef string) (string, error) {
 		return "", fmt.Errorf("attachment storage_ref escapes store")
 	}
 	return path, nil
+}
+
+func (s Store) files() ([]storeFile, error) {
+	if strings.TrimSpace(s.Root) == "" {
+		return nil, errors.New("attachment store root is required")
+	}
+	var files []storeFile
+	err := filepath.WalkDir(s.Root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) && path == s.Root {
+				return filepath.SkipDir
+			}
+			return err
+		}
+		if d == nil || d.IsDir() || strings.HasPrefix(filepath.Base(path), ".tmp-attachment-") {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		files = append(files, storeFile{Path: path, Size: info.Size(), ModTime: info.ModTime()})
+		return nil
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return files, err
 }
 
 func (s Store) maxImageBytes() int64 {

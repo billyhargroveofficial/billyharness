@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
@@ -127,11 +128,94 @@ func TestResolveRejectsTraversalAndStaleAttachment(t *testing.T) {
 	}
 }
 
+func TestPruneRemovesOldFiles(t *testing.T) {
+	store := NewStore(filepath.Join(t.TempDir(), "attachments"))
+	oldPath := writeStoreFile(t, store.Root, "old.png", "old")
+	newPath := writeStoreFile(t, store.Root, "new.png", "new")
+	tmpPath := writeStoreFile(t, store.Root, ".tmp-attachment-keep", "tmp")
+	oldTime := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(oldPath, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, removedBytes, err := store.Prune(24*time.Hour, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 || removedBytes != 3 {
+		t.Fatalf("removed=%d removedBytes=%d, want 1/3", removed, removedBytes)
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("old file still exists or unexpected stat error: %v", err)
+	}
+	for _, path := range []string{newPath, tmpPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("kept file %s: %v", path, err)
+		}
+	}
+	count, bytes, err := store.Usage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || bytes != 3 {
+		t.Fatalf("usage=%d/%d, want new file only", count, bytes)
+	}
+}
+
+func TestPruneEnforcesMaxBytesOldestFirst(t *testing.T) {
+	store := NewStore(filepath.Join(t.TempDir(), "attachments"))
+	oldest := writeStoreFile(t, store.Root, "oldest.png", "1111")
+	middle := writeStoreFile(t, store.Root, "middle.png", "2222")
+	newest := writeStoreFile(t, store.Root, "newest.png", "3333")
+	base := time.Now().Add(-3 * time.Hour)
+	for i, path := range []string{oldest, middle, newest} {
+		ts := base.Add(time.Duration(i) * time.Hour)
+		if err := os.Chtimes(path, ts, ts); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	removed, removedBytes, err := store.Prune(0, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 || removedBytes != 4 {
+		t.Fatalf("removed=%d removedBytes=%d, want 1/4", removed, removedBytes)
+	}
+	if _, err := os.Stat(oldest); !os.IsNotExist(err) {
+		t.Fatalf("oldest file still exists or unexpected stat error: %v", err)
+	}
+	for _, path := range []string{middle, newest} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("kept file %s: %v", path, err)
+		}
+	}
+	count, bytes, err := store.Usage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 || bytes != 8 {
+		t.Fatalf("usage=%d/%d, want 2/8", count, bytes)
+	}
+}
+
 func writePNG(t *testing.T, path string, width, height int) {
 	t.Helper()
 	if err := os.WriteFile(path, pngBytes(t, width, height), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeStoreFile(t *testing.T, root, name, body string) string {
+	t.Helper()
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, name)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func pngBytes(t *testing.T, width, height int) []byte {

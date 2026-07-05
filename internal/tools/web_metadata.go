@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/billyhargroveofficial/billyharness/internal/tooloutput"
 )
 
 func crawlMetadata(out compactCrawlOutput) map[string]any {
@@ -18,11 +16,6 @@ func crawlMetadata(out compactCrawlOutput) map[string]any {
 		"summary_chars":                      out.SummaryChars,
 		"summarizer_provider":                out.SummarizerProvider,
 		"summarizer_model":                   out.SummarizerModel,
-		"websum_input_tokens":                out.WebsumInputTokens,
-		"websum_output_tokens":               out.WebsumOutputTokens,
-		"websum_cost":                        out.WebsumCost,
-		"websum_cache_hit":                   out.WebsumCacheHit,
-		"websum_cache_miss":                  out.WebsumCacheMiss,
 		"websum_model":                       out.WebsumModel,
 		"websum_error":                       out.WebsumError,
 		"web_cache_hit":                      out.WebCacheHit,
@@ -135,7 +128,7 @@ func renderCrawlArtifact(pages []crawlPage) string {
 }
 
 func storeWebOutput(toolName, source, content string) (string, error) {
-	ref, err := tooloutput.Store(tooloutput.StoreRequest{
+	ref, err := StoreOutput(OutputStoreRequest{
 		Parts:                 []string{toolName, source},
 		Content:               content,
 		TrimSpace:             true,
@@ -154,11 +147,6 @@ func webPageMetadata(page compactPage) map[string]any {
 		"summary_chars":                      page.SummaryChars,
 		"summarizer_provider":                page.SummarizerProvider,
 		"summarizer_model":                   page.SummarizerModel,
-		"websum_input_tokens":                page.WebsumInputTokens,
-		"websum_output_tokens":               page.WebsumOutputTokens,
-		"websum_cost":                        page.WebsumCost,
-		"websum_cache_hit":                   page.WebsumCacheHit,
-		"websum_cache_miss":                  page.WebsumCacheMiss,
 		"websum_model":                       page.WebsumModel,
 		"websum_error":                       page.WebsumError,
 		"web_cache_hit":                      page.WebCacheHit,
@@ -166,13 +154,6 @@ func webPageMetadata(page compactPage) map[string]any {
 		"web_cache_key":                      page.WebCacheKey,
 		"web_cache_age_ms":                   page.WebCacheAgeMS,
 		"web_cache_ttl_ms":                   page.WebCacheTTLMS,
-		"web_cache_lookup_ms":                page.WebCacheLookupMS,
-		"web_http_fetch_ms":                  page.WebHTTPFetchMS,
-		"web_compact_ms":                     page.WebCompactMS,
-		"web_summary_ms":                     page.WebSummaryMS,
-		"web_output_ref_ms":                  page.WebOutputRefMS,
-		"web_cache_save_ms":                  page.WebCacheSaveMS,
-		"web_total_ms":                       page.WebTotalMS,
 		"raw_bytes_fetched":                  page.RawBytesFetched,
 		"max_bytes":                          page.MaxBytes,
 		"original_text_chars":                page.OriginalTextChars,
@@ -202,7 +183,7 @@ func webPageMetadata(page compactPage) map[string]any {
 }
 
 func addOutputRefMetadata(metadata map[string]any, ref string) {
-	_ = tooloutput.AddMetadataForPath(metadata, ref)
+	_ = AddMetadataForPath(metadata, ref)
 }
 
 func websumAPITokens(mode string, inputTokens, outputTokens int64) (int64, int64, int64) {

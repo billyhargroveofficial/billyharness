@@ -829,6 +829,38 @@ DEEPSEEK_API_KEY=sk-secret-should-not-appear
 	}
 }
 
+func TestResolveEffectiveKeepsBaseAndOverridesIndependent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	t.Setenv("FAST_AGENT_MODEL", "deepseek-v4-flash")
+
+	builderCalled := false
+	base, effective, err := ResolveEffectiveFromBase(func(base Config) []ResolveOverride {
+		builderCalled = true
+		if base.Model != "deepseek-v4-flash" {
+			t.Fatalf("builder saw base model %q", base.Model)
+		}
+		return []ResolveOverride{{
+			Key:       "model",
+			Value:     "gpt-5.5",
+			Source:    SourceGateway,
+			SourceKey: "model",
+		}}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !builderCalled {
+		t.Fatal("override builder was not called")
+	}
+	if base.Config.Model != "deepseek-v4-flash" || effective.Config.Model != "gpt-5.5" {
+		t.Fatalf("base/effective models = %q/%q", base.Config.Model, effective.Config.Model)
+	}
+	assertResolvedSource(t, base, "model", SourceEnvironment, "FAST_AGENT_MODEL")
+	assertResolvedSource(t, effective, "model", SourceGateway, "model")
+}
+
 func TestProjectConfigDenylistBlocksProviderAuthOverrides(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()

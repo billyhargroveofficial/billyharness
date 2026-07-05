@@ -19,7 +19,6 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/runstate"
-	"github.com/billyhargroveofficial/billyharness/internal/tooloutput"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
@@ -266,7 +265,7 @@ func strconvQuote(text string) string {
 }
 
 func annotateOutputRefMetadata(ref string, metadata map[string]any) {
-	_ = tooloutput.AddMetadataForPath(metadata, ref)
+	_ = tools.AddMetadataForPath(metadata, ref)
 }
 
 func minInt(a, b int) int {
@@ -899,7 +898,7 @@ func (a *Agent) compactToolResult(index int, call protocol.ToolCall, out *protoc
 	full := out.Content
 	ref := out.OutputRef
 	reusedRef := ref != ""
-	var refInfo tooloutput.Ref
+	var refInfo tools.OutputRef
 	var err error
 	if ref == "" {
 		refInfo, err = storeManagedToolOutput(index, call, full)
@@ -919,7 +918,7 @@ func (a *Agent) compactToolResult(index int, call protocol.ToolCall, out *protoc
 		if refInfo.Path != "" {
 			refInfo.AddMetadata(out.Metadata)
 		} else {
-			_ = tooloutput.AddMetadataForPath(out.Metadata, ref)
+			_ = tools.AddMetadataForPath(out.Metadata, ref)
 		}
 	}
 }
@@ -965,8 +964,8 @@ func boundedToolOutputPreview(full string, limit int, ref string, reusedRef bool
 	}
 }
 
-func storeManagedToolOutput(index int, call protocol.ToolCall, content string) (tooloutput.Ref, error) {
-	return tooloutput.Store(tooloutput.StoreRequest{
+func storeManagedToolOutput(index int, call protocol.ToolCall, content string) (tools.OutputRef, error) {
+	return tools.StoreOutput(tools.OutputStoreRequest{
 		Parts:   []string{fmt.Sprintf("%02d", index+1), call.Name, call.ID},
 		Content: content,
 	})

@@ -568,6 +568,45 @@ func TestManagerStatusListenersObserveLifecycleChanges(t *testing.T) {
 	}
 }
 
+func TestManagedServerStartEarlyReturnPublishesStatus(t *testing.T) {
+	statuses := make(chan ServerStatus, 1)
+	catalogChanges := make(chan struct{}, 1)
+	server := newManagedServer(ManagerSettings{}, config.MCPServer{
+		Name:    "remote",
+		URL:     "https://example.com/mcp",
+		Enabled: true,
+	}, func(status ServerStatus) {
+		statuses <- status
+	}, func() {
+		catalogChanges <- struct{}{}
+	})
+	server.status.Connected = true
+	server.status.State = mcpStateConnected
+	server.status.CatalogState = mcpCatalogStateReady
+	server.status.ToolCount = 1
+	server.specs = []protocol.ToolSpec{{Name: "old_tool"}}
+
+	_, _, _, err := server.start(context.Background(), true)
+	if err == nil || !strings.Contains(err.Error(), "cannot reconnect") {
+		t.Fatalf("start err = %v", err)
+	}
+
+	select {
+	case status := <-statuses:
+		if status.Name != "remote" || status.Connected || status.State != mcpStateFailed ||
+			status.ToolCount != 0 || status.CatalogState != mcpCatalogStateDisconnected {
+			t.Fatalf("published status = %#v", status)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for early-return status publish")
+	}
+	select {
+	case <-catalogChanges:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for early-return catalog publish")
+	}
+}
+
 func TestStdioCallTimeoutAndTransportCloseDisconnectStatus(t *testing.T) {
 	root := t.TempDir()
 

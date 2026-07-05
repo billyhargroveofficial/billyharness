@@ -57,8 +57,12 @@ func telegramMessageHasMedia(msg Message) bool {
 	return len(msg.Photo) > 0 || msg.Document != nil
 }
 
+func telegramMessageHasUnsupportedMedia(msg Message) bool {
+	return msg.Voice != nil || msg.Audio != nil || msg.VideoNote != nil || msg.Video != nil
+}
+
 func telegramMessageProcessable(msg Message) bool {
-	return telegramMessagePrompt(msg) != "" || telegramMessageHasMedia(msg)
+	return telegramMessagePrompt(msg) != "" || telegramMessageHasMedia(msg) || telegramMessageHasUnsupportedMedia(msg)
 }
 
 func (b *Bot) prepareTelegramAttachments(ctx context.Context, msg Message, state ChatState) ([]protocol.AttachmentRef, error) {
@@ -216,6 +220,51 @@ func telegramVisionUnsupportedMessage(model string) string {
 		return "Image input is unsupported for the current model. Switch to a vision-capable model with /model gpt-5.5, or resend text only."
 	}
 	return "Image input is unsupported for " + modelWithCapability(model) + ". Switch to a vision-capable model with /model gpt-5.5, or resend text only."
+}
+
+func telegramUnsupportedMediaInput(msg Message) *telegramDurableInputError {
+	kind := telegramUnsupportedMediaKind(msg)
+	if kind == "" {
+		kind = "media"
+	}
+	return &telegramDurableInputError{
+		Reason:      telegramUnsupportedMediaReason(kind),
+		UserMessage: telegramUnsupportedMediaMessage(kind),
+	}
+}
+
+func telegramUnsupportedMediaKind(msg Message) string {
+	switch {
+	case msg.Voice != nil:
+		return "voice"
+	case msg.Audio != nil:
+		return "audio"
+	case msg.VideoNote != nil:
+		return "video note"
+	case msg.Video != nil:
+		return "video"
+	default:
+		return ""
+	}
+}
+
+func telegramUnsupportedMediaReason(kind string) string {
+	return strings.ReplaceAll(strings.TrimSpace(kind), " ", "_") + "_unsupported"
+}
+
+func telegramUnsupportedMediaMessage(kind string) string {
+	switch kind {
+	case "voice":
+		return "Voice messages aren't supported yet -- send text or an image."
+	case "audio":
+		return "Audio messages aren't supported yet -- send text or an image."
+	case "video note":
+		return "Video note messages aren't supported yet -- send text or an image."
+	case "video":
+		return "Video messages aren't supported yet -- send text or an image."
+	default:
+		return "This media type isn't supported yet -- send text or an image."
+	}
 }
 
 func telegramDurableInput(reason, userMessage string, err error) error {

@@ -2,32 +2,8 @@ package gateway
 
 import (
 	"net"
-	"net/http"
 	"strings"
-
-	"github.com/billyhargroveofficial/billyharness/internal/gatewaybase"
 )
-
-const (
-	GatewayAuthTokenEnv       = gatewaybase.GatewayAuthTokenEnv
-	LegacyGatewayAuthTokenEnv = gatewaybase.LegacyGatewayAuthTokenEnv
-)
-
-func NormalizeBaseURL(value string) string {
-	return gatewaybase.NormalizeBaseURL(value)
-}
-
-func AuthTokenFromEnv() string {
-	return gatewaybase.AuthTokenFromEnv()
-}
-
-func SetAuthHeader(req *http.Request, token string) {
-	gatewaybase.SetAuthHeader(req, token)
-}
-
-func SetAuthHeaderFromEnv(req *http.Request) {
-	gatewaybase.SetAuthHeaderFromEnv(req)
-}
 
 func RequiresAuthForAddr(addr string) bool {
 	host := addrHost(addr)

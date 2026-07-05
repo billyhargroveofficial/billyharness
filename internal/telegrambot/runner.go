@@ -274,9 +274,6 @@ func (b *Bot) admitTelegramPromptUpdate(ctx context.Context, update Update) (tel
 	if strings.TrimSpace(resp.InputID) == "" {
 		resp.InputID = inputID
 	}
-	if err := b.admit.RecordAdmitted(update.UpdateID, msg, state.SessionID, resp, prompt, len(refs)); err != nil {
-		return telegramPromptAdmission{}, err
-	}
 	skipRun := resp.Duplicate && resp.State != "" && resp.State != "admitted"
 	if skipRun {
 		b.clearPendingInput(key, resp.InputID)

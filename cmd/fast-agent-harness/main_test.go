@@ -16,7 +16,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/commandregistry"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
-	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
@@ -199,11 +199,8 @@ func TestNormalizeGatewayURL(t *testing.T) {
 		if got := normalizeGatewayURL(input); got != want {
 			t.Fatalf("normalizeGatewayURL(%q) = %q, want %q", input, got, want)
 		}
-		if got := gateway.NormalizeBaseURL(input); got != want {
-			t.Fatalf("gateway.NormalizeBaseURL(%q) = %q, want %q", input, got, want)
-		}
-		if got := gatewayclient.NormalizeBaseURL(input); got != want {
-			t.Fatalf("gatewayclient.NormalizeBaseURL(%q) = %q, want %q", input, got, want)
+		if got := gatewayapi.NormalizeBaseURL(input); got != want {
+			t.Fatalf("gatewayapi.NormalizeBaseURL(%q) = %q, want %q", input, got, want)
 		}
 	}
 }
@@ -283,7 +280,7 @@ func TestConfigInspectJSONDoesNotLeakDotenvSecrets(t *testing.T) {
 }
 
 func TestGatewayRunUnavailableWrapsHint(t *testing.T) {
-	err := (&gatewayclient.UnavailableError{BaseURL: ":8765", Err: errors.New("connect refused")}).Error()
+	err := (&gatewayapi.UnavailableError{BaseURL: ":8765", Err: errors.New("connect refused")}).Error()
 	if !strings.Contains(err, "gateway http://127.0.0.1:8765 is not reachable") ||
 		!strings.Contains(err, "connect refused") {
 		t.Fatalf("unavailable error = %q", err)
@@ -406,50 +403,6 @@ func TestDoctorRejectsInvalidRuntimeConfig(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid runtime config") || !strings.Contains(err.Error(), "FAST_AGENT_MAX_TOOL_ROUNDS") {
 		t.Fatalf("doctor strict error = %v", err)
-	}
-}
-
-func TestConfigMCPMigrateCommandPrintsRedactedSuggestions(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "mcp.json")
-	if err := os.WriteFile(path, []byte(`{
-  "mcpServers": {
-    "github": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp-cli-secret" }
-    }
-  }
-}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	if err := configCommand([]string{"mcp-migrate", "-file", path}, &out); err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{
-		"billyharness MCP migration diagnostics",
-		"github source=explicit transport=stdio status=supported",
-		"[mcp_servers.github]",
-		`env_vars = ["GITHUB_PERSONAL_ACCESS_TOKEN"]`,
-	} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("mcp migrate output missing %q:\n%s", want, out.String())
-		}
-	}
-	if strings.Contains(out.String(), "ghp-cli-secret") {
-		t.Fatalf("mcp migrate output leaked secret:\n%s", out.String())
-	}
-
-	out.Reset()
-	if err := configCommand([]string{"mcp-migrate", "-file", path, "-json"}, &out); err != nil {
-		t.Fatal(err)
-	}
-	var report config.MCPMigrationReport
-	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
-		t.Fatal(err)
-	}
-	if len(report.Servers) != 1 || report.Servers[0].Name != "github" || strings.Contains(out.String(), "ghp-cli-secret") {
-		t.Fatalf("json report = %s", out.String())
 	}
 }
 
@@ -718,6 +671,100 @@ func TestSessionsCommandListsAndInspectsStore(t *testing.T) {
 	}
 	if !strings.Contains(deleteOut.String(), "deleted") {
 		t.Fatalf("index delete output: %s", deleteOut.String())
+	}
+}
+
+func TestSessionsExportRedactsTranscriptSurfaces(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("FAST_AGENT_PROVIDER", "mock")
+	t.Setenv("FAST_AGENT_MODEL", "mock")
+	resolved, err := config.ResolveStrict()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := resolved.Config
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.MCPEnabled = false
+	storeDir := gateway.DefaultSessionStoreDir()
+	sessionID := createSessionsExportTestSession(t, cfg, storeDir)
+
+	var rawExport bytes.Buffer
+	if err := sessionsCommand([]string{"export", "-dir", storeDir, "-mode", "raw", sessionID}, &rawExport); err != nil {
+		t.Fatal(err)
+	}
+	assertSessionsExportRedacted(t, "raw export", rawExport.String())
+	if !strings.Contains(rawExport.String(), "[redacted]") {
+		t.Fatalf("raw export missing redaction marker:\n%s", rawExport.String())
+	}
+
+	var jsonExport bytes.Buffer
+	if err := sessionsCommand([]string{"export", "-dir", storeDir, "-mode", "rich", "-json", sessionID}, &jsonExport); err != nil {
+		t.Fatal(err)
+	}
+	assertSessionsExportRedacted(t, "json export", jsonExport.String())
+	if !json.Valid(jsonExport.Bytes()) {
+		t.Fatalf("json export invalid:\n%s", jsonExport.String())
+	}
+	if !strings.Contains(jsonExport.String(), "[redacted]") {
+		t.Fatalf("json export missing redaction marker:\n%s", jsonExport.String())
+	}
+}
+
+func createSessionsExportTestSession(t *testing.T, cfg config.Config, storeDir string) string {
+	t.Helper()
+	server := gateway.NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), gateway.ServerOptions{SessionStoreDir: storeDir})
+	createBody, err := json.Marshal(gateway.CreateSessionRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(createBody))
+	req.Header.Set("Content-Type", "application/json")
+	server.Handler().ServeHTTP(create, req)
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var created gateway.SessionResponse
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	secretPrompt := strings.Join([]string{
+		"please echo sk-12345678901234567890",
+		"https://alice:secret@example.test/path?token=supersecret",
+		"Authorization: Bearer abcdefghijklmnop",
+		"X-Api-Key: hiddenvalue123456",
+		"Cookie: sessionid=verysecretcookie",
+	}, "\n")
+	runBody, err := json.Marshal(gateway.RunRequest{Prompt: secretPrompt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := httptest.NewRecorder()
+	runReq := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+created.ID+"/run", bytes.NewReader(runBody))
+	runReq.Header.Set("Content-Type", "application/json")
+	server.Handler().ServeHTTP(run, runReq)
+	if run.Code != http.StatusOK {
+		t.Fatalf("run status = %d body=%s", run.Code, run.Body.String())
+	}
+	return created.ID
+}
+
+func assertSessionsExportRedacted(t *testing.T, rel string, body string) {
+	t.Helper()
+	for _, forbidden := range []string{
+		"sk-12345678901234567890",
+		"alice:secret@",
+		"supersecret",
+		"Bearer abcdefghijklmnop",
+		"hiddenvalue123456",
+		"verysecretcookie",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("%s leaked %q:\n%s", rel, forbidden, body)
+		}
 	}
 }
 

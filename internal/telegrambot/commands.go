@@ -12,6 +12,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/memory"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/toolrender"
 )
@@ -88,6 +89,10 @@ func telegramCommands() []telegramCommandSpec {
 		telegramActionCommand("model.set", telegramCommandSpec{
 			class:   telegramCommandSessionScoped,
 			handler: (*Bot).handleModelCommand,
+		}),
+		telegramActionCommand("models.list", telegramCommandSpec{
+			bypassRunLock: true,
+			handler:       (*Bot).handleModelsCommand,
 		}),
 		telegramActionCommand("profile.set", telegramCommandSpec{
 			class:   telegramCommandSessionScoped,
@@ -278,10 +283,17 @@ func (b *Bot) handleNewCommand(ctx context.Context, msg Message, scope ChatScope
 	_ = b.sendPlain(ctx, msg, "New Billyharness session: "+short(id))
 }
 
-func (b *Bot) handleStatusCommand(ctx context.Context, msg Message, scope ChatScope, _ string) {
+func (b *Bot) handleStatusCommand(ctx context.Context, msg Message, scope ChatScope, arg string) {
 	state := b.chatStateWithLegacy(scope.Key(), scope.LegacyKey())
 	runtime := b.activeRuntimeStatus(b.gatewayScopedContext(ctx, msg, state), state)
-	_ = b.sendHTML(ctx, msg, StatusHTMLWithRuntime(state, b.opts, runtime))
+	switch view := strings.TrimSpace(arg); view {
+	case "":
+		_ = b.sendHTML(ctx, msg, StatusHTMLWithRuntime(state, b.opts, runtime))
+	case "debug":
+		_ = b.sendHTML(ctx, msg, StatusDebugHTMLWithRuntime(state, b.opts, runtime))
+	default:
+		_ = b.sendPlain(ctx, msg, "Unknown status view "+view)
+	}
 }
 
 func (b *Bot) activeRuntimeStatus(ctx context.Context, state ChatState) gatewayapi.SessionStatus {
@@ -310,6 +322,24 @@ func (b *Bot) handleModelCommand(ctx context.Context, msg Message, scope ChatSco
 	state.UpdatedAt = time.Now().UTC()
 	b.setChatState(key, state)
 	_ = b.sendPlain(ctx, msg, "Model: "+modelWithCapability(state.Model))
+}
+
+func (b *Bot) handleModelsCommand(ctx context.Context, msg Message, scope ChatScope, arg string) {
+	// Keep arg for future provider/name filtering while preserving the shared handler signature.
+	_ = arg
+	state := b.chatStateWithLegacy(scope.Key(), scope.LegacyKey())
+	current := modelAlias(fallback(state.Model, b.opts.Model))
+	lines := []string{"Known models:"}
+	for _, provider := range modelinfo.Providers() {
+		for _, model := range provider.Models {
+			marker := " "
+			if modelAlias(model) == current {
+				marker = "*"
+			}
+			lines = append(lines, fmt.Sprintf("%s %s (%s, %s)", marker, model, provider.ID, modelinfo.InputCapabilityLabel(model)))
+		}
+	}
+	_ = b.sendPlain(ctx, msg, strings.Join(lines, "\n"))
 }
 
 func (b *Bot) handleProfileCommand(ctx context.Context, msg Message, scope ChatScope, arg string) {
@@ -364,14 +394,12 @@ func (b *Bot) handleModeCommand(ctx context.Context, msg Message, scope ChatScop
 		_ = b.sendPlain(ctx, msg, "Current access mode: "+config.NormalizeAccessMode(state.AccessMode))
 		return
 	}
-	mode := strings.ToLower(strings.TrimSpace(arg))
-	switch mode {
-	case config.AccessModeBuild, config.AccessModeGuarded, config.AccessModePlan, "safe", "readonly", "read-only", "read_only", "analysis":
-	default:
+	normalized, ok := config.ParseAccessMode(arg)
+	if !ok {
 		_ = b.sendPlain(ctx, msg, "Unknown access mode. Use build, guarded, or plan.")
 		return
 	}
-	state.AccessMode = config.NormalizeAccessMode(mode)
+	state.AccessMode = normalized
 	state.UpdatedAt = time.Now().UTC()
 	b.setChatState(key, state)
 	_ = b.sendPlain(ctx, msg, "Access mode: "+state.AccessMode)

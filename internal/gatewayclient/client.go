@@ -10,18 +10,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"syscall"
-	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/displayfmt"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
-	"github.com/billyhargroveofficial/billyharness/internal/gatewaybase"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
-)
-
-const (
-	GatewayAuthTokenEnv       = gatewaybase.GatewayAuthTokenEnv
-	LegacyGatewayAuthTokenEnv = gatewaybase.LegacyGatewayAuthTokenEnv
 )
 
 var (
@@ -67,14 +59,9 @@ type EventSeqGapError struct {
 	GotSeq   int64
 }
 
-type UnavailableError struct {
-	BaseURL string
-	Err     error
-}
-
 func New(baseURL string) *Client {
 	return &Client{
-		BaseURL: NormalizeBaseURL(baseURL),
+		BaseURL: gatewayapi.NormalizeBaseURL(baseURL),
 		Client:  &http.Client{Timeout: 0},
 	}
 }
@@ -141,70 +128,6 @@ func (e *EventSeqGapError) Error() string {
 		return ""
 	}
 	return fmt.Sprintf("gateway event sequence gap: got seq %d after %d", e.GotSeq, e.AfterSeq)
-}
-
-func (e *UnavailableError) Error() string {
-	hint := UnavailableHint(e.BaseURL)
-	if e.Err == nil {
-		return hint
-	}
-	return hint + ": " + e.Err.Error()
-}
-
-func (e *UnavailableError) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.Err
-}
-
-func NormalizeBaseURL(value string) string {
-	return gatewaybase.NormalizeBaseURL(value)
-}
-
-func AuthTokenFromEnv() string {
-	return gatewaybase.AuthTokenFromEnv()
-}
-
-func SetAuthHeader(req *http.Request, token string) {
-	gatewaybase.SetAuthHeader(req, token)
-}
-
-func SetAuthHeaderFromEnv(req *http.Request) {
-	gatewaybase.SetAuthHeaderFromEnv(req)
-}
-
-func DoWithReadyRetry(ctx context.Context, client *http.Client, baseURL string, makeRequest func() (*http.Request, error)) (*http.Response, error) {
-	if client == nil {
-		client = http.DefaultClient
-	}
-	req, err := makeRequest()
-	if err != nil {
-		return nil, err
-	}
-	resp, err := client.Do(req)
-	if err == nil {
-		return resp, nil
-	}
-	if !errors.Is(err, syscall.ECONNREFUSED) {
-		return nil, err
-	}
-	if !WaitForReady(ctx, baseURL, 2*time.Second) {
-		return nil, &UnavailableError{BaseURL: baseURL, Err: err}
-	}
-	req, reqErr := makeRequest()
-	if reqErr != nil {
-		return nil, reqErr
-	}
-	return client.Do(req)
-}
-
-func WaitForReady(ctx context.Context, baseURL string, timeout time.Duration) bool {
-	return gatewaybase.WaitForReady(ctx, baseURL, timeout)
-}
-
-func UnavailableHint(baseURL string) string {
-	return gatewaybase.UnavailableHint(baseURL)
 }
 
 func (c *Client) CreateSession(ctx context.Context, profile string) (string, error) {
@@ -414,14 +337,14 @@ func (c *Client) JSON(ctx context.Context, method, path string, body any, out an
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
-	baseURL := NormalizeBaseURL(c.BaseURL)
+	baseURL := gatewayapi.NormalizeBaseURL(c.BaseURL)
 	if baseURL == "" {
 		return nil, fmt.Errorf("gateway URL is empty")
 	}
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	return DoWithReadyRetry(ctx, c.client(), baseURL, func() (*http.Request, error) {
+	return gatewayapi.DoWithReadyRetry(ctx, c.client(), baseURL, func() (*http.Request, error) {
 		var reader io.Reader
 		if body != nil {
 			reader = bytes.NewReader(body)
@@ -436,7 +359,7 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (*htt
 		if owner, ok := SessionOwnerFromContext(ctx); ok {
 			setSessionOwnerHeaders(req, owner)
 		}
-		SetAuthHeaderFromEnv(req)
+		gatewayapi.SetAuthHeaderFromEnv(req)
 		return req, nil
 	})
 }

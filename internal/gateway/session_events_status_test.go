@@ -24,7 +24,6 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
-	"github.com/billyhargroveofficial/billyharness/internal/trace"
 )
 
 func TestGatewaySessionRunStreamsStoredSequencedEvents(t *testing.T) {
@@ -624,13 +623,16 @@ func TestGatewaySessionRunRecordsContextEpochDrift(t *testing.T) {
 	t.Setenv("CODEX_HOME", filepath.Join(home, "codex-empty"))
 	writeTestMemoryIndex(t, home, "Prefers first evidence summary", "FIRST SECRET TOPIC BODY")
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "agent-index"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("project rules"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "agent-index", "docs-manifest.json"), []byte(`{"schema_version":1,"docs":["README.md"]}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "llms.txt"), []byte("repo orientation"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "README.md"), []byte("docs orientation"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -869,66 +871,6 @@ func TestGatewaySessionSnapshotsUseEffectiveSessionModelWindow(t *testing.T) {
 	}
 	if offline.ContextWindowTokens != wantWindow || offline.ContextCompactTokens != int64(wantWindow*60/100) {
 		t.Fatalf("offline context limits = window:%d compact:%d want window:%d", offline.ContextWindowTokens, offline.ContextCompactTokens, wantWindow)
-	}
-}
-
-func TestGatewayBenchmarksEndpointListsManifestSummaries(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("BILLYHARNESS_HOME", home)
-	runDir := filepath.Join(home, "bench-runs", "smoke")
-	payloadsDir := filepath.Join(runDir, "20260628T100000Z-payloads")
-	if err := os.MkdirAll(payloadsDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	resultsPath := filepath.Join(runDir, "20260628T100000Z-results.jsonl")
-	eventsPath := filepath.Join(runDir, "20260628T100000Z-events.jsonl")
-	if err := os.WriteFile(resultsPath, []byte(`{"task_id":"one","outcome":"pass"}`+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(eventsPath, []byte(`{"seq":1,"run_id":"20260628T100000Z"}`+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	manifestPath := filepath.Join(runDir, "20260628T100000Z-manifest.json")
-	manifest := trace.Manifest{
-		SchemaVersion: trace.CurrentManifestVersion,
-		RunID:         "20260628T100000Z",
-		CreatedAt:     time.Date(2026, 6, 28, 10, 0, 0, 0, time.UTC),
-		Harness:       "fast-agent-harness-go",
-		ProfileHash:   "profile123",
-		TasksPath:     "tasks.jsonl",
-		TaskCount:     1,
-		ResultsJSONL:  resultsPath,
-		EventsJSONL:   eventsPath,
-		PayloadsDir:   payloadsDir,
-	}
-	manifestBytes, err := json.Marshal(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(manifestPath, manifestBytes, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg := config.Default()
-	cfg.Provider = "mock"
-	cfg.Model = "mock"
-	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
-	rec := httptest.NewRecorder()
-	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/benchmarks", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("benchmarks status = %d body=%s", rec.Code, rec.Body.String())
-	}
-	var got BenchmarkListResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Dir != filepath.Join(home, "bench-runs") || len(got.Runs) != 1 {
-		t.Fatalf("benchmarks response = %#v", got)
-	}
-	run := got.Runs[0]
-	if run.RunID != manifest.RunID || run.TaskCount != 1 || run.ProfileHash != "profile123" ||
-		!run.ResultsPresent || !run.EventsPresent || !run.PayloadsPresent {
-		t.Fatalf("benchmark run summary = %#v", run)
 	}
 }
 

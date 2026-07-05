@@ -47,7 +47,6 @@ type Codex struct {
 type codexAuthSnapshot struct {
 	AccessToken string
 	AccountID   string
-	FedRAMP     bool
 }
 
 func (c *Codex) Stream(ctx context.Context, req Request) (<-chan Event, <-chan error) {
@@ -150,9 +149,6 @@ func (c *Codex) doResponsesRequest(ctx context.Context, body []byte) (*http.Resp
 	if auth.AccountID != "" {
 		httpReq.Header.Set("ChatGPT-Account-ID", auth.AccountID)
 	}
-	if auth.FedRAMP {
-		httpReq.Header.Set("X-OpenAI-Fedramp", "true")
-	}
 	if c.Originator != "" {
 		httpReq.Header.Set("originator", c.Originator)
 	}
@@ -213,7 +209,6 @@ func (c *Codex) authSnapshot() (codexAuthSnapshot, error) {
 	return codexAuthSnapshot{
 		AccessToken: c.Auth.AccessToken,
 		AccountID:   c.Auth.AccountID,
-		FedRAMP:     c.Auth.FedRAMP,
 	}, nil
 }
 

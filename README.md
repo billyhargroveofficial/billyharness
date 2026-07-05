@@ -6,10 +6,7 @@ Fast Go agent harness with a gateway API, TUI chat, native tools, MCP server, an
 
 - [Architecture map](docs/architecture.md) is the current package-boundary and
   import-rule source of truth.
-- [Codex research roadmap](docs/codex-research-roadmap.md) records the original
-  architecture research and comparison shape.
-- [Competitive architecture analysis](docs/competitive-architecture-analysis.md)
-  captures clean-room competitor patterns worth taking or rejecting.
+- [Docs index](docs/README.md) routes the durable architecture canon and ADRs.
 
 Work protocol for runtime changes:
 
@@ -18,7 +15,7 @@ Work protocol for runtime changes:
 3. Run the relevant package tests, then `/root/.local/go/bin/go test -count=1 ./...` for broad runtime changes.
 4. Run `GO_BIN=/root/.local/go/bin/go ./scripts/verify-deps.sh` when `go.mod` or `go.sum` changes.
 5. Rebuild locally with `go build -o ./bin/fast-agent-harness ./cmd/fast-agent-harness` when CLI, gateway, agent, provider, tool, TUI, or Telegram code changes.
-6. For production deploys, use `scripts/production-deploy.sh deploy --yes` so the binary carries commit/build-time provenance and the doctor/readiness gate runs before the deploy is accepted.
+6. For production deploys, use `scripts/deploy.sh` on hosts whose systemd units point at `bin/fast-agent-harness-current`; use `scripts/production-deploy.sh deploy --yes` for the older source-checkout deploy lane.
 7. Restart `billyharness-gateway.service` and `billyharness-telegram.service` when deployed runtime behavior changes outside the deploy script.
 8. After verification, move completed TODOs to `loop-develop/history` preserving
    their number.
@@ -41,12 +38,6 @@ For a non-failing local snapshot while editing, disable active checks:
 
 ```bash
 ./bin/fast-agent-harness doctor -build=false -services=false -gateway=false
-```
-
-For a redacted local incident bundle tied to one persisted session:
-
-```bash
-./bin/fast-agent-harness incident collect -session SESSION_ID -out /tmp/billyharness-incident
 ```
 
 Production runs on `root@82.23.163.16` under `/root/billyharness`. Competitor

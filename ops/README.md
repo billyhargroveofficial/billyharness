@@ -1,10 +1,10 @@
 # Billyharness Operations
 
-Last verified: 2026-07-04. Commands in this index were checked against
+Last verified: 2026-07-05. Commands in this index were checked against
 `README.md`, `go run ./cmd/fast-agent-harness help`,
-`go run ./cmd/fast-agent-harness doctor -h`, and the gateway/service/session/
-incident command source in this worktree. Production SSH facts were checked
-against `root@82.23.163.16` for the dated inventory linked below.
+`go run ./cmd/fast-agent-harness doctor -h`, and the gateway/service/session
+command source in this worktree. Production SSH facts must be checked live
+against `root@82.23.163.16` before changing the VPS.
 
 `ops/` is the runbook lane for production operation, health checks, and
 diagnostics. Keep these procedures outside `docs/`, because `docs/` is the
@@ -14,13 +14,10 @@ architecture canon only.
 
 - [Doctor and diagnostics](doctor-and-diagnostics.md): local health snapshots,
   config inspection, gateway readiness, MCP status, session diagnostics, and
-  incident bundles.
+  redacted export commands.
 - [Production services](production-services.md): production entrypoint, service
   names, readiness checks, deploy/rollback script, restarts, and
   deployment-time cautions.
-- [Production inventory - 2026-07-04](production-inventory-2026-07-04.md):
-  dated redacted source of truth for the live host, unit files, binary,
-  checkout, gateway binding, and doctor snapshot.
 
 ## First Response
 
@@ -37,15 +34,9 @@ For an editing-time snapshot that skips active process checks:
 ./bin/fast-agent-harness doctor -build=false -services=false -gateway=false
 ```
 
-To preserve a redacted local bundle for one failed session:
-
-```sh
-./bin/fast-agent-harness incident collect -session SESSION_ID -out /tmp/billyharness-incident
-```
-
 Production is described by the project contract as `root@82.23.163.16` under
-`/root/billyharness`. The most recent live inventory is
-`ops/production-inventory-2026-07-04.md`:
+`/root/billyharness`. For current production facts, run
+`./bin/fast-agent-harness doctor -json` and inspect the host live:
 
 ```sh
 ssh root@82.23.163.16
@@ -59,7 +50,8 @@ configs with inline `env` values, shell histories, Telegram bot tokens, Codex
 tokens, DeepSeek keys, GitHub tokens, or bearer tokens into tickets or chat.
 
 Prefer status commands that already sanitize values, such as `doctor`,
-`doctor -json`, `config inspect`, `incident collect`, and `/v1/auth/status`.
+`doctor -json`, `config inspect`, `sessions inspect`, `sessions context`,
+`sessions export`, and `/v1/auth/status`.
 When collecting logs, redact tokens, `Authorization` headers, API keys, and
 credential-bearing URLs before sharing.
 

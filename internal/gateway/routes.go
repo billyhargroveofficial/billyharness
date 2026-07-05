@@ -7,7 +7,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/auth/deepseek", s.handleDeepSeekAuth)
 	s.mux.HandleFunc("POST /v1/auth/codex/import", s.handleCodexImport)
 	s.mux.HandleFunc("GET /v1/config", s.handleConfigStatus)
-	s.mux.HandleFunc("GET /v1/benchmarks", s.handleBenchmarks)
 	s.mux.HandleFunc("GET /v1/tools", s.handleTools)
 	s.mux.HandleFunc("GET /v1/mcp", s.handleMCP)
 	s.mux.HandleFunc("GET /v1/processes", s.handleManagedProcesses)

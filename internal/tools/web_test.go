@@ -16,7 +16,6 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
-	"github.com/billyhargroveofficial/billyharness/internal/tooloutput"
 	"github.com/billyhargroveofficial/billyharness/internal/webtools"
 )
 
@@ -272,12 +271,12 @@ func TestWebCompactionStoresFullTextOutOfBand(t *testing.T) {
 		anyInt64(meta["tool_summary_saved_tokens"]) <= 0 {
 		t.Fatalf("summary token metadata should show compression: %#v", meta)
 	}
-	if meta[tooloutput.MetadataOutputRef] != ref ||
-		meta[tooloutput.MetadataOutputRefID] == "" ||
-		anyInt64(meta[tooloutput.MetadataOutputRefBytes]) <= 0 ||
-		meta[tooloutput.MetadataOutputRefSHA256] == "" ||
-		meta[tooloutput.MetadataOutputRefPermissions] != "0600" ||
-		meta[tooloutput.MetadataOutputRefPlaintext] != true {
+	if meta[MetadataOutputRef] != ref ||
+		meta[MetadataOutputRefID] == "" ||
+		anyInt64(meta[MetadataOutputRefBytes]) <= 0 ||
+		meta[MetadataOutputRefSHA256] == "" ||
+		meta[MetadataOutputRefPermissions] != "0600" ||
+		meta[MetadataOutputRefPlaintext] != true {
 		t.Fatalf("output ref metadata missing shared fields: %#v", meta)
 	}
 	bytes, err := os.ReadFile(ref)
@@ -365,10 +364,10 @@ func TestWebOutputMetadataReportsMissingArtifact(t *testing.T) {
 		EstimatedTokensSaved: 5,
 		OutputRef:            missing,
 	})
-	if meta[tooloutput.MetadataOutputRef] != missing {
+	if meta[MetadataOutputRef] != missing {
 		t.Fatalf("metadata should preserve missing output_ref path: %#v", meta)
 	}
-	if meta[tooloutput.MetadataOutputRefHashError] == "" {
+	if meta[MetadataOutputRefHashError] == "" {
 		t.Fatalf("metadata should report missing output_ref stat error: %#v", meta)
 	}
 }
@@ -648,7 +647,7 @@ func TestWebIncludeTextMarksRawExcerptOutputClass(t *testing.T) {
 	}
 }
 
-func TestWebPageMetadataIncludesPhaseTimings(t *testing.T) {
+func TestResetWebPhaseTimingsClearsInstrumentationFields(t *testing.T) {
 	page := compactPage{
 		URL:              "https://example.com/timing",
 		OutputClass:      "extractive_summary",
@@ -660,20 +659,6 @@ func TestWebPageMetadataIncludesPhaseTimings(t *testing.T) {
 		WebOutputRefMS:   5,
 		WebCacheSaveMS:   6,
 		WebTotalMS:       21,
-	}
-	meta := webPageMetadata(page)
-	for key, want := range map[string]int64{
-		"web_cache_lookup_ms": 1,
-		"web_http_fetch_ms":   2,
-		"web_compact_ms":      3,
-		"web_summary_ms":      4,
-		"web_output_ref_ms":   5,
-		"web_cache_save_ms":   6,
-		"web_total_ms":        21,
-	} {
-		if got := anyInt64(meta[key]); got != want {
-			t.Fatalf("%s = %d, want %d in %#v", key, got, want, meta)
-		}
 	}
 
 	page.resetWebPhaseTimings()
@@ -753,7 +738,6 @@ func TestModelWebSummarizerRunsOutsideMainLoopAndRecordsMetrics(t *testing.T) {
 		anyInt64(meta["tool_summary_api_total_tokens"]) != 940 ||
 		anyInt64(meta["tool_summary_api_cache_hit_tokens"]) != 300 ||
 		anyInt64(meta["tool_summary_api_cache_miss_tokens"]) != 600 ||
-		anyInt64(meta["websum_cache_miss"]) != 600 ||
 		meta["websum_model"] != "mock-summarizer" {
 		t.Fatalf("model summary metadata = %#v", meta)
 	}
@@ -1037,7 +1021,7 @@ func newPublicWebTestServer(t *testing.T, handler http.Handler) (string, webtool
 
 func assertLargeWebToolResultCompact(t *testing.T, toolName string, result Result, rawTail string, rawLen int) {
 	t.Helper()
-	if result.OutputRef == "" || result.Metadata[tooloutput.MetadataOutputRef] != result.OutputRef {
+	if result.OutputRef == "" || result.Metadata[MetadataOutputRef] != result.OutputRef {
 		t.Fatalf("%s output ref missing: result=%#v metadata=%#v", toolName, result, result.Metadata)
 	}
 	if strings.Contains(result.Content, rawTail) {

@@ -9,7 +9,6 @@ import (
 	"image"
 	"image/color"
 	"image/png"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -151,10 +150,6 @@ func TestTelegramPromptAdmissionAdvancesOffsetAfterGatewayAdmission(t *testing.T
 		return state.Offset == 43 && chat.PendingInputID == "" && chat.LastEventSeq == 2
 	})
 
-	records := readTelegramAdmissionRecords(t, admissionPathForState(statePath))
-	if len(records) != 1 || records[0].Kind != "admitted" || records[0].UpdateID != 42 || records[0].InputID != "telegram-update-42" {
-		t.Fatalf("admission records = %#v", records)
-	}
 }
 
 func TestTelegramUpdateParsesPhotoDocumentCaptionAndThread(t *testing.T) {
@@ -247,10 +242,6 @@ func TestTelegramPhotoCaptionAdmissionDownloadsAttachment(t *testing.T) {
 		return state.Offset == 51 && chat.PendingInputID == "" && chat.LastEventSeq == 2
 	})
 
-	records := readTelegramAdmissionRecords(t, admissionPathForState(statePath))
-	if len(records) != 1 || records[0].AttachmentCount != 1 || records[0].PromptSHA256 == "" {
-		t.Fatalf("records = %#v", records)
-	}
 }
 
 func TestTelegramDocumentImageAdmissionDownloadsAttachment(t *testing.T) {
@@ -350,9 +341,37 @@ func TestTelegramVisionUnsupportedModelRepliesAndAcks(t *testing.T) {
 	if state.Offset != 54 {
 		t.Fatalf("offset = %d, want 54", state.Offset)
 	}
-	records := readTelegramAdmissionRecords(t, admissionPathForState(statePath))
-	if len(records) != 1 || records[0].Kind != "ignored" || records[0].Reason != "vision_unsupported" {
-		t.Fatalf("records = %#v", records)
+}
+
+func TestTelegramVoiceOnlyRepliesAndAcks(t *testing.T) {
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	statePath := filepath.Join(t.TempDir(), "telegram-state.json")
+	harness := newTelegramAdmissionHarness()
+	var sentText string
+	client := newTelegramMediaAPIClient(t, "bottoken", nil, func(_ http.ResponseWriter, _ *http.Request, payload map[string]any) {
+		sentText, _ = payload["text"].(string)
+	})
+	bot := newAdmissionMediaTestBot(t, statePath, harness, client, "gpt-5.4", true, map[int64]bool{123: true})
+
+	bot.handlePolledUpdate(context.Background(), telegramVoiceUpdate(55, 123, 1001, Voice{
+		FileID:       "voice-1",
+		FileUniqueID: "voice-unique-1",
+		Duration:     3,
+		MIMEType:     "audio/ogg",
+		FileSize:     1024,
+	}))
+
+	if !strings.Contains(sentText, "Voice messages aren't supported yet") || !strings.Contains(sentText, "send text or an image") {
+		t.Fatalf("unsupported voice reply = %q", sentText)
+	}
+	select {
+	case admitted := <-harness.admitted:
+		t.Fatalf("unsupported voice should not admit: %#v", admitted)
+	case <-time.After(50 * time.Millisecond):
+	}
+	state := loadTelegramState(t, statePath)
+	if state.Offset != 56 {
+		t.Fatalf("offset = %d, want 56", state.Offset)
 	}
 }
 
@@ -547,11 +566,6 @@ func TestTelegramStartupReconcilesAbandonedPendingInput(t *testing.T) {
 	if chat := state.Chats[key]; chat.PendingInputID != "" || chat.PendingUpdateID != 0 || state.Offset != 47 {
 		t.Fatalf("stored state after reconciliation = %#v offset=%d", chat, state.Offset)
 	}
-	records := readTelegramAdmissionRecords(t, newTelegramAdmissionStore(statePath).path)
-	if len(records) != 1 || records[0].Kind != "abandoned" || records[0].InputID != "telegram-update-46" ||
-		records[0].Reason != "abandoned_after_restart" || records[0].GatewayState != "completed" {
-		t.Fatalf("abandoned admission record = %#v", records)
-	}
 }
 
 func TestTelegramAdmissionRequiresPendingStatePersistenceBeforeAckOrRun(t *testing.T) {
@@ -635,10 +649,6 @@ func TestTelegramIgnoredUpdateRecordsBeforeAck(t *testing.T) {
 	if state.Offset != 46 {
 		t.Fatalf("offset = %d, want 46", state.Offset)
 	}
-	records := readTelegramAdmissionRecords(t, admissionPathForState(statePath))
-	if len(records) != 1 || records[0].Kind != "ignored" || records[0].Reason != "empty_message" || records[0].UpdateID != 45 {
-		t.Fatalf("ignored records = %#v", records)
-	}
 }
 
 func newAdmissionTestBot(t *testing.T, statePath string, harness *telegramAdmissionHarness) *Bot {
@@ -689,6 +699,18 @@ func telegramPhotoUpdate(updateID int, chatID, userID int64, caption string, pho
 			Chat:      Chat{ID: chatID},
 			Caption:   caption,
 			Photo:     photos,
+		},
+	}
+}
+
+func telegramVoiceUpdate(updateID int, chatID, userID int64, voice Voice) Update {
+	return Update{
+		UpdateID: updateID,
+		Message: &Message{
+			MessageID: 77,
+			From:      &User{ID: userID},
+			Chat:      Chat{ID: chatID},
+			Voice:     &voice,
 		},
 	}
 }
@@ -767,10 +789,6 @@ func telegramPNGBytes(t *testing.T, width, height int) []byte {
 	return buf.Bytes()
 }
 
-func admissionPathForState(statePath string) string {
-	return newTelegramAdmissionStore(statePath).path
-}
-
 func receive[T any](t *testing.T, ch <-chan T, label string) T {
 	t.Helper()
 	select {
@@ -824,26 +842,4 @@ func loadTelegramState(t *testing.T, statePath string) State {
 		t.Fatal(err)
 	}
 	return state
-}
-
-func readTelegramAdmissionRecords(t *testing.T, path string) []telegramAdmissionRecord {
-	t.Helper()
-	file, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer file.Close()
-	var records []telegramAdmissionRecord
-	dec := json.NewDecoder(file)
-	for {
-		var record telegramAdmissionRecord
-		if err := dec.Decode(&record); err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			t.Fatal(err)
-		}
-		records = append(records, record)
-	}
-	return records
 }

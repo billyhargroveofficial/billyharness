@@ -291,26 +291,26 @@ func (m *contextEventMetrics) observeToolSummary(event protocol.Event) {
 	if !ok || len(result.Metadata) == 0 {
 		return
 	}
-	in := metadataInt64(result.Metadata, "tool_summary_input_tokens")
-	out := metadataInt64(result.Metadata, "tool_summary_output_tokens")
+	in := protocol.MetadataInt64(result.Metadata, "tool_summary_input_tokens")
+	out := protocol.MetadataInt64(result.Metadata, "tool_summary_output_tokens")
 	m.usage.WebSummaryInputTokens += in
 	m.usage.WebSummaryOutputTokens += out
 	callID := firstContextString(result.CallID, event.CallID)
 	if callID != "" && m.helperSeen[callID] {
 		return
 	}
-	apiInput := metadataInt64(result.Metadata, "tool_summary_api_input_tokens")
-	apiOutput := metadataInt64(result.Metadata, "tool_summary_api_output_tokens")
-	api := metadataInt64(result.Metadata, "tool_summary_api_total_tokens")
+	apiInput := protocol.MetadataInt64(result.Metadata, "tool_summary_api_input_tokens")
+	apiOutput := protocol.MetadataInt64(result.Metadata, "tool_summary_api_output_tokens")
+	api := protocol.MetadataInt64(result.Metadata, "tool_summary_api_total_tokens")
 	if api == 0 {
-		api = metadataInt64(result.Metadata, "tool_summary_api_tokens")
+		api = protocol.MetadataInt64(result.Metadata, "tool_summary_api_tokens")
 	}
 	if api == 0 {
 		api = apiInput + apiOutput
 	}
-	cacheHit := metadataInt64(result.Metadata, "tool_summary_api_cache_hit_tokens")
-	cacheMiss := metadataInt64(result.Metadata, "tool_summary_api_cache_miss_tokens")
-	if api <= 0 && apiInput <= 0 && apiOutput <= 0 && cacheHit <= 0 && cacheMiss <= 0 && !metadataBool(result.Metadata, "tool_summary_external_model_used") {
+	cacheHit := protocol.MetadataInt64(result.Metadata, "tool_summary_api_cache_hit_tokens")
+	cacheMiss := protocol.MetadataInt64(result.Metadata, "tool_summary_api_cache_miss_tokens")
+	if api <= 0 && apiInput <= 0 && apiOutput <= 0 && cacheHit <= 0 && cacheMiss <= 0 && !protocol.MetadataBool(result.Metadata, "tool_summary_external_model_used") {
 		return
 	}
 	m.usage.HelperModelCalls++
@@ -356,16 +356,16 @@ func contextCompactionFromEvent(event protocol.Event) *gatewayapi.ContextCompact
 	}
 	return &gatewayapi.ContextCompaction{
 		Seq:             event.Seq,
-		CompactionID:    metadataString(m, "compaction_id"),
-		ContextEpoch:    int(metadataInt64(m, "context_epoch")),
-		Strategy:        metadataString(m, "summary_strategy"),
-		BeforeTokens:    metadataInt64(m, "before_estimated_tokens"),
-		AfterTokens:     metadataInt64(m, "after_estimated_tokens"),
-		Reason:          metadataString(m, "reason"),
-		InputSpanHash:   metadataString(m, "input_span_hash"),
-		ReplacementHash: metadataString(m, "replacement_hash"),
-		PreHistoryHash:  metadataString(m, "pre_history_hash"),
-		PostHistoryHash: metadataString(m, "post_history_hash"),
+		CompactionID:    protocol.MetadataString(m, "compaction_id"),
+		ContextEpoch:    int(protocol.MetadataInt64(m, "context_epoch")),
+		Strategy:        protocol.MetadataString(m, "summary_strategy"),
+		BeforeTokens:    protocol.MetadataInt64(m, "before_estimated_tokens"),
+		AfterTokens:     protocol.MetadataInt64(m, "after_estimated_tokens"),
+		Reason:          protocol.MetadataString(m, "reason"),
+		InputSpanHash:   protocol.MetadataString(m, "input_span_hash"),
+		ReplacementHash: protocol.MetadataString(m, "replacement_hash"),
+		PreHistoryHash:  protocol.MetadataString(m, "pre_history_hash"),
+		PostHistoryHash: protocol.MetadataString(m, "post_history_hash"),
 	}
 }
 
@@ -704,11 +704,11 @@ func (u contextUsage) minus(other contextUsage) contextUsage {
 func contextUsageFromData(data any) contextUsage {
 	m := mapFromContextData(data)
 	return contextUsage{
-		InputTokens:     metadataInt64(m, "input_tokens"),
-		OutputTokens:    metadataInt64(m, "output_tokens"),
-		CacheHitTokens:  metadataInt64(m, "cache_hit_tokens"),
-		CacheMissTokens: metadataInt64(m, "cache_miss_tokens"),
-		ReasoningTokens: metadataInt64(m, "reasoning_tokens"),
+		InputTokens:     protocol.MetadataInt64(m, "input_tokens"),
+		OutputTokens:    protocol.MetadataInt64(m, "output_tokens"),
+		CacheHitTokens:  protocol.MetadataInt64(m, "cache_hit_tokens"),
+		CacheMissTokens: protocol.MetadataInt64(m, "cache_miss_tokens"),
+		ReasoningTokens: protocol.MetadataInt64(m, "reasoning_tokens"),
 	}
 }
 
@@ -917,44 +917,6 @@ func mapFromContextData(data any) map[string]any {
 		return nil
 	}
 	return out
-}
-
-func metadataString(metadata map[string]any, key string) string {
-	switch value := metadata[key].(type) {
-	case string:
-		return strings.TrimSpace(value)
-	case json.Number:
-		return value.String()
-	default:
-		return ""
-	}
-}
-
-func metadataBool(metadata map[string]any, key string) bool {
-	switch value := metadata[key].(type) {
-	case bool:
-		return value
-	case string:
-		return strings.EqualFold(strings.TrimSpace(value), "true")
-	default:
-		return false
-	}
-}
-
-func metadataInt64(metadata map[string]any, key string) int64 {
-	switch value := metadata[key].(type) {
-	case int:
-		return int64(value)
-	case int64:
-		return value
-	case float64:
-		return int64(value)
-	case json.Number:
-		n, _ := value.Int64()
-		return n
-	default:
-		return 0
-	}
 }
 
 func firstContextString(values ...string) string {

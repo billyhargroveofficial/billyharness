@@ -11,7 +11,6 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/checkpoint"
 	runtimehooks "github.com/billyhargroveofficial/billyharness/internal/hooks"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
-	"github.com/billyhargroveofficial/billyharness/internal/tooloutput"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
@@ -462,14 +461,14 @@ func settleToolOutputRef(result *toolExecutionResult) error {
 		result.Result.Metadata = map[string]any{}
 	}
 	refPath := strings.TrimSpace(result.Result.OutputRef)
-	expectedID := metadataString(result.Result.Metadata, tooloutput.MetadataOutputRefID)
-	expectedBytes := metadataInt64(result.Result.Metadata, tooloutput.MetadataOutputRefBytes)
-	expectedSHA := metadataString(result.Result.Metadata, tooloutput.MetadataOutputRefSHA256)
-	expectedPermissions := metadataString(result.Result.Metadata, tooloutput.MetadataOutputRefPermissions)
-	if expectedID != "" && !tooloutput.IsPortableID(expectedID) {
+	expectedID := metadataString(result.Result.Metadata, tools.MetadataOutputRefID)
+	expectedBytes := metadataInt64(result.Result.Metadata, tools.MetadataOutputRefBytes)
+	expectedSHA := metadataString(result.Result.Metadata, tools.MetadataOutputRefSHA256)
+	expectedPermissions := metadataString(result.Result.Metadata, tools.MetadataOutputRefPermissions)
+	if expectedID != "" && !tools.IsPortableID(expectedID) {
 		return fmt.Errorf("output_ref_id %q is not portable", expectedID)
 	}
-	ref, err := tooloutput.Stat(refPath)
+	ref, err := tools.StatOutputRef(refPath)
 	if err != nil {
 		return fmt.Errorf("output_ref %q is not settled: %w", refPath, err)
 	}
@@ -484,8 +483,8 @@ func settleToolOutputRef(result *toolExecutionResult) error {
 	}
 	ref.AddMetadata(result.Result.Metadata)
 	result.Result.OutputRef = ref.Path
-	delete(result.Result.Metadata, tooloutput.MetadataOutputRefHashError)
-	if id := metadataString(result.Result.Metadata, tooloutput.MetadataOutputRefID); !tooloutput.IsPortableID(id) {
+	delete(result.Result.Metadata, tools.MetadataOutputRefHashError)
+	if id := metadataString(result.Result.Metadata, tools.MetadataOutputRefID); !tools.IsPortableID(id) {
 		return fmt.Errorf("output_ref_id %q is not portable", id)
 	}
 	result.Result.Metadata["output_ref_settled"] = true
@@ -506,13 +505,13 @@ func markOutputRefUnsettled(result *toolExecutionResult, err error) {
 	if ref != "" {
 		result.Result.Metadata["unsettled_output_ref"] = ref
 	}
-	delete(result.Result.Metadata, tooloutput.MetadataOutputRef)
-	delete(result.Result.Metadata, tooloutput.MetadataOutputRefID)
-	delete(result.Result.Metadata, tooloutput.MetadataOutputRefBytes)
-	delete(result.Result.Metadata, tooloutput.MetadataOutputRefSHA256)
-	delete(result.Result.Metadata, tooloutput.MetadataOutputRefPermissions)
-	delete(result.Result.Metadata, tooloutput.MetadataOutputRefPlaintext)
-	delete(result.Result.Metadata, tooloutput.MetadataOutputRefHashError)
+	delete(result.Result.Metadata, tools.MetadataOutputRef)
+	delete(result.Result.Metadata, tools.MetadataOutputRefID)
+	delete(result.Result.Metadata, tools.MetadataOutputRefBytes)
+	delete(result.Result.Metadata, tools.MetadataOutputRefSHA256)
+	delete(result.Result.Metadata, tools.MetadataOutputRefPermissions)
+	delete(result.Result.Metadata, tools.MetadataOutputRefPlaintext)
+	delete(result.Result.Metadata, tools.MetadataOutputRefHashError)
 	result.Result.OutputRef = ""
 	result.Result.IsError = true
 	result.Result.ErrorCode = "output_ref_unsettled"
@@ -715,11 +714,11 @@ func toolOutputRefEvent(result toolExecutionResult) protocol.ToolOutputRefEvent 
 		Name:                 result.Call.Name,
 		AttemptID:            result.AttemptID,
 		OutputRef:            result.Result.OutputRef,
-		OutputRefID:          metadataString(metadata, tooloutput.MetadataOutputRefID),
-		OutputRefBytes:       metadataInt64(metadata, tooloutput.MetadataOutputRefBytes),
-		OutputRefSHA256:      metadataString(metadata, tooloutput.MetadataOutputRefSHA256),
-		OutputRefPermissions: metadataString(metadata, tooloutput.MetadataOutputRefPermissions),
-		OutputRefPlaintext:   metadataBool(metadata, tooloutput.MetadataOutputRefPlaintext),
+		OutputRefID:          metadataString(metadata, tools.MetadataOutputRefID),
+		OutputRefBytes:       metadataInt64(metadata, tools.MetadataOutputRefBytes),
+		OutputRefSHA256:      metadataString(metadata, tools.MetadataOutputRefSHA256),
+		OutputRefPermissions: metadataString(metadata, tools.MetadataOutputRefPermissions),
+		OutputRefPlaintext:   metadataBool(metadata, tools.MetadataOutputRefPlaintext),
 		Truncated:            result.Result.Truncated,
 		Compact:              &compact,
 	}
@@ -734,7 +733,7 @@ func (o *toolOrchestrator) recordTurnChange(runID string, out *protocol.ToolResu
 		out.Metadata["turn_change_error"] = err.Error()
 		return
 	}
-	ref, err := tooloutput.Store(tooloutput.StoreRequest{
+	ref, err := tools.StoreOutput(tools.OutputStoreRequest{
 		Parts:                 []string{"checkpoint", record.ToolName, record.ChangeID},
 		Content:               string(body),
 		EnsureTrailingNewline: true,
@@ -759,7 +758,7 @@ func (o *toolOrchestrator) recordTurnChange(runID string, out *protocol.ToolResu
 	}
 }
 
-func turnChangeEvent(runID string, record checkpoint.PatchRecord, ref tooloutput.Ref) protocol.TurnChangeEvent {
+func turnChangeEvent(runID string, record checkpoint.PatchRecord, ref tools.OutputRef) protocol.TurnChangeEvent {
 	event := protocol.TurnChangeEvent{
 		ChangeID:                  record.ChangeID,
 		RunID:                     strings.TrimSpace(runID),
@@ -891,7 +890,7 @@ func applyToolCompactMetadata(compact *protocol.ToolCompact, metadata map[string
 		return
 	}
 	compact.OutputRef = firstNonEmptyString(compact.OutputRef, metadataString(metadata, "output_ref"))
-	compact.OutputRefID = firstNonEmptyString(compact.OutputRefID, metadataString(metadata, tooloutput.MetadataOutputRefID))
+	compact.OutputRefID = firstNonEmptyString(compact.OutputRefID, metadataString(metadata, tools.MetadataOutputRefID))
 	compact.Summary = firstNonEmptyString(metadataString(metadata, "display_summary"), compact.Summary)
 	compact.Group = firstNonEmptyString(metadataString(metadata, "display_group"), compact.Group)
 	compact.Target = firstNonEmptyString(metadataString(metadata, "display_target"), compact.Target)
@@ -904,7 +903,7 @@ func applyToolCompactMetadata(compact *protocol.ToolCompact, metadata map[string
 	compact.EstimatedTokens = firstNonZeroInt64(compact.EstimatedTokens, metadataInt64(metadata, "estimated_text_tokens"))
 	compact.OriginalBytes = firstNonZeroInt64(compact.OriginalBytes, metadataInt64(metadata, "original_output_bytes"))
 	compact.OriginalBytes = firstNonZeroInt64(compact.OriginalBytes, metadataInt64(metadata, "output_bytes"))
-	compact.OriginalBytes = firstNonZeroInt64(compact.OriginalBytes, metadataInt64(metadata, tooloutput.MetadataOutputRefBytes))
+	compact.OriginalBytes = firstNonZeroInt64(compact.OriginalBytes, metadataInt64(metadata, tools.MetadataOutputRefBytes))
 	if metadataBool(metadata, "truncated") {
 		compact.Truncated = true
 	}

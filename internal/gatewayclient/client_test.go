@@ -13,20 +13,6 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/testkit"
 )
 
-func TestNormalizeBaseURL(t *testing.T) {
-	tests := map[string]string{
-		"":                   "",
-		":8765":              "http://127.0.0.1:8765",
-		"127.0.0.1:8765/":    "http://127.0.0.1:8765",
-		"http://0.0.0.0:80/": "http://127.0.0.1:80",
-	}
-	for input, want := range tests {
-		if got := NormalizeBaseURL(input); got != want {
-			t.Fatalf("NormalizeBaseURL(%q) = %q, want %q", input, got, want)
-		}
-	}
-}
-
 func TestStatusErrorMatchesSessionNotFound(t *testing.T) {
 	err := &StatusError{Method: http.MethodGet, Path: "/v1/sessions/missing", StatusCode: http.StatusNotFound}
 	if !errors.Is(err, ErrSessionNotFound) {
@@ -358,7 +344,7 @@ func TestClientErrorHelpersDescribeFailures(t *testing.T) {
 		t.Fatalf("gap error = %q", got)
 	}
 	base := errors.New("connect refused")
-	unavailable := &UnavailableError{BaseURL: ":8765", Err: base}
+	unavailable := &gatewayapi.UnavailableError{BaseURL: ":8765", Err: base}
 	if !errors.Is(unavailable, base) || !strings.Contains(unavailable.Error(), "http://127.0.0.1:8765") {
 		t.Fatalf("unavailable = %v", unavailable)
 	}
@@ -379,7 +365,7 @@ func TestReplaySessionEventsDropsStaleCursorEvents(t *testing.T) {
 			)
 		},
 	})
-	t.Setenv(GatewayAuthTokenEnv, "test-token")
+	t.Setenv(gatewayapi.GatewayAuthTokenEnv, "test-token")
 
 	client := New(server.URL)
 	var got []protocol.Event

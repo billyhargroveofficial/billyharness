@@ -1013,23 +1013,23 @@ Cancelled before implementation. A later solo-simplification loop supersedes
 this task by deleting `agent-index/` and the manifest-check ceremony instead of
 refreshing or clarifying stale metadata.
 
-### P1.21 Keep README/docs research files clearly historical
+### ~~P1.21 Keep README/docs research files clearly historical~~
 
-Finding: legacy research files can look like current instructions. Current
-architecture truth should route through docs indexes and architecture files.
+Superseded by `005-todo.md` P1.12 before further implementation. The later
+solo-simplification loop deletes the stale legacy research lane instead of
+maintaining historical disclaimers for it.
 
-Checklist:
+Former checklist:
 
-- Ensure `docs/README.md` clearly labels legacy research.
-- Keep `docs/research/README.md` clear that active work belongs in
-  `loop-develop/current-todo`.
+- Ensure docs indexes clearly label legacy research.
+- Keep active work routed to `loop-develop/current-todo`.
 - Do not delete source material unless stable rules are extracted and links are
   updated.
 
-Verification:
+Former verification:
 
 ```sh
-rg -n "research|legacy|current truth|active work|loop-develop" docs/README.md docs/research/README.md
+rg -n "research|legacy|current truth|active work|loop-develop" docs/README.md
 git diff --check
 ```
 
@@ -1786,7 +1786,8 @@ Billy asks for final verification.
 
 - Completed P0.16 slice. Live production was inspected over SSH at
   `root@82.23.163.16` with remote-side redaction. The dated source-of-truth
-  inventory is `ops/production-inventory-2026-07-04.md`.
+  inventory was recorded in git and later deleted as stale point-in-time
+  ceremony by 005 P1.1.
 - Captured host, checkout, binary, toolchain, systemd, process, gateway bind,
   health, route-probe, env-file metadata, store-size, and doctor facts without
   copying raw `.env`, auth JSON, MCP inline env, provider keys, Telegram
@@ -2386,26 +2387,21 @@ Billy asks for final verification.
 ### 2026-07-04 - P1.21 historical research doc labeling
 
 - Completed P1.21 slice. Added first-screen historical banners to
-  `docs/codex-research-roadmap.md` and
-  `docs/competitive-architecture-analysis.md` so preserved research source
-  material no longer reads like current Billyharness truth or an implementation
-  checklist.
-- Tightened `docs/README.md` and `docs/research/README.md` routing language to
-  say the research files carry historical banners, preserve stale backlog
-  language intentionally, and require active work to be extracted into
-  `loop-develop/current-todo`.
+  the two legacy research documents so preserved research source material no
+  longer read like current Billyharness truth or an implementation checklist.
+- Tightened docs routing language to say the research files carried historical
+  banners, preserved stale backlog language intentionally, and required active
+  work to be extracted into `loop-develop/current-todo`.
 - Verification passed:
-  `rg -n "research|legacy|current truth|active work|loop-develop" docs/README.md docs/research/README.md`;
-  `sed -n '1,24p' docs/codex-research-roadmap.md`;
-  `sed -n '1,24p' docs/competitive-architecture-analysis.md`;
+  `rg -n "research|legacy|current truth|active work|loop-develop" docs/README.md`;
+  first-screen banner inspection for both legacy research documents;
   `git diff --check`.
 - Commit: `f33f434 Label legacy research docs as historical`
   (`f33f434a605dd4632a7ef95b3750ef4f820d88c2`).
 - Push: `origin/main` updated from `16c6ae6` to `f33f434`.
 - Blockers/residual risk: none for the labeling slice. The legacy research
-  files still intentionally preserve old roadmap/backlog sections as source
-  material; future move/delete cleanup should update links and metadata in the
-  same change.
+  files intentionally preserved old roadmap/backlog sections as source
+  material at the time; `005-todo.md` P1.12 later deletes that research lane.
 
 ### 2026-07-04 - P2.1 gateway route/status handler split
 

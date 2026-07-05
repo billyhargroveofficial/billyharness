@@ -33,7 +33,6 @@ func TestCodexStreamSendsResponsesHeadersAndParsesEvents(t *testing.T) {
 		for header, want := range map[string]string{
 			"Authorization":      "Bearer secret-token",
 			"ChatGPT-Account-ID": "acct_123",
-			"X-OpenAI-Fedramp":   "true",
 			"originator":         "billy-test",
 			"User-Agent":         "billy-test/0",
 			"session-id":         "session-test",
@@ -72,7 +71,7 @@ func TestCodexStreamSendsResponsesHeadersAndParsesEvents(t *testing.T) {
 		Originator:        "billy-test",
 		UserAgent:         "billy-test/0",
 		SessionID:         "session-test",
-		Auth:              &codexAuth{AccessToken: "secret-token", AccountID: "acct_123", FedRAMP: true},
+		Auth:              &codexAuth{AccessToken: "secret-token", AccountID: "acct_123"},
 		Client:            server.Client(),
 	}
 	events, errs := c.Stream(context.Background(), Request{

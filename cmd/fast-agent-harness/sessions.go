@@ -16,7 +16,6 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
 	"github.com/billyhargroveofficial/billyharness/internal/secrets"
-	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
 	tuitranscript "github.com/billyhargroveofficial/billyharness/internal/tui/transcript"
 )
 
@@ -134,7 +133,7 @@ func sessionsDebugCommand(args []string, out io.Writer) error {
 		}
 		discovered, ok := discoverGatewayURL(context.Background(), cfg)
 		if !ok {
-			return fmt.Errorf("gateway unavailable: %s", gatewayclient.UnavailableHint(normalizeGatewayURL(cfg.GatewayAddr)))
+			return fmt.Errorf("gateway unavailable: %s", gatewayapi.UnavailableHint(normalizeGatewayURL(cfg.GatewayAddr)))
 		}
 		baseURL = discovered
 	}
@@ -633,7 +632,7 @@ func sessionsRunsCommand(args []string, out io.Writer) error {
 func sessionsImportCommand(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("sessions import", flag.ExitOnError)
 	input := fs.String("input", "", "external transcript file")
-	format := fs.String("format", sessionpkg.ImportFormatAuto, "input format: auto, jsonl, or markdown")
+	format := fs.String("format", ImportFormatAuto, "input format: auto, jsonl, or markdown")
 	jsonOut := fs.Bool("json", false, "print converted messages/events as JSON")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -648,7 +647,7 @@ func sessionsImportCommand(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	result, err := sessionpkg.ImportTranscript(raw, sessionpkg.ImportOptions{
+	result, err := ImportTranscript(raw, ImportOptions{
 		Source: *input,
 		Format: *format,
 	})

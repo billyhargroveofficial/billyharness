@@ -19,6 +19,10 @@ type Message struct {
 	CaptionEntities []Entity    `json:"caption_entities,omitempty"`
 	Photo           []PhotoSize `json:"photo,omitempty"`
 	Document        *Document   `json:"document,omitempty"`
+	Voice           *Voice      `json:"voice,omitempty"`
+	Audio           *Audio      `json:"audio,omitempty"`
+	VideoNote       *VideoNote  `json:"video_note,omitempty"`
+	Video           *Video      `json:"video,omitempty"`
 }
 
 type User struct {
@@ -52,6 +56,43 @@ type PhotoSize struct {
 type Document struct {
 	FileID       string `json:"file_id"`
 	FileUniqueID string `json:"file_unique_id,omitempty"`
+	FileName     string `json:"file_name,omitempty"`
+	MIMEType     string `json:"mime_type,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
+}
+
+type Voice struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id,omitempty"`
+	Duration     int    `json:"duration,omitempty"`
+	MIMEType     string `json:"mime_type,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
+}
+
+type Audio struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id,omitempty"`
+	Duration     int    `json:"duration,omitempty"`
+	Performer    string `json:"performer,omitempty"`
+	Title        string `json:"title,omitempty"`
+	MIMEType     string `json:"mime_type,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
+}
+
+type VideoNote struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id,omitempty"`
+	Length       int    `json:"length,omitempty"`
+	Duration     int    `json:"duration,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
+}
+
+type Video struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id,omitempty"`
+	Width        int    `json:"width,omitempty"`
+	Height       int    `json:"height,omitempty"`
+	Duration     int    `json:"duration,omitempty"`
 	FileName     string `json:"file_name,omitempty"`
 	MIMEType     string `json:"mime_type,omitempty"`
 	FileSize     int64  `json:"file_size,omitempty"`

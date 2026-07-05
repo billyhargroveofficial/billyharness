@@ -3,7 +3,6 @@ package projector
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
@@ -345,7 +344,7 @@ func cloneTurnChangeItem(item TurnChangeItem) TurnChangeItem {
 }
 
 func (p *Projector) upsertToolCall(event protocol.Event) {
-	callID := eventCallID(event)
+	callID := protocol.EventCallID(event)
 	call, ok := decodeData[protocol.ToolCall](event.Data)
 	if ok {
 		if callID == "" {
@@ -388,7 +387,7 @@ func cloneToolCompact(compact protocol.ToolCompact) protocol.ToolCompact {
 }
 
 func (p *Projector) upsertToolStatus(event protocol.Event, status, message string) {
-	callID := eventCallID(event)
+	callID := protocol.EventCallID(event)
 	if callID == "" {
 		return
 	}
@@ -411,7 +410,7 @@ func (p *Projector) upsertToolProgress(event protocol.Event) {
 	}
 	callID := strings.TrimSpace(progress.CallID)
 	if callID == "" {
-		callID = eventCallID(event)
+		callID = protocol.EventCallID(event)
 	}
 	if callID == "" {
 		return
@@ -437,7 +436,7 @@ func (p *Projector) upsertToolOutputRef(event protocol.Event) {
 	}
 	callID := strings.TrimSpace(ref.CallID)
 	if callID == "" {
-		callID = eventCallID(event)
+		callID = protocol.EventCallID(event)
 	}
 	if callID == "" {
 		return
@@ -479,7 +478,7 @@ func (p *Projector) upsertToolOutputRef(event protocol.Event) {
 }
 
 func (p *Projector) upsertToolResult(event protocol.Event, status string) {
-	callID := eventCallID(event)
+	callID := protocol.EventCallID(event)
 	result, ok := decodeData[protocol.ToolResult](event.Data)
 	if ok {
 		if callID == "" {
@@ -500,7 +499,8 @@ func (p *Projector) upsertToolResult(event protocol.Event, status string) {
 		item.IsError = result.IsError
 		item.Error = result.ErrorCode
 		item.Metadata = cloneMetadata(result.Metadata)
-		if state, ok := todoStateFromMetadata(result.Metadata); ok {
+		if state, ok := protocol.DecodeTodoState(result.Metadata["todo_state"]); ok {
+			state = state.Recount()
 			p.snapshot.TodoState = cloneTodoState(state)
 		}
 		if result.Compact != nil {
@@ -544,21 +544,21 @@ func (p *Projector) observeToolSummary(event protocol.Event) {
 	if !ok || result.Metadata == nil {
 		return
 	}
-	p.snapshot.ToolSummaryInputTokens += metadataInt64(result.Metadata, "tool_summary_input_tokens")
-	p.snapshot.ToolSummaryOutputTokens += metadataInt64(result.Metadata, "tool_summary_output_tokens")
+	p.snapshot.ToolSummaryInputTokens += protocol.MetadataInt64(result.Metadata, "tool_summary_input_tokens")
+	p.snapshot.ToolSummaryOutputTokens += protocol.MetadataInt64(result.Metadata, "tool_summary_output_tokens")
 	callID := firstNonEmpty(result.CallID, event.CallID)
 	if callID != "" && p.helperUsageCalls[callID] {
 		return
 	}
-	inputTokens := metadataInt64(result.Metadata, "tool_summary_api_input_tokens")
-	outputTokens := metadataInt64(result.Metadata, "tool_summary_api_output_tokens")
-	apiTokens := metadataInt64(result.Metadata, "tool_summary_api_total_tokens")
+	inputTokens := protocol.MetadataInt64(result.Metadata, "tool_summary_api_input_tokens")
+	outputTokens := protocol.MetadataInt64(result.Metadata, "tool_summary_api_output_tokens")
+	apiTokens := protocol.MetadataInt64(result.Metadata, "tool_summary_api_total_tokens")
 	if apiTokens == 0 {
 		apiTokens = inputTokens + outputTokens
 	}
-	cacheHit := metadataInt64(result.Metadata, "tool_summary_api_cache_hit_tokens")
-	cacheMiss := metadataInt64(result.Metadata, "tool_summary_api_cache_miss_tokens")
-	if apiTokens <= 0 && inputTokens <= 0 && outputTokens <= 0 && cacheHit <= 0 && cacheMiss <= 0 && !metadataBool(result.Metadata, "tool_summary_external_model_used") {
+	cacheHit := protocol.MetadataInt64(result.Metadata, "tool_summary_api_cache_hit_tokens")
+	cacheMiss := protocol.MetadataInt64(result.Metadata, "tool_summary_api_cache_miss_tokens")
+	if apiTokens <= 0 && inputTokens <= 0 && outputTokens <= 0 && cacheHit <= 0 && cacheMiss <= 0 && !protocol.MetadataBool(result.Metadata, "tool_summary_external_model_used") {
 		return
 	}
 	p.snapshot.ToolSummaryAPITokens += apiTokens
@@ -603,11 +603,6 @@ func (p *Projector) observeProviderHelperUsage(event protocol.Event) {
 	}
 }
 
-func eventCallID(event protocol.Event) string {
-	event = protocol.EnrichEvent(event, protocol.EventEnvelope{})
-	return strings.TrimSpace(event.CallID)
-}
-
 func isTerminalToolStatus(status string) bool {
 	switch status {
 	case "finished", "failed", "aborted":
@@ -649,46 +644,6 @@ func decodeData[T any](data any) (T, bool) {
 		return out, false
 	}
 	return out, true
-}
-
-func metadataInt64(metadata map[string]any, key string) int64 {
-	if metadata == nil {
-		return 0
-	}
-	switch value := metadata[key].(type) {
-	case int64:
-		return value
-	case int:
-		return int64(value)
-	case int32:
-		return int64(value)
-	case float64:
-		if value > 0 {
-			return int64(value)
-		}
-	case json.Number:
-		parsed, _ := value.Int64()
-		return parsed
-	case string:
-		parsed, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-		return parsed
-	}
-	return 0
-}
-
-func metadataBool(metadata map[string]any, key string) bool {
-	if metadata == nil {
-		return false
-	}
-	switch value := metadata[key].(type) {
-	case bool:
-		return value
-	case string:
-		parsed, _ := strconv.ParseBool(strings.TrimSpace(value))
-		return parsed
-	default:
-		return false
-	}
 }
 
 func firstNonEmpty(values ...string) string {
@@ -808,43 +763,7 @@ func nonNegative(value int64) int64 {
 	return value
 }
 
-func todoStateFromMetadata(metadata map[string]any) (protocol.TodoState, bool) {
-	if len(metadata) == 0 {
-		return protocol.TodoState{}, false
-	}
-	bytes, err := json.Marshal(metadata["todo_state"])
-	if err != nil {
-		return protocol.TodoState{}, false
-	}
-	var state protocol.TodoState
-	if err := json.Unmarshal(bytes, &state); err != nil {
-		return protocol.TodoState{}, false
-	}
-	state = recountTodoState(state)
-	return state, len(state.Todos) > 0 || state.Pending > 0 || state.InProgress > 0 || state.Completed > 0 || state.Blocked > 0
-}
-
 func cloneTodoState(state protocol.TodoState) protocol.TodoState {
 	state.Todos = append([]protocol.TodoItem(nil), state.Todos...)
-	return state
-}
-
-func recountTodoState(state protocol.TodoState) protocol.TodoState {
-	state.Pending = 0
-	state.InProgress = 0
-	state.Completed = 0
-	state.Blocked = 0
-	for _, item := range state.Todos {
-		switch item.Status {
-		case "pending":
-			state.Pending++
-		case "in_progress":
-			state.InProgress++
-		case "completed":
-			state.Completed++
-		case "blocked":
-			state.Blocked++
-		}
-	}
 	return state
 }

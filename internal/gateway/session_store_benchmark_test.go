@@ -95,6 +95,52 @@ func BenchmarkGatewaySessionJSONLReplay(b *testing.B) {
 	}
 }
 
+func BenchmarkGatewaySessionJSONLReplayStartupListManifestOnly(b *testing.B) {
+	for _, tc := range []struct {
+		name          string
+		sessions      int
+		eventsPerSess int
+	}{
+		{name: "sessions_5_events_1000", sessions: 5, eventsPerSess: 1_000},
+		{name: "sessions_5_events_10000", sessions: 5, eventsPerSess: 10_000},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			dir := b.TempDir()
+			var totalBytes int64
+			for i := 0; i < tc.sessions; i++ {
+				store := newSessionStore(dir)
+				session := newGatewaySession(fmt.Sprintf("bench-startup-list-%d", i), time.Now().UTC(), []protocol.Message{{Role: protocol.RoleSystem, Content: "system"}})
+				if err := writeGatewayBenchmarkEventFixture(store, session, tc.eventsPerSess, benchmarkDeltaEvent); err != nil {
+					b.Fatal(err)
+				}
+				info, err := os.Stat(filepath.Join(dir, session.ID, sessionEventsJSONLName))
+				if err != nil {
+					b.Fatal(err)
+				}
+				totalBytes += info.Size()
+			}
+			b.ReportAllocs()
+			b.ReportMetric(float64(totalBytes), "stored_bytes")
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				loaded, diagnostics, err := newSessionStore(dir).LoadAllWithDiagnostics()
+				if err != nil {
+					b.Fatal(err)
+				}
+				if diagnostics.LoadedCount != tc.sessions || len(loaded) != tc.sessions {
+					b.Fatalf("loaded=%d diagnostics=%#v", len(loaded), diagnostics)
+				}
+				for _, session := range loaded {
+					if !session.manifestOnly || session.Thread != nil {
+						b.Fatalf("session should be manifest-only: %#v", session)
+					}
+					_ = sessionSummary(session)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkReplayAfterSeq(b *testing.B) {
 	for _, tc := range []struct {
 		name     string

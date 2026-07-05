@@ -161,6 +161,11 @@ the user's `billyharness` directory. `internal/tui/settings.go` creates the
 settings file and `sessions` directory, normalizes view modes, and persists
 settings with owner-only file permissions.
 
+Saved-chat lookup keeps ID-prefix behavior authoritative. `/resume` and `/fork`
+first match exact or prefix session IDs; ambiguous prefixes remain errors. Only
+when no ID prefix matches do they fall back to case-insensitive title/message
+text search and render snippet results for multi-match queries.
+
 Current resume behavior is split by runtime mode:
 
 - Local mode restores saved messages, cells, view/accounting state, and runtime
@@ -184,6 +189,13 @@ filters cells according to `thinkView` and `toolView`, hides grouped context
 tool details when appropriate, renders each visible cell through
 `renderBlockCached`, records which viewport lines are selectable, and writes the
 unhighlighted transcript to `viewportContent`.
+
+Transcript find is a viewport feature layered on top of that unhighlighted
+content. `/find` stores the current query and byte-range matches on the TUI
+model, while `ctrl+f` / `alt+f` navigate the viewport's built-in highlights.
+Because `viewport.SetContent` clears highlights during every reflow,
+`Model.reflow` must reapply an active find query after writing
+`viewportContent`.
 
 Rich rendering and raw rendering are different views of the same cells:
 
@@ -246,7 +258,8 @@ Bubble Tea state.
 The TUI turns that metadata into concrete behavior in `internal/tui/actions.go`
 and `internal/tui/commands.go`. That includes key bindings, slash arguments,
 command palette behavior, settings mutation, chat resume/fork/new behavior,
-copy commands, gateway reconnect, and viewport/block navigation.
+copy commands, transcript find, gateway reconnect, and viewport/block
+navigation.
 
 The command registry composes shared action metadata with prompt commands,
 profile metadata, and MCP prompt metadata. The TUI may display/search that
@@ -319,8 +332,6 @@ Current hardening:
   `internal/tui/transcript`, `internal/tui/render`, `internal/tui/selection`,
   and `internal/clientux/projector` cover projection/render/copy parity.
 
-Future hardening should preserve these ownership lines. A docguard or broader
-generated-doc check can validate links and required headings, but it should not
-move active implementation checklists into `docs/`. Runtime hardening should
+Future hardening should preserve these ownership lines. Runtime hardening should
 strengthen gateway/eventlog/runtimeclient seams rather than importing gateway,
 agent, provider, or tools into `internal/tui`.

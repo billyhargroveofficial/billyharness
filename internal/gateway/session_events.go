@@ -11,7 +11,6 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/runstate"
-	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
 )
 
 type SessionStatus = gatewayapi.SessionStatus
@@ -56,7 +55,7 @@ func newGatewaySessionWithOwner(id string, created time.Time, messages []protoco
 		ID:      id,
 		Created: created,
 		Owner:   normalizeSessionOwner(owner),
-		Thread:  sessionpkg.New(messages),
+		Thread:  newRunThread(messages),
 		events:  newEventHub(),
 	}
 	session.status = SessionStatus{
@@ -164,6 +163,20 @@ func (s *Session) Status() SessionStatus {
 	status := s.status
 	hub := s.events
 	s.mu.Unlock()
+	if s.Thread == nil {
+		status.Running = false
+		status.Owner = s.Owner
+		if status.ID == "" {
+			status.ID = s.ID
+		}
+		if status.Created.IsZero() {
+			status.Created = s.Created
+		}
+		if hub != nil && hub.Dropped() > status.DroppedEvents {
+			status.DroppedEvents = hub.Dropped()
+		}
+		return status
+	}
 	status.Running = s.Thread != nil && s.Thread.Running()
 	messages := s.messages()
 	status.MessageCount = len(messages)
@@ -190,10 +203,12 @@ func (s *Session) restoreStatus(status SessionStatus) {
 		status.Owner = s.Owner
 	}
 	status.Running = s.Thread != nil && s.Thread.Running()
-	messages := s.messages()
-	status.MessageCount = len(messages)
-	status.AttachmentCount = protocol.MessageAttachmentCount(messages)
-	status.ImageSubmissions = protocol.MessageImageSubmissionCount(messages)
+	if s.Thread != nil {
+		messages := s.messages()
+		status.MessageCount = len(messages)
+		status.AttachmentCount = protocol.MessageAttachmentCount(messages)
+		status.ImageSubmissions = protocol.MessageImageSubmissionCount(messages)
+	}
 	s.status = status
 	s.mu.Unlock()
 }

@@ -22,7 +22,6 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
-	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
@@ -470,7 +469,7 @@ func TestGatewaySessionUndoDeniedDuringActiveRun(t *testing.T) {
 	started := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- session.Thread.Run(context.Background(), sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
+		done <- session.Thread.Run(context.Background(), RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
 			close(started)
 			<-ctx.Done()
 			return messages, ctx.Err()
@@ -537,7 +536,7 @@ func TestGatewaySessionRunInterruptReturnsSaveFailureBeforeReplacement(t *testin
 	started := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- session.Thread.Run(context.Background(), sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
+		done <- session.Thread.Run(context.Background(), RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
 			emit(protocol.Event{Type: protocol.EventRunStarted, RunID: "run-old"})
 			close(started)
 			<-ctx.Done()
@@ -598,7 +597,7 @@ func TestGatewaySessionCancelReturnsSaveFailureAfterCancellation(t *testing.T) {
 	started := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- session.Thread.Run(context.Background(), sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
+		done <- session.Thread.Run(context.Background(), RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
 			emit(protocol.Event{Type: protocol.EventRunStarted, RunID: "run-cancel"})
 			close(started)
 			<-ctx.Done()
@@ -677,7 +676,7 @@ func TestGatewaySessionRunInterruptPolicyCancelsActiveRunAndStartsReplacement(t 
 	firstStarted := make(chan struct{})
 	firstDone := make(chan error, 1)
 	go func() {
-		firstDone <- session.Thread.Run(context.Background(), sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
+		firstDone <- session.Thread.Run(context.Background(), RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
 			emit(protocol.Event{Type: protocol.EventRunStarted, RunID: "run-old"})
 			close(firstStarted)
 			<-ctx.Done()
@@ -825,7 +824,7 @@ func runGatewaySessionAgentForTest(t *testing.T, server *Server, sessionID strin
 	}
 	var events []protocol.Event
 	var persistErr error
-	err := session.Thread.Run(context.Background(), sessionpkg.RunnerFunc(a.RunMessages), prompt, func(event protocol.Event) {
+	err := session.Thread.Run(context.Background(), RunnerFunc(a.RunMessages), prompt, func(event protocol.Event) {
 		if persistErr != nil {
 			return
 		}

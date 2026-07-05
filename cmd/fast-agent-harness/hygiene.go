@@ -39,6 +39,14 @@ var hygieneRuntimeArtifactPaths = []string{
 	"web-cache",
 }
 
+var hygieneLargeFileExceptions = map[string]bool{
+	"internal/tools/tools.go":                    true,
+	"internal/gateway/gateway.go":                true,
+	"internal/telegrambot/commands_flow_test.go": true,
+	"internal/gateway/gateway_test.go":           true,
+	"internal/mcpclient/client_test.go":          true,
+}
+
 type hygieneOptions struct {
 	RepoDir string
 	JSON    bool
@@ -164,7 +172,6 @@ func collectHygieneSource(ctx context.Context, repoDir string, opts hygieneOptio
 	if err != nil {
 		return hygieneSourceReport{}, fmt.Errorf("git ls-files: %w", err)
 	}
-	largeFileAllowlist := hygieneLargeFileAllowlist(repoDir)
 	var report hygieneSourceReport
 	for _, path := range strings.Split(out, "\n") {
 		path = strings.TrimSpace(path)
@@ -193,7 +200,7 @@ func collectHygieneSource(ctx context.Context, repoDir string, opts hygieneOptio
 				Limit: limit,
 				Kind:  kind,
 			}
-			if largeFileAllowlist[path] {
+			if hygieneLargeFileExceptions[path] {
 				report.AllowedLargeFiles = append(report.AllowedLargeFiles, large)
 			} else {
 				report.LargeFiles = append(report.LargeFiles, large)
@@ -213,43 +220,6 @@ func sortLargeFiles(files []hygieneLargeFile) {
 		}
 		return files[i].Lines > files[j].Lines
 	})
-}
-
-func hygieneLargeFileAllowlist(repoDir string) map[string]bool {
-	body, err := os.ReadFile(filepath.Join(repoDir, "docs", "architecture.md"))
-	if err != nil {
-		return nil
-	}
-	allowed := map[string]bool{}
-	inSection := false
-	for _, line := range strings.Split(string(body), "\n") {
-		switch {
-		case strings.TrimSpace(line) == "## File Size Budget Exceptions":
-			inSection = true
-			continue
-		case inSection && strings.HasPrefix(line, "## "):
-			return allowed
-		case !inSection:
-			continue
-		}
-		for {
-			start := strings.Index(line, "`")
-			if start < 0 {
-				break
-			}
-			line = line[start+1:]
-			end := strings.Index(line, "`")
-			if end < 0 {
-				break
-			}
-			path := line[:end]
-			if strings.HasSuffix(path, ".go") {
-				allowed[path] = true
-			}
-			line = line[end+1:]
-		}
-	}
-	return allowed
 }
 
 func collectHygieneRuntimeArtifacts(repoDir string) []hygieneRuntimeArtifact {

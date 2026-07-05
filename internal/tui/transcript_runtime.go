@@ -269,10 +269,6 @@ func (m Model) statusText() string {
 	)
 }
 
-func (m Model) debugStatusText() string {
-	return m.debugFullText()
-}
-
 func debugMode(gatewayURL string) string {
 	if strings.TrimSpace(gatewayURL) == "" {
 		return "local"
@@ -518,7 +514,7 @@ func (m *Model) applyEvent(event protocol.Event) {
 		m.status = "running tool " + toolName(event.Data)
 		m.upsertContextToolGroup(event.TurnID)
 	case protocol.EventToolCallFinished:
-		m.collapseToolBlockIfLarge(eventCallID(event))
+		m.collapseToolBlockIfLarge(protocol.EventCallID(event))
 		m.upsertContextToolGroup(m.turnIDForToolEvent(event))
 	case protocol.EventStepStarted, protocol.EventStepCompleted:
 		m.applyStepStatus(event)
@@ -836,7 +832,7 @@ func (m Model) turnIDForToolEvent(event protocol.Event) string {
 	if turnID := strings.TrimSpace(event.TurnID); turnID != "" {
 		return turnID
 	}
-	if i, ok := m.toolBlockIndex(eventCallID(event)); ok {
+	if i, ok := m.toolBlockIndex(protocol.EventCallID(event)); ok {
 		return strings.TrimSpace(m.blocks[i].TurnID)
 	}
 	return ""
@@ -890,11 +886,6 @@ func stepEventFromAny(value any) (protocol.StepEvent, bool) {
 		}
 		return out, out.Kind != ""
 	}
-}
-
-func eventCallID(event protocol.Event) string {
-	event = protocol.EnrichEvent(event, protocol.EventEnvelope{})
-	return strings.TrimSpace(event.CallID)
 }
 
 func (m *Model) collapseToolBlockIfLarge(callID string) {
@@ -971,12 +962,45 @@ func (m *Model) finishLiveBlocks() {
 
 func (m *Model) reflow(gotoBottom bool) {
 	m.reflowCount++
-	var parts []string
-	var selectableLines []bool
+	items, signature := m.reflowVisibleItems()
+	parts, selectableLines, ok := m.reflowFastPath(items, signature)
+	if !ok {
+		parts, selectableLines = m.reflowFull(items)
+	}
+	m.reflowSignature = signature
+	m.reflowVisibleKeys = reflowItemKeys(items)
+	m.reflowParts = parts
+	m.lastReflowBlockCount = len(m.blocks)
+	m.viewportContent = strings.Join(parts, "\n")
+	m.viewportSelectableLines = selectableLines
+	m.viewport.SetContent(m.viewportContent)
+	m.reapplyFindQuery()
+	if m.hasSelection() {
+		m.applySelectionHighlight()
+	}
+	if gotoBottom {
+		m.viewport.GotoBottom()
+	}
+}
+
+type reflowItem struct {
+	index      int
+	key        string
+	selectable bool
+}
+
+func (m *Model) reflowVisibleItems() ([]reflowItem, string) {
 	currentToolTurnID := ""
 	if m.toolView == "current" {
 		currentToolTurnID = m.currentToolTurnID()
 	}
+	signature := strings.Join([]string{
+		m.toolView,
+		m.thinkView,
+		m.transcriptMode,
+		currentToolTurnID,
+	}, "\x00")
+	items := make([]reflowItem, 0, len(m.blocks))
 	for i, b := range m.blocks {
 		if b.Kind == "reasoning" && m.thinkView == "hidden" {
 			continue
@@ -996,20 +1020,87 @@ func (m *Model) reflow(gotoBottom bool) {
 		if b.Kind == "tool" && m.shouldHideGroupedContextTool(b) {
 			continue
 		}
-		rendered, cache := m.renderBlockCached(i)
-		m.setRichBlockCache(m.blocks[i], cache)
+		items = append(items, reflowItem{
+			index:      i,
+			key:        tuirender.RichCacheKey(m.richTerminalCacheKeyInput(i, b)),
+			selectable: m.blockSelectableForCopy(i, b),
+		})
+	}
+	return items, signature
+}
+
+func (m *Model) reflowFastPath(items []reflowItem, signature string) ([]string, []bool, bool) {
+	if signature != m.reflowSignature || len(m.reflowParts) == 0 || len(m.reflowVisibleKeys) == 0 {
+		return nil, nil, false
+	}
+	if len(items) == len(m.reflowVisibleKeys) {
+		diff := -1
+		for i, item := range items {
+			if item.key == m.reflowVisibleKeys[i] {
+				continue
+			}
+			if diff >= 0 {
+				return nil, nil, false
+			}
+			diff = i
+		}
+		if diff < 0 {
+			return m.reflowParts, m.viewportSelectableLines, true
+		}
+		if diff != len(items)-1 {
+			return nil, nil, false
+		}
+		parts := append([]string(nil), m.reflowParts...)
+		rendered, cache := m.renderBlockCached(items[diff].index)
+		m.setRichBlockCache(m.blocks[items[diff].index], cache)
+		parts[diff] = rendered
+		return parts, selectableLinesForReflowParts(parts, items), true
+	}
+	if len(items) == len(m.reflowVisibleKeys)+1 && len(m.blocks) == m.lastReflowBlockCount+1 {
+		for i, key := range m.reflowVisibleKeys {
+			if items[i].key != key {
+				return nil, nil, false
+			}
+		}
+		parts := append([]string(nil), m.reflowParts...)
+		last := items[len(items)-1]
+		rendered, cache := m.renderBlockCached(last.index)
+		m.setRichBlockCache(m.blocks[last.index], cache)
 		parts = append(parts, rendered)
-		selectableLines = appendSelectableLines(selectableLines, rendered, m.blockSelectableForCopy(i, b))
+		lines := append([]bool(nil), m.viewportSelectableLines...)
+		lines = appendSelectableLines(lines, rendered, last.selectable)
+		return parts, lines, true
 	}
-	m.viewportContent = strings.Join(parts, "\n")
-	m.viewportSelectableLines = selectableLines
-	m.viewport.SetContent(m.viewportContent)
-	if m.hasSelection() {
-		m.applySelectionHighlight()
+	return nil, nil, false
+}
+
+func (m *Model) reflowFull(items []reflowItem) ([]string, []bool) {
+	parts := make([]string, 0, len(items))
+	var selectableLines []bool
+	for _, item := range items {
+		rendered, cache := m.renderBlockCached(item.index)
+		m.setRichBlockCache(m.blocks[item.index], cache)
+		parts = append(parts, rendered)
+		selectableLines = appendSelectableLines(selectableLines, rendered, item.selectable)
 	}
-	if gotoBottom {
-		m.viewport.GotoBottom()
+	return parts, selectableLines
+}
+
+func reflowItemKeys(items []reflowItem) []string {
+	keys := make([]string, len(items))
+	for i, item := range items {
+		keys[i] = item.key
 	}
+	return keys
+}
+
+func selectableLinesForReflowParts(parts []string, items []reflowItem) []bool {
+	var lines []bool
+	for i, part := range parts {
+		selectable := i < len(items) && items[i].selectable
+		lines = appendSelectableLines(lines, part, selectable)
+	}
+	return lines
 }
 
 func appendSelectableLines(lines []bool, rendered string, selectable bool) []bool {

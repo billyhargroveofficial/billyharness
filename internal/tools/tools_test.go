@@ -12,7 +12,6 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
-	"github.com/billyhargroveofficial/billyharness/internal/tooloutput"
 	"github.com/billyhargroveofficial/billyharness/internal/webtools"
 )
 
@@ -571,7 +570,7 @@ func TestFSReadAllowsBillyToolOutputRefOutsideWorkspace(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", home)
 	root := t.TempDir()
-	ref, err := tooloutput.Store(tooloutput.StoreRequest{
+	ref, err := StoreOutput(OutputStoreRequest{
 		Parts:   []string{"test", "output-ref"},
 		Content: "alpha\nbeta\n",
 	})
@@ -1014,9 +1013,6 @@ func TestSkillsListAndReadAreOnDemandBoundedAndCompatOptional(t *testing.T) {
 	if !strings.Contains(imported.Content, `"source": "claude_compat"`) ||
 		!strings.Contains(imported.Content, `"destination":`) {
 		t.Fatalf("skill_import content=\n%s", imported.Content)
-	}
-	if _, err := os.Stat(filepath.Join(home, "skills", "legacy", "billyharness.skill.json")); err != nil {
-		t.Fatalf("import metadata missing: %v", err)
 	}
 }
 

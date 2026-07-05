@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
-	"github.com/billyhargroveofficial/billyharness/internal/tooloutput"
 )
 
 const (
@@ -299,7 +298,7 @@ func runForegroundShell(ctx context.Context, in shellExecInput, cwd string, expl
 	rawText := string(output)
 	text := rawText
 	truncated := false
-	var ref tooloutput.Ref
+	var ref OutputRef
 	var refErr error
 	if len(rawText) > in.MaxOutputBytes {
 		ref, refErr = storeForegroundShellOutput(in, rawText)
@@ -334,15 +333,15 @@ func runForegroundShell(ctx context.Context, in shellExecInput, cwd string, expl
 	return Result{Content: text, Metadata: metadata, Truncated: truncated, OutputRef: ref.Path}, nil
 }
 
-func storeForegroundShellOutput(in shellExecInput, content string) (tooloutput.Ref, error) {
+func storeForegroundShellOutput(in shellExecInput, content string) (OutputRef, error) {
 	if content == "" {
-		return tooloutput.Ref{}, nil
+		return OutputRef{}, nil
 	}
 	parts := []string{"shell_exec"}
 	if len(in.Argv) > 0 {
 		parts = append(parts, filepath.Base(in.Argv[0]))
 	}
-	return tooloutput.Store(tooloutput.StoreRequest{
+	return StoreOutput(OutputStoreRequest{
 		Parts:   parts,
 		Content: content,
 	})
@@ -481,7 +480,7 @@ func (r *Registry) handleShellOutput(_ context.Context, args json.RawMessage) (R
 	metadata["display_preview"] = compactManagedShellPreview(slice.Content)
 	metadata["display_collapse_default"] = true
 	if strings.TrimSpace(slice.Content) != "" {
-		ref, err := tooloutput.Store(tooloutput.StoreRequest{
+		ref, err := StoreOutput(OutputStoreRequest{
 			Parts:                 []string{"shell_output", proc.id},
 			Content:               slice.Content,
 			EnsureTrailingNewline: true,
@@ -491,7 +490,7 @@ func (r *Registry) handleShellOutput(_ context.Context, args json.RawMessage) (R
 			proc.setLastOutputRef(ref)
 		}
 	}
-	return Result{Content: slice.Content, Metadata: metadata, Truncated: slice.Truncated, OutputRef: metadataStringValue(metadata, tooloutput.MetadataOutputRef)}, nil
+	return Result{Content: slice.Content, Metadata: metadata, Truncated: slice.Truncated, OutputRef: metadataStringValue(metadata, MetadataOutputRef)}, nil
 }
 
 func (r *Registry) handleShellKill(_ context.Context, args json.RawMessage) (Result, error) {
@@ -705,7 +704,7 @@ func (p *managedShellProcess) metadata() map[string]any {
 	return metadata
 }
 
-func (p *managedShellProcess) setLastOutputRef(ref tooloutput.Ref) {
+func (p *managedShellProcess) setLastOutputRef(ref OutputRef) {
 	if p == nil || ref.Path == "" {
 		return
 	}

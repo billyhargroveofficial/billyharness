@@ -204,7 +204,7 @@ func (b *Bot) inputSuperseded(key string, seq int64) bool {
 	return seq > 0 && b.inputSeq[key] != seq
 }
 
-func reconcilePendingInputsOnStartup(ctx context.Context, state *State, store Store, admit *telegramAdmissionStore, harness Harness) error {
+func reconcilePendingInputsOnStartup(ctx context.Context, state *State, store Store, harness Harness) error {
 	if state == nil {
 		return nil
 	}
@@ -238,9 +238,6 @@ func reconcilePendingInputsOnStartup(ctx context.Context, state *State, store St
 					reason = resp.TerminalStatus
 				}
 			}
-		}
-		if err := admit.RecordAbandoned(key, chat, reason, gatewayState); err != nil {
-			return err
 		}
 		log.Printf("telegram abandoned pending input after restart key=%s session=%s input=%s update=%d gateway_state=%s reason=%s",
 			key, short(chat.SessionID), inputID, chat.PendingUpdateID, gatewayState, reason)

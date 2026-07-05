@@ -232,7 +232,7 @@ terminal `OutputRef` field and emits a failed tool result with
 artifact. The output-ref event is not terminal for the attempt; terminal state
 is still one of finished, failed, or aborted.
 
-`tooloutput.Store` writes refs under `$BILLYHARNESS_HOME/tool-output` and uses a
+`tools.StoreOutput` writes refs under `$BILLYHARNESS_HOME/tool-output` and uses a
 relative ID under that root. `trace.ReplayEvents` resolves absolute refs first,
 then portable relative `output_ref`/`output_ref_id` candidates under the replay
 bundle directory and `tool-output/`, so copied trace bundles can still validate

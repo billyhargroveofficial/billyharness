@@ -45,16 +45,26 @@ type RestoreOptions struct {
 }
 
 type Tracker struct {
-	opts    Options
-	tool    string
-	targets []target
-	before  map[string]FileState
+	opts               Options
+	tool               string
+	targets            []target
+	before             map[string]FileState
+	beforeFingerprints map[string]fileFingerprint
 }
 
 type target struct {
 	Path      string
 	Recursive bool
 }
+
+type fileFingerprint struct {
+	Exists  bool
+	Mode    fs.FileMode
+	Size    int64
+	ModTime time.Time
+}
+
+var snapshotReadFile = os.ReadFile
 
 type PatchRecord struct {
 	SchemaVersion int         `json:"schema_version"`
@@ -127,18 +137,18 @@ func Begin(opts Options, toolName string, args json.RawMessage) (*Tracker, bool,
 	if err != nil || !tracked {
 		return nil, tracked, err
 	}
-	before, err := snapshotTargets(opts, targets)
+	before, beforeFingerprints, err := snapshotTargetsWithFingerprints(opts, targets)
 	if err != nil {
 		return nil, true, err
 	}
-	return &Tracker{opts: opts, tool: strings.TrimSpace(toolName), targets: targets, before: before}, true, nil
+	return &Tracker{opts: opts, tool: strings.TrimSpace(toolName), targets: targets, before: before, beforeFingerprints: beforeFingerprints}, true, nil
 }
 
 func (t *Tracker) Complete(turnID, stepID, callID, attemptID string) (PatchRecord, bool, error) {
 	if t == nil {
 		return PatchRecord{}, false, nil
 	}
-	after, err := snapshotTargets(t.opts, t.targets)
+	after, err := snapshotTargetsFast(t.opts, t.targets, t.before, t.beforeFingerprints)
 	if err != nil {
 		return PatchRecord{}, false, err
 	}
@@ -469,12 +479,96 @@ func normalizeArgs(args json.RawMessage) json.RawMessage {
 }
 
 func snapshotTargets(opts Options, targets []target) (map[string]FileState, error) {
+	states, _, err := snapshotTargetsWithFingerprints(opts, targets)
+	return states, err
+}
+
+func snapshotTargetsWithFingerprints(opts Options, targets []target) (map[string]FileState, map[string]fileFingerprint, error) {
+	out := map[string]FileState{}
+	fingerprints := map[string]fileFingerprint{}
+	remaining := opts.MaxScanEntries
+	for _, target := range targets {
+		path := filepath.Clean(target.Path)
+		if !target.Recursive {
+			state, fingerprint, err := snapshotPathWithFingerprint(opts, path)
+			if err != nil {
+				return nil, nil, err
+			}
+			out[path] = state
+			if fingerprint.Exists {
+				fingerprints[path] = fingerprint
+			}
+			continue
+		}
+		info, err := os.Lstat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				out[path] = FileState{}
+				continue
+			}
+			return nil, nil, err
+		}
+		if !info.IsDir() {
+			state, fingerprint, err := snapshotPathFromInfo(opts, path, info)
+			if err != nil {
+				return nil, nil, err
+			}
+			out[path] = state
+			if fingerprint.Exists {
+				fingerprints[path] = fingerprint
+			}
+			continue
+		}
+		err = filepath.WalkDir(path, func(current string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil
+			}
+			if remaining <= 0 {
+				return filepath.SkipDir
+			}
+			if current != path && entry.IsDir() && skipDir(entry.Name()) {
+				return filepath.SkipDir
+			}
+			if sensitive(current) {
+				if entry.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			info, err := os.Lstat(current)
+			if err != nil {
+				if os.IsNotExist(err) {
+					out[filepath.Clean(current)] = FileState{}
+					return nil
+				}
+				return err
+			}
+			state, fingerprint, err := snapshotPathFromInfo(opts, current, info)
+			if err != nil {
+				return err
+			}
+			current = filepath.Clean(current)
+			out[current] = state
+			if fingerprint.Exists {
+				fingerprints[current] = fingerprint
+			}
+			remaining--
+			return nil
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return out, fingerprints, nil
+}
+
+func snapshotTargetsFast(opts Options, targets []target, before map[string]FileState, beforeFingerprints map[string]fileFingerprint) (map[string]FileState, error) {
 	out := map[string]FileState{}
 	remaining := opts.MaxScanEntries
 	for _, target := range targets {
 		path := filepath.Clean(target.Path)
 		if !target.Recursive {
-			state, err := snapshotPath(opts, path)
+			state, err := snapshotPathFast(opts, path, before, beforeFingerprints)
 			if err != nil {
 				return nil, err
 			}
@@ -490,7 +584,7 @@ func snapshotTargets(opts Options, targets []target) (map[string]FileState, erro
 			return nil, err
 		}
 		if !info.IsDir() {
-			state, err := snapshotPath(opts, path)
+			state, err := snapshotPathFastWithInfo(opts, path, info, before, beforeFingerprints)
 			if err != nil {
 				return nil, err
 			}
@@ -513,11 +607,20 @@ func snapshotTargets(opts Options, targets []target) (map[string]FileState, erro
 				}
 				return nil
 			}
-			state, err := snapshotPath(opts, current)
+			current = filepath.Clean(current)
+			info, err := os.Lstat(current)
 			if err != nil {
-				return nil
+				if os.IsNotExist(err) {
+					out[current] = FileState{}
+					return nil
+				}
+				return err
 			}
-			out[filepath.Clean(current)] = state
+			state, err := snapshotPathFastWithInfo(opts, current, info, before, beforeFingerprints)
+			if err != nil {
+				return err
+			}
+			out[current] = state
 			remaining--
 			return nil
 		})
@@ -529,6 +632,22 @@ func snapshotTargets(opts Options, targets []target) (map[string]FileState, erro
 }
 
 func snapshotPath(opts Options, path string) (FileState, error) {
+	state, _, err := snapshotPathWithFingerprint(opts, path)
+	return state, err
+}
+
+func snapshotPathWithFingerprint(opts Options, path string) (FileState, fileFingerprint, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return FileState{}, fileFingerprint{}, nil
+		}
+		return FileState{}, fileFingerprint{}, err
+	}
+	return snapshotPathFromInfo(opts, path, info)
+}
+
+func snapshotPathFast(opts Options, path string, before map[string]FileState, beforeFingerprints map[string]fileFingerprint) (FileState, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -536,6 +655,22 @@ func snapshotPath(opts Options, path string) (FileState, error) {
 		}
 		return FileState{}, err
 	}
+	return snapshotPathFastWithInfo(opts, path, info, before, beforeFingerprints)
+}
+
+func snapshotPathFastWithInfo(opts Options, path string, info fs.FileInfo, before map[string]FileState, beforeFingerprints map[string]fileFingerprint) (FileState, error) {
+	fingerprint := fingerprintFromInfo(info)
+	if previous, ok := beforeFingerprints[path]; ok && fingerprintsEqual(previous, fingerprint) {
+		if state, ok := before[path]; ok {
+			return state, nil
+		}
+	}
+	state, _, err := snapshotPathFromInfo(opts, path, info)
+	return state, err
+}
+
+func snapshotPathFromInfo(opts Options, path string, info fs.FileInfo) (FileState, fileFingerprint, error) {
+	fingerprint := fingerprintFromInfo(info)
 	state := FileState{
 		Exists: true,
 		Mode:   uint32(info.Mode().Perm()),
@@ -543,15 +678,15 @@ func snapshotPath(opts Options, path string) (FileState, error) {
 	}
 	if info.IsDir() {
 		state.Kind = KindDir
-		return state, nil
+		return state, fingerprint, nil
 	}
 	if !info.Mode().IsRegular() {
-		return FileState{Exists: true, Kind: info.Mode().Type().String(), Mode: uint32(info.Mode().Perm()), Size: info.Size(), Large: true}, nil
+		return FileState{Exists: true, Kind: info.Mode().Type().String(), Mode: uint32(info.Mode().Perm()), Size: info.Size(), Large: true}, fingerprint, nil
 	}
 	state.Kind = KindFile
-	bytes, err := os.ReadFile(path)
+	bytes, err := snapshotReadFile(path)
 	if err != nil {
-		return FileState{}, err
+		return FileState{}, fileFingerprint{}, err
 	}
 	sum := sha256.Sum256(bytes)
 	state.SHA256 = hex.EncodeToString(sum[:])
@@ -561,7 +696,23 @@ func snapshotPath(opts Options, path string) (FileState, error) {
 	if !state.Large {
 		state.ContentBase64 = base64.StdEncoding.EncodeToString(bytes)
 	}
-	return state, nil
+	return state, fingerprint, nil
+}
+
+func fingerprintFromInfo(info fs.FileInfo) fileFingerprint {
+	return fileFingerprint{
+		Exists:  true,
+		Mode:    info.Mode(),
+		Size:    info.Size(),
+		ModTime: info.ModTime(),
+	}
+}
+
+func fingerprintsEqual(a, b fileFingerprint) bool {
+	return a.Exists == b.Exists &&
+		a.Mode == b.Mode &&
+		a.Size == b.Size &&
+		a.ModTime.Equal(b.ModTime)
 }
 
 func diffSnapshots(opts Options, before, after map[string]FileState) PatchRecord {

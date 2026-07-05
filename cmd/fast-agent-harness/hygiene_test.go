@@ -79,30 +79,31 @@ func TestHygieneStrictFlagsLargeTrackedFiles(t *testing.T) {
 	}
 }
 
-func TestHygieneStrictAllowsDocumentedLargeFiles(t *testing.T) {
+func TestHygieneStrictAllowsLiteralLargeFileExceptions(t *testing.T) {
 	repo := t.TempDir()
-	writeTestFile(t, repo, "docs/architecture.md", strings.Join([]string{
-		"# Architecture",
-		"",
-		"## File Size Budget Exceptions",
-		"",
-		"| File | Current exception owner | Split plan |",
-		"| --- | --- | --- |",
-		"| `internal/tui/tui_test.go` | P1.4 TUI subpackage tests. | Split tests. |",
-		"",
-		"## Guarded Rules",
-	}, "\n"))
-	writeTestFile(t, repo, "internal/tui/tui_test.go", strings.Repeat("// test\n", hygieneGoTestFileLineLimit+1))
+	writeTestFile(t, repo, "internal/mcpclient/client_test.go", strings.Repeat("// test\n", hygieneGoTestFileLineLimit+1))
 
-	runner := &fakeHygieneRunner{lsFiles: "internal/tui/tui_test.go\n"}
+	runner := &fakeHygieneRunner{lsFiles: "internal/mcpclient/client_test.go\n"}
 	var out bytes.Buffer
 	if err := hygieneCommand([]string{"-repo", repo, "-strict"}, &out, runner); err != nil {
 		t.Fatalf("allowlisted large file should not fail strict mode: %v\n%s", err, out.String())
 	}
 	rendered := out.String()
 	if !strings.Contains(rendered, "allowed large source files:") ||
-		!strings.Contains(rendered, "internal/tui/tui_test.go: 1201 LOC > 1200") {
+		!strings.Contains(rendered, "internal/mcpclient/client_test.go: 1201 LOC > 1200") {
 		t.Fatalf("hygiene output missing allowlisted large file:\n%s", rendered)
+	}
+}
+
+func TestHygieneExceptionsIncludeKnownLargeFiles(t *testing.T) {
+	for _, path := range []string{
+		"internal/gateway/gateway.go",
+		"internal/tools/tools.go",
+		"internal/mcpclient/client_test.go",
+	} {
+		if !hygieneLargeFileExceptions[path] {
+			t.Fatalf("hygieneLargeFileExceptions missing %s", path)
+		}
 	}
 }
 

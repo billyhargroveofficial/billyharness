@@ -6,10 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCheckpointRestorePreservesDirtyPreRunContent(t *testing.T) {
@@ -378,6 +381,71 @@ func TestCheckpointShellChangedDetectsCreatedModifiedDeletedFiles(t *testing.T) 
 	}
 	if record.Stats.Added != 1 || record.Stats.Modified != 1 || record.Stats.Deleted != 1 {
 		t.Fatalf("stats = %#v files=%#v", record.Stats, record.Files)
+	}
+}
+
+func TestCheckpointShellCompleteReadsOnlyChangedFiles(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 2000; i++ {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("unchanged-%04d.txt", i)), []byte("same\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	modified := filepath.Join(root, "modified.txt")
+	deleted := filepath.Join(root, "deleted.txt")
+	if err := os.WriteFile(modified, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(deleted, []byte("delete me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := DefaultOptions([]string{root})
+	opts.MaxScanEntries = 3000
+	tracker, tracked, err := Begin(opts, "shell_exec", rawArgs(map[string]any{"cwd": "."}))
+	if err != nil || !tracked {
+		t.Fatalf("begin tracked=%v err=%v", tracked, err)
+	}
+
+	if err := os.WriteFile(modified, []byte("after\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(modified, future, future); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(deleted); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "created.txt"), []byte("created\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	fullAfter, err := snapshotTargets(opts, tracker.targets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := diffSnapshots(opts, tracker.before, fullAfter)
+
+	originalReadFile := snapshotReadFile
+	readCount := 0
+	snapshotReadFile = func(path string) ([]byte, error) {
+		readCount++
+		return originalReadFile(path)
+	}
+	defer func() {
+		snapshotReadFile = originalReadFile
+	}()
+
+	record, changed, err := tracker.Complete("turn-001", "step-001", "call-001", "attempt-001")
+	if err != nil || !changed {
+		t.Fatalf("complete changed=%v err=%v", changed, err)
+	}
+	if !reflect.DeepEqual(record.Files, expected.Files) || record.Stats != expected.Stats {
+		t.Fatalf("fast record mismatch\nfast=%#v\nfull=%#v", record.Files, expected.Files)
+	}
+	if readCount > 2 {
+		t.Fatalf("complete full reads = %d, want <= 2", readCount)
 	}
 }
 

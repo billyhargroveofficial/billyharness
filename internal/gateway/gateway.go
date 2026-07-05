@@ -27,7 +27,6 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/runtimehost"
-	sessionpkg "github.com/billyhargroveofficial/billyharness/internal/session"
 	"github.com/billyhargroveofficial/billyharness/internal/tools"
 )
 
@@ -79,7 +78,8 @@ type Session struct {
 	ID             string                  `json:"id"`
 	Created        time.Time               `json:"created"`
 	Owner          gatewayapi.SessionOwner `json:"owner,omitempty"`
-	Thread         *sessionpkg.Session     `json:"-"`
+	Thread         *runThread              `json:"-"`
+	manifestOnly   bool
 	events         *eventHub
 	eventRecorder  func(protocol.Event) (protocol.Event, error)
 	storeSnapshots sessionStoreSnapshots
@@ -112,8 +112,6 @@ type CancelSessionResponse = gatewayapi.CancelSessionResponse
 type UserInputAnswerRequest = gatewayapi.UserInputAnswerRequest
 type UserInputRejectRequest = gatewayapi.UserInputRejectRequest
 type UserInputResponse = gatewayapi.UserInputResponse
-type BenchmarkListResponse = gatewayapi.BenchmarkListResponse
-type BenchmarkRunSummary = gatewayapi.BenchmarkRunSummary
 type ManagedProcessResponse = gatewayapi.ManagedProcessResponse
 
 type runSettings struct {
@@ -661,7 +659,7 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 			defer persistenceMu.Unlock()
 			return persistenceErr
 		}
-		err = session.Thread.RunMessage(runCtx, sessionpkg.RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
+		err = session.Thread.RunMessage(runCtx, RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
 			return a.RunMessagesWithPromptOptions(ctx, messages, promptSubmitOptionsFromRun(req, "gateway_session"), emit)
 		}), userMessage, func(event protocol.Event) {
 			if getPersistenceErr() != nil {
@@ -689,7 +687,7 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 			err = persistErr
 			hadPersistenceErr = true
 		}
-		if !hadPersistenceErr && !errors.Is(err, sessionpkg.ErrBusy) {
+		if !hadPersistenceErr && !errors.Is(err, ErrBusy) {
 			if saveErr := s.saveSession(session); saveErr != nil {
 				persistErr := fmt.Errorf("session save failed after run: %w", saveErr)
 				session.markPersistenceFailure(persistErr)
@@ -704,7 +702,7 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 		terminalStatus := "completed"
 		if err != nil {
 			terminalStatus = "failed"
-			if errors.Is(err, sessionpkg.ErrBusy) {
+			if errors.Is(err, ErrBusy) {
 				terminalStatus = "busy"
 			}
 		}
@@ -1158,10 +1156,26 @@ func (s *Server) handleSessionRedo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) session(id string) (*Session, bool) {
+	session, ok, _ := s.sessionWithError(id)
+	return session, ok
+}
+
+func (s *Server) sessionWithError(id string) (*Session, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	session, ok := s.sessions[id]
-	return session, ok
+	if !ok || session == nil || !session.manifestOnly || s.store == nil {
+		return session, ok, nil
+	}
+	loaded, err := s.store.loadSessionID(id)
+	if err != nil {
+		log.Printf("gateway session lazy load failed id=%s: %v", id, err)
+		return nil, true, err
+	}
+	s.attachSessionStore(loaded)
+	s.sessions[loaded.ID] = loaded
+	session = loaded
+	return session, ok, nil
 }
 
 func (s *Server) allSessions() []*Session {
