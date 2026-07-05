@@ -105,7 +105,7 @@ func DeepSeekStatus() ProviderStatus {
 func (m Manager) DeepSeekStatus() ProviderStatus {
 	secret, err := m.ResolveDeepSeekAPIKey()
 	if err != nil {
-		return classifyProviderStatus("deepseek", "api-key", ProviderStatus{Path: BillyDotenvPath()})
+		return classifyProviderStatus("deepseek", "api-key", ProviderStatus{Path: deepSeekDotenvPath()})
 	}
 	return classifyProviderStatus("deepseek", "api-key", ProviderStatus{Configured: true, Source: secret.Source, Provenance: secret.Provenance, Path: secret.Path})
 }
@@ -118,7 +118,7 @@ func (m Manager) ResolveDeepSeekAPIKey() (SecretValue, error) {
 	if secret := m.lookupSecret(envKey, "deepseek_api_key"); strings.TrimSpace(secret.Value) != "" {
 		return secret, nil
 	}
-	return SecretValue{Path: BillyDotenvPath(), EnvVar: envKey}, fmt.Errorf("missing API key env var %s", envKey)
+	return SecretValue{Path: deepSeekDotenvPath(), EnvVar: envKey}, fmt.Errorf("missing API key env var %s", envKey)
 }
 
 func (m Manager) ResolveCodexAuth() CodexAuthResolution {
@@ -159,11 +159,14 @@ func (m Manager) SaveDeepSeekAPIKey(apiKey string) (ProviderStatus, error) {
 	if envKey == "" {
 		envKey = deepSeekKeyEnv
 	}
-	path := BillyDotenvPath()
-	if err := upsertDotenvValue(path, envKey, apiKey); err != nil {
+	path, err := config.EffectiveWritableDotenvPath()
+	if err != nil {
 		return ProviderStatus{}, err
 	}
-	return classifyProviderStatus("deepseek", "api-key", ProviderStatus{Configured: true, Source: path, Path: path}), nil
+	if err := upsertDotenvValue(path, envKey, apiKey); err != nil {
+		return ProviderStatus{}, fmt.Errorf("write DeepSeek API key to active dotenv path %s: %w", path, err)
+	}
+	return classifyProviderStatus("deepseek", "api-key", ProviderStatus{Configured: true, Source: path, Provenance: "dotenv", Path: path}), nil
 }
 
 func CodexStatusFromAuthSettings(auth config.AuthSettings) ProviderStatus {
@@ -446,7 +449,11 @@ func (m Manager) SaveCodexAuthJSON(raw json.RawMessage) (ProviderStatus, error) 
 }
 
 func BillyDotenvPath() string {
-	return filepath.Join(config.BillyHomeDir(), ".env")
+	return config.DefaultDotenvPath()
+}
+
+func deepSeekDotenvPath() string {
+	return config.EffectiveDotenvPath()
 }
 
 func upsertDotenvValue(path, key, value string) error {

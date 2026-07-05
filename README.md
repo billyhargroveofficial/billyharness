@@ -113,7 +113,9 @@ Use `BILLYHARNESS_HOME=/path/to/dir` to move that state elsewhere.
 
 The TUI credential menu is available through `/auth`. It has two setup actions:
 
-- `/auth deepseek` prompts for a DeepSeek API key and stores it in `$BILLYHARNESS_HOME/.env`.
+- `/auth deepseek` prompts for a DeepSeek API key and stores it in the effective
+  dotenv file: `FAST_AGENT_ENV_FILE` when set and allowed, otherwise
+  `$BILLYHARNESS_HOME/.env`.
 - `/auth codex` imports an existing Codex CLI ChatGPT/OAuth login into
   `$BILLYHARNESS_HOME/auth/codex.json`.
 

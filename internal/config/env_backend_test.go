@@ -134,6 +134,54 @@ func TestLookupEnvOrDotenvExplicitFileOverridesByDefault(t *testing.T) {
 	}
 }
 
+func TestEffectiveWritableDotenvPathDefaultsToBillyharnessHome(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	t.Setenv("BILLYHARNESS_DOTENV_HOME_ONLY", "")
+
+	path, err := EffectiveWritableDotenvPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != filepath.Join(root, ".env") {
+		t.Fatalf("path = %q", path)
+	}
+}
+
+func TestEffectiveWritableDotenvPathUsesExplicitEnvFile(t *testing.T) {
+	root := t.TempDir()
+	explicit := filepath.Join(root, "explicit.env")
+	t.Setenv("BILLYHARNESS_HOME", filepath.Join(root, "home"))
+	t.Setenv("FAST_AGENT_ENV_FILE", explicit)
+	t.Setenv("BILLYHARNESS_DOTENV_HOME_ONLY", "")
+
+	path, err := EffectiveWritableDotenvPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != explicit {
+		t.Fatalf("path = %q", path)
+	}
+}
+
+func TestEffectiveWritableDotenvPathIgnoresExplicitWhenHomeOnly(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	explicit := filepath.Join(root, "explicit.env")
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("FAST_AGENT_ENV_FILE", explicit)
+	t.Setenv("BILLYHARNESS_DOTENV_HOME_ONLY", "true")
+
+	path, err := EffectiveWritableDotenvPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != filepath.Join(home, ".env") {
+		t.Fatalf("path = %q", path)
+	}
+}
+
 func TestLookupEnvOrDotenvCanRestrictToBillyharnessHome(t *testing.T) {
 	root := t.TempDir()
 	billyHome := filepath.Join(root, "billyhome")

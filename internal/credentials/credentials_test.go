@@ -154,6 +154,93 @@ func TestManagerSaveDeepSeekAPIKeyUsesConfiguredEnvName(t *testing.T) {
 	}
 }
 
+func TestManagerSaveDeepSeekAPIKeyWritesExplicitEnvFile(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	explicit := filepath.Join(root, "runtime.env")
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("FAST_AGENT_ENV_FILE", explicit)
+	t.Setenv("BILLYHARNESS_DOTENV_HOME_ONLY", "")
+	manager := NewManagerFromAuthSettings(config.AuthSettings{})
+
+	status, err := manager.SaveDeepSeekAPIKey("sk-explicit-save")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Configured || status.Path != explicit || status.Source != explicit || status.Provenance != "dotenv" {
+		t.Fatalf("status = %#v", status)
+	}
+	body, err := os.ReadFile(explicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(body)) != "DEEPSEEK_API_KEY=sk-explicit-save" {
+		t.Fatalf("explicit env = %q", body)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".env")); !os.IsNotExist(err) {
+		t.Fatalf("home .env should not be written, err=%v", err)
+	}
+	secret, err := manager.ResolveDeepSeekAPIKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secret.Value != "sk-explicit-save" || secret.Path != explicit || secret.Provenance != "dotenv" {
+		t.Fatalf("secret = %#v", secret)
+	}
+}
+
+func TestManagerSaveDeepSeekAPIKeyCreatesMissingExplicitEnvFile(t *testing.T) {
+	root := t.TempDir()
+	explicit := filepath.Join(root, "missing", "runtime.env")
+	t.Setenv("BILLYHARNESS_HOME", filepath.Join(root, "home"))
+	t.Setenv("FAST_AGENT_ENV_FILE", explicit)
+	t.Setenv("BILLYHARNESS_DOTENV_HOME_ONLY", "")
+	manager := NewManagerFromAuthSettings(config.AuthSettings{})
+
+	status, err := manager.SaveDeepSeekAPIKey("sk-missing-explicit-save")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Configured || status.Path != explicit {
+		t.Fatalf("status = %#v", status)
+	}
+	body, err := os.ReadFile(explicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(body)) != "DEEPSEEK_API_KEY=sk-missing-explicit-save" {
+		t.Fatalf("explicit env = %q", body)
+	}
+}
+
+func TestManagerSaveDeepSeekAPIKeyFailsForReadOnlyExplicitEnvFile(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	explicit := filepath.Join(root, "runtime.env")
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("FAST_AGENT_ENV_FILE", explicit)
+	t.Setenv("BILLYHARNESS_DOTENV_HOME_ONLY", "")
+	if err := os.WriteFile(explicit, []byte("OTHER=value\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManagerFromAuthSettings(config.AuthSettings{})
+
+	_, err := manager.SaveDeepSeekAPIKey("sk-read-only-save")
+	if err == nil || !strings.Contains(err.Error(), explicit) || !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("err = %v", err)
+	}
+	body, readErr := os.ReadFile(explicit)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if strings.Contains(string(body), "sk-read-only-save") || strings.Contains(string(body), "DEEPSEEK_API_KEY") {
+		t.Fatalf("read-only env was modified: %q", body)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".env")); !os.IsNotExist(statErr) {
+		t.Fatalf("home .env should not be fallback-written, err=%v", statErr)
+	}
+}
+
 func TestManagerResolvesCredentialFileSecrets(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", root)

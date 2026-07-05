@@ -434,6 +434,47 @@ func TestGatewayAuthEndpointsSaveDeepSeekAndImportCodex(t *testing.T) {
 	}
 }
 
+func TestGatewayDeepSeekAuthUsesExplicitEnvFile(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	explicit := filepath.Join(root, "runtime.env")
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("FAST_AGENT_ENV_FILE", explicit)
+	t.Setenv("BILLYHARNESS_DOTENV_HOME_ONLY", "")
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: filepath.Join(t.TempDir(), "gateway-sessions")})
+
+	deepseek := httptest.NewRecorder()
+	server.Handler().ServeHTTP(deepseek, httptest.NewRequest(http.MethodPost, "/v1/auth/deepseek", bytes.NewBufferString(`{"api_key":"sk-explicit-gateway-secret"}`)))
+	if deepseek.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", deepseek.Code, deepseek.Body.String())
+	}
+	if strings.Contains(deepseek.Body.String(), "sk-explicit-gateway-secret") {
+		t.Fatalf("response leaked key: %s", deepseek.Body.String())
+	}
+	if body, err := os.ReadFile(explicit); err != nil || !strings.Contains(string(body), "DEEPSEEK_API_KEY=sk-explicit-gateway-secret") {
+		t.Fatalf("explicit env body=%q err=%v", body, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".env")); !os.IsNotExist(err) {
+		t.Fatalf("home .env should not be written, err=%v", err)
+	}
+
+	status := httptest.NewRecorder()
+	server.Handler().ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/v1/auth/status", nil))
+	if status.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", status.Code, status.Body.String())
+	}
+	var authStatus credentials.Status
+	if err := json.Unmarshal(status.Body.Bytes(), &authStatus); err != nil {
+		t.Fatal(err)
+	}
+	if !authStatus.DeepSeek.Configured || authStatus.DeepSeek.Path != explicit || authStatus.DeepSeek.Source != explicit {
+		t.Fatalf("auth status = %#v body=%s", authStatus, status.Body.String())
+	}
+}
+
 func TestGatewayConfigStatusIsSanitized(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", root)

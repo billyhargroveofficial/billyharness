@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -159,6 +160,27 @@ func findDotenv() string {
 	return files[0]
 }
 
+func DefaultDotenvPath() string {
+	return filepath.Join(BillyHomeDir(), ".env")
+}
+
+func EffectiveDotenvPath() string {
+	if !dotenvHomeOnly() {
+		if explicit := strings.TrimSpace(os.Getenv("FAST_AGENT_ENV_FILE")); explicit != "" {
+			return filepath.Clean(explicit)
+		}
+	}
+	return DefaultDotenvPath()
+}
+
+func EffectiveWritableDotenvPath() (string, error) {
+	path := EffectiveDotenvPath()
+	if err := validateWritableDotenvPath(path); err != nil {
+		return path, err
+	}
+	return path, nil
+}
+
 func findDotenvFiles() []string {
 	seen := map[string]bool{}
 	var files []string
@@ -172,7 +194,7 @@ func findDotenvFiles() []string {
 			files = append(files, path)
 		}
 	}
-	add(filepath.Join(BillyHomeDir(), ".env"))
+	add(DefaultDotenvPath())
 	if dotenvHomeOnly() {
 		return files
 	}
@@ -195,6 +217,46 @@ func findDotenvFiles() []string {
 
 func dotenvHomeOnly() bool {
 	return envBool("BILLYHARNESS_DOTENV_HOME_ONLY", false)
+}
+
+func validateWritableDotenvPath(path string) error {
+	path = filepath.Clean(strings.TrimSpace(path))
+	if path == "." || path == "" {
+		return fmt.Errorf("active dotenv path is empty")
+	}
+	if info, err := os.Stat(path); err == nil {
+		if info.IsDir() {
+			return fmt.Errorf("active dotenv path %s is a directory", path)
+		}
+		if info.Mode().Perm()&0o222 == 0 {
+			return fmt.Errorf("active dotenv path %s is read-only", path)
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat active dotenv path %s: %w", path, err)
+	}
+	dir := filepath.Dir(path)
+	existing := dir
+	for {
+		info, err := os.Stat(existing)
+		if err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("active dotenv parent %s is not a directory", existing)
+			}
+			if info.Mode().Perm()&0o222 == 0 {
+				return fmt.Errorf("active dotenv parent %s is read-only for %s", existing, path)
+			}
+			return nil
+		}
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("stat active dotenv parent %s for %s: %w", existing, path, err)
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return fmt.Errorf("active dotenv parent %s does not exist for %s", dir, path)
+		}
+		existing = parent
+	}
 }
 
 func BillyHomeDir() string {

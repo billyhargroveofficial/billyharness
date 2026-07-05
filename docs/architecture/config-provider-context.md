@@ -59,7 +59,10 @@ Dotenv lookup is deliberately ordered. `findDotenvFiles` checks
 file replaces the normal home-plus-CWD search unless
 `BILLYHARNESS_DOTENV_HOME_ONLY=true` is set, in which case only the
 Billyharness home dotenv is considered. Process environment still wins over
-dotenv.
+dotenv. Credential persistence uses the same effective dotenv target for
+DeepSeek API-key saves: `FAST_AGENT_ENV_FILE` when set and allowed, otherwise
+`$BILLYHARNESS_HOME/.env`. A read-only, directory, or otherwise unwritable
+active dotenv path fails closed instead of writing a different fallback file.
 
 Project config is not fully trusted for auth endpoints and credential paths.
 `projectConfigDeniedKey` ignores these keys in project config and records a
@@ -130,12 +133,14 @@ unsupported model/provider/capability combinations fail without probing secrets.
 
 DeepSeek uses the OpenAI-compatible chat completions transport in
 `internal/provider/provider.go`. Its API key is resolved by
-`credentials.Manager.ResolveDeepSeekAPIKey` from, in order, the configured env
-var, `$BILLYHARNESS_HOME/.env`, the configured credential JSON file, and then
-the general env/dotenv search. The request includes streaming, optional tools,
-`max_tokens`, and DeepSeek thinking/reasoning fields when configured. Provider
-errors redact secrets and classify transport, auth, rate limit, bad request,
-context overflow, server, stream closed, and unknown failures.
+`credentials.Manager.ResolveDeepSeekAPIKey` from the configured env var through
+the shared environment/dotenv lookup, then the configured credential JSON file.
+The shared lookup honors `FAST_AGENT_ENV_FILE` and
+`BILLYHARNESS_DOTENV_HOME_ONLY` as described above. The request includes
+streaming, optional tools, `max_tokens`, and DeepSeek thinking/reasoning fields
+when configured. Provider errors redact secrets and classify transport, auth,
+rate limit, bad request, context overflow, server, stream closed, and unknown
+failures.
 
 Codex/OpenAI subscription models use the Responses transport in
 `internal/provider/codex_provider.go`. Auth is loaded by `loadCodexAuth` from
