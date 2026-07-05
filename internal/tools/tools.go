@@ -435,6 +435,7 @@ func (r *Registry) syncMCPToolsFromManager() {
 	for _, external := range snapshot.Tools {
 		spec := external.Spec
 		handler := external.Handler
+		resultHandler := external.ResultHandler
 		next[spec.Name] = Tool{
 			Spec: spec,
 			mcpPolicy: mcpToolPolicy{
@@ -445,6 +446,14 @@ func (r *Registry) syncMCPToolsFromManager() {
 				SideEffectAllowlisted: external.SideEffectAllowlisted,
 			},
 			Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
+				if resultHandler != nil {
+					callResult, err := resultHandler(ctx, args)
+					return Result{
+						Content:  callResult.Content,
+						IsError:  callResult.IsError,
+						Metadata: callResult.Metadata,
+					}, err
+				}
 				content, err := handler(ctx, args)
 				return Result{Content: content}, err
 			},

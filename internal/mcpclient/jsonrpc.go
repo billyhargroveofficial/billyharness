@@ -34,9 +34,10 @@ type rpcError struct {
 	Message string `json:"message"`
 }
 
-type callToolResult struct {
+type callToolResponse struct {
 	Content           []map[string]any `json:"content"`
 	StructuredContent any              `json:"structuredContent,omitempty"`
+	Meta              map[string]any   `json:"_meta,omitempty"`
 	IsError           bool             `json:"isError"`
 }
 
@@ -156,6 +157,11 @@ func (c *stdioClient) read(ctx context.Context, limit int) (rpcResponse, error) 
 }
 
 func (c *stdioClient) callTool(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	result, err := c.callToolResult(ctx, name, args)
+	return result.Content, err
+}
+
+func (c *stdioClient) callToolResult(ctx context.Context, name string, args json.RawMessage) (ToolCallResult, error) {
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
@@ -164,21 +170,22 @@ func (c *stdioClient) callTool(ctx context.Context, name string, args json.RawMe
 		"arguments": json.RawMessage(args),
 	})
 	if err != nil {
-		return "", err
+		return ToolCallResult{}, err
 	}
-	var out callToolResult
+	var out callToolResponse
 	if err := json.Unmarshal(result, &out); err != nil {
-		return "", fmt.Errorf("MCP %s tools/call decode: %w", c.server.Name, err)
+		return ToolCallResult{}, fmt.Errorf("MCP %s tools/call decode: %w", c.server.Name, err)
 	}
 	text := renderContent(out, c.outputLimit)
+	metadata := mcpToolResultMetadata(out, serverSecrets(c.server))
 	if out.IsError {
 		if text == "" {
 			text = "MCP tool returned isError=true"
 		}
 		text = secrets.Redact(text, serverSecrets(c.server)...)
-		return text, errors.New(text)
+		return ToolCallResult{Content: text, IsError: true, Metadata: metadata}, errors.New(text)
 	}
-	return secrets.Redact(text, serverSecrets(c.server)...), nil
+	return ToolCallResult{Content: secrets.Redact(text, serverSecrets(c.server)...), Metadata: metadata}, nil
 }
 
 func (c *stdioClient) responseLimit(method string) int {

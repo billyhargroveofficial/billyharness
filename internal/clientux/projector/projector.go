@@ -68,6 +68,7 @@ type ToolItem struct {
 	Name      string
 	Call      protocol.ToolCall
 	Compact   *protocol.ToolCompact
+	Metadata  map[string]any
 	Status    string
 	Content   string
 	Error     string
@@ -498,6 +499,7 @@ func (p *Projector) upsertToolResult(event protocol.Event, status string) {
 		item.Content = result.Content
 		item.IsError = result.IsError
 		item.Error = result.ErrorCode
+		item.Metadata = cloneMetadata(result.Metadata)
 		if state, ok := todoStateFromMetadata(result.Metadata); ok {
 			p.snapshot.TodoState = cloneTodoState(state)
 		}
@@ -513,6 +515,28 @@ func (p *Projector) upsertToolResult(event protocol.Event, status string) {
 		}
 	}
 	p.snapshot.ToolsByCallID[callID] = item
+}
+
+func cloneMetadata(metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	bytes, err := json.Marshal(metadata)
+	if err != nil {
+		out := make(map[string]any, len(metadata))
+		for key, value := range metadata {
+			out[key] = value
+		}
+		return out
+	}
+	var out map[string]any
+	if err := json.Unmarshal(bytes, &out); err != nil {
+		out = make(map[string]any, len(metadata))
+		for key, value := range metadata {
+			out[key] = value
+		}
+	}
+	return out
 }
 
 func (p *Projector) observeToolSummary(event protocol.Event) {

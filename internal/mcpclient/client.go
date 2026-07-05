@@ -59,6 +59,13 @@ type ExternalTool struct {
 	MetadataTrust         string
 	SideEffectAllowlisted bool
 	Handler               func(context.Context, json.RawMessage) (string, error)
+	ResultHandler         func(context.Context, json.RawMessage) (ToolCallResult, error)
+}
+
+type ToolCallResult struct {
+	Content  string
+	IsError  bool
+	Metadata map[string]any
 }
 
 type Prompt struct {

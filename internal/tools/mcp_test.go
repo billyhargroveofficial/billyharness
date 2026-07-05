@@ -799,6 +799,71 @@ func TestMCPGatewayReconnectsCrashedStdioServer(t *testing.T) {
 	}
 }
 
+func TestMCPGatewayPreservesStructuredOutputMetadata(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.WorkspaceRoots = []string{root}
+	cfg.MCPEnabled = true
+	cfg.MCPServers = []config.MCPServer{{
+		Name:           "fake",
+		Command:        os.Args[0],
+		Args:           []string{"-test.run=TestToolsFakeStdioMCPServer"},
+		Env:            map[string]string{"BILLYHARNESS_TOOLS_MCP_HELPER": "1", "BILLYHARNESS_TOOLS_MCP_MODE": "structured_output"},
+		CWD:            root,
+		Enabled:        true,
+		Required:       true,
+		StartupTimeout: 2 * time.Second,
+		ToolTimeout:    2 * time.Second,
+	}}
+	registry, err := NewRegistryWithMCP(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+
+	called, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name: "mcp_call",
+		Arguments: rawArgs(map[string]any{
+			"name":      "mcp__fake__rich",
+			"arguments": map[string]any{"text": "hello"},
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(called.Content, "visible: hello") ||
+		!strings.Contains(called.Content, "[MCP image content omitted") ||
+		strings.Contains(called.Content, "BASE64_IMAGE_DATA") {
+		t.Fatalf("mcp_call content should stay compact, got %q", called.Content)
+	}
+	if called.Metadata["mcp_server"] != "fake" ||
+		called.Metadata["mcp_tool"] != "rich" ||
+		called.Metadata["mcp_result_is_error"] != false ||
+		anyInt64(called.Metadata["mcp_result_content_count"]) != 3 {
+		t.Fatalf("mcp target/result metadata = %#v", called.Metadata)
+	}
+	types, ok := called.Metadata["mcp_result_content_types"].([]string)
+	if !ok || len(types) != 3 || types[0] != "image" || types[1] != "resource" || types[2] != "text" {
+		t.Fatalf("mcp content types = %#v", called.Metadata["mcp_result_content_types"])
+	}
+	content, ok := called.Metadata["mcp_result_content"].([]any)
+	if !ok || len(content) != 3 {
+		t.Fatalf("mcp content metadata = %#v", called.Metadata["mcp_result_content"])
+	}
+	image, ok := content[1].(map[string]any)
+	if !ok || image["data"] != "BASE64_IMAGE_DATA" || image["mimeType"] != "image/png" {
+		t.Fatalf("image content metadata = %#v", content[1])
+	}
+	structured, ok := called.Metadata["mcp_structured_content"].(map[string]any)
+	if !ok || structured["answer"] != "structured hello" || structured["count"].(float64) != 2 {
+		t.Fatalf("structured content metadata = %#v", called.Metadata["mcp_structured_content"])
+	}
+	resultMeta, ok := called.Metadata["mcp_result_meta"].(map[string]any)
+	if !ok || resultMeta["request_id"] != "fake-call-1" {
+		t.Fatalf("mcp result meta = %#v", called.Metadata["mcp_result_meta"])
+	}
+}
+
 func TestMCPGatewayRefreshesCatalogAfterReconnect(t *testing.T) {
 	root := t.TempDir()
 	phaseFile := filepath.Join(root, "tools-catalog-reconnect.phase")
@@ -1157,6 +1222,10 @@ func TestToolsFakeStdioMCPServer(t *testing.T) {
 				name = "new_echo"
 				description = "New echo text"
 			}
+			if mode == "structured_output" {
+				name = "rich"
+				description = "Structured output"
+			}
 			_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"tools": []map[string]any{{
 				"name":        name,
 				"description": description,
@@ -1168,6 +1237,19 @@ func TestToolsFakeStdioMCPServer(t *testing.T) {
 				Arguments map[string]any `json:"arguments"`
 			}
 			_ = json.Unmarshal(req.Params, &call)
+			if call.Name == "rich" && mode == "structured_output" {
+				_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{
+					"content": []map[string]any{
+						{"type": "text", "text": "visible: " + fmt.Sprint(call.Arguments["text"])},
+						{"type": "image", "mimeType": "image/png", "data": "BASE64_IMAGE_DATA"},
+						{"type": "resource", "resource": map[string]any{"uri": "file:///tmp/result.json", "mimeType": "application/json", "text": "resource payload"}},
+					},
+					"structuredContent": map[string]any{"answer": "structured " + fmt.Sprint(call.Arguments["text"]), "count": 2},
+					"_meta":             map[string]any{"request_id": "fake-call-1"},
+					"isError":           false,
+				}})
+				continue
+			}
 			if call.Name == "new_echo" && (mode == "close_once_then_new_tool" || mode == "bad_list_once_then_new_tool") && toolsMCPPhaseExists() {
 				_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{
 					"content": []map[string]any{{"type": "text", "text": "new: " + fmt.Sprint(call.Arguments["text"])}},

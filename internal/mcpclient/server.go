@@ -249,11 +249,16 @@ func (s *managedServer) startLocked(ctx context.Context, reconnect bool) ([]prot
 }
 
 func (s *managedServer) callTool(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	result, err := s.callToolResult(ctx, name, args)
+	return result.Content, err
+}
+
+func (s *managedServer) callToolResult(ctx context.Context, name string, args json.RawMessage) (ToolCallResult, error) {
 	client, err := s.ensureConnected(ctx)
 	if err != nil {
-		return "", err
+		return ToolCallResult{}, err
 	}
-	text, err := client.callTool(ctx, name, args)
+	result, err := client.callToolResult(ctx, name, args)
 	if err != nil && !client.connected.Load() {
 		s.mu.Lock()
 		status, changed, catalogChanged := s.absorbClientLocked()
@@ -265,7 +270,7 @@ func (s *managedServer) callTool(ctx context.Context, name string, args json.Raw
 			s.publishCatalogChanged()
 		}
 	}
-	return text, err
+	return result, err
 }
 
 func (s *managedServer) handleNotification(method string, _ json.RawMessage) {

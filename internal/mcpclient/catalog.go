@@ -92,6 +92,11 @@ func buildCatalog(catalogs []serverCatalog, promoteInstructions bool) ([]Externa
 		}
 		runtime := candidate.runtime
 		originalName := candidate.originalName
+		call := func(ctx context.Context, args json.RawMessage) (ToolCallResult, error) {
+			callCtx, cancel := context.WithTimeout(ctx, toolTimeout)
+			defer cancel()
+			return runtime.callToolResult(callCtx, originalName, args)
+		}
 		tools = append(tools, ExternalTool{
 			Spec:                  spec,
 			ServerName:            candidate.server.Name,
@@ -100,10 +105,10 @@ func buildCatalog(catalogs []serverCatalog, promoteInstructions bool) ([]Externa
 			MetadataTrust:         MCPMetadataTrustUntrusted,
 			SideEffectAllowlisted: len(candidate.server.EnabledTools) > 0 && contains(candidate.server.EnabledTools, originalName),
 			Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
-				callCtx, cancel := context.WithTimeout(ctx, toolTimeout)
-				defer cancel()
-				return runtime.callTool(callCtx, originalName, args)
+				result, err := call(ctx, args)
+				return result.Content, err
 			},
+			ResultHandler: call,
 		})
 	}
 	return tools, serverInstructions, promotedInstructions, collisions

@@ -178,6 +178,12 @@ Current lazy flow:
    Permission denials, validation errors, and successful calls carry MCP target
    metadata such as server, original tool, risk source, metadata trust, schema
    validation mode, and unsupported schema keywords.
+6. MCP `tools/call` responses preserve redacted raw `content`,
+   `structuredContent`, and response `_meta` in tool-result metadata using
+   `mcp_result_content`, `mcp_structured_content`, and `mcp_result_meta`.
+   Model-facing text remains compact: text parts are rendered inline, while
+   image/resource-like parts become short placeholders that point operators to
+   the structured metadata in event/debug JSON.
 
 `ToolSet.Snapshot()` freezes the tool view for a provider turn, including an
 MCP status/catalog hash from `internal/tools/toolset.go`. Live catalog changes

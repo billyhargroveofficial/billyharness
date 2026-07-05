@@ -86,6 +86,47 @@ func TestProjectorBuildsClientSnapshot(t *testing.T) {
 	}
 }
 
+func TestProjectorPreservesStructuredToolMetadata(t *testing.T) {
+	p := New()
+	events := []protocol.Event{
+		{Seq: 1, Type: protocol.EventRunStarted},
+		{Seq: 2, Type: protocol.EventToolCallRequested, Data: protocol.ToolCall{ID: "call_mcp", Name: "mcp_call"}},
+		{Seq: 3, Type: protocol.EventToolCallFinished, CallID: "call_mcp", AttemptID: "attempt_1", Data: protocol.ToolResult{
+			CallID:  "call_mcp",
+			Name:    "mcp_call",
+			Content: "visible\n[MCP image content omitted; see mcp_result_content metadata]",
+			Metadata: map[string]any{
+				"mcp_result_content": []any{
+					map[string]any{"type": "text", "text": "visible"},
+					map[string]any{"type": "image", "mimeType": "image/png", "data": "BASE64"},
+				},
+				"mcp_structured_content": map[string]any{"answer": "structured", "count": 2},
+				"mcp_result_meta":        map[string]any{"request_id": "fake-call-1"},
+			},
+		}},
+	}
+	var snap Snapshot
+	for _, event := range events {
+		snap = p.Apply(event)
+	}
+	tool := snap.ToolsByCallID["call_mcp"]
+	if tool.Content == "" || strings.Contains(tool.Content, `"data"`) {
+		t.Fatalf("projected content should stay compact: %#v", tool)
+	}
+	structured, ok := tool.Metadata["mcp_structured_content"].(map[string]any)
+	if !ok || structured["answer"] != "structured" || structured["count"].(float64) != 2 {
+		t.Fatalf("projected structured metadata = %#v", tool.Metadata)
+	}
+	content, ok := tool.Metadata["mcp_result_content"].([]any)
+	if !ok || len(content) != 2 {
+		t.Fatalf("projected content metadata = %#v", tool.Metadata)
+	}
+	image, ok := content[1].(map[string]any)
+	if !ok || image["mimeType"] != "image/png" || image["data"] != "BASE64" {
+		t.Fatalf("projected image metadata = %#v", content[1])
+	}
+}
+
 func TestProjectorCoalescedDeltasMatchUncoalescedReplay(t *testing.T) {
 	uncoalesced := New()
 	for _, event := range []protocol.Event{

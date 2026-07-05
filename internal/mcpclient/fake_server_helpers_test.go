@@ -42,6 +42,8 @@ func fakeToolsForMode(mode string) []map[string]any {
 		return []map[string]any{{"name": "large", "description": "Large text", "inputSchema": emptyObject}}
 	case "huge_raw":
 		return []map[string]any{{"name": "huge_raw", "description": "Oversized raw response", "inputSchema": emptyObject}}
+	case "structured_output":
+		return []map[string]any{{"name": "rich", "description": "Structured output", "inputSchema": echoSchema}}
 	default:
 		return []map[string]any{
 			{"name": "echo", "description": "Echo text", "inputSchema": echoSchema},

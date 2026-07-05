@@ -111,6 +111,68 @@ func TestStdioLifecycleCallEnvAndRedaction(t *testing.T) {
 	}
 }
 
+func TestStdioCallPreservesStructuredOutputMetadata(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{
+		WorkspaceRoots:       []string{root},
+		MaxToolOutputBytes:   64 * 1024,
+		AutoApproveDangerous: true,
+		MCPServers: []config.MCPServer{{
+			Name:           "fake",
+			Command:        os.Args[0],
+			Args:           []string{"-test.run=TestFakeStdioMCPServer"},
+			Env:            helperEnv("structured_output", map[string]string{"SERVER_SECRET": "server-secret-token"}),
+			StartupTimeout: 2 * time.Second,
+			ToolTimeout:    2 * time.Second,
+			Enabled:        true,
+			EnabledTools:   []string{"rich"},
+		}},
+	}
+	manager, err := NewManager(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	rich := findTool(t, manager, "mcp__fake__rich")
+	result, err := rich.ResultHandler(context.Background(), json.RawMessage(`{"text":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, "visible: hello") ||
+		!strings.Contains(result.Content, "[MCP image content omitted") ||
+		strings.Contains(result.Content, "server-secret-token") {
+		t.Fatalf("rich content should be compact and redacted: %q", result.Content)
+	}
+	if result.IsError {
+		t.Fatalf("result marked error: %#v", result)
+	}
+	types, ok := result.Metadata["mcp_result_content_types"].([]string)
+	if !ok || len(types) != 3 || types[0] != "image" || types[1] != "resource" || types[2] != "text" {
+		t.Fatalf("content types = %#v", result.Metadata["mcp_result_content_types"])
+	}
+	content, ok := result.Metadata["mcp_result_content"].([]any)
+	if !ok || len(content) != 3 {
+		t.Fatalf("content metadata = %#v", result.Metadata["mcp_result_content"])
+	}
+	image, ok := content[1].(map[string]any)
+	if !ok || image["data"] != "[redacted]" {
+		t.Fatalf("image metadata not redacted = %#v", content[1])
+	}
+	structured, ok := result.Metadata["mcp_structured_content"].(map[string]any)
+	if !ok || structured["answer"] != "structured hello" || structured["secret"] != "[redacted]" {
+		t.Fatalf("structured metadata = %#v", result.Metadata["mcp_structured_content"])
+	}
+	meta, ok := result.Metadata["mcp_result_meta"].(map[string]any)
+	if !ok || meta["request_id"] != "fake-call-1" || meta["token"] != "[redacted]" {
+		t.Fatalf("result meta = %#v", result.Metadata["mcp_result_meta"])
+	}
+	text, err := rich.Handler(context.Background(), json.RawMessage(`{"text":"hello"}`))
+	if err != nil || text != result.Content {
+		t.Fatalf("compat handler text=%q err=%v want %q", text, err, result.Content)
+	}
+}
+
 func TestBuildCatalogUsesLocalRiskPolicyAndLabelsMCPMetadataUntrusted(t *testing.T) {
 	tools, serverInstructions, promotedInstructions, collisions := buildCatalog([]serverCatalog{{
 		server: config.MCPServer{
@@ -1196,6 +1258,21 @@ func runFakeMCPServer() {
 				_ = enc.Encode(response(req.ID, toolResult(strings.Repeat("x", 512), false)))
 			case "huge_raw":
 				_ = enc.Encode(response(req.ID, toolResult(strings.Repeat("x", 300*1024), false)))
+			case "rich":
+				if mode != "structured_output" {
+					_ = enc.Encode(rpcErrorResponse(req.ID, -32602, "unknown tool"))
+					continue
+				}
+				_ = enc.Encode(response(req.ID, map[string]any{
+					"content": []map[string]any{
+						{"type": "text", "text": "visible: " + fmt.Sprint(call.Arguments["text"])},
+						{"type": "image", "mimeType": "image/png", "data": "server-secret-token"},
+						{"type": "resource", "resource": map[string]any{"uri": "file:///tmp/result.json", "mimeType": "application/json", "text": "resource payload"}},
+					},
+					"structuredContent": map[string]any{"answer": "structured " + fmt.Sprint(call.Arguments["text"]), "secret": "server-secret-token"},
+					"_meta":             map[string]any{"request_id": "fake-call-1", "token": "server-secret-token"},
+					"isError":           false,
+				}))
 			default:
 				_ = enc.Encode(rpcErrorResponse(req.ID, -32602, "unknown tool"))
 			}

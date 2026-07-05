@@ -1,6 +1,7 @@
 package eventlog
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -160,6 +161,66 @@ func TestAppendAndReplayJSONL(t *testing.T) {
 	}
 	if len(got) != 2 || got[0].Name != "one" || got[1].Name != "two" {
 		t.Fatalf("records = %#v", got)
+	}
+}
+
+func TestReplayJSONLPreservesMCPStructuredToolMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	event := protocol.Event{
+		SchemaVersion: protocol.EventSchemaVersion,
+		Seq:           1,
+		Source:        protocol.EventSourceAgent,
+		RunID:         "run-1",
+		Type:          protocol.EventToolCallFinished,
+		CallID:        "call-1",
+		AttemptID:     "attempt-1",
+		Data: protocol.ToolResult{
+			CallID:  "call-1",
+			Name:    "mcp_call",
+			Content: "visible",
+			Metadata: map[string]any{
+				"mcp_result_content": []any{
+					map[string]any{"type": "text", "text": "visible"},
+					map[string]any{"type": "image", "mimeType": "image/png", "data": "BASE64"},
+				},
+				"mcp_structured_content": map[string]any{"answer": "structured", "count": 2},
+				"mcp_result_meta":        map[string]any{"request_id": "fake-call-1"},
+			},
+		},
+	}
+	if err := AppendJSONL(path, event); err != nil {
+		t.Fatal(err)
+	}
+	var replayed []protocol.Event
+	err := ReplayJSONL[protocol.Event](path, JSONLOptions{}, func(record JSONLRecord[protocol.Event]) error {
+		replayed = append(replayed, record.Value)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayed) != 1 {
+		t.Fatalf("replayed = %#v", replayed)
+	}
+	body, err := json.Marshal(replayed[0].Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result protocol.ToolResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatal(err)
+	}
+	structured, ok := result.Metadata["mcp_structured_content"].(map[string]any)
+	if !ok || structured["answer"] != "structured" || structured["count"].(float64) != 2 {
+		t.Fatalf("structured metadata = %#v", result.Metadata["mcp_structured_content"])
+	}
+	content, ok := result.Metadata["mcp_result_content"].([]any)
+	if !ok || len(content) != 2 {
+		t.Fatalf("content metadata = %#v", result.Metadata["mcp_result_content"])
+	}
+	image, ok := content[1].(map[string]any)
+	if !ok || image["mimeType"] != "image/png" || image["data"] != "BASE64" {
+		t.Fatalf("image metadata = %#v", content[1])
 	}
 }
 
