@@ -19,6 +19,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/clientux"
 	uxprojector "github.com/billyhargroveofficial/billyharness/internal/clientux/projector"
+	"github.com/billyhargroveofficial/billyharness/internal/clipboard"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/filesearch"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
@@ -462,6 +463,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.resize(m.followOutput)
 	case tea.KeyPressMsg:
+		// Ctrl+V: try clipboard image paste first; if no image, fall through to normal text paste
+		if msg.String() == "ctrl+v" && m.authInputProvider == "" && !m.busy {
+			if ok, err := m.pasteImageFromClipboard(); ok {
+				m.reflow(m.followOutput)
+				skipTextareaUpdate = true
+				break
+			} else if !errors.Is(err, clipboard.ErrNoImage) {
+				// Real error, not just empty clipboard
+				m.status = "paste: " + err.Error()
+				m.reflow(m.followOutput)
+				skipTextareaUpdate = true
+				break
+			}
+			// No image in clipboard — fall through to textarea paste
+		}
 		if m.authInputProvider != "" && msg.String() == "esc" {
 			m.cancelAuthInput()
 			skipTextareaUpdate = true

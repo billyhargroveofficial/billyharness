@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/billyhargroveofficial/billyharness/internal/attachments"
+	"github.com/billyhargroveofficial/billyharness/internal/clipboard"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/toolrender"
@@ -24,6 +25,27 @@ func (m *Model) attachImage(path string) (bool, error) {
 	m.attachments = append(m.attachments, ref)
 	m.status = fmt.Sprintf("attached image %d", len(m.attachments))
 	return true, nil
+}
+
+func (m *Model) attachImageBytes(data []byte, fileName string) (bool, error) {
+	ref, err := attachments.DefaultStore().StoreImageBytes(fileName, data, "")
+	if err != nil {
+		return false, err
+	}
+	m.attachments = append(m.attachments, ref)
+	m.status = fmt.Sprintf("attached image %d", len(m.attachments))
+	return true, nil
+}
+
+// pasteImageFromClipboard reads an image from the system clipboard and
+// attaches it. Returns true on success. On failure (no image in clipboard,
+// unsupported platform, etc.) it returns false with an error.
+func (m *Model) pasteImageFromClipboard() (bool, error) {
+	data, name, err := clipboard.ReadImage()
+	if err != nil {
+		return false, err
+	}
+	return m.attachImageBytes(data, name)
 }
 
 func (m *Model) applyAttachCommand(arg string) error {

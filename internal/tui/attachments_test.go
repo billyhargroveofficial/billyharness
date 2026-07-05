@@ -100,6 +100,32 @@ func TestSubmitWithAttachmentRendersTranscriptChip(t *testing.T) {
 	}
 }
 
+func TestAttachImageBytesAddsAttachment(t *testing.T) {
+	m := newTestModel(t)
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	img.Set(0, 0, color.RGBA{255, 0, 0, 255})
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := m.attachImageBytes(buf.Bytes(), "clipboard-test.png")
+	if err != nil {
+		t.Fatalf("attachImageBytes: %v", err)
+	}
+	if !ok {
+		t.Fatal("attachImageBytes returned false")
+	}
+	if len(m.attachments) != 1 {
+		t.Fatalf("attachments = %#v", m.attachments)
+	}
+	if m.attachments[0].FileName != "clipboard-test.png" {
+		t.Fatalf("filename = %q", m.attachments[0].FileName)
+	}
+	if chip := m.attachmentChipsView(); !strings.Contains(chip, "clipboard-test.png") {
+		t.Fatalf("chip = %q", chip)
+	}
+}
+
 func writeTUITestPNG(t *testing.T, name string, width, height int) string {
 	t.Helper()
 	dir := t.TempDir()
