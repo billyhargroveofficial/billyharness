@@ -130,8 +130,12 @@ func (r *Registry) addWebSearch() {
 					if nativeErr != nil {
 						return Result{}, fmt.Errorf("%s web search failed: %v; native fallback failed: %w", backend, err, nativeErr)
 					}
-					out, _ := json.MarshalIndent(nativeResults, "", "  ")
-					metadata := webSearchMetadata(webtools.BackendNative, searchReq, webBackendKey{}, len(nativeResults))
+					out, _ := json.MarshalIndent(nativeResults.Results, "", "  ")
+					metadata := webSearchMetadata(webtools.BackendNative, searchReq, webBackendKey{}, webSearchMetadataStats{
+						ResultCount:         len(nativeResults.Results),
+						ResultsBeforeFilter: nativeResults.ResultsBeforeFilter,
+						ResultsAfterFilter:  nativeResults.ResultsAfterFilter,
+					})
 					metadata["web_backend_attempted"] = backend
 					metadata["web_backend_failed"] = true
 					metadata["web_backend_error"] = truncate(err.Error(), 240)
@@ -139,7 +143,10 @@ func (r *Registry) addWebSearch() {
 					return Result{Content: string(out), Metadata: metadata}, nil
 				}
 				out, _ := json.MarshalIndent(results, "", "  ")
-				metadata := webSearchMetadata(results.Backend, searchReq, key, len(results.Results))
+				metadata := webSearchMetadata(results.Backend, searchReq, key, webSearchMetadataStats{
+					ResultCount:        len(results.Results),
+					ResultsAfterFilter: len(results.Results),
+				})
 				metadata["helper_api_calls"] = results.Usage.APICalls
 				metadata["helper_cost_usd"] = results.Usage.CostUSD
 				return Result{Content: string(out), Metadata: metadata}, nil
@@ -148,8 +155,12 @@ func (r *Registry) addWebSearch() {
 			if err != nil {
 				return Result{}, err
 			}
-			out, _ := json.MarshalIndent(results, "", "  ")
-			return Result{Content: string(out), Metadata: webSearchMetadata(webtools.BackendNative, searchReq, webBackendKey{}, len(results))}, nil
+			out, _ := json.MarshalIndent(results.Results, "", "  ")
+			return Result{Content: string(out), Metadata: webSearchMetadata(webtools.BackendNative, searchReq, webBackendKey{}, webSearchMetadataStats{
+				ResultCount:         len(results.Results),
+				ResultsBeforeFilter: results.ResultsBeforeFilter,
+				ResultsAfterFilter:  results.ResultsAfterFilter,
+			})}, nil
 		},
 	})
 }

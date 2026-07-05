@@ -216,7 +216,11 @@ or `full_text` is still hard-capped.
 backends. Provider-backed search and extraction live in `internal/webtools` and
 are invoked from `internal/tools/web_backend.go`. Configured backend failures
 can fall back to native search when safe; missing backend API keys return an
-explicit configuration error rather than silently changing behavior.
+explicit configuration error rather than silently changing behavior. Search
+result metadata reports whether freshness and domain filters were requested,
+supported, enforced by the provider, post-filtered locally, or skipped. Native
+DuckDuckGo search post-filters domains and marks freshness as skipped; when
+available, metadata includes result counts before and after local filtering.
 
 Model web summaries are injected through the `webtools.Summarizer` interface.
 `internal/tools` does not import `internal/provider`; the provider adapter is

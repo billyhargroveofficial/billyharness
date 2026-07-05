@@ -63,7 +63,14 @@ func TestWebSearchTavilyBackendForwardsQueryOptions(t *testing.T) {
 	}
 	if result.Metadata["web_backend"] != "tavily" ||
 		result.Metadata["web_freshness_days"] != 7 ||
+		result.Metadata["web_freshness_requested"] != true ||
+		result.Metadata["web_freshness_supported"] != true ||
+		result.Metadata["web_freshness_enforced"] != true ||
+		result.Metadata["web_domain_filter_requested"] != true ||
+		result.Metadata["web_domain_filter_supported"] != true ||
+		result.Metadata["web_domain_filter_enforcement"] != "provider" ||
 		anyInt64(result.Metadata["web_result_count"]) != 1 ||
+		anyInt64(result.Metadata["web_results_after_filter"]) != 1 ||
 		!strings.Contains(result.Content, `"published_date": "2026-07-02"`) ||
 		!strings.Contains(result.Content, `"content": "Useful evidence."`) {
 		t.Fatalf("search result/metadata = %#v\n%s", result.Metadata, result.Content)
@@ -117,6 +124,7 @@ func TestWebSearchBackendFailureFallsBackToNativeWithMetadata(t *testing.T) {
 		Arguments: rawArgs(map[string]any{
 			"query":           "agent docs",
 			"limit":           5,
+			"freshness_days":  3,
 			"include_domains": []string{"docs.example.com"},
 		}),
 	})
@@ -127,7 +135,17 @@ func TestWebSearchBackendFailureFallsBackToNativeWithMetadata(t *testing.T) {
 		result.Metadata["web_backend_attempted"] != "exa" ||
 		result.Metadata["web_backend_failed"] != true ||
 		result.Metadata["web_failover_policy"] != "configured_backend_then_native" ||
-		anyInt64(result.Metadata["web_result_count"]) != 1 {
+		result.Metadata["web_freshness_requested"] != true ||
+		result.Metadata["web_freshness_supported"] != false ||
+		result.Metadata["web_freshness_enforced"] != false ||
+		result.Metadata["web_domain_filter_requested"] != true ||
+		result.Metadata["web_domain_filter_supported"] != true ||
+		result.Metadata["web_domain_filter_enforcement"] != "native_post_filter" ||
+		anyInt64(result.Metadata["web_result_count"]) != 1 ||
+		anyInt64(result.Metadata["web_results_before_filter"]) != 2 ||
+		anyInt64(result.Metadata["web_results_after_filter"]) != 1 ||
+		!strings.Contains(fmt.Sprint(result.Metadata["web_skipped_filters"]), "freshness_days") ||
+		!strings.Contains(fmt.Sprint(result.Metadata["web_post_filtered_filters"]), "domains") {
 		t.Fatalf("fallback metadata = %#v", result.Metadata)
 	}
 	if !strings.Contains(result.Content, "https://docs.example.com/guide") ||

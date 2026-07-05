@@ -106,7 +106,19 @@ func (r *Registry) webBackendSearch(ctx context.Context, backend string, req web
 	}
 }
 
-func (r *Registry) nativeSearch(ctx context.Context, req webtools.SearchRequest) ([]searchResult, error) {
+type nativeSearchResponse struct {
+	Results             []searchResult
+	ResultsBeforeFilter int
+	ResultsAfterFilter  int
+}
+
+type webSearchMetadataStats struct {
+	ResultCount         int
+	ResultsBeforeFilter int
+	ResultsAfterFilter  int
+}
+
+func (r *Registry) nativeSearch(ctx context.Context, req webtools.SearchRequest) (nativeSearchResponse, error) {
 	query := strings.TrimSpace(req.Query)
 	limit := normalizedNativeSearchLimit(req.Limit)
 	parseLimit := limit
@@ -116,10 +128,15 @@ func (r *Registry) nativeSearch(ctx context.Context, req webtools.SearchRequest)
 	searchURL := duckDuckGoLiteSearchURL(query)
 	body, _, _, err := httpGetWithClient(ctx, r.nativeWebHTTPClient(), searchURL, maxWebBytes)
 	if err != nil {
-		return nil, err
+		return nativeSearchResponse{}, err
 	}
 	results := parseSearchResults(searchURL, string(body), parseLimit)
-	return filterSearchResults(results, req, limit), nil
+	filtered := filterSearchResults(results, req, limit)
+	return nativeSearchResponse{
+		Results:             filtered,
+		ResultsBeforeFilter: len(results),
+		ResultsAfterFilter:  len(filtered),
+	}, nil
 }
 
 func normalizedNativeSearchLimit(value int) int {
@@ -190,11 +207,52 @@ func searchResultAllowedByDomains(rawURL string, include, exclude map[string]boo
 	return false
 }
 
-func webSearchMetadata(backend string, req webtools.SearchRequest, key webBackendKey, resultCount int) map[string]any {
+func webSearchMetadata(backend string, req webtools.SearchRequest, key webBackendKey, stats webSearchMetadataStats) map[string]any {
+	if stats.ResultCount == 0 {
+		stats.ResultCount = stats.ResultsAfterFilter
+	}
+	freshnessRequested := req.FreshnessDays > 0
+	domainFilterRequested := len(req.IncludeDomains) > 0 || len(req.ExcludeDomains) > 0
+	freshnessSupported := backend == webtools.BackendTavily || backend == webtools.BackendExa
+	domainFilterSupported := backend == webtools.BackendTavily || backend == webtools.BackendExa || backend == webtools.BackendNative
+	var skippedFilters []string
+	var postFilteredFilters []string
+	domainEnforcement := "none"
+	if domainFilterRequested {
+		switch backend {
+		case webtools.BackendNative:
+			domainEnforcement = "native_post_filter"
+			postFilteredFilters = append(postFilteredFilters, "domains")
+		case webtools.BackendTavily, webtools.BackendExa:
+			domainEnforcement = "provider"
+		default:
+			domainEnforcement = "unsupported"
+			skippedFilters = append(skippedFilters, "domains")
+		}
+	}
+	if freshnessRequested && !freshnessSupported {
+		skippedFilters = append(skippedFilters, "freshness_days")
+	}
 	metadata := map[string]any{
-		"web_backend":      backend,
-		"web_query":        strings.TrimSpace(req.Query),
-		"web_result_count": resultCount,
+		"web_backend":                   backend,
+		"web_query":                     strings.TrimSpace(req.Query),
+		"web_result_count":              stats.ResultCount,
+		"web_results_after_filter":      stats.ResultsAfterFilter,
+		"web_freshness_requested":       freshnessRequested,
+		"web_freshness_supported":       freshnessSupported,
+		"web_freshness_enforced":        freshnessRequested && freshnessSupported,
+		"web_domain_filter_requested":   domainFilterRequested,
+		"web_domain_filter_supported":   domainFilterSupported,
+		"web_domain_filter_enforcement": domainEnforcement,
+	}
+	if stats.ResultsBeforeFilter > 0 {
+		metadata["web_results_before_filter"] = stats.ResultsBeforeFilter
+	}
+	if len(skippedFilters) > 0 {
+		metadata["web_skipped_filters"] = skippedFilters
+	}
+	if len(postFilteredFilters) > 0 {
+		metadata["web_post_filtered_filters"] = postFilteredFilters
 	}
 	if key.EnvVar != "" {
 		metadata["web_backend_key_env"] = key.EnvVar
