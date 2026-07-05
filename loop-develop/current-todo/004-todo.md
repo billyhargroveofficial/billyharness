@@ -2108,6 +2108,43 @@ Billy asks for final verification.
   metadata, not promoted into provider-native structured tool-result channels;
   model-facing text remains the compact string path used today.
 
+### 2026-07-05 - P1.9 output-ref settlement before terminal events
+
+- Completed P1.9. Tool attempts now settle `OutputRef` artifacts before any
+  terminal tool event is emitted: the agent stats the file, verifies existing
+  byte/hash/permission metadata, requires a portable relative `output_ref_id`,
+  refreshes metadata, and only then emits `tool.output_ref_created` before the
+  terminal result.
+- If settlement fails, the agent clears the terminal `OutputRef`, marks the
+  tool result as `output_ref_unsettled`, stores the original path in
+  `unsettled_output_ref`, and emits `tool.call_failed` without a
+  `tool.output_ref_created` event. Eventlog lifecycle validation now rejects
+  terminal tool events that still claim `output_ref` without a prior settled
+  output-ref event for the same attempt.
+- `tooloutput.Store` now records portable relative IDs under
+  `$BILLYHARNESS_HOME/tool-output`. Trace replay resolves absolute refs first,
+  then portable `output_ref`/`output_ref_id` candidates under the replay bundle
+  root and `tool-output/`, so moved bundles can still validate output-ref bytes
+  and hashes.
+- Updated `docs/architecture/runtime-event-system.md` and
+  `docs/architecture/tools-mcp-and-policy.md` because output-ref lifecycle,
+  metadata, and replay portability contracts changed. Updated the canonical
+  `late_output_ref` fixture to invalid under the stricter event contract.
+- Verification passed:
+  `gofmt -w internal/tooloutput/tooloutput.go internal/tooloutput/tooloutput_test.go internal/agent/tool_attempt.go internal/agent/tool_attempt_test.go internal/eventlog/eventlog.go internal/eventlog/eventlog_test.go internal/trace/trace.go internal/trace/trace_test.go`;
+  `go test -count=1 ./internal/tooloutput ./internal/agent`;
+  `go test -count=1 ./internal/tools ./internal/eventlog ./internal/trace`;
+  `git diff --check`;
+  `go test -race -count=1 ./internal/agent ./internal/eventlog ./internal/trace ./internal/tooloutput ./internal/tools`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`;
+  `go test -count=1 ./...`.
+- Commit: `dcf0503 Validate output refs before terminal events`
+  (`dcf05034c88035a7e97c8acc1c58e7ae7ca5f0f4`).
+- Push: `origin/main` updated from `1edf6e5` to `dcf0503`.
+- Blockers/residual risk: output refs are still plaintext file artifacts, not
+  packed into trace bundles by default; replay portability depends on copying
+  the referenced files under the bundle root using the portable ID layout.
+
 ### 2026-07-04 - P1.12 verify-local temp rebuild and strict hygiene pass
 
 - Completed P1.12 slice. `scripts/verify-local.sh` now builds the CLI binary
