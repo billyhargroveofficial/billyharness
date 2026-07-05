@@ -217,23 +217,11 @@ func (v *LifecycleValidator) Observe(event protocol.Event) error {
 	callID := strings.TrimSpace(event.CallID)
 	attemptID := strings.TrimSpace(event.AttemptID)
 
+	if rule, ok := lifecycleRuleFor(event.Type); ok {
+		return v.observeLifecycleRule(event, rule)
+	}
+
 	switch event.Type {
-	case protocol.EventRunStarted:
-		if runID == "" {
-			return fmt.Errorf("%s missing run_id", event.Type)
-		}
-		v.runs[runID] = struct{}{}
-	case protocol.EventRunCompleted, protocol.EventRunFailed:
-		if runID == "" {
-			return fmt.Errorf("%s missing run_id", event.Type)
-		}
-		if _, ok := v.runs[runID]; !ok {
-			return fmt.Errorf("%s without started run %q", event.Type, runID)
-		}
-		if previous, ok := v.terminalRun[runID]; ok {
-			return fmt.Errorf("duplicate terminal run event for %q: got %s after %s", runID, event.Type, previous)
-		}
-		v.terminalRun[runID] = event.Type
 	case protocol.EventTurnStarted:
 		if err := v.requireKnownRun(event.Type, runID); err != nil {
 			return err

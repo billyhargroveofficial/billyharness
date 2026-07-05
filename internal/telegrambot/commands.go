@@ -220,13 +220,13 @@ func telegramCommandHelpHTML() string {
 		"",
 		"Commands:",
 	}
-	for _, spec := range telegramCommands() {
-		if spec.usage == "" {
+	for _, command := range CommandDocs() {
+		if command.Usage == "" {
 			continue
 		}
-		line := "<code>" + esc(spec.usage) + "</code>"
-		if spec.summary != "" {
-			line += " " + esc(spec.summary)
+		line := "<code>" + esc(command.Usage) + "</code>"
+		if command.Summary != "" {
+			line += " " + esc(command.Summary)
 		}
 		lines = append(lines, line)
 	}

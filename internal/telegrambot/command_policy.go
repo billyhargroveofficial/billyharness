@@ -11,6 +11,21 @@ const (
 	telegramCommandOwnerOnly
 )
 
+func (c telegramCommandClass) String() string {
+	switch c {
+	case telegramCommandPublic:
+		return "public"
+	case telegramCommandSessionScoped:
+		return "session-scoped"
+	case telegramCommandOperatorOnly:
+		return "operator-only"
+	case telegramCommandOwnerOnly:
+		return "owner-only"
+	default:
+		return fmt.Sprintf("unknown(%d)", c)
+	}
+}
+
 func (b *Bot) authorizeCommand(msg Message, spec telegramCommandSpec) error {
 	switch spec.class {
 	case telegramCommandPublic, telegramCommandSessionScoped:

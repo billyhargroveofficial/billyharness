@@ -145,26 +145,11 @@ func lookupMCPToolRisk(risks map[string]string, tool string) (protocol.Risk, boo
 }
 
 func normalizeMCPRisk(value string) protocol.Risk {
-	value = strings.ToLower(strings.TrimSpace(value))
-	value = strings.ReplaceAll(value, "-", "_")
-	switch value {
-	case "read", "readonly", "read_only", "local_read":
-		return protocol.RiskLocalRead
-	case "network", "network_read", "net_read":
-		return protocol.RiskNetworkRead
-	case "write", "local_write":
-		return protocol.RiskLocalWrite
-	case "network_write", "net_write":
-		return protocol.RiskNetworkWrite
-	case "exec", "execute":
-		return protocol.RiskExecute
-	case "external", "external_mutation", "mutation":
-		return protocol.RiskExternalMutation
-	case "secret", "secret_access", "secrets":
-		return protocol.RiskSecretAccess
-	default:
+	risk, ok := protocol.ParseRisk(value)
+	if !ok {
 		return ""
 	}
+	return risk
 }
 
 func buildPromptCatalog(catalogs []serverCatalog) []Prompt {

@@ -19,6 +19,7 @@ Runs the local Billyharness verification gate:
   git diff --check
   scripts/verify-deps.sh (read-only go mod tidy -diff + direct dependency check)
   go vet ./...
+  go run ./cmd/fast-agent-harness docsgen -check
   go test -count=1 ./...
   focused race packages
   optional full race with --full-race
@@ -79,6 +80,7 @@ run_step() {
 run_step "git diff --check" git diff --check
 run_step "verify dependency metadata" env GO_BIN="$go_bin" scripts/verify-deps.sh
 run_step "go vet" "$go_bin" vet ./...
+run_step "docsgen freshness" "$go_bin" run ./cmd/fast-agent-harness docsgen -check
 run_step "go test" "$go_bin" test -count=1 ./...
 run_step "focused race tests" "$go_bin" test -race -count=1 ./internal/eventlog ./internal/gateway ./internal/telegrambot ./internal/tools ./internal/tui ./internal/clientux/projector
 if [[ "$full_race" -eq 1 ]]; then

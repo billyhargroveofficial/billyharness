@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/clientux"
 	"github.com/billyhargroveofficial/billyharness/internal/commandregistry"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
@@ -36,6 +37,41 @@ func TestRunHandlesHelpAndUnknownCommand(t *testing.T) {
 	err := run()
 	if err == nil || !strings.Contains(err.Error(), `unknown command "definitely-not-a-command"`) {
 		t.Fatalf("unknown command err = %v", err)
+	}
+}
+
+func TestSubcommandsAreBackedByCLICommandDocs(t *testing.T) {
+	docs := clientux.CLICommandDocs()
+	if _, err := buildSubcommands(docs, subcommandRuns); err != nil {
+		t.Fatalf("subcommand table invalid: %v", err)
+	}
+	var usageOut bytes.Buffer
+	writeUsage(&usageOut)
+	usageLines := strings.Split(usageOut.String(), "\n")
+	for _, doc := range docs {
+		command, ok := lookupSubcommand(doc.Name)
+		if !ok {
+			t.Fatalf("lookupSubcommand(%q) failed", doc.Name)
+		}
+		for _, alias := range doc.Aliases {
+			aliasCommand, ok := lookupSubcommand(alias)
+			if !ok {
+				t.Fatalf("lookupSubcommand(%q) failed", alias)
+			}
+			if aliasCommand.Name != command.Name {
+				t.Fatalf("alias %q resolved to %q, want %q", alias, aliasCommand.Name, command.Name)
+			}
+		}
+		display := (subcommand{CLICommandDoc: doc}).displayName()
+		count := 0
+		for _, line := range usageLines {
+			if strings.HasPrefix(line, "  "+display) {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("usage contains %q %d times:\n%s", display, count, usageOut.String())
+		}
 	}
 }
 

@@ -463,6 +463,34 @@ func TestLifecycleValidatorRejectsOrderingViolations(t *testing.T) {
 	}
 }
 
+func TestLifecycleRulesExposeRuntimeRunRules(t *testing.T) {
+	rules := LifecycleRules()
+	if got, want := len(rules), 3; got != want {
+		t.Fatalf("LifecycleRules() = %d rules, want %d", got, want)
+	}
+	seen := map[protocol.EventType]LifecycleRuleDoc{}
+	for _, rule := range rules {
+		if rule.Entity != "run" {
+			t.Fatalf("unexpected lifecycle entity %q in partial table", rule.Entity)
+		}
+		if _, ok := lifecycleRuleFor(rule.Event); !ok {
+			t.Fatalf("exported rule %s is not consumed by runtime table", rule.Event)
+		}
+		seen[rule.Event] = rule
+	}
+	for _, eventType := range []protocol.EventType{protocol.EventRunStarted, protocol.EventRunCompleted, protocol.EventRunFailed} {
+		if _, ok := seen[eventType]; !ok {
+			t.Fatalf("missing lifecycle rule for %s", eventType)
+		}
+	}
+	if seen[protocol.EventRunStarted].Kind != string(ruleStarts) {
+		t.Fatalf("run.started kind = %q, want %q", seen[protocol.EventRunStarted].Kind, ruleStarts)
+	}
+	if !seen[protocol.EventRunCompleted].Terminal || !seen[protocol.EventRunFailed].Terminal {
+		t.Fatalf("terminal run rules = completed:%v failed:%v", seen[protocol.EventRunCompleted].Terminal, seen[protocol.EventRunFailed].Terminal)
+	}
+}
+
 func TestLifecycleValidatorRejectsOpenTerminalStateWhenRequired(t *testing.T) {
 	err := ValidateClosedLifecycle([]protocol.Event{
 		{Type: protocol.EventRunStarted, RunID: "run-1"},

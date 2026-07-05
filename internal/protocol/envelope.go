@@ -125,7 +125,8 @@ func ValidateEventEnvelope(event Event) error {
 	if !isKnownEventSource(event.Source) {
 		return fmt.Errorf("%s unsupported source %q", event.Type, event.Source)
 	}
-	if !isKnownEventType(event.Type) {
+	spec, ok := eventTypeSpec(event.Type)
+	if !ok {
 		return fmt.Errorf("unsupported event type %q", event.Type)
 	}
 	if strings.TrimSpace(event.TS) == "" {
@@ -135,30 +136,7 @@ func ValidateEventEnvelope(event Event) error {
 		return fmt.Errorf("%s invalid ts: %w", event.Type, err)
 	}
 
-	switch event.Type {
-	case EventRunStarted, EventRunCompleted, EventRunFailed, EventContextThreshold, EventContextCompacted:
-		return requireEnvelope(event, "run_id")
-	case EventTurnStarted, EventTurnCompleted, EventTurnChangeRecorded, EventTurnChangeReverted:
-		return requireEnvelope(event, "run_id", "turn_id")
-	case EventStepStarted, EventStepCompleted:
-		return requireEnvelope(event, "run_id", "turn_id", "step_id")
-	case EventModelCallStarted, EventModelCallFinished, EventAssistantDelta, EventAssistantReasoning, EventProviderUsageUpdate:
-		return requireEnvelope(event, "run_id", "turn_id", "step_id")
-	case EventProviderHelperUsage:
-		return requireEnvelope(event, "run_id")
-	case EventToolCallRequested, EventToolPermissionRequested, EventToolPermissionDecided, EventToolAudit, EventToolCallProgress:
-		return requireEnvelope(event, "run_id", "call_id")
-	case EventToolCallStarted, EventToolCallFinished, EventToolCallFailed, EventToolCallAborted, EventToolOutputRefCreated:
-		return requireEnvelope(event, "run_id", "call_id", "attempt_id")
-	case EventUserInputRequested, EventUserInputAnswered, EventUserInputRejected:
-		return requireEnvelope(event, "run_id", "turn_id", "step_id", "call_id", "attempt_id")
-	case EventHookStarted, EventHookFinished, EventHookFailed:
-		return requireEnvelope(event, "run_id")
-	case EventSessionStatus:
-		return nil
-	default:
-		return nil
-	}
+	return requireEnvelope(event, spec.RequiredIDs...)
 }
 
 func requireEnvelope(event Event, fields ...string) error {
@@ -190,57 +168,13 @@ func requireEnvelope(event Event, fields ...string) error {
 }
 
 func isKnownEventSource(source EventSource) bool {
-	switch source {
-	case EventSourceAgent, EventSourceGateway, EventSourceTUI, EventSourceTelegram, EventSourceTool, EventSourceProvider, EventSourceMCP, EventSourceBench:
-		return true
-	default:
-		return false
-	}
+	_, ok := eventSourceSpecBySource[source]
+	return ok
 }
 
 func isKnownEventType(eventType EventType) bool {
-	switch eventType {
-	case EventRunStarted,
-		EventTurnStarted,
-		EventTurnCompleted,
-		EventTurnChangeRecorded,
-		EventTurnChangeReverted,
-		EventStepStarted,
-		EventStepCompleted,
-		EventModelCallStarted,
-		EventModelCallFinished,
-		EventAssistantReasoning,
-		EventAssistantDelta,
-		EventToolCallRequested,
-		EventToolPermissionRequested,
-		EventToolPermissionDecided,
-		EventToolAudit,
-		EventToolCallProgress,
-		EventToolCallStarted,
-		EventToolCallFinished,
-		EventToolCallFailed,
-		EventToolCallAborted,
-		EventToolOutputRefCreated,
-		EventContextThreshold,
-		EventContextCompacted,
-		EventHookStarted,
-		EventHookFinished,
-		EventHookFailed,
-		EventRunCompleted,
-		EventRunFailed,
-		EventProviderUsageUpdate,
-		EventProviderHelperUsage,
-		EventSessionStatus,
-		EventGatewayStreamGap,
-		EventStreamStillRunning,
-		EventSessionImported,
-		EventUserInputRequested,
-		EventUserInputAnswered,
-		EventUserInputRejected:
-		return true
-	default:
-		return false
-	}
+	_, ok := eventTypeSpecByType[eventType]
+	return ok
 }
 
 func enrichEventIDsFromData(event *Event) {

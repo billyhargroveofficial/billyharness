@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +15,10 @@ const legacySettingsContextWindowTokens int64 = 1_000_000
 
 func Default() Config {
 	return MustResolve().Config
+}
+
+func BuiltIn() Config {
+	return cloneConfigForResolve(builtInConfig())
 }
 
 func (c Config) APIKey() string {
@@ -178,20 +181,8 @@ func NormalizeContextCompactStrategy(value string) string {
 }
 
 func (c *Config) ApplyBillySettingsDefaults() {
-	path := filepath.Join(BillyHomeDir(), "settings.json")
-	body, err := os.ReadFile(path)
+	settings, err := LoadBillySettings(BillySettingsPath())
 	if err != nil {
-		return
-	}
-	var settings struct {
-		LastSelectedModel    string `json:"last_selected_model"`
-		LastReasoningKind    string `json:"last_reasoning_kind"`
-		LastReasoningEffort  string `json:"last_reasoning_effort"`
-		LastProfile          string `json:"last_profile"`
-		ContextWindowTokens  int64  `json:"context_window_tokens"`
-		ContextCompactTokens int    `json:"context_compact_tokens"`
-	}
-	if err := json.Unmarshal(body, &settings); err != nil {
 		return
 	}
 	if os.Getenv("FAST_AGENT_CONTEXT_WINDOW_TOKENS") == "" && settings.ContextWindowTokens > 0 {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
 type MCPServer struct {
@@ -354,26 +355,9 @@ func normalizeMCPToolRiskMap(in map[string]string) map[string]string {
 }
 
 func normalizeMCPToolRisk(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	value = strings.ReplaceAll(value, "-", "_")
-	switch value {
-	case "":
-		return ""
-	case "read", "readonly", "read_only", "local_read":
-		return "local_read"
-	case "network", "network_read", "net_read":
-		return "network_read"
-	case "write", "local_write":
-		return "local_write"
-	case "network_write", "net_write":
-		return "network_write"
-	case "exec", "execute":
-		return "execute"
-	case "external", "external_mutation", "mutation":
-		return "external_mutation"
-	case "secret", "secret_access", "secrets":
-		return "secret_access"
-	default:
+	risk, ok := protocol.ParseRisk(value)
+	if !ok {
 		return ""
 	}
+	return string(risk)
 }

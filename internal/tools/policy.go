@@ -91,7 +91,7 @@ func (r *Registry) policyDecisionForRisk(name string, risk protocol.Risk) Policy
 }
 
 func riskAllowedInPlanMode(risk protocol.Risk) bool {
-	switch riskClass(risk) {
+	switch protocol.RiskClass(risk) {
 	case protocol.RiskLocalRead, protocol.RiskNetworkRead:
 		return true
 	default:
@@ -100,7 +100,7 @@ func riskAllowedInPlanMode(risk protocol.Risk) bool {
 }
 
 func riskDeniedInGuardedMode(risk protocol.Risk) bool {
-	switch riskClass(risk) {
+	switch protocol.RiskClass(risk) {
 	case protocol.RiskLocalWrite, protocol.RiskNetworkWrite, protocol.RiskExecute, protocol.RiskExternalMutation, protocol.RiskSecretAccess:
 		return true
 	default:
@@ -109,7 +109,7 @@ func riskDeniedInGuardedMode(risk protocol.Risk) bool {
 }
 
 func riskRequiresDangerousApproval(risk protocol.Risk) bool {
-	switch riskClass(risk) {
+	switch protocol.RiskClass(risk) {
 	case protocol.RiskLocalWrite, protocol.RiskNetworkWrite, protocol.RiskExecute, protocol.RiskExternalMutation, protocol.RiskSecretAccess:
 		return true
 	default:
@@ -118,20 +118,7 @@ func riskRequiresDangerousApproval(risk protocol.Risk) bool {
 }
 
 func riskClass(risk protocol.Risk) protocol.Risk {
-	switch risk {
-	case protocol.RiskReadOnly:
-		return protocol.RiskLocalRead
-	case protocol.RiskNetwork:
-		return protocol.RiskNetworkRead
-	case protocol.RiskWrite:
-		return protocol.RiskLocalWrite
-	case protocol.RiskLocalRead, protocol.RiskLocalWrite, protocol.RiskNetworkRead, protocol.RiskNetworkWrite, protocol.RiskExecute, protocol.RiskExternalMutation, protocol.RiskSecretAccess:
-		return risk
-	case protocol.RiskExternal:
-		return protocol.RiskExternal
-	default:
-		return risk
-	}
+	return protocol.RiskClass(risk)
 }
 
 func (d PolicyDecision) Allowed() bool {

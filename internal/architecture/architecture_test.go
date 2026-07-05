@@ -90,8 +90,10 @@ func TestCommandPackagesRemainAdapters(t *testing.T) {
 	allowed := map[string]bool{
 		"attachments":     true,
 		"bench":           true,
+		"clientux":        true,
 		"commandregistry": true,
 		"config":          true,
+		"docsgen":         true,
 		"credentials":     true,
 		"gateway":         true,
 		"gatewayapi":      true,

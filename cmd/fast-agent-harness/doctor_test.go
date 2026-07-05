@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/docsgen"
 )
 
 type fakeDoctorRunner struct {
@@ -226,6 +227,94 @@ func TestDoctorMCPAllowlistCheckPassesAvailableAllowedServers(t *testing.T) {
 	}
 }
 
+func TestDoctorDocsChecksIncludeEveryTarget(t *testing.T) {
+	repo := t.TempDir()
+	docsDir := filepath.Join(repo, "docs", "generated")
+	if err := os.MkdirAll(docsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range docsgen.Targets() {
+		body, err := target.Generate()
+		if err != nil {
+			t.Fatalf("generate %s: %v", target.Name, err)
+		}
+		if err := os.WriteFile(filepath.Join(docsDir, target.Filename), body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	report := collectDoctorReport(context.Background(), config.Default(), doctorOptions{
+		RepoDir:       repo,
+		CheckBuild:    false,
+		CheckServices: false,
+		CheckGateway:  false,
+		CheckDocs:     true,
+		Timeout:       time.Second,
+	}, &fakeDoctorRunner{})
+	for _, target := range docsgen.Targets() {
+		assertDoctorCheck(t, report, "docs:"+target.Name, "ok")
+	}
+}
+
+func TestDoctorCheckSpecsAreBackedByDoctorCheckDocs(t *testing.T) {
+	docs := doctorCheckDocs()
+	specs := doctorCheckSpecs()
+	if got, want := len(specs), len(docs); got != want {
+		t.Fatalf("doctorCheckSpecs = %d, want %d", got, want)
+	}
+	for i, spec := range specs {
+		doc := docs[i]
+		if spec.Name != doc.Name {
+			t.Fatalf("spec[%d] name = %q, want %q", i, spec.Name, doc.Name)
+		}
+		if spec.Description != doc.Description {
+			t.Fatalf("spec[%d] description = %q, want %q", i, spec.Description, doc.Description)
+		}
+		if strings.Join(spec.Modes, ",") != strings.Join(doc.Modes, ",") {
+			t.Fatalf("spec[%d] modes = %v, want %v", i, spec.Modes, doc.Modes)
+		}
+		if spec.Run == nil {
+			t.Fatalf("spec[%d] missing run func", i)
+		}
+	}
+}
+
+func TestCollectDoctorReportCheckNamesFollowDescriptors(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BILLYHARNESS_HOME", filepath.Join(root, "home"))
+	report := collectDoctorReport(context.Background(), config.Default(), doctorOptions{
+		RepoDir:       repo,
+		CheckBuild:    false,
+		CheckServices: false,
+		CheckGateway:  false,
+		Timeout:       time.Second,
+	}, &fakeDoctorRunner{})
+	got := doctorCheckNames(report.Checks)
+	want := []string{
+		"config provider/model",
+		"provider capability",
+		"gateway bind address",
+		"auth configured",
+		"mcp allowlist",
+		"tool catalog",
+		"session store access",
+		"attachments store usage",
+		"git status",
+		"build check",
+		"service billyharness-gateway.service",
+		"service billyharness-telegram.service",
+		"gateway /health",
+		"gateway /ready",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("doctor check names:\ngot:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 func TestCollectDoctorReportFromResolvedPrintsConfigProvenance(t *testing.T) {
 	repo := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
@@ -419,6 +508,14 @@ func findDoctorCheck(t *testing.T, checks []doctorCheck, name string) doctorChec
 	}
 	t.Fatalf("missing doctor check %q in %#v", name, checks)
 	return doctorCheck{}
+}
+
+func doctorCheckNames(checks []doctorCheck) []string {
+	out := make([]string, 0, len(checks))
+	for _, check := range checks {
+		out = append(out, check.Name)
+	}
+	return out
 }
 
 func execNotFound(name string) error {

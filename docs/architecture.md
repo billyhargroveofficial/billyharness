@@ -11,6 +11,12 @@ exceptions are allowed only when they name the phase that removes them.
 
 ## Package Map
 
+The table below is hand-written intent and the import allowlist enforced by
+`internal/architecture`. The generated reality view in
+`docs/generated/packages.md` lists current package comments, direct internal
+edges, and reverse import edges from `go list`; changing either side's world
+makes the matching guard go red.
+
 | Package | Responsibility | Allowed internal imports | Forbidden imports and owner notes |
 | --- | --- | --- | --- |
 | `internal/agent` | Runtime loop, model calls, tool orchestration, compaction, and event emission. | `checkpoint`, `config`, `hooks`, `instructions`, `mcpclient`, `memory`, `modelinfo`, `projectcontext`, `protocol`, `provider`, `runstate`, `tools` | Should shrink behind runtime/toolexec seams in P1.1. Do not add presentation imports. |
@@ -22,10 +28,11 @@ exceptions are allowed only when they name the phase that removes them.
 | `internal/clientux/projector` | Presentation-neutral protocol event projector for client run snapshots. | `protocol` | Must not import gateway server, agent, provider, tools, TUI, Telegram, or rendering packages. |
 | `internal/codexauth` | Shared Codex auth payload, JWT claim, account, expiry, auth-mode, and refresh-status helpers. | none | Must remain pure parsing/status logic with no HTTP, file writes, provider, credentials, or config imports. |
 | `internal/commandregistry` | Shared searchable metadata registry for built-in actions, local prompt commands, profiles, and MCP prompt metadata. | `clientux`, `config`, `mcpclient`, `promptcommands` | Must stay metadata-only; no command execution, provider calls, gateway server, TUI, Telegram, cloud registry, or marketplace behavior. |
-| `internal/config` | Runtime configuration, profiles, summaries, MCP/hook config loading. | `modelinfo` | Must not import adapters, tools, provider runtime construction, or UI packages. |
+| `internal/config` | Runtime configuration, profiles, summaries, MCP/hook config loading. | `modelinfo`, `protocol` | Must not import adapters, tools, provider runtime construction, or UI packages. |
 | `internal/credentials` | Credential file discovery, token persistence, and auth payload helpers. | `codexauth`, `config`, `modelinfo` | Must not import provider implementations except through future auth wiring. |
 | `internal/diagnostics` | Command-based diagnostics runner, bounded output capture, and compiler-style issue parsing. | none | Must stay command-based; no LSP client, watcher, auto-install, or provider calls. |
 | `internal/displayfmt` | Leaf display formatting helpers for compact numbers and percentages shared by client surfaces. | none | Must remain presentation-neutral and must not import clients, gateway, provider, tools, or runtime packages. |
+| `internal/docsgen` | Generated reference documentation for code-owned registries and package metadata. | `clientux`, `commandregistry`, `config`, `eventlog`, `gateway`, `gatewayapi`, `protocol`, `serviceops`, `telegrambot`, `tools`, `tui` | Reporting leaf. Runtime packages must not import docsgen; generated files are committed and enforced by tests. |
 | `internal/eventlog` | Event record validation, lifecycle validation, JSONL helpers, and corruption diagnostics. | `protocol` | Guarded: no `agent`, `gateway`, `trace`, `tui`, or `telegrambot` imports. |
 | `internal/filesearch` | On-demand workspace file resolver for fuzzy relative-path lookup using git, ripgrep, and walk fallbacks. | none | Must stay local and rebuildable; no watchers, databases, shell history, or file-content injection. |
 | `internal/gateway` | HTTP adapter for sessions, benchmark artifacts, session run locking, session persistence, replay, and inspection. | `agent`, `attachments`, `checkpoint`, `clientux`, `clientux/projector`, `config`, `credentials`, `eventlog`, `gatewayapi`, `mcpstatus`, `modelinfo`, `protocol`, `provider`, `runstate`, `runtimehost`, `secrets`, `tools`, `trace` | Must directly import `eventlog` and keep lifecycle semantics there. Server DTOs and shared client transport helpers belong to `gatewayapi`/`gatewayclient`. Stored-session inspection may use the shared client UX projector, not a gateway-local projector. |

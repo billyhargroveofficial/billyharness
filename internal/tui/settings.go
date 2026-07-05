@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 
@@ -14,24 +13,7 @@ const (
 	legacySettingsContextWindowTokens = 1000000
 )
 
-type appSettings struct {
-	Theme                     string  `json:"theme"`
-	ToolView                  string  `json:"tool_view"`
-	ThinkView                 string  `json:"think_view"`
-	TranscriptMode            string  `json:"transcript_mode"`
-	ContextWindowTokens       int64   `json:"context_window_tokens"`
-	InputPricePer1MTokens     float64 `json:"input_price_per_1m_tokens"`
-	OutputPricePer1MTokens    float64 `json:"output_price_per_1m_tokens"`
-	CacheHitPricePer1MTokens  float64 `json:"cache_hit_price_per_1m_tokens"`
-	CacheMissPricePer1MTokens float64 `json:"cache_miss_price_per_1m_tokens"`
-	LastLocalChatID           string  `json:"last_local_chat_id,omitempty"`
-	LastGatewaySessionID      string  `json:"last_gateway_session_id,omitempty"`
-	LastSelectedModel         string  `json:"last_selected_model,omitempty"`
-	LastProfile               string  `json:"last_profile,omitempty"`
-	LastAccessMode            string  `json:"last_access_mode,omitempty"`
-	LastReasoningEffort       string  `json:"last_reasoning_effort,omitempty"`
-	LastReasoningKind         string  `json:"last_reasoning_kind,omitempty"`
-}
+type appSettings config.BillySettings
 
 func loadAppSettings() (appSettings, string, string, error) {
 	dir := billyHomeDir()
@@ -41,7 +23,7 @@ func loadAppSettings() (appSettings, string, string, error) {
 	if err := os.MkdirAll(sessionsDir, 0o700); err != nil {
 		return settings, settingsPath, sessionsDir, err
 	}
-	bytes, err := os.ReadFile(settingsPath)
+	loaded, err := config.LoadBillySettingsWithDefaults(settingsPath, config.BillySettings(settings))
 	if err != nil {
 		if os.IsNotExist(err) {
 			_ = saveAppSettings(settingsPath, settings)
@@ -49,10 +31,7 @@ func loadAppSettings() (appSettings, string, string, error) {
 		}
 		return settings, settingsPath, sessionsDir, err
 	}
-	if err := json.Unmarshal(bytes, &settings); err != nil {
-		return defaultAppSettings(), settingsPath, sessionsDir, err
-	}
-	settings = settings.normalized()
+	settings = appSettings(loaded).normalized()
 	return settings, settingsPath, sessionsDir, nil
 }
 
@@ -97,14 +76,7 @@ func (s appSettings) normalized() appSettings {
 
 func saveAppSettings(path string, settings appSettings) error {
 	settings = settings.normalized()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	bytes, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, append(bytes, '\n'), 0o600)
+	return config.SaveBillySettings(path, config.BillySettings(settings))
 }
 
 func validViewMode(value string, allowed []string) bool {

@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -59,11 +58,23 @@ type resolveState struct {
 }
 
 type configSpec struct {
-	Key      string
-	Env      []string
-	Redacted bool
-	get      func(Config) any
-	set      func(*Config, any) error
+	Key         string
+	Env         []string
+	Type        string
+	Default     string
+	Redacted    bool
+	Description string
+	get         func(Config) any
+	set         func(*Config, any) error
+}
+
+type ConfigKeySpec struct {
+	Key         string
+	Env         []string
+	Type        string
+	Default     string
+	Redacted    bool
+	Description string
 }
 
 func Resolve(overrides ...ResolveOverride) (ResolvedConfig, error) {
@@ -272,81 +283,102 @@ func (r ResolvedConfig) SanitizedConfig() map[string]any {
 
 func configSpecs() []configSpec {
 	return []configSpec{
-		stringSpec("provider", []string{"FAST_AGENT_PROVIDER"}, func(c Config) any { return c.Provider }, func(c *Config, v string) { c.Provider = v }),
-		stringSpec("model", []string{"FAST_AGENT_MODEL"}, func(c Config) any { return c.Model }, func(c *Config, v string) { c.Model = v }),
-		stringSpec("profile", []string{"BILLYHARNESS_PROFILE", "FAST_AGENT_PROFILE"}, func(c Config) any { return c.Profile }, func(c *Config, v string) { c.Profile = NormalizeProfileName(v) }),
-		stringSpec("base_url", []string{"DEEPSEEK_BASE_URL"}, func(c Config) any { return c.BaseURL }, func(c *Config, v string) { c.BaseURL = v }),
-		stringSpec("api_key_env", []string{"DEEPSEEK_API_KEY_ENV"}, func(c Config) any { return c.APIKeyEnv }, func(c *Config, v string) { c.APIKeyEnv = v }),
-		stringSpec("credential_file", []string{"BILLYHARNESS_CREDENTIAL_FILE", "FAST_AGENT_CREDENTIAL_FILE"}, func(c Config) any { return c.CredentialFile }, func(c *Config, v string) { c.CredentialFile = v }),
-		stringSpec("codex_base_url", []string{"FAST_AGENT_CODEX_BASE_URL"}, func(c Config) any { return c.CodexBaseURL }, func(c *Config, v string) { c.CodexBaseURL = v }),
-		stringSpec("codex_auth_file", []string{"FAST_AGENT_CODEX_AUTH_FILE"}, func(c Config) any { return c.CodexAuthFile }, func(c *Config, v string) { c.CodexAuthFile = v }),
-		stringSpec("codex_refresh_url", []string{"FAST_AGENT_CODEX_REFRESH_URL"}, func(c Config) any { return c.CodexRefreshURL }, func(c *Config, v string) { c.CodexRefreshURL = v }),
-		stringSpec("codex_auth_api_base_url", []string{"CODEX_AUTHAPI_BASE_URL"}, func(c Config) any { return c.CodexAuthAPIBaseURL }, func(c *Config, v string) { c.CodexAuthAPIBaseURL = v }),
-		stringSpec("codex_client_id", []string{"FAST_AGENT_CODEX_CLIENT_ID"}, func(c Config) any { return c.CodexClientID }, func(c *Config, v string) { c.CodexClientID = v }),
-		stringSpec("codex_originator", []string{"FAST_AGENT_CODEX_ORIGINATOR"}, func(c Config) any { return c.CodexOriginator }, func(c *Config, v string) { c.CodexOriginator = v }),
-		stringSpec("thinking", []string{"DEEPSEEK_THINKING"}, func(c Config) any { return c.Thinking }, func(c *Config, v string) { c.Thinking = v }),
-		stringSpec("reasoning_effort", []string{"DEEPSEEK_REASONING_EFFORT"}, func(c Config) any { return c.ReasoningEffort }, func(c *Config, v string) { c.ReasoningEffort = v }),
-		boolSpec("disable_spark", []string{"BILLYHARNESS_DISABLE_SPARK", "FAST_AGENT_DISABLE_SPARK"}, func(c Config) any { return c.DisableSpark }, func(c *Config, v bool) { c.DisableSpark = v }),
-		intSpec("max_tokens", []string{"FAST_AGENT_MAX_TOKENS"}, func(c Config) any { return c.MaxTokens }, func(c *Config, v int) { c.MaxTokens = v }),
-		intSpec("max_tool_rounds", []string{"FAST_AGENT_MAX_TOOL_ROUNDS"}, func(c Config) any { return c.MaxToolRounds }, func(c *Config, v int) { c.MaxToolRounds = v }),
-		intSpec("max_parallel_tools", []string{"FAST_AGENT_MAX_PARALLEL_TOOLS"}, func(c Config) any { return c.MaxParallelTools }, func(c *Config, v int) { c.MaxParallelTools = v }),
-		intSpec("provider_max_retries", []string{"FAST_AGENT_PROVIDER_MAX_RETRIES"}, func(c Config) any { return c.ProviderMaxRetries }, func(c *Config, v int) { c.ProviderMaxRetries = v }),
-		int64Spec("context_window_tokens", []string{"FAST_AGENT_CONTEXT_WINDOW_TOKENS"}, func(c Config) any { return c.ContextWindowTokens }, func(c *Config, v int64) { c.ContextWindowTokens = v }),
-		intSpec("context_compact_tokens", []string{"FAST_AGENT_CONTEXT_COMPACT_TOKENS"}, func(c Config) any { return c.ContextCompactTokens }, func(c *Config, v int) { c.ContextCompactTokens = v }),
-		intSpec("context_compact_keep", []string{"FAST_AGENT_CONTEXT_COMPACT_KEEP"}, func(c Config) any { return c.ContextCompactKeep }, func(c *Config, v int) { c.ContextCompactKeep = v }),
-		intSpec("context_compact_max_chars", []string{"FAST_AGENT_CONTEXT_COMPACT_MAX_CHARS"}, func(c Config) any { return c.ContextCompactMaxChars }, func(c *Config, v int) { c.ContextCompactMaxChars = v }),
-		stringSpec("context_compact_strategy", []string{"FAST_AGENT_CONTEXT_COMPACT_STRATEGY"}, func(c Config) any { return c.ContextCompactStrategy }, func(c *Config, v string) { c.ContextCompactStrategy = v }),
-		stringSpec("context_compact_summary_provider", []string{"FAST_AGENT_CONTEXT_COMPACT_SUMMARY_PROVIDER"}, func(c Config) any { return c.ContextCompactSummaryProvider }, func(c *Config, v string) { c.ContextCompactSummaryProvider = v }),
-		stringSpec("context_compact_summary_model", []string{"FAST_AGENT_CONTEXT_COMPACT_SUMMARY_MODEL"}, func(c Config) any { return c.ContextCompactSummaryModel }, func(c *Config, v string) { c.ContextCompactSummaryModel = v }),
-		stringSpec("web_summary_mode", []string{"FAST_AGENT_WEB_SUMMARY_MODE"}, func(c Config) any { return c.WebSummaryMode }, func(c *Config, v string) { c.WebSummaryMode = v }),
-		stringSpec("web_summary_provider", []string{"FAST_AGENT_WEB_SUMMARY_PROVIDER"}, func(c Config) any { return c.WebSummaryProvider }, func(c *Config, v string) { c.WebSummaryProvider = v }),
-		stringSpec("web_summary_model", []string{"FAST_AGENT_WEB_SUMMARY_MODEL"}, func(c Config) any { return c.WebSummaryModel }, func(c *Config, v string) { c.WebSummaryModel = v }),
-		intSpec("web_summary_max_input_tokens", []string{"FAST_AGENT_WEB_SUMMARY_MAX_INPUT_TOKENS"}, func(c Config) any { return c.WebSummaryMaxInputTokens }, func(c *Config, v int) { c.WebSummaryMaxInputTokens = v }),
-		intSpec("web_summary_max_output_tokens", []string{"FAST_AGENT_WEB_SUMMARY_MAX_OUTPUT_TOKENS"}, func(c Config) any { return c.WebSummaryMaxOutputTokens }, func(c *Config, v int) { c.WebSummaryMaxOutputTokens = v }),
-		durationSecondsSpec("web_summary_timeout_sec", []string{"FAST_AGENT_WEB_SUMMARY_TIMEOUT_SEC"}, func(c Config) any { return c.WebSummaryTimeout }, func(c *Config, v time.Duration) { c.WebSummaryTimeout = v }),
-		boolSpec("web_cache_enabled", []string{"FAST_AGENT_WEB_CACHE_ENABLED", "BILLYHARNESS_WEB_CACHE_ENABLED"}, func(c Config) any { return c.WebCacheEnabled }, func(c *Config, v bool) { c.WebCacheEnabled = v }),
-		durationSecondsSpec("web_cache_ttl_sec", []string{"FAST_AGENT_WEB_CACHE_TTL_SEC", "BILLYHARNESS_WEB_CACHE_TTL_SEC"}, func(c Config) any { return c.WebCacheTTL }, func(c *Config, v time.Duration) { c.WebCacheTTL = v }),
-		int64Spec("web_cache_max_bytes", []string{"FAST_AGENT_WEB_CACHE_MAX_BYTES", "BILLYHARNESS_WEB_CACHE_MAX_BYTES"}, func(c Config) any { return c.WebCacheMaxBytes }, func(c *Config, v int64) { c.WebCacheMaxBytes = v }),
-		stringSpec("web_search_backend", []string{"BILLYHARNESS_WEB_SEARCH_BACKEND", "FAST_AGENT_WEB_SEARCH_BACKEND"}, func(c Config) any { return NormalizeWebBackend(c.WebSearchBackend) }, func(c *Config, v string) { c.WebSearchBackend = NormalizeWebBackend(v) }),
-		stringSpec("web_extract_backend", []string{"BILLYHARNESS_WEB_EXTRACT_BACKEND", "FAST_AGENT_WEB_EXTRACT_BACKEND"}, func(c Config) any { return NormalizeWebBackend(c.WebExtractBackend) }, func(c *Config, v string) { c.WebExtractBackend = NormalizeWebBackend(v) }),
-		stringSpec("web_tavily_api_key_env", []string{"BILLYHARNESS_WEB_TAVILY_API_KEY_ENV", "FAST_AGENT_WEB_TAVILY_API_KEY_ENV"}, func(c Config) any { return c.WebTavilyAPIKeyEnv }, func(c *Config, v string) { c.WebTavilyAPIKeyEnv = v }),
-		stringSpec("web_exa_api_key_env", []string{"BILLYHARNESS_WEB_EXA_API_KEY_ENV", "FAST_AGENT_WEB_EXA_API_KEY_ENV"}, func(c Config) any { return c.WebExaAPIKeyEnv }, func(c *Config, v string) { c.WebExaAPIKeyEnv = v }),
-		stringListSpec("web_hermes_env_files", []string{"BILLYHARNESS_WEB_HERMES_ENV_FILES", "FAST_AGENT_WEB_HERMES_ENV_FILES"}, func(c Config) any { return c.WebHermesEnvFiles }, func(c *Config, v []string) { c.WebHermesEnvFiles = v }),
-		durationSecondsSpec("request_timeout_sec", []string{"FAST_AGENT_REQUEST_TIMEOUT_SEC"}, func(c Config) any { return c.RequestTimeout }, func(c *Config, v time.Duration) { c.RequestTimeout = v }),
-		durationSecondsSpec("stream_idle_timeout_sec", []string{"FAST_AGENT_STREAM_IDLE_TIMEOUT_SEC"}, func(c Config) any { return c.StreamIdleTimeout }, func(c *Config, v time.Duration) { c.StreamIdleTimeout = v }),
-		intSpec("project_doc_max_bytes", []string{"FAST_AGENT_PROJECT_DOC_MAX_BYTES"}, func(c Config) any { return c.ProjectDocMaxBytes }, func(c *Config, v int) { c.ProjectDocMaxBytes = v }),
-		stringListSpec("project_doc_fallback_filenames", []string{"FAST_AGENT_PROJECT_DOC_FALLBACK_FILENAMES"}, func(c Config) any { return c.ProjectDocFallbacks }, func(c *Config, v []string) { c.ProjectDocFallbacks = v }),
-		intSpec("project_context_max_bytes", []string{"FAST_AGENT_PROJECT_CONTEXT_MAX_BYTES", "BILLYHARNESS_PROJECT_CONTEXT_MAX_BYTES"}, func(c Config) any { return c.ProjectContextMaxBytes }, func(c *Config, v int) { c.ProjectContextMaxBytes = v }),
-		boolSpec("memory_enabled", []string{"BILLYHARNESS_MEMORY_ENABLED", "FAST_AGENT_MEMORY_ENABLED"}, func(c Config) any { return c.MemoryEnabled }, func(c *Config, v bool) { c.MemoryEnabled = v }),
-		boolSpec("memory_auto_extract_enabled", []string{"BILLYHARNESS_MEMORY_AUTO_EXTRACT_ENABLED", "FAST_AGENT_MEMORY_AUTO_EXTRACT_ENABLED"}, func(c Config) any { return c.MemoryAutoExtractEnabled }, func(c *Config, v bool) { c.MemoryAutoExtractEnabled = v }),
-		intSpec("memory_summary_max_bytes", []string{"BILLYHARNESS_MEMORY_SUMMARY_MAX_BYTES", "FAST_AGENT_MEMORY_SUMMARY_MAX_BYTES"}, func(c Config) any { return c.MemorySummaryMaxBytes }, func(c *Config, v int) { c.MemorySummaryMaxBytes = v }),
-		intSpec("memory_index_max_bytes", []string{"BILLYHARNESS_MEMORY_INDEX_MAX_BYTES", "FAST_AGENT_MEMORY_INDEX_MAX_BYTES"}, func(c Config) any { return c.MemoryIndexMaxBytes }, func(c *Config, v int) { c.MemoryIndexMaxBytes = v }),
-		intSpec("memory_topic_max_bytes", []string{"BILLYHARNESS_MEMORY_TOPIC_MAX_BYTES", "FAST_AGENT_MEMORY_TOPIC_MAX_BYTES"}, func(c Config) any { return c.MemoryTopicMaxBytes }, func(c *Config, v int) { c.MemoryTopicMaxBytes = v }),
-		intSpec("max_tool_output_bytes", []string{"FAST_AGENT_MAX_TOOL_OUTPUT_BYTES"}, func(c Config) any { return c.MaxToolOutputBytes }, func(c *Config, v int) { c.MaxToolOutputBytes = v }),
-		boolSpec("diagnostics_enabled", []string{"BILLYHARNESS_DIAGNOSTICS_ENABLED", "FAST_AGENT_DIAGNOSTICS_ENABLED"}, func(c Config) any { return c.DiagnosticsEnabled }, func(c *Config, v bool) { c.DiagnosticsEnabled = v }),
-		stringListSpec("diagnostics_config_files", []string{"BILLYHARNESS_DIAGNOSTICS_CONFIG_FILES", "FAST_AGENT_DIAGNOSTICS_CONFIG_FILES"}, func(c Config) any { return c.DiagnosticsConfigFiles }, func(c *Config, v []string) { c.DiagnosticsConfigFiles = v }),
-		boolSpec("auto_approve_dangerous", []string{"FAST_AGENT_AUTO_APPROVE_DANGEROUS"}, func(c Config) any { return c.AutoApproveDangerous }, func(c *Config, v bool) { c.AutoApproveDangerous = v }),
-		stringSpec("access_mode", []string{"BILLYHARNESS_ACCESS_MODE", "FAST_AGENT_ACCESS_MODE"}, func(c Config) any { return NormalizeAccessMode(c.AccessMode) }, func(c *Config, v string) { c.AccessMode = NormalizeAccessMode(v) }),
-		boolSpec("store_reasoning", []string{"FAST_AGENT_STORE_REASONING"}, func(c Config) any { return c.StoreReasoningContent }, func(c *Config, v bool) { c.StoreReasoningContent = v }),
-		stringSpec("gateway_addr", []string{"FAST_AGENT_GATEWAY_ADDR"}, func(c Config) any { return c.GatewayAddr }, func(c *Config, v string) { c.GatewayAddr = v }),
-		boolSpec("mcp_enabled", []string{"FAST_AGENT_MCP_ENABLED"}, func(c Config) any { return c.MCPEnabled }, func(c *Config, v bool) { c.MCPEnabled = v }),
-		stringListSpec("mcp_config_files", []string{"FAST_AGENT_MCP_CONFIG_FILES"}, func(c Config) any { return c.MCPConfigFiles }, func(c *Config, v []string) { c.MCPConfigFiles = v }),
-		stringListSpec("mcp_allowed_servers", []string{"FAST_AGENT_MCP_ALLOWED_SERVERS"}, func(c Config) any { return c.MCPAllowedServers }, func(c *Config, v []string) { c.MCPAllowedServers = v }),
-		boolSpec("mcp_promote_server_instructions", []string{"BILLYHARNESS_MCP_PROMOTE_SERVER_INSTRUCTIONS", "FAST_AGENT_MCP_PROMOTE_SERVER_INSTRUCTIONS"}, func(c Config) any { return c.MCPPromoteServerInstructions }, func(c *Config, v bool) { c.MCPPromoteServerInstructions = v }),
-		boolSpec("hooks_enabled", []string{"BILLYHARNESS_HOOKS_ENABLED", "FAST_AGENT_HOOKS_ENABLED"}, func(c Config) any { return c.HooksEnabled }, func(c *Config, v bool) { c.HooksEnabled = v }),
-		stringListSpec("hooks_config_files", []string{"BILLYHARNESS_HOOKS_CONFIG_FILES", "FAST_AGENT_HOOKS_CONFIG_FILES"}, func(c Config) any { return c.HookConfigFiles }, func(c *Config, v []string) { c.HookConfigFiles = v }),
+		stringSpec("provider", "Which LLM backend serves requests", []string{"FAST_AGENT_PROVIDER"}, func(c Config) any { return c.Provider }, func(c *Config, v string) { c.Provider = v }),
+		stringSpec("model", "Which model name or alias the active provider uses", []string{"FAST_AGENT_MODEL"}, func(c Config) any { return c.Model }, func(c *Config, v string) { c.Model = v }),
+		stringSpec("profile", "Which Billy profile supplies persona and runtime defaults", []string{"BILLYHARNESS_PROFILE", "FAST_AGENT_PROFILE"}, func(c Config) any { return c.Profile }, func(c *Config, v string) { c.Profile = NormalizeProfileName(v) }),
+		stringSpec("base_url", "DeepSeek-compatible API base URL", []string{"DEEPSEEK_BASE_URL"}, func(c Config) any { return c.BaseURL }, func(c *Config, v string) { c.BaseURL = v }),
+		stringSpec("api_key_env", "Environment variable that stores the DeepSeek API key", []string{"DEEPSEEK_API_KEY_ENV"}, func(c Config) any { return c.APIKeyEnv }, func(c *Config, v string) { c.APIKeyEnv = v }),
+		stringSpec("credential_file", "Path to the DeepSeek credential fallback file", []string{"BILLYHARNESS_CREDENTIAL_FILE", "FAST_AGENT_CREDENTIAL_FILE"}, func(c Config) any { return c.CredentialFile }, func(c *Config, v string) { c.CredentialFile = v }),
+		stringSpec("codex_base_url", "Codex backend API base URL", []string{"FAST_AGENT_CODEX_BASE_URL"}, func(c Config) any { return c.CodexBaseURL }, func(c *Config, v string) { c.CodexBaseURL = v }),
+		stringSpec("codex_auth_file", "Path to the Codex OAuth token file", []string{"FAST_AGENT_CODEX_AUTH_FILE"}, func(c Config) any { return c.CodexAuthFile }, func(c *Config, v string) { c.CodexAuthFile = v }),
+		stringSpec("codex_refresh_url", "OAuth token refresh endpoint for Codex credentials", []string{"FAST_AGENT_CODEX_REFRESH_URL"}, func(c Config) any { return c.CodexRefreshURL }, func(c *Config, v string) { c.CodexRefreshURL = v }),
+		stringSpec("codex_auth_api_base_url", "Codex account API base URL used for auth status", []string{"CODEX_AUTHAPI_BASE_URL"}, func(c Config) any { return c.CodexAuthAPIBaseURL }, func(c *Config, v string) { c.CodexAuthAPIBaseURL = v }),
+		stringSpec("codex_client_id", "OAuth client id used for Codex refreshes", []string{"FAST_AGENT_CODEX_CLIENT_ID"}, func(c Config) any { return c.CodexClientID }, func(c *Config, v string) { c.CodexClientID = v }),
+		stringSpec("codex_originator", "Originator label sent with Codex requests", []string{"FAST_AGENT_CODEX_ORIGINATOR"}, func(c Config) any { return c.CodexOriginator }, func(c *Config, v string) { c.CodexOriginator = v }),
+		stringSpec("thinking", "Reasoning mode requested from DeepSeek-style providers", []string{"DEEPSEEK_THINKING"}, func(c Config) any { return c.Thinking }, func(c *Config, v string) { c.Thinking = v }),
+		stringSpec("reasoning_effort", "Reasoning effort level sent to capable providers", []string{"DEEPSEEK_REASONING_EFFORT"}, func(c Config) any { return c.ReasoningEffort }, func(c *Config, v string) { c.ReasoningEffort = v }),
+		boolSpec("disable_spark", "Rewrite Spark model aliases to the non-Spark default", []string{"BILLYHARNESS_DISABLE_SPARK", "FAST_AGENT_DISABLE_SPARK"}, func(c Config) any { return c.DisableSpark }, func(c *Config, v bool) { c.DisableSpark = v }),
+		intSpec("max_tokens", "Maximum model output tokens requested per call", []string{"FAST_AGENT_MAX_TOKENS"}, func(c Config) any { return c.MaxTokens }, func(c *Config, v int) { c.MaxTokens = v }),
+		intSpec("max_tool_rounds", "Maximum tool-call rounds allowed during one turn", []string{"FAST_AGENT_MAX_TOOL_ROUNDS"}, func(c Config) any { return c.MaxToolRounds }, func(c *Config, v int) { c.MaxToolRounds = v }),
+		intSpec("max_parallel_tools", "Maximum tool calls the runtime may execute concurrently", []string{"FAST_AGENT_MAX_PARALLEL_TOOLS"}, func(c Config) any { return c.MaxParallelTools }, func(c *Config, v int) { c.MaxParallelTools = v }),
+		intSpec("provider_max_retries", "Maximum provider retry attempts after retryable failures", []string{"FAST_AGENT_PROVIDER_MAX_RETRIES"}, func(c Config) any { return c.ProviderMaxRetries }, func(c *Config, v int) { c.ProviderMaxRetries = v }),
+		int64Spec("context_window_tokens", "Context window token budget for the active model", []string{"FAST_AGENT_CONTEXT_WINDOW_TOKENS"}, func(c Config) any { return c.ContextWindowTokens }, func(c *Config, v int64) { c.ContextWindowTokens = v }),
+		intSpec("context_compact_tokens", "Token threshold that triggers context compaction", []string{"FAST_AGENT_CONTEXT_COMPACT_TOKENS"}, func(c Config) any { return c.ContextCompactTokens }, func(c *Config, v int) { c.ContextCompactTokens = v }),
+		intSpec("context_compact_keep", "Recent message count kept around compaction summaries", []string{"FAST_AGENT_CONTEXT_COMPACT_KEEP"}, func(c Config) any { return c.ContextCompactKeep }, func(c *Config, v int) { c.ContextCompactKeep = v }),
+		intSpec("context_compact_max_chars", "Maximum transcript characters fed into compaction", []string{"FAST_AGENT_CONTEXT_COMPACT_MAX_CHARS"}, func(c Config) any { return c.ContextCompactMaxChars }, func(c *Config, v int) { c.ContextCompactMaxChars = v }),
+		stringSpec("context_compact_strategy", "Compaction strategy for over-budget context", []string{"FAST_AGENT_CONTEXT_COMPACT_STRATEGY"}, func(c Config) any { return c.ContextCompactStrategy }, func(c *Config, v string) { c.ContextCompactStrategy = v }),
+		stringSpec("context_compact_summary_provider", "Provider used for model-assisted compaction summaries", []string{"FAST_AGENT_CONTEXT_COMPACT_SUMMARY_PROVIDER"}, func(c Config) any { return c.ContextCompactSummaryProvider }, func(c *Config, v string) { c.ContextCompactSummaryProvider = v }),
+		stringSpec("context_compact_summary_model", "Model used for model-assisted compaction summaries", []string{"FAST_AGENT_CONTEXT_COMPACT_SUMMARY_MODEL"}, func(c Config) any { return c.ContextCompactSummaryModel }, func(c *Config, v string) { c.ContextCompactSummaryModel = v }),
+		stringSpec("web_summary_mode", "Web fetch summarization mode", []string{"FAST_AGENT_WEB_SUMMARY_MODE"}, func(c Config) any { return c.WebSummaryMode }, func(c *Config, v string) { c.WebSummaryMode = v }),
+		stringSpec("web_summary_provider", "Provider used for model-assisted web summaries", []string{"FAST_AGENT_WEB_SUMMARY_PROVIDER"}, func(c Config) any { return c.WebSummaryProvider }, func(c *Config, v string) { c.WebSummaryProvider = v }),
+		stringSpec("web_summary_model", "Model used for model-assisted web summaries", []string{"FAST_AGENT_WEB_SUMMARY_MODEL"}, func(c Config) any { return c.WebSummaryModel }, func(c *Config, v string) { c.WebSummaryModel = v }),
+		intSpec("web_summary_max_input_tokens", "Maximum input tokens for model-assisted web summaries", []string{"FAST_AGENT_WEB_SUMMARY_MAX_INPUT_TOKENS"}, func(c Config) any { return c.WebSummaryMaxInputTokens }, func(c *Config, v int) { c.WebSummaryMaxInputTokens = v }),
+		intSpec("web_summary_max_output_tokens", "Maximum output tokens for model-assisted web summaries", []string{"FAST_AGENT_WEB_SUMMARY_MAX_OUTPUT_TOKENS"}, func(c Config) any { return c.WebSummaryMaxOutputTokens }, func(c *Config, v int) { c.WebSummaryMaxOutputTokens = v }),
+		durationSecondsSpec("web_summary_timeout_sec", "Timeout in seconds for model-assisted web summaries", []string{"FAST_AGENT_WEB_SUMMARY_TIMEOUT_SEC"}, func(c Config) any { return c.WebSummaryTimeout }, func(c *Config, v time.Duration) { c.WebSummaryTimeout = v }),
+		boolSpec("web_cache_enabled", "Enable the local web fetch cache", []string{"FAST_AGENT_WEB_CACHE_ENABLED", "BILLYHARNESS_WEB_CACHE_ENABLED"}, func(c Config) any { return c.WebCacheEnabled }, func(c *Config, v bool) { c.WebCacheEnabled = v }),
+		durationSecondsSpec("web_cache_ttl_sec", "TTL in seconds for cached web fetch results", []string{"FAST_AGENT_WEB_CACHE_TTL_SEC", "BILLYHARNESS_WEB_CACHE_TTL_SEC"}, func(c Config) any { return c.WebCacheTTL }, func(c *Config, v time.Duration) { c.WebCacheTTL = v }),
+		int64Spec("web_cache_max_bytes", "Maximum bytes retained in the web fetch cache", []string{"FAST_AGENT_WEB_CACHE_MAX_BYTES", "BILLYHARNESS_WEB_CACHE_MAX_BYTES"}, func(c Config) any { return c.WebCacheMaxBytes }, func(c *Config, v int64) { c.WebCacheMaxBytes = v }),
+		stringSpec("web_search_backend", "Backend used by web search tools", []string{"BILLYHARNESS_WEB_SEARCH_BACKEND", "FAST_AGENT_WEB_SEARCH_BACKEND"}, func(c Config) any { return NormalizeWebBackend(c.WebSearchBackend) }, func(c *Config, v string) { c.WebSearchBackend = NormalizeWebBackend(v) }),
+		stringSpec("web_extract_backend", "Backend used by web extraction tools", []string{"BILLYHARNESS_WEB_EXTRACT_BACKEND", "FAST_AGENT_WEB_EXTRACT_BACKEND"}, func(c Config) any { return NormalizeWebBackend(c.WebExtractBackend) }, func(c *Config, v string) { c.WebExtractBackend = NormalizeWebBackend(v) }),
+		stringSpec("web_tavily_api_key_env", "Environment variable that stores the Tavily API key", []string{"BILLYHARNESS_WEB_TAVILY_API_KEY_ENV", "FAST_AGENT_WEB_TAVILY_API_KEY_ENV"}, func(c Config) any { return c.WebTavilyAPIKeyEnv }, func(c *Config, v string) { c.WebTavilyAPIKeyEnv = v }),
+		stringSpec("web_exa_api_key_env", "Environment variable that stores the Exa API key", []string{"BILLYHARNESS_WEB_EXA_API_KEY_ENV", "FAST_AGENT_WEB_EXA_API_KEY_ENV"}, func(c Config) any { return c.WebExaAPIKeyEnv }, func(c *Config, v string) { c.WebExaAPIKeyEnv = v }),
+		stringListSpec("web_hermes_env_files", "Additional env files consulted by Hermes web backends", []string{"BILLYHARNESS_WEB_HERMES_ENV_FILES", "FAST_AGENT_WEB_HERMES_ENV_FILES"}, func(c Config) any { return c.WebHermesEnvFiles }, func(c *Config, v []string) { c.WebHermesEnvFiles = v }),
+		durationSecondsSpec("request_timeout_sec", "Timeout in seconds for provider requests", []string{"FAST_AGENT_REQUEST_TIMEOUT_SEC"}, func(c Config) any { return c.RequestTimeout }, func(c *Config, v time.Duration) { c.RequestTimeout = v }),
+		durationSecondsSpec("stream_idle_timeout_sec", "Idle timeout in seconds for provider streams", []string{"FAST_AGENT_STREAM_IDLE_TIMEOUT_SEC"}, func(c Config) any { return c.StreamIdleTimeout }, func(c *Config, v time.Duration) { c.StreamIdleTimeout = v }),
+		intSpec("project_doc_max_bytes", "Maximum bytes read from project instruction docs", []string{"FAST_AGENT_PROJECT_DOC_MAX_BYTES"}, func(c Config) any { return c.ProjectDocMaxBytes }, func(c *Config, v int) { c.ProjectDocMaxBytes = v }),
+		stringListSpec("project_doc_fallback_filenames", "Fallback project instruction filenames to read", []string{"FAST_AGENT_PROJECT_DOC_FALLBACK_FILENAMES"}, func(c Config) any { return c.ProjectDocFallbacks }, func(c *Config, v []string) { c.ProjectDocFallbacks = v }),
+		intSpec("project_context_max_bytes", "Maximum bytes of project context included in prompts", []string{"FAST_AGENT_PROJECT_CONTEXT_MAX_BYTES", "BILLYHARNESS_PROJECT_CONTEXT_MAX_BYTES"}, func(c Config) any { return c.ProjectContextMaxBytes }, func(c *Config, v int) { c.ProjectContextMaxBytes = v }),
+		boolSpec("memory_enabled", "Enable curated memory loading into prompt context", []string{"BILLYHARNESS_MEMORY_ENABLED", "FAST_AGENT_MEMORY_ENABLED"}, func(c Config) any { return c.MemoryEnabled }, func(c *Config, v bool) { c.MemoryEnabled = v }),
+		boolSpec("memory_auto_extract_enabled", "Enable automatic memory extraction behavior", []string{"BILLYHARNESS_MEMORY_AUTO_EXTRACT_ENABLED", "FAST_AGENT_MEMORY_AUTO_EXTRACT_ENABLED"}, func(c Config) any { return c.MemoryAutoExtractEnabled }, func(c *Config, v bool) { c.MemoryAutoExtractEnabled = v }),
+		intSpec("memory_summary_max_bytes", "Maximum bytes read from the memory summary", []string{"BILLYHARNESS_MEMORY_SUMMARY_MAX_BYTES", "FAST_AGENT_MEMORY_SUMMARY_MAX_BYTES"}, func(c Config) any { return c.MemorySummaryMaxBytes }, func(c *Config, v int) { c.MemorySummaryMaxBytes = v }),
+		intSpec("memory_index_max_bytes", "Maximum bytes read from the memory index", []string{"BILLYHARNESS_MEMORY_INDEX_MAX_BYTES", "FAST_AGENT_MEMORY_INDEX_MAX_BYTES"}, func(c Config) any { return c.MemoryIndexMaxBytes }, func(c *Config, v int) { c.MemoryIndexMaxBytes = v }),
+		intSpec("memory_topic_max_bytes", "Maximum bytes read from one memory topic", []string{"BILLYHARNESS_MEMORY_TOPIC_MAX_BYTES", "FAST_AGENT_MEMORY_TOPIC_MAX_BYTES"}, func(c Config) any { return c.MemoryTopicMaxBytes }, func(c *Config, v int) { c.MemoryTopicMaxBytes = v }),
+		intSpec("max_tool_output_bytes", "Maximum bytes retained from one tool result", []string{"FAST_AGENT_MAX_TOOL_OUTPUT_BYTES"}, func(c Config) any { return c.MaxToolOutputBytes }, func(c *Config, v int) { c.MaxToolOutputBytes = v }),
+		boolSpec("diagnostics_enabled", "Enable command-based diagnostics tooling", []string{"BILLYHARNESS_DIAGNOSTICS_ENABLED", "FAST_AGENT_DIAGNOSTICS_ENABLED"}, func(c Config) any { return c.DiagnosticsEnabled }, func(c *Config, v bool) { c.DiagnosticsEnabled = v }),
+		stringListSpec("diagnostics_config_files", "Diagnostics config files to load", []string{"BILLYHARNESS_DIAGNOSTICS_CONFIG_FILES", "FAST_AGENT_DIAGNOSTICS_CONFIG_FILES"}, func(c Config) any { return c.DiagnosticsConfigFiles }, func(c *Config, v []string) { c.DiagnosticsConfigFiles = v }),
+		boolSpec("auto_approve_dangerous", "Allow write/execute/side-effecting tools without approval", []string{"FAST_AGENT_AUTO_APPROVE_DANGEROUS"}, func(c Config) any { return c.AutoApproveDangerous }, func(c *Config, v bool) { c.AutoApproveDangerous = v }),
+		stringSpec("access_mode", "Tool access mode controlling write and side-effect gates", []string{"BILLYHARNESS_ACCESS_MODE", "FAST_AGENT_ACCESS_MODE"}, func(c Config) any { return NormalizeAccessMode(c.AccessMode) }, func(c *Config, v string) { c.AccessMode = NormalizeAccessMode(v) }),
+		boolSpec("store_reasoning", "Persist model reasoning content in local event logs", []string{"FAST_AGENT_STORE_REASONING"}, func(c Config) any { return c.StoreReasoningContent }, func(c *Config, v bool) { c.StoreReasoningContent = v }),
+		stringSpec("gateway_addr", "Address the local gateway binds to", []string{"FAST_AGENT_GATEWAY_ADDR"}, func(c Config) any { return c.GatewayAddr }, func(c *Config, v string) { c.GatewayAddr = v }),
+		boolSpec("mcp_enabled", "Enable runtime MCP server loading", []string{"FAST_AGENT_MCP_ENABLED"}, func(c Config) any { return c.MCPEnabled }, func(c *Config, v bool) { c.MCPEnabled = v }),
+		stringListSpec("mcp_config_files", "MCP config files to load", []string{"FAST_AGENT_MCP_CONFIG_FILES"}, func(c Config) any { return c.MCPConfigFiles }, func(c *Config, v []string) { c.MCPConfigFiles = v }),
+		stringListSpec("mcp_allowed_servers", "Allowlist of MCP server names visible to the runtime", []string{"FAST_AGENT_MCP_ALLOWED_SERVERS"}, func(c Config) any { return c.MCPAllowedServers }, func(c *Config, v []string) { c.MCPAllowedServers = v }),
+		boolSpec("mcp_promote_server_instructions", "Promote MCP server instructions into trusted prompt context", []string{"BILLYHARNESS_MCP_PROMOTE_SERVER_INSTRUCTIONS", "FAST_AGENT_MCP_PROMOTE_SERVER_INSTRUCTIONS"}, func(c Config) any { return c.MCPPromoteServerInstructions }, func(c *Config, v bool) { c.MCPPromoteServerInstructions = v }),
+		boolSpec("hooks_enabled", "Enable configured hook execution", []string{"BILLYHARNESS_HOOKS_ENABLED", "FAST_AGENT_HOOKS_ENABLED"}, func(c Config) any { return c.HooksEnabled }, func(c *Config, v bool) { c.HooksEnabled = v }),
+		stringListSpec("hooks_config_files", "Hook config files to load", []string{"BILLYHARNESS_HOOKS_CONFIG_FILES", "FAST_AGENT_HOOKS_CONFIG_FILES"}, func(c Config) any { return c.HookConfigFiles }, func(c *Config, v []string) { c.HookConfigFiles = v }),
 	}
 }
 
-func stringSpec(key string, env []string, get func(Config) any, set func(*Config, string)) configSpec {
-	return configSpec{Key: key, Env: env, get: get, set: func(c *Config, value any) error {
+func ConfigKeySpecs() []ConfigKeySpec {
+	defaults := builtInConfig()
+	specs := configSpecs()
+	out := make([]ConfigKeySpec, 0, len(specs))
+	for _, spec := range specs {
+		defaultValue := formatConfigDefault(displayConfigValue(spec.get(defaults)))
+		if spec.Redacted {
+			defaultValue = "(redacted)"
+		}
+		out = append(out, ConfigKeySpec{
+			Key:         spec.Key,
+			Env:         append([]string(nil), spec.Env...),
+			Type:        spec.Type,
+			Default:     defaultValue,
+			Redacted:    spec.Redacted,
+			Description: spec.Description,
+		})
+	}
+	return out
+}
+
+func stringSpec(key string, desc string, env []string, get func(Config) any, set func(*Config, string)) configSpec {
+	return configSpec{Key: key, Env: env, Type: "string", Description: desc, get: get, set: func(c *Config, value any) error {
 		set(c, strings.TrimSpace(fmt.Sprint(value)))
 		return nil
 	}}
 }
 
-func intSpec(key string, env []string, get func(Config) any, set func(*Config, int)) configSpec {
-	return configSpec{Key: key, Env: env, get: get, set: func(c *Config, value any) error {
+func intSpec(key string, desc string, env []string, get func(Config) any, set func(*Config, int)) configSpec {
+	return configSpec{Key: key, Env: env, Type: "int", Description: desc, get: get, set: func(c *Config, value any) error {
 		parsed, err := parseIntValue(value)
 		if err != nil {
 			return err
@@ -356,8 +388,8 @@ func intSpec(key string, env []string, get func(Config) any, set func(*Config, i
 	}}
 }
 
-func int64Spec(key string, env []string, get func(Config) any, set func(*Config, int64)) configSpec {
-	return configSpec{Key: key, Env: env, get: get, set: func(c *Config, value any) error {
+func int64Spec(key string, desc string, env []string, get func(Config) any, set func(*Config, int64)) configSpec {
+	return configSpec{Key: key, Env: env, Type: "int64", Description: desc, get: get, set: func(c *Config, value any) error {
 		parsed, err := parseInt64Value(value)
 		if err != nil {
 			return err
@@ -367,8 +399,8 @@ func int64Spec(key string, env []string, get func(Config) any, set func(*Config,
 	}}
 }
 
-func boolSpec(key string, env []string, get func(Config) any, set func(*Config, bool)) configSpec {
-	return configSpec{Key: key, Env: env, get: get, set: func(c *Config, value any) error {
+func boolSpec(key string, desc string, env []string, get func(Config) any, set func(*Config, bool)) configSpec {
+	return configSpec{Key: key, Env: env, Type: "bool", Description: desc, get: get, set: func(c *Config, value any) error {
 		parsed, err := parseBoolValue(value)
 		if err != nil {
 			return err
@@ -378,8 +410,8 @@ func boolSpec(key string, env []string, get func(Config) any, set func(*Config, 
 	}}
 }
 
-func durationSecondsSpec(key string, env []string, get func(Config) any, set func(*Config, time.Duration)) configSpec {
-	return configSpec{Key: key, Env: env, get: get, set: func(c *Config, value any) error {
+func durationSecondsSpec(key string, desc string, env []string, get func(Config) any, set func(*Config, time.Duration)) configSpec {
+	return configSpec{Key: key, Env: env, Type: "duration_seconds", Description: desc, get: get, set: func(c *Config, value any) error {
 		parsed, err := parseIntValue(value)
 		if err != nil {
 			return err
@@ -389,8 +421,8 @@ func durationSecondsSpec(key string, env []string, get func(Config) any, set fun
 	}}
 }
 
-func stringListSpec(key string, env []string, get func(Config) any, set func(*Config, []string)) configSpec {
-	return configSpec{Key: key, Env: env, get: get, set: func(c *Config, value any) error {
+func stringListSpec(key string, desc string, env []string, get func(Config) any, set func(*Config, []string)) configSpec {
+	return configSpec{Key: key, Env: env, Type: "string_list", Description: desc, get: get, set: func(c *Config, value any) error {
 		parsed, err := parseStringListValue(value)
 		if err != nil {
 			return err
@@ -430,20 +462,12 @@ func (s *resolveState) applyTOML(path, source string) error {
 }
 
 func (s *resolveState) applyBillySettings() {
-	path := filepath.Join(BillyHomeDir(), "settings.json")
-	body, err := os.ReadFile(path)
-	if err != nil {
+	path := BillySettingsPath()
+	if _, err := os.Stat(path); err != nil {
 		return
 	}
-	var settings struct {
-		LastSelectedModel    string `json:"last_selected_model"`
-		LastReasoningKind    string `json:"last_reasoning_kind"`
-		LastReasoningEffort  string `json:"last_reasoning_effort"`
-		LastProfile          string `json:"last_profile"`
-		ContextWindowTokens  int64  `json:"context_window_tokens"`
-		ContextCompactTokens int    `json:"context_compact_tokens"`
-	}
-	if err := json.Unmarshal(body, &settings); err != nil {
+	settings, err := LoadBillySettings(path)
+	if err != nil {
 		s.warn(fmt.Sprintf("load %s: %v", path, err))
 		return
 	}
@@ -837,6 +861,29 @@ func displayConfigValue(value any) any {
 	default:
 		return v
 	}
+}
+
+func formatConfigDefault(value any) string {
+	switch v := value.(type) {
+	case []string:
+		if len(v) == 0 {
+			return "[]"
+		}
+		return strings.Join(v, ", ")
+	case string:
+		return canonicalConfigPath(v)
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
+func canonicalConfigPath(value string) string {
+	home := filepath.Clean(BillyHomeDir())
+	path := filepath.Clean(value)
+	if rel, err := filepath.Rel(home, path); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+		return filepath.ToSlash(filepath.Join("$BILLYHARNESS_HOME", rel))
+	}
+	return value
 }
 
 func parseIntValue(value any) (int, error) {

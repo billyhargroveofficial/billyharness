@@ -1,6 +1,9 @@
 package protocol
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 type Role string
 
@@ -14,18 +17,98 @@ const (
 type Risk string
 
 const (
-	RiskReadOnly         Risk = "read_only"
-	RiskNetwork          Risk = "network"
-	RiskWrite            Risk = "write"
-	RiskExecute          Risk = "execute"
-	RiskExternal         Risk = "external"
-	RiskLocalRead        Risk = "local_read"
-	RiskLocalWrite       Risk = "local_write"
-	RiskNetworkRead      Risk = "network_read"
-	RiskNetworkWrite     Risk = "network_write"
+	// RiskReadOnly is the coarse native class for local read-only tools.
+	RiskReadOnly Risk = "read_only"
+	// RiskNetwork is the coarse native class for network read tools.
+	RiskNetwork Risk = "network"
+	// RiskWrite is the coarse native class for local write tools.
+	RiskWrite Risk = "write"
+	// RiskExecute allows local process execution.
+	RiskExecute Risk = "execute"
+	// RiskExternal marks externally mediated tools with unknown side effects.
+	RiskExternal Risk = "external"
+	// RiskLocalRead reads local files or local metadata.
+	RiskLocalRead Risk = "local_read"
+	// RiskLocalWrite mutates local files or local state.
+	RiskLocalWrite Risk = "local_write"
+	// RiskNetworkRead reads from network resources.
+	RiskNetworkRead Risk = "network_read"
+	// RiskNetworkWrite mutates network resources.
+	RiskNetworkWrite Risk = "network_write"
+	// RiskExternalMutation mutates state through an external integration.
 	RiskExternalMutation Risk = "external_mutation"
-	RiskSecretAccess     Risk = "secret_access"
+	// RiskSecretAccess can expose credential or secret material.
+	RiskSecretAccess Risk = "secret_access"
 )
+
+type RiskClassSpec struct {
+	Risk        Risk
+	Description string
+}
+
+var riskClassSpecs = []RiskClassSpec{
+	{Risk: RiskReadOnly, Description: "Coarse native class for local read-only tools"},
+	{Risk: RiskNetwork, Description: "Coarse native class for network read tools"},
+	{Risk: RiskWrite, Description: "Coarse native class for local write tools"},
+	{Risk: RiskExecute, Description: "Local process execution"},
+	{Risk: RiskExternal, Description: "Externally mediated tool with unknown side effects"},
+	{Risk: RiskLocalRead, Description: "Reads local files or local metadata"},
+	{Risk: RiskLocalWrite, Description: "Mutates local files or local state"},
+	{Risk: RiskNetworkRead, Description: "Reads from network resources"},
+	{Risk: RiskNetworkWrite, Description: "Mutates network resources"},
+	{Risk: RiskExternalMutation, Description: "Mutates state through an external integration"},
+	{Risk: RiskSecretAccess, Description: "Can expose credential or secret material"},
+}
+
+func RiskClassSpecs() []RiskClassSpec {
+	return append([]RiskClassSpec(nil), riskClassSpecs...)
+}
+
+func RiskClasses() []Risk {
+	out := make([]Risk, 0, len(riskClassSpecs))
+	for _, spec := range riskClassSpecs {
+		out = append(out, spec.Risk)
+	}
+	return out
+}
+
+func ParseRisk(value string) (Risk, bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "-", "_")
+	switch value {
+	case "":
+		return "", false
+	case "read", "readonly", "read_only", "local_read":
+		return RiskLocalRead, true
+	case "network", "network_read", "net_read":
+		return RiskNetworkRead, true
+	case "write", "local_write":
+		return RiskLocalWrite, true
+	case "network_write", "net_write":
+		return RiskNetworkWrite, true
+	case "exec", "execute":
+		return RiskExecute, true
+	case "external", "external_mutation", "mutation":
+		return RiskExternalMutation, true
+	case "secret", "secret_access", "secrets":
+		return RiskSecretAccess, true
+	default:
+		return "", false
+	}
+}
+
+func RiskClass(risk Risk) Risk {
+	switch risk {
+	case RiskReadOnly:
+		return RiskLocalRead
+	case RiskNetwork:
+		return RiskNetworkRead
+	case RiskWrite:
+		return RiskLocalWrite
+	default:
+		return risk
+	}
+}
 
 type Message struct {
 	Role             Role          `json:"role"`

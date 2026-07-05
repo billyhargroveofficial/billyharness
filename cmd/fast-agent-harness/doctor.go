@@ -18,6 +18,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/attachments"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
+	"github.com/billyhargroveofficial/billyharness/internal/docsgen"
 	"github.com/billyhargroveofficial/billyharness/internal/gateway"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/serviceops"
@@ -33,6 +34,7 @@ type doctorOptions struct {
 	CheckBuild    bool
 	CheckServices bool
 	CheckGateway  bool
+	CheckDocs     bool
 	Timeout       time.Duration
 }
 
@@ -141,6 +143,7 @@ func doctorCmd(args []string) error {
 	checkBuild := fs.Bool("build", true, "compile-check the CLI package")
 	checkServices := fs.Bool("services", true, "check billyharness systemd services")
 	checkGateway := fs.Bool("gateway", true, "check gateway /health and /ready")
+	checkDocs := fs.Bool("docs", false, "check generated docs fingerprints against the live binary")
 	mode := fs.String("mode", "auto", "doctor mode: auto, local, or production")
 	timeoutSec := fs.Int("timeout-sec", 10, "per-command timeout seconds")
 	if err := fs.Parse(args); err != nil {
@@ -164,6 +167,7 @@ func doctorCmd(args []string) error {
 		CheckBuild:    *checkBuild,
 		CheckServices: *checkServices,
 		CheckGateway:  *checkGateway,
+		CheckDocs:     *checkDocs || *deep,
 		Timeout:       time.Duration(*timeoutSec) * time.Second,
 	}
 	resolved, err := config.ResolveStrict()
@@ -229,15 +233,65 @@ func collectDoctorReport(ctx context.Context, cfg config.Config, opts doctorOpti
 	opts.Mode = normalizeDoctorMode(opts.Mode, repoDir)
 	report.Mode = opts.Mode
 	report.Runtime = collectDoctorRuntime(ctx, cfg, repoDir, opts, runner)
-	report.Checks = append(report.Checks, doctorConfigChecks(cfg, report.Runtime.Auth)...)
-	report.Checks = append(report.Checks, doctorToolCatalogStatus(cfg))
-	report.Checks = append(report.Checks, doctorSessionStoreAccessCheck(report.GatewaySessionDir))
-	report.Checks = append(report.Checks, doctorAttachmentsStoreUsageCheck(report.Runtime.AttachmentsStore))
-	report.Checks = append(report.Checks, doctorGitStatus(ctx, repoDir, opts, runner))
-	report.Checks = append(report.Checks, doctorBuildStatus(ctx, repoDir, opts, runner))
-	report.Checks = append(report.Checks, doctorServiceStatuses(ctx, opts, runner)...)
-	report.Checks = append(report.Checks, doctorGatewayStatuses(ctx, cfg, opts)...)
+	doctorCtx := &doctorContext{
+		Context: ctx,
+		Config:  cfg,
+		Runtime: report.Runtime,
+		RepoDir: repoDir,
+		Options: opts,
+		Runner:  runner,
+	}
+	for _, spec := range doctorCheckSpecs() {
+		if !doctorCheckSpecEnabled(spec, opts) {
+			continue
+		}
+		report.Checks = append(report.Checks, spec.Run(doctorCtx)...)
+	}
 	return report
+}
+
+func doctorDocsStatuses(repoDir string, opts doctorOptions) []doctorCheck {
+	if !opts.CheckDocs {
+		return nil
+	}
+	targets := docsgen.Targets()
+	out := make([]doctorCheck, 0, len(targets))
+	if strings.TrimSpace(repoDir) == "" {
+		for _, target := range targets {
+			out = append(out, doctorCheck{Name: "docs:" + target.Name, Status: "n/a", Detail: "repository directory unknown"})
+		}
+		return out
+	}
+	dir := filepath.Join(repoDir, "docs", "generated")
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		detail := "docs/generated absent"
+		if err != nil && !os.IsNotExist(err) {
+			detail = "docs/generated unavailable: " + err.Error()
+		}
+		for _, target := range targets {
+			out = append(out, doctorCheck{Name: "docs:" + target.Name, Status: "n/a", Detail: detail})
+		}
+		return out
+	}
+	for _, status := range docsgen.VerifyAgainst(dir) {
+		check := doctorCheck{Name: "docs:" + status.Name}
+		switch status.Status {
+		case docsgen.TargetStatusOK:
+			check.Status = "ok"
+			check.Detail = status.Filename + " hash=" + status.ActualHash
+		case docsgen.TargetStatusStale:
+			check.Status = "fail"
+			check.Detail = status.Filename + " stale; run go run ./cmd/fast-agent-harness docsgen"
+		case docsgen.TargetStatusMissing:
+			check.Status = "fail"
+			check.Detail = status.Filename + " missing; run go run ./cmd/fast-agent-harness docsgen"
+		default:
+			check.Status = "fail"
+			check.Detail = status.Filename + " unreadable: " + status.Detail
+		}
+		out = append(out, check)
+	}
+	return out
 }
 
 func collectDoctorRuntime(ctx context.Context, cfg config.Config, repoDir string, opts doctorOptions, runner doctorCommandRunner) doctorRuntimeStatus {
