@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -15,7 +16,7 @@ import (
 
 func TestStreamEventsDoesNotDuplicateEmittedRunFailure(t *testing.T) {
 	rec := httptest.NewRecorder()
-	streamEvents(rec, func(emit func(protocol.Event)) error {
+	streamEvents(context.Background(), rec, func(emit func(protocol.Event)) error {
 		emit(protocol.Event{Type: protocol.EventRunStarted})
 		emit(protocol.Event{Type: protocol.EventRunFailed, Data: "provider boom"})
 		return errors.New("provider boom")
@@ -38,7 +39,7 @@ func TestStreamEventsDoesNotDuplicateEmittedRunFailure(t *testing.T) {
 
 func TestStreamEventsSynthesizesFailureForSetupError(t *testing.T) {
 	rec := httptest.NewRecorder()
-	streamEvents(rec, func(emit func(protocol.Event)) error {
+	streamEvents(context.Background(), rec, func(emit func(protocol.Event)) error {
 		return errors.New("setup boom")
 	})
 
@@ -56,7 +57,7 @@ func TestStreamEventsSynthesizesFailureForSetupError(t *testing.T) {
 
 func TestStreamEventsDoesNotAppendFailureAfterRunCompleted(t *testing.T) {
 	rec := httptest.NewRecorder()
-	streamEvents(rec, func(emit func(protocol.Event)) error {
+	streamEvents(context.Background(), rec, func(emit func(protocol.Event)) error {
 		emit(protocol.Event{Type: protocol.EventRunStarted})
 		emit(protocol.Event{Type: protocol.EventRunCompleted})
 		return errors.New("late cleanup boom")
@@ -75,7 +76,7 @@ func TestStreamEventsDoesNotBlockRunWhenClientWriterStalls(t *testing.T) {
 	runDone := make(chan struct{})
 	streamDone := make(chan struct{})
 	go func() {
-		streamEvents(writer, func(emit func(protocol.Event)) error {
+		streamEvents(context.Background(), writer, func(emit func(protocol.Event)) error {
 			emit(protocol.Event{Seq: 1, Type: protocol.EventRunStarted})
 			select {
 			case <-writer.writeStarted:
@@ -104,27 +105,52 @@ func TestStreamEventsDoesNotBlockRunWhenClientWriterStalls(t *testing.T) {
 	}
 	select {
 	case <-streamDone:
-		t.Fatal("stream finished before writer was unblocked")
-	default:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not finish after bounded final drain")
 	}
 	close(writer.unblock)
+}
+
+func TestStreamEventsReturnsAfterClientContextCancelledDuringActiveStream(t *testing.T) {
+	writer := newBlockingResponseWriter()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan struct{})
+	streamDone := make(chan struct{})
+	go func() {
+		streamEvents(ctx, writer, func(emit func(protocol.Event)) error {
+			emit(protocol.Event{Seq: 1, Type: protocol.EventRunStarted})
+			select {
+			case <-writer.writeStarted:
+			case <-time.After(time.Second):
+				t.Error("writer did not start")
+			}
+			cancel()
+			for i := 0; i < liveRunStreamBuffer+20; i++ {
+				emit(protocol.Event{Seq: int64(i + 2), Type: protocol.EventAssistantDelta, Data: fmt.Sprintf("delta-%03d", i)})
+			}
+			close(runDone)
+			return ctx.Err()
+		})
+		close(streamDone)
+	}()
+
+	select {
+	case <-writer.writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("writer did not block on first write")
+	}
+	select {
+	case <-runDone:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("run was blocked after client context cancellation")
+	}
 	select {
 	case <-streamDone:
 	case <-time.After(time.Second):
-		t.Fatal("stream did not finish after writer unblocked")
+		t.Fatal("stream did not finish after cancelled client context")
 	}
-
-	events := readProtocolEvents(t, bytes.NewReader(writer.bytes()))
-	var sawGap bool
-	for _, event := range events {
-		if event.Type == protocol.EventGatewayStreamGap {
-			sawGap = true
-			break
-		}
-	}
-	if !sawGap {
-		t.Fatalf("stream events missing gap hint: %#v", events)
-	}
+	close(writer.unblock)
 }
 
 type blockingResponseWriter struct {

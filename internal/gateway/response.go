@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -12,9 +13,15 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/secrets"
 )
 
-const liveRunStreamBuffer = 256
+const (
+	liveRunStreamBuffer     = 256
+	liveRunStreamFinalDrain = 250 * time.Millisecond
+)
 
-func streamEvents(w http.ResponseWriter, run func(func(protocol.Event)) error) {
+func streamEvents(ctx context.Context, w http.ResponseWriter, run func(func(protocol.Event)) error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -36,6 +43,11 @@ func streamEvents(w http.ResponseWriter, run func(func(protocol.Event)) error) {
 	var lastQueuedSeq atomic.Int64
 	queue := func(event protocol.Event) bool {
 		select {
+		case <-ctx.Done():
+			return false
+		default:
+		}
+		select {
 		case <-writerDone:
 			return false
 		default:
@@ -48,6 +60,8 @@ func streamEvents(w http.ResponseWriter, run func(func(protocol.Event)) error) {
 			return true
 		case <-writerDone:
 			return false
+		case <-ctx.Done():
+			return false
 		default:
 			return false
 		}
@@ -59,10 +73,7 @@ func streamEvents(w http.ResponseWriter, run func(func(protocol.Event)) error) {
 		}
 		event := gatewayStreamGapEvent(dropped, lastQueuedSeq.Load())
 		if block {
-			select {
-			case events <- event:
-			case <-writerDone:
-			}
+			queueFinalEvent(ctx, events, writerDone, event)
 			return
 		}
 		if !queue(event) {
@@ -87,7 +98,32 @@ func streamEvents(w http.ResponseWriter, run func(func(protocol.Event)) error) {
 		emitGap(true)
 	}
 	close(events)
-	<-writerDone
+	waitStreamWriter(ctx, writerDone)
+}
+
+func queueFinalEvent(ctx context.Context, events chan<- protocol.Event, writerDone <-chan struct{}, event protocol.Event) {
+	timer := time.NewTimer(liveRunStreamFinalDrain)
+	defer timer.Stop()
+	select {
+	case events <- event:
+	case <-writerDone:
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+}
+
+func waitStreamWriter(ctx context.Context, writerDone <-chan struct{}) {
+	timer := time.NewTimer(liveRunStreamFinalDrain)
+	defer timer.Stop()
+	select {
+	case <-writerDone:
+	case <-timer.C:
+	case <-ctx.Done():
+		select {
+		case <-writerDone:
+		case <-timer.C:
+		}
+	}
 }
 
 func gatewayStreamGapEvent(dropped, replayAfterSeq int64) protocol.Event {

@@ -559,7 +559,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	streamEvents(w, func(emit func(protocol.Event)) error {
+	streamEvents(r.Context(), w, func(emit func(protocol.Event)) error {
 		settings, err := s.runSettingsForRequest(r.Context(), req)
 		if err != nil {
 			return err
@@ -613,7 +613,7 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, fmt.Sprintf("input_id %q is already %s", admission.InputID, admission.State))
 		return
 	}
-	streamEvents(w, func(emit func(protocol.Event)) error {
+	streamEvents(r.Context(), w, func(emit func(protocol.Event)) error {
 		completePreflightFailure := func(err error) error {
 			if err == nil {
 				return nil

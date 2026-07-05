@@ -264,8 +264,11 @@ it does not create a session or durable event log.
 `POST /v1/sessions/{id}/run` streams live run events while the session recorder
 persists observed events. The stream writer has a bounded buffer
 (`liveRunStreamBuffer`), and if the writer falls behind it emits
-`gateway.stream_gap` with dropped-event count and a replay cursor hint. That
-hint is useful for session runs; stateless `/v1/run` has no session replay path.
+`gateway.stream_gap` with dropped-event count and a replay cursor hint when it
+can enqueue that hint without blocking the handler. Final gap emission and
+writer drain are bounded so a dead or stalled client cannot pin a run handler.
+The hint is useful for session runs; stateless `/v1/run` has no session replay
+path.
 
 `GET /v1/sessions/{id}/events` has two query parameters:
 
