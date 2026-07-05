@@ -1,6 +1,6 @@
 # 006 TODO - Real Docsgen: Generated, Test-Enforced Agent Map
 
-Status: current
+Status: completed/verified
 Created: 2026-07-04
 Owner loop: Claude main chat + 3 Sonnet code-anchor readers (tools/config,
 gateway/commands, protocol/eventlog/docs), building on the 72-agent 005 research
@@ -1398,3 +1398,16 @@ Notes:
 - Docs rule for every task: generated files regenerate; prose files update
   only when behavior they describe changed; state which docs were checked
   when none changed.
+
+## History Archive Note
+
+Archived: 2026-07-05
+
+Final status: complete and verified. Main-chat verification found all 14 unique
+006 tasks resolved, final global verification green, `docsgen -check` green,
+and `./scripts/verify-local.sh` passing with full-race intentionally skipped
+because `--full-race` was not requested.
+
+Residual risk kept from the implementation evidence: event lifecycle docs are
+generated only where the declarative table is honest; deeper lifecycle modeling
+can still be expanded in a later loop if Billy wants it.
