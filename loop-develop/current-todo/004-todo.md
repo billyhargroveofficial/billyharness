@@ -1985,6 +1985,35 @@ Billy asks for final verification.
   diagnostics; they are simply excluded from the prompt to avoid unsafe or
   missing file reads.
 
+### 2026-07-05 - P1.5 doctor runtime capability and MCP allowlist checks
+
+- Completed a P1.5 doctor/runtime diagnostics slice. Doctor reports now carry
+  the same `ProviderCapabilitySnapshot` derived from `ProviderBinding()` and
+  print a text `capability:` line with validation status.
+- Added strict-failing doctor checks for provider capability validation and MCP
+  allowlist availability. Unsupported provider/model capability bindings,
+  missing allowlisted MCP servers, disabled allowlisted MCP servers, and
+  unsupported allowlisted MCP transports now appear as `fail` checks so
+  `doctor -strict` exits non-zero.
+- Existing auth diagnostics already fail when the active runtime provider lacks
+  configured credential material; this slice keeps that path and adds the
+  runtime capability/MCP checks beside it.
+- Updated `README.md` and `ops/doctor-and-diagnostics.md` because doctor
+  output and strict failure semantics changed.
+- Verification passed:
+  `gofmt -w cmd/fast-agent-harness/doctor.go cmd/fast-agent-harness/doctor_test.go`;
+  `go test -count=1 ./cmd/fast-agent-harness ./internal/config ./internal/gateway`;
+  `git diff --check`;
+  `go test -count=1 ./...`;
+  `go test -race -count=1 ./cmd/fast-agent-harness`;
+  `go build -o /tmp/billyharness-verify/fast-agent-harness ./cmd/fast-agent-harness`.
+- Commit: `c54a7bc Harden doctor runtime capability checks`
+  (`c54a7bc27d890ff30da77b4f7abf7e6bce5359fc`).
+- Push: `origin/main` updated from `5680e2e` to `c54a7bc`.
+- Blockers/residual risk: MCP allowlist checks inspect loaded config, not live
+  stdio process startup/tool-list success; gateway `/ready` and runtime MCP
+  status remain the live dependency probes.
+
 ### 2026-07-04 - P1.12 verify-local temp rebuild and strict hygiene pass
 
 - Completed P1.12 slice. `scripts/verify-local.sh` now builds the CLI binary
