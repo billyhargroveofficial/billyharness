@@ -1,6 +1,6 @@
 # 004 TODO - Production-Grade Agent Architecture, Stability, And Debuggability
 
-Status: current
+Status: completed/verified
 Created: 2026-07-04
 Owner loop: native Codex research loop
 
@@ -2662,3 +2662,17 @@ Final response must include:
 - commit hashes and push state;
 - remaining blockers or residual risk.
 ```
+
+## History Archive Note
+
+Archived: 2026-07-05
+
+Final status: complete and verified. Main-chat verification found no remaining
+open 004 tasks after accounting for cancelled/superseded docguard/manifest
+items. The file already contains final verification evidence and per-slice
+commit/push records.
+
+Residual risk kept from the implementation evidence: no live production
+deploy/restart was run by the final local verification gate. Production rollout
+still needs to be performed intentionally from the production checkout when
+Billy asks for it.
