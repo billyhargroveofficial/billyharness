@@ -234,8 +234,10 @@ git diff --check
 
 Commit/push state:
 
-- Implementation commit and push are pending immediately after this history
-  record is staged.
+- Implementation commit is `af718c2 Replace HH agent-club bridge with generic
+  contract`.
+- Branch `codex/gateway-ingress-foundation` is pushed and aligned with
+  `origin/codex/gateway-ingress-foundation`.
 
 Remaining blockers:
 
