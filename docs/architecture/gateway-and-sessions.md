@@ -3,9 +3,9 @@
 Status note: this document is written against the current worktree on
 2026-07-07. Mutation-auth hardening, session-owner header scoping,
 stored-session projector inspection, fail-closed persistence behavior,
-manifest-only session startup, and the neutral agent-club registry/discovery
-ingress route are current worktree contracts, not assumptions from older
-releases.
+manifest-only session startup, the neutral agent-club registry/discovery ingress
+route, and verified agent-club trigger delivery are current worktree contracts,
+not assumptions from older releases.
 
 Code anchors:
 
@@ -30,9 +30,12 @@ Code anchors:
 - `internal/gateway/agentclub_events.go`: agent-club event and capability
   discovery HTTP adapter that admits normalized external adapter events without
   dispatching a run.
+- `internal/gateway/agentclub_triggers.go`: verified agent-club trigger
+  delivery adapter, raw-body HMAC handling, body caps, deterministic trigger
+  identity, and redacted trigger audit.
 - `internal/agentclub/`: neutral v0 event contract, capability metadata,
-  trusted binding validation, discovery views, canonical payload hashing, and
-  ingress event/rule conversion.
+  trusted binding and trigger binding validation, discovery views, canonical
+  payload hashing, and ingress event/rule conversion.
 - `internal/ingress/`: pure external-event admission DTOs, deterministic input
   IDs, raw-body HMAC helpers, and payload metadata sanitization.
 - `internal/gateway/http_security.go`: HTTP bearer, mutation, origin, host,
@@ -57,7 +60,7 @@ and remote clients. It owns:
   run, cancel, undo, redo, and user-input routes;
 - gateway-owned external ingress admission into existing session input
   ledgers, with neutral adapter-event normalization plus optional trusted
-  registry/binding checks before admission;
+  registry/binding and trigger-delivery checks before admission;
 - durable session persistence when `ServerOptions.SessionStoreDir` is set;
 - startup manifest indexing of durable sessions into the in-memory session map;
 - event recording before live fanout for session runs;
@@ -93,6 +96,7 @@ Future agents should update this section from that route table, not from memory.
 | `GET /v1/mcp` | runtime MCP status, prompts, and server instructions |
 | `GET /v1/processes` | managed shell-process status from the tools registry |
 | `GET /v1/agentclub/capabilities` | list enabled agent-club capability descriptors and safe binding metadata visible to the request actor |
+| `POST /v1/agentclub/triggers/{binding_id}/deliveries` | verify a trusted agent-club trigger delivery and admit it as a queued input without running the session |
 | `POST /v1/run` | stateless live NDJSON run stream; no durable session history |
 | `GET /v1/sessions` | list sessions visible to the request actor |
 | `POST /v1/sessions` | create a session and optionally persist owner metadata |
@@ -253,11 +257,46 @@ descriptors and safe binding metadata visible to the current actor. It does
 not include secrets, raw prompts, payloads, environment variables, command
 lines, or metadata values.
 
+Verified trigger delivery is the next admission layer:
+
+```text
+trusted trigger binding
+  -> capped raw delivery body
+  -> optional raw-body HMAC-SHA256 verification
+  -> deterministic external event id
+  -> normalized agent-club event
+  -> gateway ingress admission
+  -> queued session input, run_dispatched=false
+```
+
+`POST /v1/agentclub/triggers/{binding_id}/deliveries` looks up a trusted
+trigger binding from the configured registry. The binding, not the payload,
+supplies source, capability, event type, ingress owner, target session, prompt,
+auth method, and body cap. Webhook bindings may require HMAC-SHA256 over the
+raw body with constant-time comparison. Webhook external event ids are derived
+from binding id plus the configured delivery id header; schedule/manual
+deliveries use binding id plus `scheduled_at_utc`. The existing ingress
+idempotency path still includes rule id, source, external event id, payload
+hash, and target session id.
+
+Trigger failures and successes are written to a redacted
+`agentclub-trigger-audit.jsonl` ledger when the gateway store is configured.
+That ledger records binding id, trigger kind, source, capability, event type,
+decision, reason, payload hash, external event id hash, target session id,
+admitted input id, duplicate state, client type, client id hash, and metadata
+keys. It does not store raw bodies, prompts, delivery ids, signatures, HMAC
+secrets, metadata values, command lines, or external adapter secrets.
+
+Schedule/manual delivery is deterministic but not a scheduler daemon. A
+schedule/manual request must provide `scheduled_at_utc`; future timestamps are
+rejected unless the request is explicitly a dry registration, and dry
+registration does not admit a session input.
+
 The gateway does not load project manifests, read `.billyharness` integration
-files, execute capabilities directly, or run schedules in this slice. A later
-configuration slice can add a trusted gateway config file under the operator's
-Billyharness home, but project-local manifests need a separate install/hash
-story first.
+files, execute capabilities directly, run schedules, or auto-run sessions in
+this slice. A later configuration slice can add a trusted gateway config file
+under the operator's Billyharness home, but project-local manifests need a
+separate install/hash story first.
 
 Generic owner scoping now includes `SessionOwner.ClientID` plus
 `X-Billyharness-Session-Client-ID`. Client ID can scope non-Telegram/non-TUI

@@ -47,8 +47,9 @@ type CapabilityListResponse struct {
 }
 
 type Registry struct {
-	capabilities map[string]CapabilityDescriptor
-	bindings     []TrustedBinding
+	capabilities    map[string]CapabilityDescriptor
+	bindings        []TrustedBinding
+	triggerBindings map[string]TriggerBinding
 }
 
 type BindingMatch struct {
@@ -57,8 +58,13 @@ type BindingMatch struct {
 }
 
 func NewRegistry(descriptors []CapabilityDescriptor, bindings []TrustedBinding) (*Registry, error) {
+	return NewRegistryWithTriggers(descriptors, bindings, nil)
+}
+
+func NewRegistryWithTriggers(descriptors []CapabilityDescriptor, bindings []TrustedBinding, triggers []TriggerBinding) (*Registry, error) {
 	r := &Registry{
-		capabilities: make(map[string]CapabilityDescriptor, len(descriptors)),
+		capabilities:    make(map[string]CapabilityDescriptor, len(descriptors)),
+		triggerBindings: make(map[string]TriggerBinding, len(triggers)),
 	}
 	for _, descriptor := range descriptors {
 		normalized, err := NormalizeCapabilityDescriptor(descriptor)
@@ -83,6 +89,31 @@ func NewRegistry(descriptors []CapabilityDescriptor, bindings []TrustedBinding) 
 	sort.Slice(r.bindings, func(i, j int) bool {
 		return bindingSortKey(r.bindings[i]) < bindingSortKey(r.bindings[j])
 	})
+	for _, binding := range triggers {
+		normalized, err := NormalizeTriggerBinding(binding)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := r.triggerBindings[normalized.ID]; exists {
+			return nil, fmt.Errorf("%w: duplicate trigger binding %q", ErrInvalidTriggerBinding, normalized.ID)
+		}
+		if _, ok := r.capabilities[normalized.Capability]; !ok {
+			return nil, fmt.Errorf("%w: trigger references %q", ErrUnknownCapability, normalized.Capability)
+		}
+		req := EventRequest{
+			SchemaVersion:   SchemaVersion,
+			Source:          normalized.Source,
+			Capability:      normalized.Capability,
+			EventType:       normalized.EventType,
+			ExternalEventID: "registry-validation",
+			Prompt:          normalized.Prompt,
+			Payload:         []byte(`{}`),
+		}
+		if _, err := r.Match(req, normalized.Owner); err != nil {
+			return nil, fmt.Errorf("%w: trigger %q has no enabled trusted binding: %v", ErrInvalidTriggerBinding, normalized.ID, err)
+		}
+		r.triggerBindings[normalized.ID] = normalized
+	}
 	return r, nil
 }
 
@@ -185,6 +216,24 @@ func (r *Registry) CapabilitiesForActor(actor gatewayapi.SessionOwner) Capabilit
 		})
 	}
 	return resp
+}
+
+func (r *Registry) TriggerBinding(id string) (TriggerBinding, error) {
+	if r == nil {
+		return TriggerBinding{}, ErrUnknownTriggerBinding
+	}
+	id, err := normalizeIdentifier("binding_id", id)
+	if err != nil {
+		return TriggerBinding{}, err
+	}
+	binding, ok := r.triggerBindings[id]
+	if !ok {
+		return TriggerBinding{}, fmt.Errorf("%w: %s", ErrUnknownTriggerBinding, id)
+	}
+	if !binding.Enabled {
+		return TriggerBinding{}, fmt.Errorf("%w: %s", ErrTriggerDisabled, id)
+	}
+	return cloneTriggerBinding(binding), nil
 }
 
 func normalizeIdentifierList(field string, values []string) ([]string, error) {

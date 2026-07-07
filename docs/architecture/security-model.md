@@ -23,6 +23,9 @@ Primary code anchors:
   and [internal/agentclub](../../internal/agentclub): neutral agent-club event
   contract validation, trusted binding policy, ingress owner scoping,
   read-only discovery, and admission-only route behavior.
+- [internal/gateway/agentclub_triggers.go](../../internal/gateway/agentclub_triggers.go):
+  verified trigger delivery, raw-body HMAC handling, body caps, deterministic
+  event identity, and redacted trigger audit.
 - [internal/gateway/response.go](../../internal/gateway/response.go):
   redacted JSON and NDJSON gateway responses.
 - [internal/gatewayapi/types.go](../../internal/gatewayapi/types.go) and
@@ -72,10 +75,10 @@ The major boundaries are:
   the HTTP security boundary. They are not cryptographic identity.
 - External ingress: webhook/scheduler/project triggers are untrusted until a
   local rule verifies them and the gateway admits them as session inputs.
-- Agent-club ingress: external project adapters may submit normalized events,
-  but configured registries can first require trusted descriptor/binding
-  matches, and admitted events must still become scoped gateway inputs before
-  any run can happen.
+- Agent-club ingress: external project adapters may submit normalized events
+  or verified trigger deliveries, but configured registries can first require
+  trusted descriptor/binding/trigger matches, and admitted events must still
+  become scoped gateway inputs before any run can happen.
 - Telegram: Telegram is a scoped gateway client with its own allowlist and
   send/delete safety; it does not get direct gateway-server imports.
 - Tools: tool risk, access mode, workspace path checks, dangerous-tool config,
@@ -200,9 +203,30 @@ auth material, prompts, or payload values.
 
 `GET /v1/agentclub/capabilities` is the matching read-only discovery surface.
 It returns enabled descriptors and safe binding metadata visible to the current
-actor, and it does not grant authority to execute anything. Scheduler/webhook
-HMAC endpoints, safe outputs, action approvals, project manifest loading, and
-capability execution are later slices.
+actor, and it does not grant authority to execute anything. Scheduler daemons,
+safe outputs, action approvals, project manifest loading, and capability
+execution are later slices.
+
+Verified trigger delivery is now a generic gateway admission path at
+`POST /v1/agentclub/triggers/{binding_id}/deliveries`. The trusted trigger
+binding supplies source, capability, event type, ingress owner, target session,
+prompt, auth method, and body cap; request bodies cannot choose those fields.
+Webhook bindings can require HMAC-SHA256 over the raw body, using constant-time
+signature comparison before parsing. Bodies are capped before verification or
+JSON decoding. Webhook event identity comes from binding id plus the configured
+delivery id header; schedule/manual identity comes from binding id plus
+`scheduled_at_utc`; the existing input idempotency path also includes payload
+hash and target session id.
+
+Trigger audit is redacted separately from ingress audit so failures before
+normalization still leave evidence. It records binding id, trigger kind,
+source/capability/event type, decision, reason, payload hash, external event id
+hash, target session id, input id, duplicate state, client type, client id hash,
+and metadata keys. It does not record raw bodies, prompts, delivery ids,
+signatures, HMAC secrets, metadata values, headers, command lines, or adapter
+secrets. Schedule/manual delivery has no daemon in this slice: future timestamps
+are rejected unless explicitly marked as dry registration, and dry registration
+does not admit an input.
 
 ## Session Scope
 
