@@ -237,6 +237,15 @@ func (c *Client) AdmitSessionInput(ctx context.Context, sessionID string, input 
 	return out, nil
 }
 
+func (c *Client) AdmitHHReviewQueue(ctx context.Context, sessionID string, req gatewayapi.HHReviewQueueRequest) (gatewayapi.HHReviewQueueResponse, error) {
+	var out gatewayapi.HHReviewQueueResponse
+	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/agentclub/hh/review-queue"
+	if err := c.JSON(ctx, http.MethodPost, path, req, &out); err != nil {
+		return gatewayapi.HHReviewQueueResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) CompleteSessionInput(ctx context.Context, sessionID, inputID string, input gatewayapi.SessionInputCompleteRequest) (gatewayapi.SessionInputResponse, error) {
 	var out gatewayapi.SessionInputResponse
 	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/inputs/" + url.PathEscape(strings.TrimSpace(inputID)) + "/complete"

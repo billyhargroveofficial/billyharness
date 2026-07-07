@@ -31,26 +31,27 @@ import (
 )
 
 type Server struct {
-	providerAuth    config.ProviderAuthSnapshot
-	providerBinding config.ProviderBinding
-	profile         config.ProfileSelection
-	runtime         config.RuntimeLimits
-	toolPolicy      config.ToolPolicySettings
-	diagnostics     config.DiagnosticsSettings
-	mcpSettings     config.MCPSettings
-	hookSettings    config.HookSettings
-	instructions    config.InstructionSettings
-	gatewayAddr     string
-	agent           *agent.Agent
-	registry        *tools.Registry
-	auth            credentials.Manager
-	mux             *http.ServeMux
-	authToken       string
-	httpSecurity    httpSecurityOptions
-	sessions        map[string]*Session
-	store           *sessionStore
-	storeHealth     gatewayapi.SessionStoreHealth
-	mu              sync.Mutex
+	providerAuth           config.ProviderAuthSnapshot
+	providerBinding        config.ProviderBinding
+	profile                config.ProfileSelection
+	runtime                config.RuntimeLimits
+	toolPolicy             config.ToolPolicySettings
+	diagnostics            config.DiagnosticsSettings
+	mcpSettings            config.MCPSettings
+	hookSettings           config.HookSettings
+	instructions           config.InstructionSettings
+	gatewayAddr            string
+	agent                  *agent.Agent
+	registry               *tools.Registry
+	auth                   credentials.Manager
+	mux                    *http.ServeMux
+	authToken              string
+	httpSecurity           httpSecurityOptions
+	sessions               map[string]*Session
+	store                  *sessionStore
+	storeHealth            gatewayapi.SessionStoreHealth
+	hhApplicantReviewQueue hhApplicantReviewQueueAdapter
+	mu                     sync.Mutex
 }
 
 type ServerOptions struct {

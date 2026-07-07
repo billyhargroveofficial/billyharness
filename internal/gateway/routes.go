@@ -78,6 +78,7 @@ func (s *Server) routeSpecs() []routeSpec {
 		{Method: "GET", Pattern: "/v1/sessions/{id}/events", Handler: s.handleSessionEvents, Summary: "Replay or follow session events", Response: "NDJSON protocol.Event"},
 		{Method: "POST", Pattern: "/v1/sessions/{id}/inputs", Handler: s.handleSessionInput, Summary: "Admit a queued session input", Request: "SessionInputRequest", Response: "SessionInputResponse"},
 		{Method: "POST", Pattern: "/v1/sessions/{id}/inputs/{input_id}/complete", Handler: s.handleSessionInputComplete, Summary: "Mark a queued input terminal", Request: "SessionInputCompleteRequest", Response: "SessionInputResponse"},
+		{Method: "POST", Pattern: "/v1/sessions/{id}/agentclub/hh/review-queue", Handler: s.handleHHReviewQueueIngress, Summary: "Admit read-only HH review queue output as ingress input", Request: "HHReviewQueueRequest", Response: "HHReviewQueueResponse"},
 		{Method: "POST", Pattern: "/v1/sessions/{id}/run", Handler: s.handleSessionRun, Summary: "Run a prompt inside an existing session", Request: "RunRequest", Response: "NDJSON protocol.Event"},
 		{Method: "POST", Pattern: "/v1/sessions/{id}/user_input/{request_id}/answer", Handler: s.handleUserInputAnswer, Summary: "Answer a pending user-input request", Request: "UserInputAnswerRequest", Response: "UserInputResponse"},
 		{Method: "POST", Pattern: "/v1/sessions/{id}/user_input/{request_id}/reject", Handler: s.handleUserInputReject, Summary: "Reject a pending user-input request", Request: "UserInputRejectRequest", Response: "UserInputResponse"},

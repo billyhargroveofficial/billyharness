@@ -1,10 +1,10 @@
 # Gateway and Sessions Architecture
 
 Status note: this document is written against the current worktree on
-2026-07-05. Mutation-auth hardening, session-owner header scoping,
-stored-session projector inspection, fail-closed persistence behavior, and
-manifest-only session startup are current worktree contracts, not assumptions
-from older releases.
+2026-07-07. Mutation-auth hardening, session-owner header scoping,
+stored-session projector inspection, fail-closed persistence behavior,
+manifest-only session startup, and the read-only HH review queue ingress route
+are current worktree contracts, not assumptions from older releases.
 
 Code anchors:
 
@@ -26,6 +26,11 @@ Code anchors:
   idempotency state.
 - `internal/gateway/ingress.go`: gateway-owned ingress admission helper and
   redacted append-only ingress audit ledger.
+- `internal/gateway/agentclub_hh.go`: HH review queue ingress HTTP adapter
+  that admits captured output without dispatching a run.
+- `internal/agentclub/hhapplicant/`: read-only HH applicant-tool review queue
+  capture, validation, fixed argv construction, output hashing, and ingress
+  event/rule conversion.
 - `internal/ingress/`: pure external-event admission DTOs, deterministic input
   IDs, raw-body HMAC helpers, and payload metadata sanitization.
 - `internal/gateway/http_security.go`: HTTP bearer, mutation, origin, host,
@@ -49,7 +54,7 @@ and remote clients. It owns:
 - session creation, listing, status, context, event replay, input admission,
   run, cancel, undo, redo, and user-input routes;
 - gateway-owned external ingress admission into existing session input
-  ledgers, without adapter-specific execution;
+  ledgers, with only narrow allowlisted adapter execution before admission;
 - durable session persistence when `ServerOptions.SessionStoreDir` is set;
 - startup manifest indexing of durable sessions into the in-memory session map;
 - event recording before live fanout for session runs;
@@ -63,10 +68,10 @@ It does not own client rendering. Shared transport DTOs belong in
 URL/auth/readiness helpers belong in `internal/gatewayapi`; neutral projection
 logic belongs in `internal/clientux`.
 
-It also does not let external triggers run commands, tools, MCP calls, provider
-overrides, or schedulers directly. External ingress must first become a
-gateway-admitted session input, and a separate gateway run must later promote
-that input before the runtime sees it.
+It also does not let external triggers run tools, MCP calls, provider
+overrides, arbitrary commands, or schedulers directly. External ingress must
+first become a gateway-admitted session input, and a separate gateway run must
+later promote that input before the runtime sees it.
 
 ## HTTP Surface
 
@@ -94,6 +99,7 @@ Future agents should update this section from that route table, not from memory.
 | `GET /v1/sessions/{id}/events` | NDJSON replay/follow stream for session events |
 | `POST /v1/sessions/{id}/inputs` | admit an idempotent pending input without running it |
 | `POST /v1/sessions/{id}/inputs/{input_id}/complete` | terminally complete an admitted input with optional failure evidence |
+| `POST /v1/sessions/{id}/agentclub/hh/review-queue` | capture the local HH review queue read-only command and admit its stdout as an ingress input without running the session |
 | `POST /v1/sessions/{id}/run` | admit/promote an input and run it through the session thread |
 | `POST /v1/sessions/{id}/user_input/{request_id}/answer` | answer a pending user-input request |
 | `POST /v1/sessions/{id}/user_input/{request_id}/reject` | reject a pending user-input request |
@@ -159,10 +165,14 @@ continues; save failure aborts the replacement stream. `POST
 `POST /v1/sessions/{id}/inputs` is intentionally separate from run execution.
 It gives clients a durable idempotency point before a run is promoted.
 
-## External Ingress Foundation
+## External Ingress And HH Review Queue
 
-The ingress foundation is internal-only in this slice. There is no HH adapter,
-webhook HTTP route, scheduler, UI, or arbitrary project command runner.
+Ingress is admission-first. It does not let external triggers dispatch runs,
+call tools, call MCP, or pick provider/runtime overrides. The current HTTP
+adapter surface has exactly one project-specific route: the HH applicant-tool
+review queue bridge. There is still no public webhook route, scheduler, UI,
+generic project command runner, raw API caller, raw SQL caller, browser auth
+bridge, or HH mutating action.
 
 `internal/ingress` owns the pure admission contract:
 
@@ -184,6 +194,33 @@ redacted `received` audit record, and then calls the existing input admission
 path. The final `admitted` or `rejected` audit record follows input admission,
 so a durable input cannot be written without prior ingress audit evidence. It
 does not promote the input, start a run, call tools, call MCP, or shell out.
+
+`POST /v1/sessions/{id}/agentclub/hh/review-queue` is the first concrete
+adapter over that foundation. The route accepts a profile, limit, and optional
+repo root, validates the target session exists, then authorizes the session
+against the adapter owner before any local HH command runs:
+
+```text
+client_type=ingress
+client_id=ingress:hh-applicant-tool:<profile>
+```
+
+The adapter is intentionally not a command runner. It constructs only fixed
+argv for `f228jobfckr cohort-review --limit N`, runs it in the allowlisted
+`D:\repos\hh-applicant-tool` checkout or an explicitly configured equivalent,
+and passes the validated profile through the single `HH_PROFILE_ID`
+environment slot. Output capture is bounded by a timeout and byte cap. Command
+failure, timeout, output-cap, invalid profile, invalid limit, and invalid repo
+root fail before input admission.
+
+Captured stdout becomes the session-input prompt and raw ingress body. Metadata
+stays safe: project, profile, command name, limit, output hash, parsed review
+item count, and policy labels. Ingress audit stores only hashes, status, client
+type/id hash, metadata keys, target session id, duplicate state, and input id;
+it does not store recruiter text, prompts, raw command output, repo paths, or
+external event ids. The deterministic external event identity is derived from
+profile, command, limit, stdout hash, and target session id, so repeat captures
+of the same queue output deduplicate through the normal session input ledger.
 
 Generic owner scoping now includes `SessionOwner.ClientID` plus
 `X-Billyharness-Session-Client-ID`. Client ID can scope non-Telegram/non-TUI

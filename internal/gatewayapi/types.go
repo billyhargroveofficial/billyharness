@@ -59,6 +59,35 @@ type SessionInputCompleteRequest struct {
 	FailureReason  string `json:"failure_reason,omitempty"`
 }
 
+type HHReviewQueueRequest struct {
+	Profile  string `json:"profile"`
+	Limit    int    `json:"limit"`
+	RepoRoot string `json:"repo_root,omitempty"`
+}
+
+type HHReviewQueueResponse struct {
+	Input               SessionInputResponse `json:"input"`
+	InputID             string               `json:"input_id"`
+	State               string               `json:"state"`
+	Duplicate           bool                 `json:"duplicate,omitempty"`
+	Admitted            bool                 `json:"admitted"`
+	AuditStatus         string               `json:"audit_status"`
+	AuditReason         string               `json:"audit_reason,omitempty"`
+	TargetSessionID     string               `json:"target_session_id"`
+	ClientID            string               `json:"client_id"`
+	ClientType          string               `json:"client_type"`
+	Profile             string               `json:"profile"`
+	Limit               int                  `json:"limit"`
+	CommandName         string               `json:"command_name"`
+	CommandArgs         []string             `json:"command_args"`
+	OutputSHA256        string               `json:"output_sha256"`
+	PayloadSHA256       string               `json:"payload_sha256"`
+	ExternalEventIDHash string               `json:"external_event_id_hash"`
+	ReviewItemCount     int                  `json:"review_item_count"`
+	MetadataKeys        []string             `json:"metadata_keys,omitempty"`
+	RunDispatched       bool                 `json:"run_dispatched"`
+}
+
 type CreateSessionRequest struct {
 	Messages []protocol.Message `json:"messages,omitempty"`
 	Profile  string             `json:"profile,omitempty"`
