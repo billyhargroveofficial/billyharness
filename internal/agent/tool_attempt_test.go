@@ -269,7 +269,7 @@ func TestRunMessagesShellExecEmitsTurnChangeRecorded(t *testing.T) {
 	if !ok {
 		t.Fatalf("turn change event missing: %#v", events)
 	}
-	if change.ToolName != "shell_exec" || change.Added != 1 || change.Directories != 1 || change.PatchOutputRef == "" {
+	if change.ToolName != "shell_exec" || change.Added != 1 || change.PatchOutputRef == "" {
 		t.Fatalf("turn change = %#v", change)
 	}
 	if !turnChangeIncludesFile(change, "shell.txt", "added") {

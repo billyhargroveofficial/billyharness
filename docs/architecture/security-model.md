@@ -5,7 +5,7 @@ trust boundaries. It consolidates the gateway, Telegram, tools, MCP, secrets,
 filesystem, and public-web rules that are spread across the implementation.
 It is not a checklist or runbook.
 
-Status note: reviewed against current code paths on 2026-07-04. This document
+Status note: reviewed against current code paths on 2026-07-07. This document
 describes current behavior, not an implementation checklist.
 
 Primary code anchors:
@@ -16,6 +16,20 @@ Primary code anchors:
   bearer, browser, mutation, host, content-type, and privilege clamp checks.
 - [internal/gateway/session_authz.go](../../internal/gateway/session_authz.go):
   session owner-header authorization.
+- [internal/gateway/ingress.go](../../internal/gateway/ingress.go) and
+  [internal/ingress](../../internal/ingress): external ingress admission,
+  HMAC verification helpers, unsafe metadata rejection, and redacted audit.
+- [internal/gateway/agentclub_events.go](../../internal/gateway/agentclub_events.go)
+  and [internal/agentclub](../../internal/agentclub): neutral agent-club event
+  contract validation, trusted binding policy, ingress owner scoping,
+  read-only discovery, and admission-only route behavior.
+- [internal/gateway/agentclub_triggers.go](../../internal/gateway/agentclub_triggers.go):
+  verified trigger delivery, raw-body HMAC handling, body caps, deterministic
+  event identity, and redacted trigger audit.
+- [internal/gateway/agentclub_proposals.go](../../internal/gateway/agentclub_proposals.go):
+  safe-output proposal creation, listing, hash-bound decisions, explicit
+  hash-bound apply, expiration, supersede handling, and session-scoped JSONL
+  replay.
 - [internal/gateway/response.go](../../internal/gateway/response.go):
   redacted JSON and NDJSON gateway responses.
 - [internal/gatewayapi/types.go](../../internal/gatewayapi/types.go) and
@@ -63,6 +77,14 @@ The major boundaries are:
   provider credentials.
 - Session owner scope: owner headers are gateway-enforced scoping claims inside
   the HTTP security boundary. They are not cryptographic identity.
+- External ingress: webhook/scheduler/project triggers are untrusted until a
+  local rule verifies them and the gateway admits them as session inputs.
+- Agent-club ingress: external project adapters may submit normalized events
+  or verified trigger deliveries, but configured registries can first require
+  trusted descriptor/binding/trigger matches, and admitted events must still
+  become scoped gateway inputs before any run can happen.
+- Agent-club proposals: agents or adapters may propose exact future side-effect
+  artifacts, but decisions are hash-bound records only and do not execute.
 - Telegram: Telegram is a scoped gateway client with its own allowlist and
   send/delete safety; it does not get direct gateway-server imports.
 - Tools: tool risk, access mode, workspace path checks, dangerous-tool config,
@@ -133,6 +155,158 @@ the mutation bearer token. It still allows stricter request knobs such as a
 lower `max_tool_rounds` or a less-privileged `access_mode`, and clamps requests
 that try to raise tool rounds or access privilege above server configuration.
 
+## External Ingress Boundary
+
+External ingress is gateway admission, not execution. There is no public
+webhook route and no scheduler. The current project-adapter surface is the
+neutral agent-club event route, and future adapters must use the same shape:
+
+- verify raw request bodies before parsing when a shared secret is configured;
+- compare HMAC signatures in constant time and reject missing, stale, mutated,
+  or invalid signatures;
+- translate only allowlisted event sources into `IngressEvent`;
+- derive deterministic `input_id` values from rule id, source, external event
+  id, payload hash, and target session;
+- reject payload metadata that attempts provider, model, access-mode, tool,
+  MCP, shell, or command override authority;
+- authorize the target session through gateway owner scope before appending the
+  normal `inputs.jsonl` admission;
+- write the redacted ingress audit ledger even for rejected events when a
+  gateway store is configured.
+
+The audit ledger records hashes, decision reason, target session id, admitted
+input id, duplicate state, client type/id hash, and metadata keys. It does not
+store raw body text, prompt text, external event IDs, metadata values, secrets,
+or command payloads.
+
+The agent-club route at `POST /v1/sessions/{id}/agentclub/events` accepts one
+normalized event and then uses the same ingress admission bridge. It requires
+session-owner headers with a non-empty `client_id` and `client_type=ingress`,
+authorizes that actor against the target session before input admission, and
+uses that actor as the ingress rule owner. Request payloads cannot set owner,
+provider, model, thinking, reasoning effort, access mode, max tool rounds, MCP,
+tools, shell, command, environment, browser auth, raw API, raw SQL, or dispatch
+authority.
+
+The normalized event route response is redacted and admit-only. It returns
+admitted state, duplicate state, input id, target session id, source,
+capability, event type, payload hash, external event id hash, metadata keys,
+and `run_dispatched=false`. Trigger delivery responses use the same redacted
+shape, but an explicit trusted trigger `run_policy` may set
+`run_dispatched=true` after input admission and policy checks. Neither response
+includes raw prompt, raw payload, external event id, client id, or metadata
+values. Agent-club capability descriptors are metadata only (`id`, title,
+description, kind, risk, schemas, `dispatch=admit_only`, approval semantics);
+Billyharness does not load project manifests or execute capabilities directly
+in this slice.
+
+When an agent-club registry is configured, the route checks descriptor and
+trusted binding policy before writing ingress audit or session inputs. Bindings
+are local gateway policy only: they have stable local IDs and link a
+capability to `client_type=ingress`, a concrete `client_id`, optional sources,
+optional event types, optional safe metadata keys, and an enabled flag. Unknown
+capabilities, disabled bindings, source/event mismatches, and disallowed
+metadata keys are rejected at admission time. Binding metadata cannot contain
+secrets, executable commands, environment variables, raw API calls, SQL, browser
+auth material, prompts, or payload values.
+
+The registry is loaded from operator-owned JSON only:
+`$BILLYHARNESS_HOME/agentclub.config.json` or paths from
+`BILLYHARNESS_AGENTCLUB_CONFIG_FILES` /
+`FAST_AGENT_AGENTCLUB_CONFIG_FILES`. Missing default config preserves
+no-registry behavior. Any explicitly configured invalid file fails startup.
+Webhook trigger secrets are referenced by `hmac_secret_env` and resolved from
+environment/dotenv into runtime memory only; readiness, `/v1/config`, doctor,
+and CLI JSON never expose the secret value.
+
+`GET /v1/agentclub/capabilities` is the matching read-only discovery surface.
+It returns enabled descriptors and safe binding metadata visible to the current
+actor, and it does not grant authority to execute anything. Scheduler daemons,
+project manifest loading, and capability execution are not part of this
+surface.
+
+Verified trigger delivery is now a generic gateway admission path at
+`POST /v1/agentclub/triggers/{binding_id}/deliveries`. The trusted trigger
+binding supplies source, capability, event type, ingress owner, target session,
+prompt, auth method, and body cap; request bodies cannot choose those fields.
+Webhook bindings can require HMAC-SHA256 over the raw body, using constant-time
+signature comparison before parsing. Bodies are capped before verification or
+JSON decoding. Webhook event identity comes from binding id plus the configured
+delivery id header; schedule/manual identity comes from binding id plus
+`scheduled_at_utc`; the existing input idempotency path also includes payload
+hash and target session id.
+
+Trigger audit is redacted separately from ingress audit so failures before
+normalization still leave evidence. It records binding id, trigger kind,
+source/capability/event type, decision, reason, payload hash, external event id
+hash, target session id, input id, duplicate state, client type, client id hash,
+and metadata keys. It does not record raw bodies, prompts, delivery ids,
+signatures, HMAC secrets, metadata values, headers, command lines, or adapter
+secrets. Schedule/manual future timestamps are rejected unless explicitly
+marked as dry registration, and dry registration does not admit an input.
+
+`fast-agent-harness agentclub scheduler run` is a separate local operator
+runner for enabled interval `kind=schedule` trigger config. It computes due UTC
+ticks, writes private `agentclub-scheduler-state.json` state, and posts only to
+the verified trigger delivery route. It does not call session run routes,
+execute shell commands, call MCP tools, load project manifests, mutate external
+APIs, or apply proposals. The gateway remains the owner of trigger
+verification, ingress audit, owner-scope authorization, and session input
+admission.
+
+Trigger auto-run is a separate opt-in trust layer, not payload authority. A
+configured trigger `run_policy` can dispatch only after the input was admitted.
+The gateway refuses duplicate inputs, cross-owner sessions, busy sessions for
+`start_if_idle`, cooldown/rate-limit violations, and policies that exceed the
+server's configured access mode or max tool rounds. The dispatched request uses
+the trusted prompt and admitted input id; payload metadata cannot set provider,
+model, reasoning effort, access mode, max tool rounds, tools, MCP, shell,
+browser auth, raw APIs, SQL, or dispatch behavior. Auto-run decisions are
+recorded in a redacted `agentclub-autorun-audit.jsonl` ledger when the gateway
+store is configured.
+
+Safe-output proposals are the review boundary for future external mutation.
+`POST /v1/sessions/{id}/agentclub/proposals`, `GET
+/v1/sessions/{id}/agentclub/proposals`, `POST
+/v1/sessions/{id}/agentclub/proposals/{proposal_id}/decision`, and `POST
+/v1/sessions/{id}/agentclub/proposals/{proposal_id}/apply` all sit behind
+normal gateway session owner authorization. A proposal stores source,
+capability, action kind, risk, target scope, preview/output-ref summary,
+payload hash, policy version, proposal hash, owner/session scope, state,
+timestamps, optional expiry, and metadata keys. Raw payloads and metadata
+values are not returned in list responses.
+
+Decisions must provide the expected proposal hash and can approve, reject, or
+edit as a new proposal. Expiration and supersede state are replayed from
+`agentclub-proposals.jsonl`; approvals are not chat messages and are not
+inferred from ordinary conversation text. Recording an approval does not call
+external APIs, send HH replies, apply to jobs, modify GitHub, run shell
+commands, call MCP tools, edit files, dispatch a run, or apply an action.
+
+Apply is a second explicit gate. An apply request must provide the expected
+proposal hash and an idempotency key, and the gateway applies only the current
+approved artifact with matching owner scope. Duplicate apply requests return
+the existing apply result instead of invoking the executor again. Dry runs
+validate the same boundary without writing an apply record. The only v0
+executor is `record_note`, which writes a redacted `proposal_applied` record
+and synthetic `agentclub:apply:<apply_id>` output ref. Unsupported action
+kinds become `proposal_apply_failed` records. The apply ledger stores hashes
+and safe identifiers only, never raw payloads, metadata values, bearer tokens,
+external responses, command output, shell snippets, SQL, browser state, or MCP
+arguments. Apply never dispatches a run.
+
+Operator surfaces stay behind the same gateway APIs. The CLI requires explicit
+session id, proposal id, and expected proposal hash for approve/reject
+decisions and for apply; CLI apply derives a deterministic idempotency key if
+the operator does not pass one. The TUI `/agentclub` view only lists enabled
+capabilities and the current gateway session's proposals. Telegram
+`/agentclub` is operator-only;
+pending proposal buttons carry a proposal id plus expected hash prefix, then
+the callback handler re-fetches the proposal under Telegram owner headers and
+submits the full current hash to the gateway. Stale hashes, terminal proposal
+states, and cross-owner decisions are refused by the gateway rather than by
+chat text convention.
+
 ## Session Scope
 
 Session owner metadata is a routing and authorization claim, not a credential.
@@ -141,9 +315,9 @@ It is represented by `gatewayapi.SessionOwner` and the
 [internal/gatewayapi/types.go](../../internal/gatewayapi/types.go). The shared
 gateway client attaches those headers from `gatewayclient.WithSessionOwner`.
 
-Committed HEAD stores owner metadata when supplied in create-session bodies,
-but it does not enforce owner scope on reads or mutations. Current worktree
-behavior adds [internal/gateway/session_authz.go](../../internal/gateway/session_authz.go):
+Committed HEAD stores owner metadata when supplied in create-session bodies and
+enforces owner scope on reads and mutations through
+[internal/gateway/session_authz.go](../../internal/gateway/session_authz.go):
 
 - create-session body owner must match scoped request headers when both are
   present;
@@ -154,6 +328,12 @@ behavior adds [internal/gateway/session_authz.go](../../internal/gateway/session
 - scoped actors may not mutate legacy unowned sessions;
 - cross-owner reads and mutations are denied with `403`;
 - unscoped local callers remain unscoped gateway operators.
+
+`SessionOwner.ClientID` and `X-Billyharness-Session-Client-ID` are the generic
+principal for clients that do not have Telegram/TUI-specific IDs. If a stored
+session owner has `client_id`, scoped actors must present the same client ID.
+This lets ingress rules use a narrow owner such as `client_type=ingress` plus a
+project-specific client ID instead of sharing one broad external scope.
 
 The authority decision is recorded in
 [ADR 0002](../adr/0002-gateway-owns-session-authority.md). Future clients
@@ -394,14 +574,15 @@ Current code truth:
 - Provider/model/reasoning per-run overrides are bearer-gated under mutation
   auth; tool-round and access-mode requests are clamped.
 - Session owner headers scope list/read/mutation behavior.
+- External ingress is admitted through gateway session inputs and redacted audit,
+  not through direct tool, MCP, shell, or provider override execution.
+- Agent-club ingress admits only normalized external adapter events as queued
+  inputs; it does not expose generic project commands, schedulers, webhooks,
+  auto-run, browser auth, raw APIs, raw SQL, or project-specific actions.
 - Telegram carries owner scope through gateway requests and hardens
   secret-bearing auth commands.
 - MCP initialize instructions are metadata-only by default and require explicit
   operator promotion before model-context injection.
-
-These dirty-worktree behaviors are documented because they are visible in this
-checkout and referenced by adjacent architecture docs. They should not be
-described as clean-release behavior until the hardening files are committed.
 
 ## Verification Anchors
 
@@ -421,6 +602,12 @@ owning packages. The most relevant current test names are:
 - `TestGatewayRunRequestPrivilegeClamps`
 - `TestGatewaySessionOwnerMetadataPersistsAndLists`
 - `TestGatewaySessionOwnerScopeFiltersAndDeniesCrossOwner`
+- `TestGatewaySessionClientIDOwnerScopeFiltersAndDeniesCrossOwner`
+- `TestGatewayIngressAdmitsAuditsDuplicatesAndConflictsWithoutDispatch`
+- `TestGatewayIngressAuditsRejectedAdmission`
+- `TestAgentClubEventRouteAdmitsInputAuditsAndDoesNotDispatch`
+- `TestAgentClubEventRouteRequiresIngressOwnerHeaders`
+- `TestAgentClubEventRouteDeniesCrossOwnerBeforeInputWrite`
 - `TestStdioLifecycleCallEnvAndRedaction`
 - `TestRunMessagesDoesNotInjectUntrustedMCPInstructionsByDefault`
 - `TestClientRejectsLocalhostAndRFC1918Targets`

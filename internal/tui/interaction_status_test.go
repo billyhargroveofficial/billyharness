@@ -1311,6 +1311,7 @@ func TestUndoRedoCommandsRequestGatewayApply(t *testing.T) {
 
 type testModelHelper interface {
 	Helper()
+	Cleanup(func())
 	Setenv(string, string)
 	TempDir() string
 }

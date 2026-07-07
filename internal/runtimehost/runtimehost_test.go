@@ -21,6 +21,7 @@ func TestSettingsFromConfigMatchesGatewayTUIAndRegistryProjections(t *testing.T)
 	cfg.ProjectDocFallbacks = []string{"AGENTS.md"}
 	cfg.MCPEnabled = true
 	cfg.MCPAllowedServers = []string{"github"}
+	cfg.AgentClubConfigFiles = []string{"/agentclub.json"}
 	cfg.DiagnosticsEnabled = true
 	cfg.HooksEnabled = true
 	cfg.StoreReasoningContent = true
@@ -34,6 +35,7 @@ func TestSettingsFromConfigMatchesGatewayTUIAndRegistryProjections(t *testing.T)
 		!reflect.DeepEqual(settings.ToolPolicy, cfg.ToolPolicySettings()) ||
 		!reflect.DeepEqual(settings.Diagnostics, cfg.DiagnosticsSettings()) ||
 		!reflect.DeepEqual(settings.MCP, cfg.MCPSettings()) ||
+		!reflect.DeepEqual(settings.AgentClub, cfg.AgentClubSettings()) ||
 		!reflect.DeepEqual(settings.Hooks, cfg.HookSettings()) ||
 		!reflect.DeepEqual(settings.Instructions, cfg.InstructionSettings()) ||
 		settings.Auth != cfg.AuthSettings() {

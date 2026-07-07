@@ -962,7 +962,33 @@ func TestRunGatewayTurnsStreamedRunFailedIntoRunDoneError(t *testing.T) {
 func newTestModel(t testModelHelper) Model {
 	t.Helper()
 	t.Setenv("BILLYHARNESS_HOME", t.TempDir())
+	stubStatusGitInfoForTest(t)
 	return NewModel(config.Default(), Options{})
+}
+
+func stubStatusGitInfoForTest(t testModelHelper) {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+
+	statusGitInfoCache.Lock()
+	prevCWD := statusGitInfoCache.cwd
+	prevExpires := statusGitInfoCache.expires
+	prevInfo := statusGitInfoCache.info
+	statusGitInfoCache.cwd = cwd
+	statusGitInfoCache.expires = time.Now().Add(time.Hour)
+	statusGitInfoCache.info = statusGitInfo{rootName: "billyharness", branch: "main"}
+	statusGitInfoCache.Unlock()
+
+	t.Cleanup(func() {
+		statusGitInfoCache.Lock()
+		statusGitInfoCache.cwd = prevCWD
+		statusGitInfoCache.expires = prevExpires
+		statusGitInfoCache.info = prevInfo
+		statusGitInfoCache.Unlock()
+	})
 }
 
 func writePromptCommand(t *testing.T, path string, content string) {

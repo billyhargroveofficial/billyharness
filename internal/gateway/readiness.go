@@ -23,6 +23,9 @@ func (s *Server) readinessResponse() ReadinessResponse {
 	mcpStatus, mcpCheck := s.mcpReadiness()
 	checks = append(checks, mcpCheck)
 
+	agentClubStatus, agentClubCheck := s.agentClubReadiness()
+	checks = append(checks, agentClubCheck)
+
 	var sessionStore *gatewayapi.SessionStoreHealth
 	storeCheck, storeHealth := s.sessionStoreReadiness()
 	checks = append(checks, storeCheck)
@@ -38,9 +41,50 @@ func (s *Server) readinessResponse() ReadinessResponse {
 		Checks:       checks,
 		Tools:        toolsStatus,
 		MCP:          mcpStatus,
+		AgentClub:    agentClubStatus,
 		SessionStore: sessionStore,
 	}
 	return resp
+}
+
+func (s *Server) agentClubReadiness() (gatewayapi.AgentClubReadinessStatus, ReadinessCheck) {
+	status := s.agentClubStatus
+	if status.ConfiguredFileCount == 0 && len(s.agentClubConfig.ConfigFiles) > 0 {
+		status.ConfiguredFileCount = len(s.agentClubConfig.ConfigFiles)
+	}
+	if s.agentClub != nil {
+		status.Configured = true
+		summary := s.agentClub.Summary()
+		if status.CapabilityCount == 0 {
+			status.CapabilityCount = summary.CapabilityCount
+		}
+		if status.BindingCount == 0 {
+			status.BindingCount = summary.BindingCount
+		}
+		if status.EnabledBindingCount == 0 {
+			status.EnabledBindingCount = summary.EnabledBindingCount
+		}
+		if status.TriggerCount == 0 {
+			status.TriggerCount = summary.TriggerCount
+		}
+		if status.EnabledTriggerCount == 0 {
+			status.EnabledTriggerCount = summary.EnabledTriggerCount
+		}
+	}
+	if !status.Configured && status.ConfiguredFileCount == 0 {
+		return status, ReadinessCheck{Name: "agentclub_registry", Status: readinessOK, Detail: "no config files"}
+	}
+	detail := fmt.Sprintf("files=%d capabilities=%d enabled_bindings=%d enabled_triggers=%d missing_secrets=%d",
+		status.ConfiguredFileCount,
+		status.CapabilityCount,
+		status.EnabledBindingCount,
+		status.EnabledTriggerCount,
+		status.MissingSecretEnvCount,
+	)
+	if status.MissingSecretEnvCount > 0 {
+		return status, ReadinessCheck{Name: "agentclub_registry", Status: readinessWarn, Detail: detail}
+	}
+	return status, ReadinessCheck{Name: "agentclub_registry", Status: readinessOK, Detail: detail}
 }
 
 func (s *Server) providerReadinessCheck() ReadinessCheck {

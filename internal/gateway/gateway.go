@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/agent"
+	"github.com/billyhargroveofficial/billyharness/internal/agentclub"
 	"github.com/billyhargroveofficial/billyharness/internal/attachments"
 	"github.com/billyhargroveofficial/billyharness/internal/checkpoint"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
@@ -38,6 +39,8 @@ type Server struct {
 	toolPolicy      config.ToolPolicySettings
 	diagnostics     config.DiagnosticsSettings
 	mcpSettings     config.MCPSettings
+	agentClubConfig config.AgentClubSettings
+	agentClubStatus gatewayapi.AgentClubReadinessStatus
 	hookSettings    config.HookSettings
 	instructions    config.InstructionSettings
 	gatewayAddr     string
@@ -50,6 +53,7 @@ type Server struct {
 	sessions        map[string]*Session
 	store           *sessionStore
 	storeHealth     gatewayapi.SessionStoreHealth
+	agentClub       *agentclub.Registry
 	mu              sync.Mutex
 }
 
@@ -58,6 +62,8 @@ type ServerOptions struct {
 	SessionStoreDir                          string
 	RequireMutationAuth                      bool
 	DevAllowUnauthenticatedLoopbackMutations bool
+	AgentClubRegistry                        *agentclub.Registry
+	AgentClubStatus                          gatewayapi.AgentClubReadinessStatus
 }
 
 type ServerSettings struct {
@@ -68,6 +74,7 @@ type ServerSettings struct {
 	ToolPolicy      config.ToolPolicySettings
 	Diagnostics     config.DiagnosticsSettings
 	MCP             config.MCPSettings
+	AgentClub       config.AgentClubSettings
 	Hooks           config.HookSettings
 	Instructions    config.InstructionSettings
 	GatewayAddr     string
@@ -146,6 +153,7 @@ func ServerSettingsFromRuntimeHost(settings runtimehost.Settings) ServerSettings
 		ToolPolicy:      settings.ToolPolicy,
 		Diagnostics:     settings.Diagnostics,
 		MCP:             settings.MCP,
+		AgentClub:       settings.AgentClub,
 		Hooks:           settings.Hooks,
 		Instructions:    settings.Instructions,
 		GatewayAddr:     settings.GatewayAddr,
@@ -167,6 +175,8 @@ func NewServerWithOptionsFromSettings(settings ServerSettings, prov provider.Pro
 		toolPolicy:      settings.ToolPolicy,
 		diagnostics:     settings.Diagnostics,
 		mcpSettings:     settings.MCP,
+		agentClubConfig: settings.AgentClub,
+		agentClubStatus: opts.AgentClubStatus,
 		hookSettings:    settings.Hooks,
 		instructions:    settings.Instructions,
 		gatewayAddr:     settings.GatewayAddr,
@@ -175,6 +185,7 @@ func NewServerWithOptionsFromSettings(settings ServerSettings, prov provider.Pro
 		auth:            credentials.NewManagerFromAuthSettings(settings.Auth),
 		mux:             http.NewServeMux(),
 		sessions:        map[string]*Session{},
+		agentClub:       opts.AgentClubRegistry,
 	}
 	if strings.TrimSpace(opts.SessionStoreDir) != "" {
 		s.store = newSessionStore(opts.SessionStoreDir)
@@ -214,6 +225,7 @@ func runtimeHostSettingsFromServerSettings(settings ServerSettings) runtimehost.
 		ToolPolicy:      settings.ToolPolicy,
 		Diagnostics:     settings.Diagnostics,
 		MCP:             settings.MCP,
+		AgentClub:       settings.AgentClub,
 		Hooks:           settings.Hooks,
 		Instructions:    settings.Instructions,
 		GatewayAddr:     settings.GatewayAddr,
@@ -236,6 +248,9 @@ func cloneServerSettings(settings ServerSettings) ServerSettings {
 		MCPPromoteServerInstructions: settings.MCP.PromoteServerInstructions,
 		MCPServers:                   settings.MCP.Servers,
 	}.MCPSettings()
+	settings.AgentClub = config.Config{
+		AgentClubConfigFiles: settings.AgentClub.ConfigFiles,
+	}.AgentClubSettings()
 	settings.Hooks = config.Config{
 		HooksEnabled:    settings.Hooks.Enabled,
 		HookConfigFiles: settings.Hooks.ConfigFiles,
@@ -612,108 +627,126 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	streamEvents(r.Context(), w, func(emit func(protocol.Event)) error {
-		completePreflightFailure := func(err error) error {
-			if err == nil {
-				return nil
-			}
-			if completeErr := s.completeSessionInputWithReason(session, admission.InputID, 0, "preflight_failed", err.Error()); completeErr != nil {
-				return errors.Join(err, fmt.Errorf("complete preflight-failed input: %w", completeErr))
-			}
-			return err
+		req.InterruptPolicy = interruptPolicy
+		return s.runAdmittedSessionInput(r.Context(), session, req, admission, "gateway_session", emit)
+	})
+}
+
+func (s *Server) runAdmittedSessionInput(ctx context.Context, session *Session, req RunRequest, admission gatewayapi.SessionInputResponse, source string, emit func(protocol.Event)) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if emit == nil {
+		emit = func(protocol.Event) {}
+	}
+	interruptPolicy, err := normalizeInterruptPolicy(req.InterruptPolicy)
+	if err != nil {
+		return err
+	}
+	completePreflightFailure := func(err error) error {
+		if err == nil {
+			return nil
 		}
-		if err := s.applySessionInterruptPolicy(r.Context(), session, interruptPolicy); err != nil {
-			return completePreflightFailure(err)
+		if completeErr := s.completeSessionInputWithReason(session, admission.InputID, 0, "preflight_failed", err.Error()); completeErr != nil {
+			return errors.Join(err, fmt.Errorf("complete preflight-failed input: %w", completeErr))
 		}
-		settings, err := s.runSettingsForRequest(r.Context(), req)
-		if err != nil {
-			return completePreflightFailure(err)
+		return err
+	}
+	if err := s.applySessionInterruptPolicy(ctx, session, interruptPolicy); err != nil {
+		return completePreflightFailure(err)
+	}
+	settings, err := s.runSettingsForRequest(ctx, req)
+	if err != nil {
+		return completePreflightFailure(err)
+	}
+	a, err := s.agentForSessionRunSettings(session, settings)
+	if err != nil {
+		return completePreflightFailure(err)
+	}
+	statusReq := runRequestFromSettings(settings)
+	userMessage := protocol.UserMessage(req.Prompt, req.Attachments)
+	contextEpochAdmission := s.sessionContextEpochAdmission(ctx, session, settings, userMessage)
+	runSeq, err := s.promoteSessionInput(session, admission.InputID)
+	if err != nil {
+		return completePreflightFailure(err)
+	}
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+	var persistenceMu sync.Mutex
+	var persistenceErr error
+	setPersistenceErr := func(err error) {
+		if err == nil {
+			return
 		}
-		a, err := s.agentForSessionRunSettings(session, settings)
-		if err != nil {
-			return completePreflightFailure(err)
+		persistenceMu.Lock()
+		if persistenceErr == nil {
+			persistenceErr = err
+			cancelRun()
 		}
-		statusReq := runRequestFromSettings(settings)
-		userMessage := protocol.UserMessage(req.Prompt, req.Attachments)
-		contextEpochAdmission := s.sessionContextEpochAdmission(r.Context(), session, settings, userMessage)
-		runSeq, err := s.promoteSessionInput(session, admission.InputID)
-		if err != nil {
-			return completePreflightFailure(err)
+		persistenceMu.Unlock()
+	}
+	getPersistenceErr := func() error {
+		persistenceMu.Lock()
+		defer persistenceMu.Unlock()
+		return persistenceErr
+	}
+	if source == "" {
+		source = "gateway_session"
+	}
+	err = session.Thread.RunMessage(runCtx, RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
+		return a.RunMessagesWithPromptOptions(ctx, messages, promptSubmitOptionsFromRun(req, source), emit)
+	}), userMessage, func(event protocol.Event) {
+		if getPersistenceErr() != nil {
+			return
 		}
-		runCtx, cancelRun := context.WithCancel(r.Context())
-		defer cancelRun()
-		var persistenceMu sync.Mutex
-		var persistenceErr error
-		setPersistenceErr := func(err error) {
-			if err == nil {
-				return
-			}
-			persistenceMu.Lock()
-			if persistenceErr == nil {
-				persistenceErr = err
-				cancelRun()
-			}
-			persistenceMu.Unlock()
-		}
-		getPersistenceErr := func() error {
-			persistenceMu.Lock()
-			defer persistenceMu.Unlock()
-			return persistenceErr
-		}
-		err = session.Thread.RunMessage(runCtx, RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
-			return a.RunMessagesWithPromptOptions(ctx, messages, promptSubmitOptionsFromRun(req, "gateway_session"), emit)
-		}), userMessage, func(event protocol.Event) {
-			if getPersistenceErr() != nil {
-				return
-			}
-			if event.Type == protocol.EventRunStarted {
-				drift, err := session.beginRunStatusWithContextEpoch(statusReq, runSeq, contextEpochAdmission.Run, contextEpochAdmission.Current)
-				if err != nil {
-					setPersistenceErr(err)
-					return
-				}
-				event = addContextEpochToRunStarted(event, contextEpochAdmission.Run, drift)
-			}
-			observed, ok, err := session.observeRunEvent(event)
+		if event.Type == protocol.EventRunStarted {
+			drift, err := session.beginRunStatusWithContextEpoch(statusReq, runSeq, contextEpochAdmission.Run, contextEpochAdmission.Current)
 			if err != nil {
 				setPersistenceErr(err)
 				return
 			}
-			if ok {
-				emit(observed)
-			}
-		})
-		hadPersistenceErr := false
-		if persistErr := getPersistenceErr(); persistErr != nil {
-			err = persistErr
-			hadPersistenceErr = true
+			event = addContextEpochToRunStarted(event, contextEpochAdmission.Run, drift)
 		}
-		if !hadPersistenceErr && !errors.Is(err, ErrBusy) {
-			if saveErr := s.saveSession(session); saveErr != nil {
-				persistErr := fmt.Errorf("session save failed after run: %w", saveErr)
-				session.markPersistenceFailure(persistErr)
-				emit(protocol.Event{Type: protocol.EventSessionStatus, Data: session.Status()})
-				if err == nil {
-					err = persistErr
-				} else {
-					err = errors.Join(err, persistErr)
-				}
-			}
-		}
-		terminalStatus := "completed"
+		observed, ok, err := session.observeRunEvent(event)
 		if err != nil {
-			terminalStatus = "failed"
-			if errors.Is(err, ErrBusy) {
-				terminalStatus = "busy"
-			}
+			setPersistenceErr(err)
+			return
 		}
-		if completeErr := s.completeSessionInput(session, admission.InputID, runSeq, terminalStatus); completeErr != nil {
-			log.Printf("gateway session input complete failed id=%s input=%s: %v", session.ID, admission.InputID, completeErr)
-			if err == nil {
-				return completeErr
-			}
+		if ok {
+			emit(observed)
 		}
-		return err
 	})
+	hadPersistenceErr := false
+	if persistErr := getPersistenceErr(); persistErr != nil {
+		err = persistErr
+		hadPersistenceErr = true
+	}
+	if !hadPersistenceErr && !errors.Is(err, ErrBusy) {
+		if saveErr := s.saveSession(session); saveErr != nil {
+			persistErr := fmt.Errorf("session save failed after run: %w", saveErr)
+			session.markPersistenceFailure(persistErr)
+			emit(protocol.Event{Type: protocol.EventSessionStatus, Data: session.Status()})
+			if err == nil {
+				err = persistErr
+			} else {
+				err = errors.Join(err, persistErr)
+			}
+		}
+	}
+	terminalStatus := "completed"
+	if err != nil {
+		terminalStatus = "failed"
+		if errors.Is(err, ErrBusy) {
+			terminalStatus = "busy"
+		}
+	}
+	if completeErr := s.completeSessionInput(session, admission.InputID, runSeq, terminalStatus); completeErr != nil {
+		log.Printf("gateway session input complete failed id=%s input=%s: %v", session.ID, admission.InputID, completeErr)
+		if err == nil {
+			return completeErr
+		}
+	}
+	return err
 }
 
 func (s *Server) handleSessionInput(w http.ResponseWriter, r *http.Request) {
@@ -1244,6 +1277,7 @@ func sessionSummary(session *Session) SessionSummary {
 }
 
 func normalizeSessionOwner(owner gatewayapi.SessionOwner) gatewayapi.SessionOwner {
+	owner.ClientID = strings.TrimSpace(owner.ClientID)
 	owner.ClientType = strings.ToLower(strings.TrimSpace(owner.ClientType))
 	owner.TUIChatID = strings.TrimSpace(owner.TUIChatID)
 	owner.Profile = strings.TrimSpace(owner.Profile)
@@ -1275,6 +1309,7 @@ func (s *Server) runtimeDiffSettings() config.RuntimeDiffSettings {
 		ToolPolicy:  s.toolPolicy,
 		Diagnostics: s.diagnostics,
 		MCP:         s.mcpSettings,
+		AgentClub:   s.agentClubConfig,
 		Hooks:       s.hookSettings,
 		GatewayAddr: s.gatewayAddr,
 	}

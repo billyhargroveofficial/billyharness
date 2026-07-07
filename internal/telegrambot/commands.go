@@ -130,6 +130,11 @@ func telegramCommands() []telegramCommandSpec {
 			bypassRunLock: true,
 			handler:       (*Bot).handleContextCommand,
 		}),
+		telegramActionCommand("agentclub.show", telegramCommandSpec{
+			class:         telegramCommandOperatorOnly,
+			bypassRunLock: true,
+			handler:       (*Bot).handleAgentClubCommand,
+		}),
 		telegramActionCommand("memory.manage", telegramCommandSpec{
 			class:         telegramCommandOperatorOnly,
 			bypassRunLock: true,

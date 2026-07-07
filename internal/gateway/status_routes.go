@@ -47,7 +47,11 @@ func (s *Server) handleConfigStatus(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, publicConfigStatusResponse(resolved))
+	resp := publicConfigStatusResponse(resolved)
+	if resp.Diagnostics != nil {
+		resp.Diagnostics["agent_club"] = s.agentClubStatus
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleDeepSeekAuth(w http.ResponseWriter, r *http.Request) {

@@ -20,6 +20,7 @@ makes the matching guard go red.
 | Package | Responsibility | Allowed internal imports | Forbidden imports and owner notes |
 | --- | --- | --- | --- |
 | `internal/agent` | Runtime loop, model calls, tool orchestration, compaction, and event emission. | `checkpoint`, `config`, `hooks`, `instructions`, `mcpclient`, `memory`, `modelinfo`, `projectcontext`, `protocol`, `provider`, `runstate`, `tools` | Should shrink behind runtime/toolexec seams in P1.1. Do not add presentation imports. |
+| `internal/agentclub` | Neutral agent-club v0 event contract, persisted operator registry JSON mapping, capability metadata, trusted binding policy, validation, discovery views, and pure mapping into gateway ingress admission. | `gatewayapi`, `ingress` | Must not become a scheduler, generic project runner, HH adapter, command executor, browser/auth adapter, raw API caller, raw SQL caller, or gateway server client. |
 | `internal/architecture` | Test-only import graph guard. | none | Guard package must not become runtime code. |
 | `internal/attachments` | Attachment metadata, image validation, hashing, private local storage, ref resolution, and store usage/prune operations surfaced by the CLI adapter. | `config`, `protocol` | Must not import provider, gateway, agent, tools, TUI, or Telegram packages; store refs and metadata only, never raw image bytes in JSONL. |
 | `internal/bench` | Benchmark runners, local-loop tasks, provider comparison, replay verification. | `agent`, `config`, `modelinfo`, `protocol`, `provider`, `runstate`, `runtimehost`, `trace` | Bench can compose broad runtime pieces, but should not become a shared runtime dependency. |
@@ -29,17 +30,18 @@ makes the matching guard go red.
 | `internal/clipboard` | Cross-platform raw image clipboard ingestion for client surfaces. | none | Must stay a leaf package: no TUI, Telegram, gateway, provider, tools, or attachment-store imports. |
 | `internal/codexauth` | Shared Codex auth payload, JWT claim, account, expiry, auth-mode, and refresh-status helpers. | none | Must remain pure parsing/status logic with no HTTP, file writes, provider, credentials, or config imports. |
 | `internal/commandregistry` | Shared searchable metadata registry for built-in actions, local prompt commands, profiles, and MCP prompt metadata. | `clientux`, `config`, `mcpclient`, `promptcommands` | Must stay metadata-only; no command execution, provider calls, gateway server, TUI, Telegram, cloud registry, or marketplace behavior. |
-| `internal/config` | Runtime configuration, profiles, summaries, MCP/hook config loading. | `modelinfo`, `protocol` | Must not import adapters, tools, provider runtime construction, or UI packages. |
+| `internal/config` | Runtime configuration, profiles, summaries, MCP/hook config loading, and agent-club config path/env resolution. | `modelinfo`, `protocol` | Must not import adapters, tools, provider runtime construction, or UI packages. |
 | `internal/credentials` | Credential file discovery, token persistence, and auth payload helpers. | `codexauth`, `config`, `modelinfo` | Must not import provider implementations except through future auth wiring. |
 | `internal/diagnostics` | Command-based diagnostics runner, bounded output capture, and compiler-style issue parsing. | none | Must stay command-based; no LSP client, watcher, auto-install, or provider calls. |
 | `internal/displayfmt` | Leaf display formatting helpers for compact numbers and percentages shared by client surfaces. | none | Must remain presentation-neutral and must not import clients, gateway, provider, tools, or runtime packages. |
 | `internal/docsgen` | Generated reference documentation for code-owned registries and package metadata. | `clientux`, `commandregistry`, `config`, `eventlog`, `gateway`, `gatewayapi`, `protocol`, `serviceops`, `telegrambot`, `tools`, `tui` | Reporting leaf. Runtime packages must not import docsgen; generated files are committed and enforced by tests. |
 | `internal/eventlog` | Event record validation, lifecycle validation, JSONL helpers, and corruption diagnostics. | `protocol` | Guarded: no `agent`, `gateway`, `trace`, `tui`, or `telegrambot` imports. |
 | `internal/filesearch` | On-demand workspace file resolver for fuzzy relative-path lookup using git, ripgrep, and walk fallbacks. | none | Must stay local and rebuildable; no watchers, databases, shell history, or file-content injection. |
-| `internal/gateway` | HTTP adapter for sessions, benchmark artifacts, session run locking, session persistence, replay, and inspection. | `agent`, `attachments`, `checkpoint`, `clientux`, `clientux/projector`, `config`, `credentials`, `eventlog`, `gatewayapi`, `mcpstatus`, `modelinfo`, `protocol`, `provider`, `runstate`, `runtimehost`, `secrets`, `tools`, `trace` | Must directly import `eventlog` and keep lifecycle semantics there. Server DTOs and shared client transport helpers belong to `gatewayapi`/`gatewayclient`. Stored-session inspection may use the shared client UX projector, not a gateway-local projector. |
+| `internal/gateway` | HTTP adapter for sessions, benchmark artifacts, session run locking, session persistence, replay, inspection, and gateway-owned ingress audit/admission. | `agent`, `agentclub`, `attachments`, `checkpoint`, `clientux`, `clientux/projector`, `config`, `credentials`, `eventlog`, `gatewayapi`, `ingress`, `mcpstatus`, `modelinfo`, `protocol`, `provider`, `runstate`, `runtimehost`, `secrets`, `tools`, `trace` | Must directly import `eventlog` and keep lifecycle semantics there. Server DTOs and shared client transport helpers belong to `gatewayapi`/`gatewayclient`. Stored-session inspection may use the shared client UX projector, not a gateway-local projector. |
 | `internal/gatewayapi` | Shared gateway HTTP request/response DTOs, URL normalization, readiness, auth header, and unavailable-hint helpers. | `config`, `protocol`, `serviceops` | Must not import gateway server, clients, runtime, provider, tools, TUI, or Telegram. |
-| `internal/gatewayclient` | Shared gateway HTTP client helpers, typed status errors, session JSON/NDJSON methods, and client-side context formatting. | `displayfmt`, `gatewayapi`, `protocol` | Must not import gateway server, agent, provider, tools, TUI, or Telegram. |
+| `internal/gatewayclient` | Shared gateway HTTP client helpers, typed status errors, session JSON/NDJSON methods, agent-club discovery/proposal client helpers, and redacted client-side formatting. | `agentclub`, `displayfmt`, `gatewayapi`, `protocol`, `secrets` | May import `secrets` only for redacted display/JSON-facing summaries. Must not import gateway server, agent, provider, tools, TUI, or Telegram. |
 | `internal/hooks` | Hook process execution and hook event payloads. | `config`, `protocol`, `secrets` | Must not import agent, tools, provider, or presentation packages. |
+| `internal/ingress` | Pure external-event admission contracts, deterministic session input IDs, raw-body HMAC helpers, and payload metadata sanitization before gateway input admission. | `gatewayapi` | Must not import gateway server, agent, provider, tools, MCP, TUI, Telegram, shell/process helpers, or execute anything. |
 | `internal/instructions` | Instruction file discovery and initial instruction assembly. | `config`, `protocol` | Must stay independent of runtime adapters and provider implementations. |
 | `internal/mcpclient` | Managed MCP stdio clients, server lifecycle, tool discovery, and status. | `config`, `protocol`, `secrets` | Must not depend on agent, gateway, TUI, or Telegram. |
 | `internal/mcpserver` | Local MCP server adapter exposing harness tools. | `protocol`, `tools` | Tool risk decisions must go through the central tools policy boundary. |
@@ -55,7 +57,7 @@ makes the matching guard go red.
 | `internal/secrets` | Secret discovery and redaction helpers. | none | Must remain a leaf utility package. |
 | `internal/serviceops` | Managed service names, subcommands, unit paths, and pid-file metadata shared by operator tooling. | none | Must remain a leaf metadata package; no systemd calls, process inspection, config loading, gateway, TUI, Telegram, or runtime imports. |
 | `internal/skills` | Local SKILL.md discovery, frontmatter parsing, bounded viewing of support files, and explicit local import metadata for compatibility skills. | `config` | Must not import tools, provider, gateway, TUI, Telegram, remote marketplaces, or network clients. |
-| `internal/telegrambot` | Telegram adapter, rendering, command handling, gateway client wrapper, and Telegram media attachment ingestion. | `attachments`, `clientux`, `clientux/projector`, `commandregistry`, `config`, `credentials`, `displayfmt`, `eventlog`, `gatewayapi`, `gatewayclient`, `mcpstatus`, `memory`, `modelinfo`, `protocol`, `secrets`, `toolrender` | Must not import gateway server internals. |
+| `internal/telegrambot` | Telegram adapter, rendering, command handling, agent-club proposal callbacks, gateway client wrapper, and Telegram media attachment ingestion. | `agentclub`, `attachments`, `clientux`, `clientux/projector`, `commandregistry`, `config`, `credentials`, `displayfmt`, `eventlog`, `gatewayapi`, `gatewayclient`, `mcpstatus`, `memory`, `modelinfo`, `protocol`, `secrets`, `toolrender` | Must not import gateway server internals. |
 | `internal/testkit` | Shared test helpers for HTTP servers, JWTs, and future cross-package fixtures. | none | Must remain test-support only and must not become a runtime dependency. |
 | `internal/testkit/fakeprovider` | Shared scripted provider test helper for replay, retry, malformed-stream, and cancellation regressions. | `provider` | Must remain test-support only and must not become a runtime dependency. |
 | `internal/toolrender` | Shared tool display labels, argument summaries, output-ref evidence lines, and compact tool result text for clients. | `displayfmt`, `protocol` | Must not import TUI, Telegram, gateway, or tools. |
@@ -70,6 +72,16 @@ makes the matching guard go red.
 | `internal/webtools` | Public-host-safe HTTP client and web fetch primitives. | none | Must not import provider, tools, gateway, TUI, or Telegram. |
 
 `internal/store` is currently an empty/reserved directory, not a Go package.
+
+## Public Packages
+
+`pkg/agentclub` is the public adapter SDK for external projects. It may expose
+wire DTOs, JSON payload builders, raw-body HMAC signing, owner-header helpers,
+and a small HTTP client for the agent-club gateway routes. It must remain
+standard-library-only, must not import Billyharness `internal/*` packages in
+production code, and must not read Billyharness home config, dotenv files,
+project manifests, provider/model/tool knobs, scheduler state, or executor/apply
+state.
 
 ## Runtime Event Delivery
 

@@ -657,6 +657,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		reflow = true
 		gotoBottom = m.followOutput
+	case agentClubStatusMsg:
+		if msg.err != nil {
+			m.addBlock("error", "AGENT CLUB", msg.err.Error())
+			m.status = "agent-club failed"
+		} else {
+			m.addInfoBlock("AGENT CLUB", msg.text)
+			m.status = "agent-club shown"
+		}
+		reflow = true
+		gotoBottom = m.followOutput
 	case processStatusMsg:
 		if msg.err != nil {
 			m.addBlock("error", "PROCESSES", msg.err.Error())

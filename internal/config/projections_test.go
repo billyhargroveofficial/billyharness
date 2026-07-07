@@ -131,6 +131,7 @@ func TestDiagnosticSnapshotUsesProviderBindingAndAuthProjection(t *testing.T) {
 		GatewayAddr:          "127.0.0.1:9999",
 		MCPEnabled:           true,
 		MCPAllowedServers:    []string{"github", "context7"},
+		AgentClubConfigFiles: []string{"agentclub.json"},
 		MaxToolOutputBytes:   8192,
 	}
 
@@ -177,6 +178,7 @@ func TestDiagnosticSnapshotUsesProviderBindingAndAuthProjection(t *testing.T) {
 		runtimeTool.GatewayAddr != "127.0.0.1:9999" ||
 		!runtimeTool.MCPEnabled ||
 		runtimeTool.MCPAllowedServers != "github,context7" ||
+		runtimeTool.AgentClubConfigFiles != "agentclub.json" ||
 		runtimeTool.MaxToolOutputBytes != 8192 {
 		t.Fatalf("snapshot runtime/tool settings = %#v", runtimeTool)
 	}
@@ -229,11 +231,12 @@ func TestProviderBindingCarriesAuthAndRuntimeSettings(t *testing.T) {
 
 func TestConfigProjectionsReturnDefensiveCopies(t *testing.T) {
 	cfg := Config{
-		WorkspaceRoots:      []string{"/repo"},
-		ProjectDocFallbacks: []string{"README.md"},
-		MCPEnabled:          true,
-		MCPConfigFiles:      []string{"mcp.toml"},
-		MCPAllowedServers:   []string{"github"},
+		WorkspaceRoots:       []string{"/repo"},
+		ProjectDocFallbacks:  []string{"README.md"},
+		MCPEnabled:           true,
+		MCPConfigFiles:       []string{"mcp.toml"},
+		MCPAllowedServers:    []string{"github"},
+		AgentClubConfigFiles: []string{"agentclub.json"},
 		MCPServers: []MCPServer{{
 			Name:            "github",
 			Args:            []string{"serve"},
@@ -250,6 +253,7 @@ func TestConfigProjectionsReturnDefensiveCopies(t *testing.T) {
 
 	toolPolicy := cfg.ToolPolicySettings()
 	mcp := cfg.MCPSettings()
+	agentClub := cfg.AgentClubSettings()
 	instructions := cfg.InstructionSettings()
 
 	toolPolicy.WorkspaceRoots[0] = "/other"
@@ -266,6 +270,7 @@ func TestConfigProjectionsReturnDefensiveCopies(t *testing.T) {
 	mcp.Servers[0].EnabledTools[0] = "other"
 	mcp.Servers[0].DisabledTools[0] = "other"
 	mcp.Servers[0].ToolRisks["delete"] = "local_read"
+	agentClub.ConfigFiles[0] = "other-agentclub.json"
 
 	if cfg.WorkspaceRoots[0] != "/repo" || cfg.ProjectDocFallbacks[0] != "README.md" {
 		t.Fatalf("tool projection mutated config: %#v", cfg)
@@ -281,7 +286,8 @@ func TestConfigProjectionsReturnDefensiveCopies(t *testing.T) {
 		server.EnabledTools[0] != "search" ||
 		server.DisabledTools[0] != "delete" ||
 		server.DefaultToolRisk != "network_read" ||
-		server.ToolRisks["delete"] != "external_mutation" {
+		server.ToolRisks["delete"] != "external_mutation" ||
+		cfg.AgentClubConfigFiles[0] != "agentclub.json" {
 		t.Fatalf("MCP projection mutated config: %#v", cfg)
 	}
 }
@@ -301,6 +307,7 @@ func TestRuntimeDiffOverridesFromSettingsMatchesConfigDiff(t *testing.T) {
 	current.MCPEnabled = true
 	current.MCPConfigFiles = []string{"/tmp/mcp.toml"}
 	current.MCPAllowedServers = []string{"search"}
+	current.AgentClubConfigFiles = []string{"/tmp/agentclub.json"}
 	current.HooksEnabled = true
 	current.HookConfigFiles = []string{"/tmp/hooks.toml"}
 	current.GatewayAddr = "127.0.0.1:9999"

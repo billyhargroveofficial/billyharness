@@ -88,6 +88,7 @@ func TestRequiredInternalImports(t *testing.T) {
 
 func TestCommandPackagesRemainAdapters(t *testing.T) {
 	allowed := map[string]bool{
+		"agentclub":       true,
 		"attachments":     true,
 		"bench":           true,
 		"clientux":        true,

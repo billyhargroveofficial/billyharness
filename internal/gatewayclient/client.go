@@ -10,10 +10,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/agentclub"
 	"github.com/billyhargroveofficial/billyharness/internal/displayfmt"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/secrets"
 )
 
 var (
@@ -40,6 +43,12 @@ type RunResult struct {
 	SeqGap        *EventSeqGapError
 	StreamGaps    int
 	DroppedEvents int64
+}
+
+type AgentClubTriggerDelivery struct {
+	BindingID string
+	Body      []byte
+	Headers   map[string]string
 }
 
 type StatusError struct {
@@ -237,6 +246,59 @@ func (c *Client) AdmitSessionInput(ctx context.Context, sessionID string, input 
 	return out, nil
 }
 
+func (c *Client) AgentClubCapabilities(ctx context.Context) (agentclub.CapabilityListResponse, error) {
+	var out agentclub.CapabilityListResponse
+	if err := c.JSON(ctx, http.MethodGet, "/v1/agentclub/capabilities", nil, &out); err != nil {
+		return agentclub.CapabilityListResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) DeliverAgentClubTrigger(ctx context.Context, delivery AgentClubTriggerDelivery) (agentclub.TriggerDeliveryResponse, error) {
+	var out agentclub.TriggerDeliveryResponse
+	path := "/v1/agentclub/triggers/" + url.PathEscape(strings.TrimSpace(delivery.BindingID)) + "/deliveries"
+	if err := c.JSONBytesWithHeaders(ctx, http.MethodPost, path, delivery.Body, delivery.Headers, &out); err != nil {
+		return agentclub.TriggerDeliveryResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) CreateAgentClubProposal(ctx context.Context, sessionID string, proposal agentclub.ProposalCreateRequest) (agentclub.ProposalCreateResponse, error) {
+	var out agentclub.ProposalCreateResponse
+	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/agentclub/proposals"
+	if err := c.JSON(ctx, http.MethodPost, path, proposal, &out); err != nil {
+		return agentclub.ProposalCreateResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) AgentClubProposals(ctx context.Context, sessionID string) (agentclub.ProposalListResponse, error) {
+	var out agentclub.ProposalListResponse
+	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/agentclub/proposals"
+	if err := c.JSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return agentclub.ProposalListResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) DecideAgentClubProposal(ctx context.Context, sessionID, proposalID string, decision agentclub.ProposalDecisionRequest) (agentclub.ProposalDecisionResponse, error) {
+	var out agentclub.ProposalDecisionResponse
+	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/agentclub/proposals/" + url.PathEscape(strings.TrimSpace(proposalID)) + "/decision"
+	if err := c.JSON(ctx, http.MethodPost, path, decision, &out); err != nil {
+		return agentclub.ProposalDecisionResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) ApplyAgentClubProposal(ctx context.Context, sessionID, proposalID string, apply agentclub.ProposalApplyRequest) (agentclub.ProposalApplyResponse, error) {
+	var out agentclub.ProposalApplyResponse
+	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/agentclub/proposals/" + url.PathEscape(strings.TrimSpace(proposalID)) + "/apply"
+	if err := c.JSON(ctx, http.MethodPost, path, apply, &out); err != nil {
+		return agentclub.ProposalApplyResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) CompleteSessionInput(ctx context.Context, sessionID, inputID string, input gatewayapi.SessionInputCompleteRequest) (gatewayapi.SessionInputResponse, error) {
 	var out gatewayapi.SessionInputResponse
 	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/inputs/" + url.PathEscape(strings.TrimSpace(inputID)) + "/complete"
@@ -336,7 +398,26 @@ func (c *Client) JSON(ctx context.Context, method, path string, body any, out an
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
+func (c *Client) JSONBytesWithHeaders(ctx context.Context, method, path string, body []byte, headers map[string]string, out any) error {
+	resp, err := c.doWithHeaders(ctx, method, path, body, headers)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if err := statusError(resp, method, path); err != nil {
+		return err
+	}
+	if out == nil {
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
+	return c.doWithHeaders(ctx, method, path, body, nil)
+}
+
+func (c *Client) doWithHeaders(ctx context.Context, method, path string, body []byte, headers map[string]string) (*http.Response, error) {
 	baseURL := gatewayapi.NormalizeBaseURL(c.BaseURL)
 	if baseURL == "" {
 		return nil, fmt.Errorf("gateway URL is empty")
@@ -356,6 +437,14 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (*htt
 		if body != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
+		for key, value := range headers {
+			key = strings.TrimSpace(key)
+			value = strings.TrimSpace(value)
+			if key == "" || value == "" {
+				continue
+			}
+			req.Header.Set(key, value)
+		}
 		if owner, ok := SessionOwnerFromContext(ctx); ok {
 			setSessionOwnerHeaders(req, owner)
 		}
@@ -366,6 +455,9 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (*htt
 
 func setSessionOwnerHeaders(req *http.Request, owner gatewayapi.SessionOwner) {
 	owner = normalizeSessionOwner(owner)
+	if owner.ClientID != "" {
+		req.Header.Set(gatewayapi.HeaderSessionClientID, owner.ClientID)
+	}
 	if owner.ClientType != "" {
 		req.Header.Set(gatewayapi.HeaderSessionClientType, owner.ClientType)
 	}
@@ -384,6 +476,7 @@ func setSessionOwnerHeaders(req *http.Request, owner gatewayapi.SessionOwner) {
 }
 
 func normalizeSessionOwner(owner gatewayapi.SessionOwner) gatewayapi.SessionOwner {
+	owner.ClientID = strings.TrimSpace(owner.ClientID)
 	owner.ClientType = strings.ToLower(strings.TrimSpace(owner.ClientType))
 	owner.TUIChatID = strings.TrimSpace(owner.TUIChatID)
 	owner.Profile = strings.TrimSpace(owner.Profile)
@@ -397,6 +490,188 @@ func (c *Client) client() *http.Client {
 	}
 	c.Client = &http.Client{Timeout: 0}
 	return c.Client
+}
+
+func FormatAgentClubCapabilities(resp agentclub.CapabilityListResponse) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "agent-club capabilities: %d\n", len(resp.Capabilities))
+	if len(resp.Capabilities) == 0 {
+		b.WriteString("capabilities: none\n")
+		return b.String()
+	}
+	for _, capability := range resp.Capabilities {
+		descriptor := capability.Descriptor
+		title := strings.TrimSpace(descriptor.Title)
+		if title == "" {
+			title = descriptor.ID
+		}
+		fmt.Fprintf(&b, "- %s", strings.TrimSpace(descriptor.ID))
+		if title != descriptor.ID {
+			fmt.Fprintf(&b, " %q", secrets.Redact(title))
+		}
+		var attrs []string
+		attrs = appendNonEmptyAttr(attrs, "kind", descriptor.Kind)
+		attrs = appendNonEmptyAttr(attrs, "risk", descriptor.Risk)
+		attrs = appendNonEmptyAttr(attrs, "dispatch", descriptor.Dispatch)
+		attrs = appendNonEmptyAttr(attrs, "approval", descriptor.Approval)
+		attrs = appendNonEmptyAttr(attrs, "version", descriptor.Version)
+		if len(attrs) > 0 {
+			fmt.Fprintf(&b, " %s", strings.Join(attrs, " "))
+		}
+		b.WriteByte('\n')
+		for _, binding := range capability.Bindings {
+			fmt.Fprintf(&b, "  binding")
+			if strings.TrimSpace(binding.ID) != "" {
+				fmt.Fprintf(&b, " id=%s", secrets.Redact(strings.TrimSpace(binding.ID)))
+			}
+			fmt.Fprintf(&b, " %s/%s enabled=%t",
+				secrets.Redact(strings.TrimSpace(binding.ClientType)),
+				secrets.Redact(strings.TrimSpace(binding.ClientID)),
+				binding.Enabled,
+			)
+			if len(binding.Sources) > 0 {
+				fmt.Fprintf(&b, " sources=%s", secrets.Redact(strings.Join(binding.Sources, ",")))
+			}
+			if len(binding.EventTypes) > 0 {
+				fmt.Fprintf(&b, " events=%s", secrets.Redact(strings.Join(binding.EventTypes, ",")))
+			}
+			if len(binding.MetadataKeys) > 0 {
+				fmt.Fprintf(&b, " metadata=%s", secrets.Redact(strings.Join(binding.MetadataKeys, ",")))
+			}
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+func FormatAgentClubProposals(resp agentclub.ProposalListResponse) string {
+	var b strings.Builder
+	pending := 0
+	for _, proposal := range resp.Proposals {
+		if proposal.State == agentclub.ProposalStatePending {
+			pending++
+		}
+	}
+	fmt.Fprintf(&b, "agent-club proposals: %d pending=%d\n", len(resp.Proposals), pending)
+	if len(resp.Proposals) == 0 {
+		b.WriteString("proposals: none\n")
+		return b.String()
+	}
+	for _, proposal := range resp.Proposals {
+		formatted := FormatAgentClubProposal(proposal)
+		b.WriteString(formatted)
+		if !strings.HasSuffix(formatted, "\n") {
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+func FormatAgentClubProposal(proposal agentclub.Proposal) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "- %s state=%s hash=%s",
+		secrets.Redact(strings.TrimSpace(proposal.ProposalID)),
+		firstNonEmpty(strings.TrimSpace(proposal.State), "unknown"),
+		ShortAgentClubHash(proposal.ProposalHash),
+	)
+	var attrs []string
+	attrs = appendNonEmptyAttr(attrs, "risk", proposal.Risk)
+	attrs = appendNonEmptyAttr(attrs, "source", proposal.Source)
+	attrs = appendNonEmptyAttr(attrs, "capability", proposal.Capability)
+	attrs = appendNonEmptyAttr(attrs, "action", proposal.ActionKind)
+	attrs = appendNonEmptyAttr(attrs, "target", proposal.TargetScope)
+	if proposal.CreatedAt.IsZero() {
+		attrs = append(attrs, "created=-")
+	} else {
+		attrs = append(attrs, "created="+proposal.CreatedAt.UTC().Format(time.RFC3339))
+	}
+	if proposal.ExpiresAt != nil {
+		attrs = append(attrs, "expires="+proposal.ExpiresAt.UTC().Format(time.RFC3339))
+	}
+	if len(attrs) > 0 {
+		fmt.Fprintf(&b, " %s", strings.Join(redactAttrs(attrs), " "))
+	}
+	b.WriteByte('\n')
+	if preview := safeProposalPreview(proposal.Preview, 240); preview != "" {
+		fmt.Fprintf(&b, "  preview: %s\n", preview)
+	}
+	if outputRef := safeProposalPreview(proposal.OutputRef, 180); outputRef != "" {
+		fmt.Fprintf(&b, "  output_ref: %s\n", outputRef)
+	}
+	if proposal.PayloadSHA256 != "" {
+		fmt.Fprintf(&b, "  payload_sha256: %s\n", ShortAgentClubHash(proposal.PayloadSHA256))
+	}
+	if len(proposal.MetadataKeys) > 0 {
+		fmt.Fprintf(&b, "  metadata_keys: %s\n", secrets.Redact(strings.Join(proposal.MetadataKeys, ",")))
+	}
+	if proposal.SupersedesProposalID != "" {
+		fmt.Fprintf(&b, "  supersedes: %s\n", secrets.Redact(proposal.SupersedesProposalID))
+	}
+	if proposal.SupersededByProposalID != "" {
+		fmt.Fprintf(&b, "  superseded_by: %s\n", secrets.Redact(proposal.SupersededByProposalID))
+	}
+	return b.String()
+}
+
+func FormatAgentClubProposalApply(resp agentclub.ProposalApplyResponse) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "apply proposal %s apply=%s state=%s action=%s hash=%s dry_run=%t run_dispatched=%t",
+		secrets.Redact(strings.TrimSpace(resp.ProposalID)),
+		secrets.Redact(strings.TrimSpace(resp.ApplyID)),
+		firstNonEmpty(strings.TrimSpace(resp.State), "unknown"),
+		secrets.Redact(strings.TrimSpace(resp.ActionKind)),
+		ShortAgentClubHash(resp.ProposalHash),
+		resp.DryRun,
+		resp.RunDispatched,
+	)
+	if resp.Duplicate {
+		b.WriteString(" duplicate=true")
+	}
+	b.WriteByte('\n')
+	if outputRef := safeProposalPreview(resp.OutputRef, 180); outputRef != "" {
+		fmt.Fprintf(&b, "  output_ref: %s\n", outputRef)
+	}
+	if resp.PayloadSHA256 != "" {
+		fmt.Fprintf(&b, "  payload_sha256: %s\n", ShortAgentClubHash(resp.PayloadSHA256))
+	}
+	return b.String()
+}
+
+func ShortAgentClubHash(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if len(value) <= 12 {
+		return value
+	}
+	return value[:12]
+}
+
+func appendNonEmptyAttr(attrs []string, key, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return attrs
+	}
+	return append(attrs, key+"="+value)
+}
+
+func redactAttrs(attrs []string) []string {
+	out := make([]string, len(attrs))
+	for i, attr := range attrs {
+		out[i] = secrets.Redact(attr)
+	}
+	return out
+}
+
+func safeProposalPreview(value string, maxRunes int) string {
+	value = strings.TrimSpace(secrets.Redact(value))
+	if value == "" {
+		return ""
+	}
+	value = strings.Join(strings.Fields(value), " ")
+	runes := []rune(value)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes]) + "..."
+	}
+	return value
 }
 
 func FormatSessionContext(resp gatewayapi.SessionContextResponse) string {

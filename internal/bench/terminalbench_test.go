@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -73,6 +74,9 @@ func TestExportTerminalBenchDatasetWritesTaskDirectoryAndEvaluatorBridge(t *test
 	}
 	if strings.Join(evaluator.Argv, "\x00") != "sh\x00-c\x00grep -q ok src/answer.txt" {
 		t.Fatalf("evaluator argv = %#v", evaluator.Argv)
+	}
+	if runtime.GOOS == "windows" {
+		return
 	}
 
 	output, err := runTerminalBenchBridge(taskDir, filepath.Join(taskDir, "workspace"))
@@ -278,6 +282,9 @@ func assertFileMode(t *testing.T, path string, want os.FileMode) {
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		return
 	}
 	if got := info.Mode().Perm(); got != want {
 		t.Fatalf("%s mode = %o, want %o", path, got, want)

@@ -169,6 +169,7 @@ func cloneConfigForResolve(cfg Config) Config {
 	cfg.MCPConfigFiles = cloneStrings(cfg.MCPConfigFiles)
 	cfg.MCPAllowedServers = cloneStrings(cfg.MCPAllowedServers)
 	cfg.MCPServers = cloneMCPServers(cfg.MCPServers)
+	cfg.AgentClubConfigFiles = cloneStrings(cfg.AgentClubConfigFiles)
 	cfg.HookConfigFiles = cloneStrings(cfg.HookConfigFiles)
 	cfg.Hooks = cloneHooks(cfg.Hooks)
 	return cfg
@@ -344,6 +345,7 @@ func configSpecs() []configSpec {
 		stringListSpec("mcp_config_files", "MCP config files to load", []string{"FAST_AGENT_MCP_CONFIG_FILES"}, func(c Config) any { return c.MCPConfigFiles }, func(c *Config, v []string) { c.MCPConfigFiles = v }),
 		stringListSpec("mcp_allowed_servers", "Allowlist of MCP server names visible to the runtime", []string{"FAST_AGENT_MCP_ALLOWED_SERVERS"}, func(c Config) any { return c.MCPAllowedServers }, func(c *Config, v []string) { c.MCPAllowedServers = v }),
 		boolSpec("mcp_promote_server_instructions", "Promote MCP server instructions into trusted prompt context", []string{"BILLYHARNESS_MCP_PROMOTE_SERVER_INSTRUCTIONS", "FAST_AGENT_MCP_PROMOTE_SERVER_INSTRUCTIONS"}, func(c Config) any { return c.MCPPromoteServerInstructions }, func(c *Config, v bool) { c.MCPPromoteServerInstructions = v }),
+		stringListSpec("agentclub_config_files", "Agent-club registry config JSON files to load", []string{"BILLYHARNESS_AGENTCLUB_CONFIG_FILES", "FAST_AGENT_AGENTCLUB_CONFIG_FILES"}, func(c Config) any { return c.AgentClubConfigFiles }, func(c *Config, v []string) { c.AgentClubConfigFiles = v }),
 		boolSpec("hooks_enabled", "Enable configured hook execution", []string{"BILLYHARNESS_HOOKS_ENABLED", "FAST_AGENT_HOOKS_ENABLED"}, func(c Config) any { return c.HooksEnabled }, func(c *Config, v bool) { c.HooksEnabled = v }),
 		stringListSpec("hooks_config_files", "Hook config files to load", []string{"BILLYHARNESS_HOOKS_CONFIG_FILES", "FAST_AGENT_HOOKS_CONFIG_FILES"}, func(c Config) any { return c.HookConfigFiles }, func(c *Config, v []string) { c.HookConfigFiles = v }),
 	}

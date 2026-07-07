@@ -37,7 +37,7 @@
 | reasoning_effort                 | string           | high                                         | DEEPSEEK_REASONING_EFFORT                                                                | no       | Reasoning effort level sent to capable providers            |
 | disable_spark                    | bool             | false                                        | BILLYHARNESS_DISABLE_SPARK, FAST_AGENT_DISABLE_SPARK                                     | no       | Rewrite Spark model aliases to the non-Spark default        |
 | max_tokens                       | int              | 8192                                         | FAST_AGENT_MAX_TOKENS                                                                    | no       | Maximum model output tokens requested per call              |
-| max_tool_rounds                  | int              | 100                                          | FAST_AGENT_MAX_TOOL_ROUNDS                                                               | no       | Maximum tool-call rounds allowed during one turn            |
+| max_tool_rounds                  | int              | 0                                            | FAST_AGENT_MAX_TOOL_ROUNDS                                                               | no       | Maximum tool-call rounds allowed during one turn            |
 | max_parallel_tools               | int              | 4                                            | FAST_AGENT_MAX_PARALLEL_TOOLS                                                            | no       | Maximum tool calls the runtime may execute concurrently     |
 | provider_max_retries             | int              | 2                                            | FAST_AGENT_PROVIDER_MAX_RETRIES                                                          | no       | Maximum provider retry attempts after retryable failures    |
 | context_window_tokens            | int64            | 1000000                                      | FAST_AGENT_CONTEXT_WINDOW_TOKENS                                                         | no       | Context window token budget for the active model            |
@@ -82,6 +82,7 @@
 | mcp_config_files                 | string_list      | []                                           | FAST_AGENT_MCP_CONFIG_FILES                                                              | no       | MCP config files to load                                    |
 | mcp_allowed_servers              | string_list      | telegram, telegram-parilka, github, context7 | FAST_AGENT_MCP_ALLOWED_SERVERS                                                           | no       | Allowlist of MCP server names visible to the runtime        |
 | mcp_promote_server_instructions  | bool             | false                                        | BILLYHARNESS_MCP_PROMOTE_SERVER_INSTRUCTIONS, FAST_AGENT_MCP_PROMOTE_SERVER_INSTRUCTIONS | no       | Promote MCP server instructions into trusted prompt context |
+| agentclub_config_files           | string_list      | []                                           | BILLYHARNESS_AGENTCLUB_CONFIG_FILES, FAST_AGENT_AGENTCLUB_CONFIG_FILES                   | no       | Agent-club registry config JSON files to load               |
 | hooks_enabled                    | bool             | true                                         | BILLYHARNESS_HOOKS_ENABLED, FAST_AGENT_HOOKS_ENABLED                                     | no       | Enable configured hook execution                            |
 | hooks_config_files               | string_list      | []                                           | BILLYHARNESS_HOOKS_CONFIG_FILES, FAST_AGENT_HOOKS_CONFIG_FILES                           | no       | Hook config files to load                                   |
 
@@ -118,4 +119,4 @@ This file uses `config.BillySettings` as the canonical JSON shape. It stores TUI
 | $BILLYHARNESS_HOME/hooks.config.toml       | Hook sub-registry loaded by $BILLYHARNESS_HOME/hooks.config.toml              |
 | $BILLYHARNESS_HOME/diagnostics.config.toml | Diagnostics sub-registry loaded by $BILLYHARNESS_HOME/diagnostics.config.toml |
 
-<!-- source-hash: d879d9ca37b571598245f032357fbbf428f5d45a84aa9dfc7ae1f24054c03d14 -->
+<!-- source-hash: e9a6825e17866d33b208c7d56825e6df8262cee92da2be5fc5761d40f769585d -->

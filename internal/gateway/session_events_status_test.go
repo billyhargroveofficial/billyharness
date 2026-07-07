@@ -424,6 +424,61 @@ func TestGatewaySessionOwnerScopeFiltersAndDeniesCrossOwner(t *testing.T) {
 	}
 }
 
+func TestGatewaySessionClientIDOwnerScopeFiltersAndDeniesCrossOwner(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+
+	ownOwner := SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"}
+	otherOwner := SessionOwner{ClientID: "ingress:other:prod", ClientType: "ingress"}
+	ownID := createScopedTestSession(t, server, ownOwner)
+	otherID := createScopedTestSession(t, server, otherOwner)
+
+	list := httptest.NewRecorder()
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/sessions", nil)
+	setScopedTestOwnerHeaders(listReq, ownOwner)
+	server.Handler().ServeHTTP(list, listReq)
+	if list.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", list.Code, list.Body.String())
+	}
+	var listed SessionListResponse
+	if err := json.Unmarshal(list.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	visible := map[string]bool{}
+	for _, summary := range listed.Sessions {
+		visible[summary.ID] = true
+	}
+	if !visible[ownID] || visible[otherID] {
+		t.Fatalf("visible sessions = %#v, want only %s", visible, ownID)
+	}
+
+	ownRead := httptest.NewRecorder()
+	ownReadReq := httptest.NewRequest(http.MethodGet, "/v1/sessions/"+ownID+"/status", nil)
+	setScopedTestOwnerHeaders(ownReadReq, ownOwner)
+	server.Handler().ServeHTTP(ownRead, ownReadReq)
+	if ownRead.Code != http.StatusOK {
+		t.Fatalf("own read status = %d body=%s", ownRead.Code, ownRead.Body.String())
+	}
+
+	crossRead := httptest.NewRecorder()
+	crossReadReq := httptest.NewRequest(http.MethodGet, "/v1/sessions/"+otherID+"/status", nil)
+	setScopedTestOwnerHeaders(crossReadReq, ownOwner)
+	server.Handler().ServeHTTP(crossRead, crossReadReq)
+	if crossRead.Code != http.StatusForbidden {
+		t.Fatalf("cross read status = %d body=%s", crossRead.Code, crossRead.Body.String())
+	}
+
+	crossMutate := httptest.NewRecorder()
+	crossMutateReq := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+otherID+"/inputs", strings.NewReader(`{"prompt":"nope"}`))
+	setScopedTestOwnerHeaders(crossMutateReq, ownOwner)
+	server.Handler().ServeHTTP(crossMutate, crossMutateReq)
+	if crossMutate.Code != http.StatusForbidden {
+		t.Fatalf("cross mutate status = %d body=%s", crossMutate.Code, crossMutate.Body.String())
+	}
+}
+
 func createScopedTestSession(t *testing.T, server *Server, owner SessionOwner) string {
 	t.Helper()
 	body, _ := json.Marshal(CreateSessionRequest{Owner: owner})
@@ -440,6 +495,9 @@ func createScopedTestSession(t *testing.T, server *Server, owner SessionOwner) s
 }
 
 func setScopedTestOwnerHeaders(req *http.Request, owner SessionOwner) {
+	if owner.ClientID != "" {
+		req.Header.Set(gatewayapi.HeaderSessionClientID, owner.ClientID)
+	}
 	if owner.ClientType != "" {
 		req.Header.Set(gatewayapi.HeaderSessionClientType, owner.ClientType)
 	}

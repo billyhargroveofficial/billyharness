@@ -8,6 +8,7 @@ import (
 )
 
 const (
+	HeaderSessionClientID         = "X-Billyharness-Session-Client-ID"
 	HeaderSessionClientType       = "X-Billyharness-Session-Client-Type"
 	HeaderSessionTelegramChatID   = "X-Billyharness-Session-Telegram-Chat-ID"
 	HeaderSessionTelegramThreadID = "X-Billyharness-Session-Telegram-Thread-ID"
@@ -65,6 +66,7 @@ type CreateSessionRequest struct {
 }
 
 type SessionOwner struct {
+	ClientID         string `json:"client_id,omitempty"`
 	ClientType       string `json:"client_type,omitempty"`
 	TelegramChatID   int64  `json:"telegram_chat_id,omitempty"`
 	TelegramThreadID int    `json:"telegram_thread_id,omitempty"`
@@ -90,14 +92,15 @@ type HealthResponse struct {
 }
 
 type ReadinessResponse struct {
-	OK           bool                   `json:"ok"`
-	Provider     string                 `json:"provider"`
-	Model        string                 `json:"model"`
-	GatewayAddr  string                 `json:"gateway_addr,omitempty"`
-	Checks       []ReadinessCheck       `json:"checks"`
-	Tools        ReadinessCatalogStatus `json:"tools"`
-	MCP          ReadinessMCPStatus     `json:"mcp"`
-	SessionStore *SessionStoreHealth    `json:"session_store,omitempty"`
+	OK           bool                     `json:"ok"`
+	Provider     string                   `json:"provider"`
+	Model        string                   `json:"model"`
+	GatewayAddr  string                   `json:"gateway_addr,omitempty"`
+	Checks       []ReadinessCheck         `json:"checks"`
+	Tools        ReadinessCatalogStatus   `json:"tools"`
+	MCP          ReadinessMCPStatus       `json:"mcp"`
+	AgentClub    AgentClubReadinessStatus `json:"agent_club"`
+	SessionStore *SessionStoreHealth      `json:"session_store,omitempty"`
 }
 
 type ReadinessCheck struct {
@@ -117,6 +120,20 @@ type ReadinessMCPStatus struct {
 	RequiredFailures int  `json:"required_failures,omitempty"`
 	OptionalWarnings int  `json:"optional_warnings,omitempty"`
 	ToolCount        int  `json:"tool_count,omitempty"`
+}
+
+type AgentClubReadinessStatus struct {
+	ConfiguredFileCount    int      `json:"configured_file_count"`
+	ConfiguredFileBasename []string `json:"configured_file_basenames,omitempty"`
+	CapabilityCount        int      `json:"capability_count"`
+	BindingCount           int      `json:"binding_count"`
+	EnabledBindingCount    int      `json:"enabled_binding_count"`
+	TriggerCount           int      `json:"trigger_count"`
+	EnabledTriggerCount    int      `json:"enabled_trigger_count"`
+	EnabledAutoRunCount    int      `json:"enabled_auto_run_count,omitempty"`
+	HMACSecretEnvCount     int      `json:"hmac_secret_env_count,omitempty"`
+	MissingSecretEnvCount  int      `json:"missing_secret_env_count,omitempty"`
+	Configured             bool     `json:"configured"`
 }
 
 type SessionStoreHealth struct {

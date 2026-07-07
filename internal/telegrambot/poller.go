@@ -34,6 +34,10 @@ func (b *Bot) Run(ctx context.Context) error {
 }
 
 func (b *Bot) handlePolledUpdate(ctx context.Context, update Update) {
+	if update.CallbackQuery != nil {
+		b.handleCallbackQuery(ctx, update)
+		return
+	}
 	if update.Message == nil || !telegramMessageProcessable(*update.Message) {
 		b.ackIgnoredUpdate(update, "empty_message")
 		return

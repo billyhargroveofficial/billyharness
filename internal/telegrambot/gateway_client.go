@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/billyhargroveofficial/billyharness/internal/agentclub"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
@@ -89,6 +90,18 @@ func (c *GatewayClient) AdmitSessionInput(ctx context.Context, sessionID string,
 
 func (c *GatewayClient) CompleteSessionInput(ctx context.Context, sessionID, inputID string, input gatewayapi.SessionInputCompleteRequest) (gatewayapi.SessionInputResponse, error) {
 	return c.gatewayClient().CompleteSessionInput(ctx, sessionID, inputID, input)
+}
+
+func (c *GatewayClient) AgentClubCapabilities(ctx context.Context) (agentclub.CapabilityListResponse, error) {
+	return c.gatewayClient().AgentClubCapabilities(ctx)
+}
+
+func (c *GatewayClient) AgentClubProposals(ctx context.Context, sessionID string) (agentclub.ProposalListResponse, error) {
+	return c.gatewayClient().AgentClubProposals(ctx, sessionID)
+}
+
+func (c *GatewayClient) DecideAgentClubProposal(ctx context.Context, sessionID, proposalID string, decision agentclub.ProposalDecisionRequest) (agentclub.ProposalDecisionResponse, error) {
+	return c.gatewayClient().DecideAgentClubProposal(ctx, sessionID, proposalID, decision)
 }
 
 func (c *GatewayClient) ReplaySessionEvents(ctx context.Context, sessionID string, afterSeq int64, emit func(protocol.Event)) error {

@@ -129,6 +129,16 @@ var sharedActionDefinitions = []ActionDefinition{
 		TelegramSummary: "preview latest turn diff",
 	},
 	{
+		ID:              "agentclub.show",
+		Title:           "Show Agent Club",
+		Category:        "session",
+		Slash:           "/agentclub",
+		TelegramAliases: []string{"/agentclub"},
+		TelegramUsage:   "/agentclub",
+		Summary:         "show agent-club capabilities and proposals",
+		TelegramSummary: "agent-club proposals",
+	},
+	{
 		ID:       "debug.full",
 		Title:    "Debug Snapshot",
 		Category: "session",

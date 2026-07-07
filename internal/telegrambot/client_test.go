@@ -35,6 +35,63 @@ func TestClientSendMessageUsesThreadAndParseMode(t *testing.T) {
 	}
 }
 
+func TestClientSendMessageWithReplyMarkupAndCallbacks(t *testing.T) {
+	var sendPayload map[string]any
+	var callbackPayload map[string]any
+	client := newTelegramAPIClient(t, "token", map[string]telegramAPIHandler{
+		"sendMessage": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			sendPayload = payload
+			writeTelegramResult(w, SentMessage{MessageID: 42, Chat: Chat{ID: -100}})
+		},
+		"answerCallbackQuery": func(w http.ResponseWriter, _ *http.Request, payload map[string]any) {
+			callbackPayload = payload
+			writeTelegramResult(w, true)
+		},
+	})
+	_, err := client.SendMessageWithReplyMarkup(context.Background(), -100, "<b>hi</b>", "HTML", 7, InlineKeyboardMarkup{
+		InlineKeyboard: [][]InlineKeyboardButton{{
+			{Text: "Approve", CallbackData: "acp:a:proposal-1:abcdef"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replyMarkup, ok := sendPayload["reply_markup"].(map[string]any)
+	if !ok || replyMarkup["inline_keyboard"] == nil {
+		t.Fatalf("send payload missing reply markup: %#v", sendPayload)
+	}
+	if sendPayload["parse_mode"] != "HTML" || sendPayload["message_thread_id"] != float64(7) {
+		t.Fatalf("send payload = %#v", sendPayload)
+	}
+	if err := client.AnswerCallbackQuery(context.Background(), "callback-1", "Approved"); err != nil {
+		t.Fatal(err)
+	}
+	if callbackPayload["callback_query_id"] != "callback-1" || callbackPayload["text"] != "Approved" {
+		t.Fatalf("callback payload = %#v", callbackPayload)
+	}
+}
+
+func TestClientGetUpdatesIncludesCallbacks(t *testing.T) {
+	var payload map[string]any
+	client := newTelegramAPIClient(t, "token", map[string]telegramAPIHandler{
+		"getUpdates": func(w http.ResponseWriter, _ *http.Request, got map[string]any) {
+			payload = got
+			writeTelegramResult(w, []Update{})
+		},
+	})
+	if _, err := client.GetUpdates(context.Background(), 10, 5); err != nil {
+		t.Fatal(err)
+	}
+	allowed, ok := payload["allowed_updates"].([]any)
+	if !ok {
+		t.Fatalf("allowed_updates missing: %#v", payload)
+	}
+	joined := fmt.Sprint(allowed)
+	if !strings.Contains(joined, "message") || !strings.Contains(joined, "callback_query") {
+		t.Fatalf("allowed updates = %#v", allowed)
+	}
+}
+
 func TestClientGetFileAndDownloadFile(t *testing.T) {
 	var getFilePayload map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

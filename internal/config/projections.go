@@ -101,6 +101,10 @@ type HookSettings struct {
 	Hooks       []Hook
 }
 
+type AgentClubSettings struct {
+	ConfigFiles []string
+}
+
 type InstructionSettings struct {
 	Profile                ProfileSelection
 	WorkspaceRoots         []string
@@ -250,6 +254,12 @@ func (c Config) HookSettings() HookSettings {
 		Enabled:     c.HooksEnabled,
 		ConfigFiles: cloneStrings(c.HookConfigFiles),
 		Hooks:       cloneHooks(c.Hooks),
+	}
+}
+
+func (c Config) AgentClubSettings() AgentClubSettings {
+	return AgentClubSettings{
+		ConfigFiles: cloneStrings(c.AgentClubConfigFiles),
 	}
 }
 

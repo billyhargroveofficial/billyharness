@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/agentclub"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/testkit"
@@ -133,6 +137,7 @@ func TestCreateSessionWithOwnerSendsOwnerMetadata(t *testing.T) {
 	})
 
 	owner := gatewayapi.SessionOwner{
+		ClientID:         "telegram:123:u1001",
 		ClientType:       "telegram",
 		TelegramChatID:   123,
 		TelegramThreadID: 7,
@@ -164,6 +169,7 @@ func TestContextSessionOwnerSendsScopeHeaders(t *testing.T) {
 	})
 
 	owner := gatewayapi.SessionOwner{
+		ClientID:         "telegram:123:u1001",
 		ClientType:       "telegram",
 		TelegramChatID:   123,
 		TelegramThreadID: 7,
@@ -175,6 +181,7 @@ func TestContextSessionOwnerSendsScopeHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	for header, want := range map[string]string{
+		gatewayapi.HeaderSessionClientID:         "telegram:123:u1001",
 		gatewayapi.HeaderSessionClientType:       "telegram",
 		gatewayapi.HeaderSessionTelegramChatID:   "123",
 		gatewayapi.HeaderSessionTelegramThreadID: "7",
@@ -442,6 +449,314 @@ func TestAdmitSessionInputPostsTypedRequest(t *testing.T) {
 	if got.InputID != "input-1" || got.Prompt != "hello" || got.InterruptPolicy != gatewayapi.InterruptPolicyInterrupt || got.ClientID != "telegram:1" ||
 		len(got.Attachments) != 1 || got.Attachments[0].ID != "att_test" {
 		t.Fatalf("request = %#v", got)
+	}
+}
+
+func TestAgentClubCapabilitiesFetchesTypedResponseWithOwnerHeaders(t *testing.T) {
+	var got http.Header
+	server := testkit.NewRouteServer(t, testkit.Route{
+		Method: http.MethodGet,
+		Path:   "/v1/agentclub/capabilities",
+		Handler: func(w http.ResponseWriter, r *http.Request) {
+			got = r.Header.Clone()
+			testkit.WriteJSON(t, w, agentclub.CapabilityListResponse{
+				SchemaVersion: agentclub.SchemaVersion,
+				Capabilities: []agentclub.CapabilityView{
+					{
+						Descriptor: agentclub.CapabilityDescriptor{
+							ID:       "event.review",
+							Kind:     agentclub.CapabilityKindReview,
+							Risk:     agentclub.RiskReadOnly,
+							Dispatch: agentclub.DispatchAdmitOnly,
+						},
+					},
+				},
+			})
+		},
+	})
+
+	owner := gatewayapi.SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"}
+	resp, err := New(server.URL).AgentClubCapabilities(WithSessionOwner(context.Background(), owner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Get(gatewayapi.HeaderSessionClientID) != owner.ClientID || got.Get(gatewayapi.HeaderSessionClientType) != owner.ClientType {
+		t.Fatalf("owner headers = %#v", got)
+	}
+	if resp.SchemaVersion != agentclub.SchemaVersion || len(resp.Capabilities) != 1 || resp.Capabilities[0].Descriptor.ID != "event.review" {
+		t.Fatalf("response = %#v", resp)
+	}
+}
+
+func TestDeliverAgentClubTriggerForwardsBodyHeadersAndEscapesPath(t *testing.T) {
+	owner := gatewayapi.SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"}
+	var gotBody []byte
+	var gotHeader string
+	var gotOwner gatewayapi.SessionOwner
+	var gotEscapedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		gotEscapedPath = r.URL.EscapedPath()
+		gotHeader = r.Header.Get("X-Test-Signature")
+		gotOwner = gatewayapi.SessionOwner{
+			ClientType: r.Header.Get(gatewayapi.HeaderSessionClientType),
+			ClientID:   r.Header.Get(gatewayapi.HeaderSessionClientID),
+		}
+		var err error
+		gotBody, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		testkit.WriteJSON(t, w, agentclub.TriggerDeliveryResponse{
+			SchemaVersion:   agentclub.SchemaVersion,
+			Admitted:        true,
+			InputID:         "input-1",
+			State:           "admitted",
+			TargetSessionID: "session-1",
+			BindingID:       "fixture manual",
+			TriggerKind:     agentclub.TriggerKindManual,
+			Source:          "fixture",
+			Capability:      "fixture.review",
+			EventType:       "review_queue",
+			RunDispatched:   false,
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	resp, err := New(server.URL).DeliverAgentClubTrigger(WithSessionOwner(context.Background(), owner), AgentClubTriggerDelivery{
+		BindingID: "fixture manual",
+		Body:      []byte(`{"ok":true}`),
+		Headers:   map[string]string{"X-Test-Signature": "sha256=abc"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotEscapedPath != "/v1/agentclub/triggers/fixture%20manual/deliveries" {
+		t.Fatalf("escaped path = %q", gotEscapedPath)
+	}
+	if string(gotBody) != `{"ok":true}` || gotHeader != "sha256=abc" {
+		t.Fatalf("body/header = %s %q", string(gotBody), gotHeader)
+	}
+	if gotOwner != owner {
+		t.Fatalf("owner headers = %#v", gotOwner)
+	}
+	if !resp.Admitted || resp.InputID != "input-1" || resp.RunDispatched {
+		t.Fatalf("response = %#v", resp)
+	}
+}
+
+func TestDeliverAgentClubTriggerReturnsTypedStatusError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		_, _ = w.Write([]byte(`too large`))
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := New(server.URL).DeliverAgentClubTrigger(context.Background(), AgentClubTriggerDelivery{
+		BindingID: "fixture.manual",
+		Body:      []byte(`{"ok":true}`),
+	})
+	var status *StatusError
+	if !errors.As(err, &status) {
+		t.Fatalf("err = %T %v", err, err)
+	}
+	if status.StatusCode != http.StatusRequestEntityTooLarge || status.Method != http.MethodPost || !strings.Contains(status.Path, "/v1/agentclub/triggers/") {
+		t.Fatalf("status = %#v", status)
+	}
+}
+
+func TestAgentClubProposalClientMethodsUseTypedRoutesAndOwnerHeaders(t *testing.T) {
+	owner := gatewayapi.SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"}
+	var gotCreate agentclub.ProposalCreateRequest
+	var gotDecision agentclub.ProposalDecisionRequest
+	var gotApply agentclub.ProposalApplyRequest
+	var sawOwnerHeaders int
+	proposal := agentclub.Proposal{
+		SchemaVersion: agentclub.SchemaVersion,
+		ProposalID:    "proposal-1",
+		SessionID:     "session-1",
+		Source:        "fixture",
+		Capability:    "reply.draft",
+		ActionKind:    "hh.reply",
+		Risk:          agentclub.RiskExternalMutation,
+		State:         agentclub.ProposalStatePending,
+		ProposalHash:  strings.Repeat("a", 64),
+	}
+	server := testkit.NewRouteServer(t,
+		testkit.Route{
+			Method: http.MethodPost,
+			Path:   "/v1/sessions/session-1/agentclub/proposals",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get(gatewayapi.HeaderSessionClientID) == owner.ClientID && r.Header.Get(gatewayapi.HeaderSessionClientType) == owner.ClientType {
+					sawOwnerHeaders++
+				}
+				if !testkit.DecodeJSON(t, r, &gotCreate) {
+					return
+				}
+				testkit.WriteJSON(t, w, agentclub.ProposalCreateResponse{SchemaVersion: agentclub.SchemaVersion, Proposal: proposal})
+			},
+		},
+		testkit.Route{
+			Method: http.MethodGet,
+			Path:   "/v1/sessions/session-1/agentclub/proposals",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get(gatewayapi.HeaderSessionClientID) == owner.ClientID && r.Header.Get(gatewayapi.HeaderSessionClientType) == owner.ClientType {
+					sawOwnerHeaders++
+				}
+				testkit.WriteJSON(t, w, agentclub.ProposalListResponse{SchemaVersion: agentclub.SchemaVersion, Proposals: []agentclub.Proposal{proposal}})
+			},
+		},
+		testkit.Route{
+			Method: http.MethodPost,
+			Path:   "/v1/sessions/session-1/agentclub/proposals/proposal-1/decision",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get(gatewayapi.HeaderSessionClientID) == owner.ClientID && r.Header.Get(gatewayapi.HeaderSessionClientType) == owner.ClientType {
+					sawOwnerHeaders++
+				}
+				if !testkit.DecodeJSON(t, r, &gotDecision) {
+					return
+				}
+				approved := proposal
+				approved.State = agentclub.ProposalStateApproved
+				testkit.WriteJSON(t, w, agentclub.ProposalDecisionResponse{SchemaVersion: agentclub.SchemaVersion, DecisionID: "decision-1", Action: agentclub.ProposalDecisionApprove, Proposal: approved})
+			},
+		},
+		testkit.Route{
+			Method: http.MethodPost,
+			Path:   "/v1/sessions/session-1/agentclub/proposals/proposal-1/apply",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get(gatewayapi.HeaderSessionClientID) == owner.ClientID && r.Header.Get(gatewayapi.HeaderSessionClientType) == owner.ClientType {
+					sawOwnerHeaders++
+				}
+				if !testkit.DecodeJSON(t, r, &gotApply) {
+					return
+				}
+				testkit.WriteJSON(t, w, agentclub.ProposalApplyResponse{
+					SchemaVersion: agentclub.SchemaVersion,
+					ProposalID:    proposal.ProposalID,
+					ProposalHash:  proposal.ProposalHash,
+					ApplyID:       "apply-1",
+					State:         agentclub.ProposalApplyStateDryRun,
+					ActionKind:    proposal.ActionKind,
+					DryRun:        true,
+					OutputRef:     "agentclub:apply:apply-1",
+					PayloadSHA256: proposal.PayloadSHA256,
+					RunDispatched: false,
+				})
+			},
+		},
+	)
+	client := New(server.URL)
+	ctx := WithSessionOwner(context.Background(), owner)
+	created, err := client.CreateAgentClubProposal(ctx, "session-1", agentclub.ProposalCreateRequest{
+		SchemaVersion: agentclub.SchemaVersion,
+		Source:        "fixture",
+		Capability:    "reply.draft",
+		ActionKind:    "hh.reply",
+		Risk:          agentclub.RiskExternalMutation,
+		Preview:       "preview",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Proposal.ProposalID != proposal.ProposalID || gotCreate.ActionKind != "hh.reply" {
+		t.Fatalf("created=%#v gotCreate=%#v", created, gotCreate)
+	}
+	listed, err := client.AgentClubProposals(ctx, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Proposals) != 1 || listed.Proposals[0].ProposalID != proposal.ProposalID {
+		t.Fatalf("listed = %#v", listed)
+	}
+	decision, err := client.DecideAgentClubProposal(ctx, "session-1", "proposal-1", agentclub.ProposalDecisionRequest{
+		SchemaVersion:        agentclub.SchemaVersion,
+		Action:               agentclub.ProposalDecisionApprove,
+		ExpectedProposalHash: proposal.ProposalHash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Proposal.State != agentclub.ProposalStateApproved || gotDecision.Action != agentclub.ProposalDecisionApprove {
+		t.Fatalf("decision=%#v gotDecision=%#v", decision, gotDecision)
+	}
+	apply, err := client.ApplyAgentClubProposal(ctx, "session-1", "proposal-1", agentclub.ProposalApplyRequest{
+		SchemaVersion:        agentclub.SchemaVersion,
+		ExpectedProposalHash: proposal.ProposalHash,
+		IdempotencyKey:       "operator:dry-run",
+		DryRun:               true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if apply.State != agentclub.ProposalApplyStateDryRun || !gotApply.DryRun || gotApply.IdempotencyKey != "operator:dry-run" {
+		t.Fatalf("apply=%#v gotApply=%#v", apply, gotApply)
+	}
+	if sawOwnerHeaders != 4 {
+		t.Fatalf("sawOwnerHeaders = %d", sawOwnerHeaders)
+	}
+}
+
+func TestFormatAgentClubCapabilitiesAndProposalsRedactsOperatorSurface(t *testing.T) {
+	capabilities := FormatAgentClubCapabilities(agentclub.CapabilityListResponse{
+		SchemaVersion: agentclub.SchemaVersion,
+		Capabilities: []agentclub.CapabilityView{{
+			Descriptor: agentclub.CapabilityDescriptor{
+				ID:       "event.review",
+				Title:    "Review queue",
+				Kind:     agentclub.CapabilityKindReview,
+				Risk:     agentclub.RiskReadOnly,
+				Dispatch: agentclub.DispatchAdmitOnly,
+				Approval: agentclub.ApprovalRequired,
+			},
+			Bindings: []agentclub.BindingView{{
+				Capability:   "event.review",
+				ClientType:   "ingress",
+				ClientID:     "ingress:hh-applicant-tool:prod",
+				Sources:      []string{"hh_applicant_tool"},
+				EventTypes:   []string{"review_queue"},
+				MetadataKeys: []string{"profile"},
+				Enabled:      true,
+			}},
+		}},
+	})
+	for _, want := range []string{"agent-club capabilities: 1", "event.review", "binding ingress/ingress:hh-applicant-tool:prod", "dispatch=admit_only"} {
+		if !strings.Contains(capabilities, want) {
+			t.Fatalf("capability output missing %q:\n%s", want, capabilities)
+		}
+	}
+
+	created := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	proposals := FormatAgentClubProposals(agentclub.ProposalListResponse{
+		SchemaVersion: agentclub.SchemaVersion,
+		Proposals: []agentclub.Proposal{{
+			SchemaVersion: agentclub.SchemaVersion,
+			ProposalID:    "proposal-123",
+			SessionID:     "session-1",
+			Source:        "hh_applicant_tool",
+			Capability:    "safe_output.reply",
+			ActionKind:    "reply",
+			Risk:          agentclub.RiskExternalMutation,
+			State:         agentclub.ProposalStatePending,
+			ProposalHash:  strings.Repeat("a", 64),
+			PayloadSHA256: strings.Repeat("b", 64),
+			Preview:       "draft uses https://user-secret:pass-secret@example.com/path?token=query-secret and should be redacted",
+			OutputRef:     "file:///tmp/output?api_key=secret",
+			CreatedAt:     created,
+			MetadataKeys:  []string{"profile"},
+		}},
+	})
+	for _, want := range []string{"agent-club proposals: 1 pending=1", "proposal-123", "hash=aaaaaaaaaaaa", "payload_sha256: bbbbbbbbbbbb", "preview:"} {
+		if !strings.Contains(proposals, want) {
+			t.Fatalf("proposal output missing %q:\n%s", want, proposals)
+		}
+	}
+	for _, leaked := range []string{"user-secret", "pass-secret", "query-secret", "api_key=secret"} {
+		if strings.Contains(proposals, leaked) {
+			t.Fatalf("proposal output leaked %q:\n%s", leaked, proposals)
+		}
 	}
 }
 

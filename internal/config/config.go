@@ -69,6 +69,7 @@ type Config struct {
 	MCPAllowedServers              []string
 	MCPPromoteServerInstructions   bool
 	MCPServers                     []MCPServer
+	AgentClubConfigFiles           []string
 	HooksEnabled                   bool
 	HookConfigFiles                []string
 	Hooks                          []Hook

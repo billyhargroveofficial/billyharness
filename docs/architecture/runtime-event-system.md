@@ -59,6 +59,16 @@ Legacy replay/import mode is explicit: callers can omit `RequireEnvelope` only
 for old records that predate schema-versioned envelopes; new durable writers
 must emit schema version `1`.
 
+Gateway ingress audit is intentionally not part of `protocol.Event` in the
+current foundation. `ingress-audit.jsonl` records pre-run admission decisions,
+including rejections that may have no run, turn, or session event stream to
+attach to. Because ingress admission does not dispatch runtime work, the normal
+session event stream remains focused on run/session lifecycle events. If a
+future adapter persists `ingress.received`, `ingress.rejected`,
+`ingress.admitted`, or `ingress.dispatched` through `events.jsonl`, that slice
+must add explicit protocol event constants, docsgen entries, envelope tests,
+and lifecycle/projection expectations.
+
 ## Protocol Envelope
 
 `protocol.Event` has these durable identity fields:
@@ -310,3 +320,6 @@ These are current implementation boundaries, not desired behavior:
 - Gateway session storage has its own record shape and live-stream API. This
   document relies only on the shared event contract and the delivery rule in
   `docs/architecture.md`; gateway API details belong in gateway documentation.
+- Gateway ingress audit is a separate JSONL ledger today, not a protocol event
+  stream. That keeps rejected external triggers replayable without pretending
+  they are runtime/session events.

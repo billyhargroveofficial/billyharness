@@ -6,26 +6,27 @@ This reference documents the top-level command table. Run `fast-agent-harness <c
 
 ## Top-Level Commands
 
-| Name            | Aliases    | Summary                                                   |
-| --------------- | ---------- | --------------------------------------------------------- |
-| run             | -          | run one prompt through local or gateway mode              |
-| chat            | -          | start interactive stdin chat                              |
-| tui             | -          | start the terminal UI                                     |
-| telegram        | -          | start the Telegram bot adapter                            |
-| serve           | gateway    | start the gateway server                                  |
-| help            | -h, --help | show top-level command help                               |
-| mcp             | -          | run the local MCP server adapter                          |
-| config          | -          | inspect resolved configuration                            |
-| bench           | -          | run benchmark and Terminal-Bench helpers                  |
-| sessions        | session    | list, inspect, search, export, import, and index sessions |
-| attachments     | attachment | garbage-collect attachment store data                     |
-| inspect-session | -          | inspect one stored session                                |
-| memory          | -          | manage local memory entries                               |
-| commands        | command    | list and search the command registry                      |
-| tools           | -          | print native tool registry JSON                           |
-| doctor          | health     | run diagnostics and readiness checks                      |
-| hygiene         | -          | run source and artifact hygiene checks                    |
-| docsgen         | -          | generate or check committed reference docs                |
+| Name            | Aliases    | Summary                                                      |
+| --------------- | ---------- | ------------------------------------------------------------ |
+| run             | -          | run one prompt through local or gateway mode                 |
+| chat            | -          | start interactive stdin chat                                 |
+| tui             | -          | start the terminal UI                                        |
+| telegram        | -          | start the Telegram bot adapter                               |
+| serve           | gateway    | start the gateway server                                     |
+| help            | -h, --help | show top-level command help                                  |
+| mcp             | -          | run the local MCP server adapter                             |
+| config          | -          | inspect resolved configuration                               |
+| bench           | -          | run benchmark and Terminal-Bench helpers                     |
+| sessions        | session    | list, inspect, search, export, import, and index sessions    |
+| attachments     | attachment | garbage-collect attachment store data                        |
+| inspect-session | -          | inspect one stored session                                   |
+| memory          | -          | manage local memory entries                                  |
+| commands        | command    | list and search the command registry                         |
+| agentclub       | agent-club | inspect agent-club capabilities, proposals, and local config |
+| tools           | -          | print native tool registry JSON                              |
+| doctor          | health     | run diagnostics and readiness checks                         |
+| hygiene         | -          | run source and artifact hygiene checks                       |
+| docsgen         | -          | generate or check committed reference docs                   |
 
 ## What Doctor Checks
 
@@ -38,6 +39,7 @@ Doctor check names come from the descriptor table that `doctor` ranges over at r
 | gateway bind address                          | local, production       | Classify the configured gateway bind address as loopback or externally reachable.                                          |
 | auth configured                               | local, production       | Check whether credential material exists for the active provider.                                                          |
 | mcp allowlist                                 | local, production       | Check configured MCP servers against the allowed-server list.                                                              |
+| agentclub config                              | local, production       | Validate configured agent-club registry JSON files and secret env references without executing capabilities.               |
 | tool catalog                                  | local, production       | Ensure the native tool registry exposes visible tools.                                                                     |
 | session store access                          | local, production       | Check that the gateway session store path is readable and writable.                                                        |
 | attachments store usage                       | local, production       | Warn when the attachment store exceeds the default garbage-collection threshold.                                           |
@@ -63,4 +65,4 @@ Doctor check names come from the descriptor table that `doctor` ranges over at r
 | gateway /health                               | local, production       | Probe the local gateway health endpoint unless -gateway=false disables it.                                                 |
 | gateway /ready                                | local, production       | Probe the local gateway readiness endpoint unless -gateway=false disables it.                                              |
 
-<!-- source-hash: 83ab024746f1583301f14bb7657c40df33195ca414551a69e82f20b79c399148 -->
+<!-- source-hash: 2c9c21d36ae632fb4f1f239bf9d9a5067c07983464ec832af0cddd818342ca9c -->
