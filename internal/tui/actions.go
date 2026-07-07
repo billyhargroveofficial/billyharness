@@ -936,23 +936,41 @@ func actionKeybindings(action actionSpec) []string {
 }
 
 func keyPressNames(msg tea.KeyPressMsg) []string {
-	names := []string{strings.ToLower(strings.TrimSpace(msg.String()))}
+	var names []string
+	names = appendKeyPressName(names, msg.String())
+	names = appendKeyPressName(names, msg.Keystroke())
 	if msg.Code == tea.KeyEnter {
 		if msg.Mod.Contains(tea.ModAlt) {
-			names = append(names, "alt+enter")
+			names = appendKeyPressName(names, "alt+enter")
 		} else {
-			names = append(names, "enter")
+			names = appendKeyPressName(names, "enter")
 		}
 	}
 	if msg.Mod.Contains(tea.ModAlt) && msg.Code != tea.KeyEnter {
 		if key := printableKeyName(msg); key != "" {
-			names = append(names, "alt+"+key)
+			names = appendKeyPressName(names, "alt+"+key)
 		}
 	}
 	return names
 }
 
+func appendKeyPressName(names []string, name string) []string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return names
+	}
+	for _, existing := range names {
+		if existing == name {
+			return names
+		}
+	}
+	return append(names, name)
+}
+
 func printableKeyName(msg tea.KeyPressMsg) string {
+	if msg.BaseCode >= 32 && msg.BaseCode <= 126 {
+		return strings.ToLower(string(rune(msg.BaseCode)))
+	}
 	if text := strings.ToLower(strings.TrimSpace(msg.Text)); text != "" {
 		return text
 	}

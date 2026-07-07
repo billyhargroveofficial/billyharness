@@ -418,6 +418,10 @@ func TestActionRegistryBacksKeybindingsAndHelp(t *testing.T) {
 	if !ok || action.id != "message.paste_image" {
 		t.Fatalf("alt+v action = %#v ok=%t", action, ok)
 	}
+	action, ok = actionForKey(tea.KeyPressMsg{Code: 0x16, BaseCode: 'v', Mod: tea.ModCtrl | tea.ModAlt})
+	if !ok || action.id != "message.paste_image" {
+		t.Fatalf("windows alt+v action = %#v ok=%t", action, ok)
+	}
 }
 
 func TestActionRegistryDispatchesSlashAliases(t *testing.T) {
