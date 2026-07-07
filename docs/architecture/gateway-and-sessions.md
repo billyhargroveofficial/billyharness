@@ -3,7 +3,7 @@
 Status note: this document is written against the current worktree on
 2026-07-07. Mutation-auth hardening, session-owner header scoping,
 stored-session projector inspection, fail-closed persistence behavior,
-manifest-only session startup, and the read-only HH review queue ingress route
+manifest-only session startup, and the neutral agent-club event ingress route
 are current worktree contracts, not assumptions from older releases.
 
 Code anchors:
@@ -26,11 +26,10 @@ Code anchors:
   idempotency state.
 - `internal/gateway/ingress.go`: gateway-owned ingress admission helper and
   redacted append-only ingress audit ledger.
-- `internal/gateway/agentclub_hh.go`: HH review queue ingress HTTP adapter
-  that admits captured output without dispatching a run.
-- `internal/agentclub/hhapplicant/`: read-only HH applicant-tool review queue
-  capture, validation, fixed argv construction, output hashing, and ingress
-  event/rule conversion.
+- `internal/gateway/agentclub_events.go`: agent-club event HTTP adapter that
+  admits normalized external adapter events without dispatching a run.
+- `internal/agentclub/`: neutral v0 event contract, capability metadata,
+  validation, canonical payload hashing, and ingress event/rule conversion.
 - `internal/ingress/`: pure external-event admission DTOs, deterministic input
   IDs, raw-body HMAC helpers, and payload metadata sanitization.
 - `internal/gateway/http_security.go`: HTTP bearer, mutation, origin, host,
@@ -54,7 +53,7 @@ and remote clients. It owns:
 - session creation, listing, status, context, event replay, input admission,
   run, cancel, undo, redo, and user-input routes;
 - gateway-owned external ingress admission into existing session input
-  ledgers, with only narrow allowlisted adapter execution before admission;
+  ledgers, with only neutral adapter-event normalization before admission;
 - durable session persistence when `ServerOptions.SessionStoreDir` is set;
 - startup manifest indexing of durable sessions into the in-memory session map;
 - event recording before live fanout for session runs;
@@ -97,9 +96,9 @@ Future agents should update this section from that route table, not from memory.
 | `GET /v1/sessions/{id}/context` | project context, runtime, usage, prompt, and replay-derived metrics |
 | `GET /v1/sessions/{id}/inspect` | return redacted live/durable session inspection and replay readiness |
 | `GET /v1/sessions/{id}/events` | NDJSON replay/follow stream for session events |
+| `POST /v1/sessions/{id}/agentclub/events` | admit one normalized agent-club adapter event as an ingress input without running the session |
 | `POST /v1/sessions/{id}/inputs` | admit an idempotent pending input without running it |
 | `POST /v1/sessions/{id}/inputs/{input_id}/complete` | terminally complete an admitted input with optional failure evidence |
-| `POST /v1/sessions/{id}/agentclub/hh/review-queue` | capture the local HH review queue read-only command and admit its stdout as an ingress input without running the session |
 | `POST /v1/sessions/{id}/run` | admit/promote an input and run it through the session thread |
 | `POST /v1/sessions/{id}/user_input/{request_id}/answer` | answer a pending user-input request |
 | `POST /v1/sessions/{id}/user_input/{request_id}/reject` | reject a pending user-input request |
@@ -165,14 +164,14 @@ continues; save failure aborts the replacement stream. `POST
 `POST /v1/sessions/{id}/inputs` is intentionally separate from run execution.
 It gives clients a durable idempotency point before a run is promoted.
 
-## External Ingress And HH Review Queue
+## External Ingress And Agent-Club
 
 Ingress is admission-first. It does not let external triggers dispatch runs,
 call tools, call MCP, or pick provider/runtime overrides. The current HTTP
-adapter surface has exactly one project-specific route: the HH applicant-tool
-review queue bridge. There is still no public webhook route, scheduler, UI,
-generic project command runner, raw API caller, raw SQL caller, browser auth
-bridge, or HH mutating action.
+adapter surface has one neutral route for project adapters:
+`POST /v1/sessions/{id}/agentclub/events`. There is no public webhook route,
+scheduler, UI, generic project command runner, raw API caller, raw SQL caller,
+browser auth bridge, or project-specific behavior in Billyharness core.
 
 `internal/ingress` owns the pure admission contract:
 
@@ -195,32 +194,35 @@ path. The final `admitted` or `rejected` audit record follows input admission,
 so a durable input cannot be written without prior ingress audit evidence. It
 does not promote the input, start a run, call tools, call MCP, or shell out.
 
-`POST /v1/sessions/{id}/agentclub/hh/review-queue` is the first concrete
-adapter over that foundation. The route accepts a profile, limit, and optional
-repo root, validates the target session exists, then authorizes the session
-against the adapter owner before any local HH command runs:
+`internal/agentclub` is a small v0 contract layer for external project
+adapters. An adapter submits one normalized event with `schema_version=1`,
+`source`, `capability`, `event_type`, `external_event_id`, `prompt`, a JSON
+`payload`, and safe string metadata. The gateway route requires session-owner
+headers before it decodes authority from anywhere else:
 
 ```text
 client_type=ingress
-client_id=ingress:hh-applicant-tool:<profile>
+client_id=ingress:<adapter-id>:<profile-or-env>
 ```
 
-The adapter is intentionally not a command runner. It constructs only fixed
-argv for `f228jobfckr cohort-review --limit N`, runs it in the allowlisted
-`D:\repos\hh-applicant-tool` checkout or an explicitly configured equivalent,
-and passes the validated profile through the single `HH_PROFILE_ID`
-environment slot. Output capture is bounded by a timeout and byte cap. Command
-failure, timeout, output-cap, invalid profile, invalid limit, and invalid repo
-root fail before input admission.
+The route requires a non-empty actor with `client_type=ingress`, authorizes
+that actor against the target session, maps the event to `IngressEvent` plus a
+local `IngressRule` whose owner is that actor, and admits the resulting
+session input. Payload authority stays inert: request JSON cannot set owner,
+provider, model, reasoning, access mode, tool, MCP, shell, command, env, raw
+SQL, browser auth, or dispatch behavior. Metadata still passes through the
+existing ingress unsafe-key sanitizer.
 
-Captured stdout becomes the session-input prompt and raw ingress body. Metadata
-stays safe: project, profile, command name, limit, output hash, parsed review
-item count, and policy labels. Ingress audit stores only hashes, status, client
-type/id hash, metadata keys, target session id, duplicate state, and input id;
-it does not store recruiter text, prompts, raw command output, repo paths, or
-external event ids. The deterministic external event identity is derived from
-profile, command, limit, stdout hash, and target session id, so repeat captures
-of the same queue output deduplicate through the normal session input ledger.
+The response is intentionally small and redacted: schema version, admitted
+state, duplicate state, input id, target session id, source, capability, event
+type, payload SHA-256, external event id hash, metadata keys, and
+`run_dispatched=false`. It does not include raw prompt, raw payload, external
+event id, client id, metadata values, or adapter-specific command details.
+
+Agent-club capability descriptors are metadata only in this slice. A descriptor
+may declare `id`, `title`, `description`, `kind`, `risk`, `input_schema`,
+`output_schema`, `dispatch=admit_only`, and approval semantics, but the gateway
+does not load project manifests or execute capabilities directly.
 
 Generic owner scoping now includes `SessionOwner.ClientID` plus
 `X-Billyharness-Session-Client-ID`. Client ID can scope non-Telegram/non-TUI

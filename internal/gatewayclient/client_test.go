@@ -448,42 +448,6 @@ func TestAdmitSessionInputPostsTypedRequest(t *testing.T) {
 	}
 }
 
-func TestAdmitHHReviewQueuePostsTypedRequest(t *testing.T) {
-	var got gatewayapi.HHReviewQueueRequest
-	server := testkit.NewRouteServer(t, testkit.Route{
-		Method: http.MethodPost,
-		Path:   "/v1/sessions/session-1/agentclub/hh/review-queue",
-		Handler: func(w http.ResponseWriter, r *http.Request) {
-			if !testkit.DecodeJSON(t, r, &got) {
-				return
-			}
-			testkit.WriteJSON(t, w, gatewayapi.HHReviewQueueResponse{
-				InputID:       "input-1",
-				State:         "admitted",
-				Admitted:      true,
-				AuditStatus:   "admitted",
-				OutputSHA256:  "abc123",
-				RunDispatched: false,
-			})
-		},
-	})
-
-	resp, err := New(server.URL).AdmitHHReviewQueue(context.Background(), "session-1", gatewayapi.HHReviewQueueRequest{
-		Profile:  "prod",
-		Limit:    3,
-		RepoRoot: `D:\repos\hh-applicant-tool`,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Profile != "prod" || got.Limit != 3 || got.RepoRoot == "" {
-		t.Fatalf("request = %#v", got)
-	}
-	if resp.InputID != "input-1" || !resp.Admitted || resp.RunDispatched {
-		t.Fatalf("response = %#v", resp)
-	}
-}
-
 func TestUserInputAnsweredAndRejectedPostTypedRequests(t *testing.T) {
 	var gotAnswer gatewayapi.UserInputAnswerRequest
 	var gotReject gatewayapi.UserInputRejectRequest

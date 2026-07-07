@@ -21,6 +21,15 @@ mutate the target session. Ingress does not promote the input, start a run,
 execute tools, call MCP, shell out, or accept provider/model/access-mode
 overrides from payload metadata.
 
+Agent-club v0 is the neutral HTTP contract for project adapters in this
+decision. A request to `POST /v1/sessions/{id}/agentclub/events` carries
+`schema_version=1`, `source`, `capability`, `event_type`,
+`external_event_id`, `prompt`, a JSON payload, and safe metadata. Authority
+comes from gateway auth plus session-owner headers, not from the body. The
+route requires `client_type=ingress` and a non-empty client id, uses that actor
+as the ingress rule owner, admits the event as a queued session input, and
+returns only redacted ids, hashes, metadata keys, and `run_dispatched=false`.
+
 Ingress audit is stored in a separate redacted gateway-store ledger. It records
 hashes, decision reasons, target session id, admitted input id, duplicate
 state, client identity hash, and metadata keys, but not raw bodies, prompts,
@@ -28,8 +37,9 @@ external IDs, metadata values, or secrets.
 
 ## Consequences
 
-Future adapters such as HH, cron, or webhook surfaces must enter through this
-contract before any runtime work happens.
+Future adapters such as project CLIs, cron, or webhook surfaces must enter
+through this contract before any runtime work happens. Billyharness core should
+not import concrete project adapters.
 
 Retries become idempotent because input IDs include rule id, source, external
 event id, payload hash, and target session id. If local mapping changes while
@@ -46,6 +56,8 @@ lifecycle/projection tests in that same change.
 Code paths:
 
 - `internal/ingress`
+- `internal/agentclub`
+- `internal/gateway/agentclub_events.go`
 - `internal/gateway/ingress.go`
 - `internal/gateway/session_inputs.go`
 - `internal/gateway/session_authz.go`
@@ -55,6 +67,6 @@ Code paths:
 Focused tests:
 
 ```sh
-go test -count=1 ./internal/ingress ./internal/gatewayclient
-go test -count=1 ./internal/gateway -run 'TestGatewayIngress|TestGatewaySessionClientID'
+go test -count=1 ./internal/agentclub ./internal/ingress ./internal/gatewayclient
+go test -count=1 ./internal/gateway -run 'TestGatewayIngress|TestAgentClub|TestGatewaySessionClientID'
 ```

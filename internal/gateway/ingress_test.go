@@ -23,22 +23,22 @@ func TestGatewayIngressAdmitsAuditsDuplicatesAndConflictsWithoutDispatch(t *test
 	cfg.Model = "mock"
 	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
 	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
-	owner := gatewayapi.SessionOwner{ClientID: "ingress:hh:prod", ClientType: "ingress"}
+	owner := gatewayapi.SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"}
 	sessionID := createScopedTestSession(t, server, owner)
 
 	event := ingress.IngressEvent{
-		Source:          "hh",
-		ExternalEventID: "message-123",
+		Source:          "fixture",
+		ExternalEventID: "delivery-123",
 		TargetSessionID: sessionID,
-		Prompt:          "Summarize this recruiter message.",
-		RawBody:         []byte(`{"message":"SECRET recruiter text"}`),
+		Prompt:          "Summarize this fixture event.",
+		RawBody:         []byte(`{"message":"SECRET fixture text"}`),
 		Metadata: map[string]string{
-			"project": "hh-applicant-tool",
+			"project": "fixture-project",
 		},
 	}
 	rule := ingress.IngressRule{
-		ID:     "hh-message-review",
-		Source: "hh",
+		ID:     "fixture-review",
+		Source: "fixture",
 		Owner:  owner,
 		StaticMetadata: map[string]string{
 			"ingress.policy": "review_only",
@@ -79,7 +79,7 @@ func TestGatewayIngressAdmitsAuditsDuplicatesAndConflictsWithoutDispatch(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"SECRET recruiter text", "Summarize this recruiter message.", "message-123", owner.ClientID} {
+	for _, forbidden := range []string{"SECRET fixture text", "Summarize this fixture event.", "delivery-123", owner.ClientID} {
 		if strings.Contains(string(auditJSON), forbidden) {
 			t.Fatalf("audit leaked %q: %s", forbidden, auditJSON)
 		}
@@ -149,11 +149,11 @@ func TestGatewayIngressDeniesUnscopedRuleBeforeInputWrite(t *testing.T) {
 	cfg.Model = "mock"
 	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
 	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
-	sessionID := createScopedTestSession(t, server, gatewayapi.SessionOwner{ClientID: "ingress:hh:prod", ClientType: "ingress"})
+	sessionID := createScopedTestSession(t, server, gatewayapi.SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"})
 
 	_, err := server.AdmitIngressEvent(context.Background(),
-		ingress.IngressEvent{Source: "hh", TargetSessionID: sessionID, Prompt: "hello"},
-		ingress.IngressRule{ID: "hh-message-review", Source: "hh"},
+		ingress.IngressEvent{Source: "fixture", TargetSessionID: sessionID, Prompt: "hello"},
+		ingress.IngressRule{ID: "fixture-review", Source: "fixture"},
 	)
 	if err == nil || !strings.Contains(err.Error(), "client_id required") {
 		t.Fatalf("err = %v", err)
@@ -176,11 +176,11 @@ func TestGatewayIngressDeniesCrossOwnerBeforeInputWrite(t *testing.T) {
 	cfg.Model = "mock"
 	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
 	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
-	sessionID := createScopedTestSession(t, server, gatewayapi.SessionOwner{ClientID: "ingress:hh:prod", ClientType: "ingress"})
+	sessionID := createScopedTestSession(t, server, gatewayapi.SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"})
 
 	_, err := server.AdmitIngressEvent(context.Background(),
-		ingress.IngressEvent{Source: "hh", TargetSessionID: sessionID, Prompt: "hello"},
-		ingress.IngressRule{ID: "hh-message-review", Source: "hh", Owner: gatewayapi.SessionOwner{ClientID: "ingress:other:prod", ClientType: "ingress"}},
+		ingress.IngressEvent{Source: "fixture", TargetSessionID: sessionID, Prompt: "hello"},
+		ingress.IngressRule{ID: "fixture-review", Source: "fixture", Owner: gatewayapi.SessionOwner{ClientID: "ingress:other:prod", ClientType: "ingress"}},
 	)
 	if err == nil || !strings.Contains(err.Error(), "session owner scope mismatch") {
 		t.Fatalf("err = %v", err)
@@ -203,15 +203,15 @@ func TestGatewayIngressAuditFailurePreventsInputWrite(t *testing.T) {
 	cfg.Model = "mock"
 	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
 	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
-	owner := gatewayapi.SessionOwner{ClientID: "ingress:hh:prod", ClientType: "ingress"}
+	owner := gatewayapi.SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"}
 	sessionID := createScopedTestSession(t, server, owner)
 	if err := os.WriteFile(filepath.Join(storeDir, ingressAuditJSONLName), []byte("{not-json\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	_, err := server.AdmitIngressEvent(context.Background(),
-		ingress.IngressEvent{Source: "hh", TargetSessionID: sessionID, Prompt: "hello"},
-		ingress.IngressRule{ID: "hh-message-review", Source: "hh", Owner: owner},
+		ingress.IngressEvent{Source: "fixture", TargetSessionID: sessionID, Prompt: "hello"},
+		ingress.IngressRule{ID: "fixture-review", Source: "fixture", Owner: owner},
 	)
 	if err == nil {
 		t.Fatalf("expected audit replay error")

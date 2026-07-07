@@ -430,8 +430,8 @@ func TestGatewaySessionClientIDOwnerScopeFiltersAndDeniesCrossOwner(t *testing.T
 	cfg.Model = "mock"
 	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
 
-	ownOwner := SessionOwner{ClientID: "ingress:hh:prod", ClientType: "ingress"}
-	otherOwner := SessionOwner{ClientID: "ingress:nareshka:prod", ClientType: "ingress"}
+	ownOwner := SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"}
+	otherOwner := SessionOwner{ClientID: "ingress:other:prod", ClientType: "ingress"}
 	ownID := createScopedTestSession(t, server, ownOwner)
 	otherID := createScopedTestSession(t, server, otherOwner)
 

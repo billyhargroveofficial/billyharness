@@ -5,7 +5,7 @@ trust boundaries. It consolidates the gateway, Telegram, tools, MCP, secrets,
 filesystem, and public-web rules that are spread across the implementation.
 It is not a checklist or runbook.
 
-Status note: reviewed against current code paths on 2026-07-04. This document
+Status note: reviewed against current code paths on 2026-07-07. This document
 describes current behavior, not an implementation checklist.
 
 Primary code anchors:
@@ -19,10 +19,10 @@ Primary code anchors:
 - [internal/gateway/ingress.go](../../internal/gateway/ingress.go) and
   [internal/ingress](../../internal/ingress): external ingress admission,
   HMAC verification helpers, unsafe metadata rejection, and redacted audit.
-- [internal/gateway/agentclub_hh.go](../../internal/gateway/agentclub_hh.go)
-  and [internal/agentclub/hhapplicant](../../internal/agentclub/hhapplicant):
-  read-only HH review queue capture, fixed argv validation, ingress owner
-  scoping, and admission-only route behavior.
+- [internal/gateway/agentclub_events.go](../../internal/gateway/agentclub_events.go)
+  and [internal/agentclub](../../internal/agentclub): neutral agent-club event
+  contract validation, ingress owner scoping, and admission-only route
+  behavior.
 - [internal/gateway/response.go](../../internal/gateway/response.go):
   redacted JSON and NDJSON gateway responses.
 - [internal/gatewayapi/types.go](../../internal/gatewayapi/types.go) and
@@ -72,9 +72,8 @@ The major boundaries are:
   the HTTP security boundary. They are not cryptographic identity.
 - External ingress: webhook/scheduler/project triggers are untrusted until a
   local rule verifies them and the gateway admits them as session inputs.
-- HH review queue ingress: the local adapter may capture one allowlisted
-  read-only command, but it must still become a scoped gateway input before any
-  run can happen.
+- Agent-club ingress: external project adapters may submit normalized events,
+  but they must still become scoped gateway inputs before any run can happen.
 - Telegram: Telegram is a scoped gateway client with its own allowlist and
   send/delete safety; it does not get direct gateway-server imports.
 - Tools: tool risk, access mode, workspace path checks, dangerous-tool config,
@@ -148,8 +147,8 @@ that try to raise tool rounds or access privilege above server configuration.
 ## External Ingress Boundary
 
 External ingress is gateway admission, not execution. There is no public
-webhook route and no scheduler. The current project-specific adapter is the
-read-only HH review queue route, and future adapters must use the same shape:
+webhook route and no scheduler. The current project-adapter surface is the
+neutral agent-club event route, and future adapters must use the same shape:
 
 - verify raw request bodies before parsing when a shared secret is configured;
 - compare HMAC signatures in constant time and reject missing, stale, mutated,
@@ -169,20 +168,23 @@ input id, duplicate state, client type/id hash, and metadata keys. It does not
 store raw body text, prompt text, external event IDs, metadata values, secrets,
 or command payloads.
 
-The HH route at `POST /v1/sessions/{id}/agentclub/hh/review-queue` is a narrow
-local capture adapter, not a runner. It validates profile, limit, and repo root;
-authorizes the target session for `client_type=ingress` and
-`client_id=ingress:hh-applicant-tool:<profile>` before executing; then runs only
-the fixed argv `f228jobfckr cohort-review --limit N` in the allowlisted
-`D:\repos\hh-applicant-tool` checkout or an explicitly configured equivalent.
-The profile is passed only through `HH_PROFILE_ID`. The adapter applies a
-timeout and output byte cap, hashes stdout, admits stdout as a queued input, and
-returns input/audit summary fields. It does not dispatch a run.
+The agent-club route at `POST /v1/sessions/{id}/agentclub/events` accepts one
+normalized event and then uses the same ingress admission bridge. It requires
+session-owner headers with a non-empty `client_id` and `client_type=ingress`,
+authorizes that actor against the target session before input admission, and
+uses that actor as the ingress rule owner. Request payloads cannot set owner,
+provider, model, thinking, reasoning effort, access mode, max tool rounds, MCP,
+tools, shell, command, environment, browser auth, raw API, raw SQL, or dispatch
+authority.
 
-Adjacent HH commands remain outside the boundary: `cohort-review --done`,
-`cohort-review --done-all`, `cohort-apply`, `cohort-reply`, `cohort-buttons`,
-`cohort-watch`, browser auth, raw `call-api`, raw SQL `query`, generic argv,
-schedulers, and mutating HH actions are not route behavior.
+The agent-club response is redacted and admit-only. It returns admitted state,
+duplicate state, input id, target session id, source, capability, event type,
+payload hash, external event id hash, metadata keys, and
+`run_dispatched=false`. It does not include raw prompt, raw payload, external
+event id, client id, or metadata values. Agent-club capability descriptors are
+metadata only (`id`, title, description, kind, risk, schemas,
+`dispatch=admit_only`, approval semantics); Billyharness does not load project
+manifests or execute capabilities in this slice.
 
 ## Session Scope
 
@@ -453,9 +455,9 @@ Current code truth:
 - Session owner headers scope list/read/mutation behavior.
 - External ingress is admitted through gateway session inputs and redacted audit,
   not through direct tool, MCP, shell, or provider override execution.
-- HH review queue ingress captures only the fixed read-only local command and
-  admits it as a queued input; it does not expose generic project commands or
-  HH mutating actions.
+- Agent-club ingress admits only normalized external adapter events as queued
+  inputs; it does not expose generic project commands, schedulers, webhooks,
+  auto-run, browser auth, raw APIs, raw SQL, or project-specific actions.
 - Telegram carries owner scope through gateway requests and hardens
   secret-bearing auth commands.
 - MCP initialize instructions are metadata-only by default and require explicit
@@ -482,8 +484,9 @@ owning packages. The most relevant current test names are:
 - `TestGatewaySessionClientIDOwnerScopeFiltersAndDeniesCrossOwner`
 - `TestGatewayIngressAdmitsAuditsDuplicatesAndConflictsWithoutDispatch`
 - `TestGatewayIngressAuditsRejectedAdmission`
-- `TestHHReviewQueueRouteAdmitsIngressInputWithoutDispatch`
-- `TestHHReviewQueueRouteDeniesCrossProfileBeforeRunner`
+- `TestAgentClubEventRouteAdmitsInputAuditsAndDoesNotDispatch`
+- `TestAgentClubEventRouteRequiresIngressOwnerHeaders`
+- `TestAgentClubEventRouteDeniesCrossOwnerBeforeInputWrite`
 - `TestStdioLifecycleCallEnvAndRedaction`
 - `TestRunMessagesDoesNotInjectUntrustedMCPInstructionsByDefault`
 - `TestClientRejectsLocalhostAndRFC1918Targets`
