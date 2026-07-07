@@ -21,8 +21,8 @@ Primary code anchors:
   HMAC verification helpers, unsafe metadata rejection, and redacted audit.
 - [internal/gateway/agentclub_events.go](../../internal/gateway/agentclub_events.go)
   and [internal/agentclub](../../internal/agentclub): neutral agent-club event
-  contract validation, ingress owner scoping, and admission-only route
-  behavior.
+  contract validation, trusted binding policy, ingress owner scoping,
+  read-only discovery, and admission-only route behavior.
 - [internal/gateway/response.go](../../internal/gateway/response.go):
   redacted JSON and NDJSON gateway responses.
 - [internal/gatewayapi/types.go](../../internal/gatewayapi/types.go) and
@@ -73,7 +73,9 @@ The major boundaries are:
 - External ingress: webhook/scheduler/project triggers are untrusted until a
   local rule verifies them and the gateway admits them as session inputs.
 - Agent-club ingress: external project adapters may submit normalized events,
-  but they must still become scoped gateway inputs before any run can happen.
+  but configured registries can first require trusted descriptor/binding
+  matches, and admitted events must still become scoped gateway inputs before
+  any run can happen.
 - Telegram: Telegram is a scoped gateway client with its own allowlist and
   send/delete safety; it does not get direct gateway-server imports.
 - Tools: tool risk, access mode, workspace path checks, dangerous-tool config,
@@ -185,6 +187,22 @@ event id, client id, or metadata values. Agent-club capability descriptors are
 metadata only (`id`, title, description, kind, risk, schemas,
 `dispatch=admit_only`, approval semantics); Billyharness does not load project
 manifests or execute capabilities in this slice.
+
+When an agent-club registry is configured, the route checks descriptor and
+trusted binding policy before writing ingress audit or session inputs. Bindings
+are local gateway policy only: they link a capability to
+`client_type=ingress`, a concrete `client_id`, optional sources, optional
+event types, optional safe metadata keys, and an enabled flag. Unknown
+capabilities, disabled bindings, source/event mismatches, and disallowed
+metadata keys are rejected at admission time. Binding metadata cannot contain
+secrets, executable commands, environment variables, raw API calls, SQL, browser
+auth material, prompts, or payload values.
+
+`GET /v1/agentclub/capabilities` is the matching read-only discovery surface.
+It returns enabled descriptors and safe binding metadata visible to the current
+actor, and it does not grant authority to execute anything. Scheduler/webhook
+HMAC endpoints, safe outputs, action approvals, project manifest loading, and
+capability execution are later slices.
 
 ## Session Scope
 

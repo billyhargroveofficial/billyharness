@@ -3,8 +3,9 @@
 Status note: this document is written against the current worktree on
 2026-07-07. Mutation-auth hardening, session-owner header scoping,
 stored-session projector inspection, fail-closed persistence behavior,
-manifest-only session startup, and the neutral agent-club event ingress route
-are current worktree contracts, not assumptions from older releases.
+manifest-only session startup, and the neutral agent-club registry/discovery
+ingress route are current worktree contracts, not assumptions from older
+releases.
 
 Code anchors:
 
@@ -26,10 +27,12 @@ Code anchors:
   idempotency state.
 - `internal/gateway/ingress.go`: gateway-owned ingress admission helper and
   redacted append-only ingress audit ledger.
-- `internal/gateway/agentclub_events.go`: agent-club event HTTP adapter that
-  admits normalized external adapter events without dispatching a run.
+- `internal/gateway/agentclub_events.go`: agent-club event and capability
+  discovery HTTP adapter that admits normalized external adapter events without
+  dispatching a run.
 - `internal/agentclub/`: neutral v0 event contract, capability metadata,
-  validation, canonical payload hashing, and ingress event/rule conversion.
+  trusted binding validation, discovery views, canonical payload hashing, and
+  ingress event/rule conversion.
 - `internal/ingress/`: pure external-event admission DTOs, deterministic input
   IDs, raw-body HMAC helpers, and payload metadata sanitization.
 - `internal/gateway/http_security.go`: HTTP bearer, mutation, origin, host,
@@ -53,7 +56,8 @@ and remote clients. It owns:
 - session creation, listing, status, context, event replay, input admission,
   run, cancel, undo, redo, and user-input routes;
 - gateway-owned external ingress admission into existing session input
-  ledgers, with only neutral adapter-event normalization before admission;
+  ledgers, with neutral adapter-event normalization plus optional trusted
+  registry/binding checks before admission;
 - durable session persistence when `ServerOptions.SessionStoreDir` is set;
 - startup manifest indexing of durable sessions into the in-memory session map;
 - event recording before live fanout for session runs;
@@ -88,6 +92,7 @@ Future agents should update this section from that route table, not from memory.
 | `GET /v1/tools` | registry tool specs |
 | `GET /v1/mcp` | runtime MCP status, prompts, and server instructions |
 | `GET /v1/processes` | managed shell-process status from the tools registry |
+| `GET /v1/agentclub/capabilities` | list enabled agent-club capability descriptors and safe binding metadata visible to the request actor |
 | `POST /v1/run` | stateless live NDJSON run stream; no durable session history |
 | `GET /v1/sessions` | list sessions visible to the request actor |
 | `POST /v1/sessions` | create a session and optionally persist owner metadata |
@@ -195,10 +200,17 @@ so a durable input cannot be written without prior ingress audit evidence. It
 does not promote the input, start a run, call tools, call MCP, or shell out.
 
 `internal/agentclub` is a small v0 contract layer for external project
-adapters. An adapter submits one normalized event with `schema_version=1`,
-`source`, `capability`, `event_type`, `external_event_id`, `prompt`, a JSON
-`payload`, and safe string metadata. The gateway route requires session-owner
-headers before it decodes authority from anywhere else:
+adapters. It uses four layers:
+
+1. a capability descriptor that says what exists;
+2. a trusted binding that says which ingress owner may submit it;
+3. an admitted event that becomes a gateway input;
+4. a later normal gateway run, started separately by a client or operator.
+
+An adapter submits one normalized event with `schema_version=1`, `source`,
+`capability`, `event_type`, `external_event_id`, `prompt`, a JSON `payload`,
+and safe string metadata. The gateway route requires session-owner headers
+before it decodes authority from anywhere else:
 
 ```text
 client_type=ingress
@@ -221,8 +233,31 @@ event id, client id, metadata values, or adapter-specific command details.
 
 Agent-club capability descriptors are metadata only in this slice. A descriptor
 may declare `id`, `title`, `description`, `kind`, `risk`, `input_schema`,
-`output_schema`, `dispatch=admit_only`, and approval semantics, but the gateway
-does not load project manifests or execute capabilities directly.
+`output_schema`, `dispatch=admit_only`, approval semantics, and version.
+Conservative risk values are `read_only`, `local_read`, `network_read`,
+`local_write`, `network_write`, `external_mutation`, `execute`,
+`secret_access`, and `unknown`; approval is `none` or `required`.
+
+Trusted bindings link a descriptor to `client_type=ingress`, a concrete
+`client_id`, optional source restrictions, optional event-type restrictions,
+optional safe metadata keys, and an enabled flag. They are gateway-owned local
+policy, not project-provided authority. When a registry is configured, the
+event route rejects unknown capabilities, disabled capabilities, source/event
+mismatches, and disallowed metadata keys before writing ingress audit or
+session inputs. When no registry is configured, the lower-level normalized
+event route remains permissive for local tests and direct operator-owned
+adapters.
+
+`GET /v1/agentclub/capabilities` is read-only discovery. It returns enabled
+descriptors and safe binding metadata visible to the current actor. It does
+not include secrets, raw prompts, payloads, environment variables, command
+lines, or metadata values.
+
+The gateway does not load project manifests, read `.billyharness` integration
+files, execute capabilities directly, or run schedules in this slice. A later
+configuration slice can add a trusted gateway config file under the operator's
+Billyharness home, but project-local manifests need a separate install/hash
+story first.
 
 Generic owner scoping now includes `SessionOwner.ClientID` plus
 `X-Billyharness-Session-Client-ID`. Client ID can scope non-Telegram/non-TUI

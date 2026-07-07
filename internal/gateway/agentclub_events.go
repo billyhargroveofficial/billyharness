@@ -28,6 +28,12 @@ func (s *Server) handleAgentClubEventIngress(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
+	if s != nil && s.agentClub != nil {
+		if _, err := s.agentClub.Match(req, actor); err != nil {
+			writeAgentClubEventError(w, err)
+			return
+		}
+	}
 	mapping, err := agentclub.MapToIngress(req, session.ID, actor)
 	if err != nil {
 		writeAgentClubEventError(w, err)
@@ -45,6 +51,17 @@ func (s *Server) handleAgentClubEventIngress(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, status, agentclub.ResponseFromAdmission(mapping, result.Input, result.Decision.Admitted))
 }
 
+func (s *Server) handleAgentClubCapabilities(w http.ResponseWriter, r *http.Request) {
+	actor := sessionOwnerFromRequest(r)
+	var resp agentclub.CapabilityListResponse
+	if s != nil && s.agentClub != nil {
+		resp = s.agentClub.CapabilitiesForActor(actor)
+	} else {
+		resp = agentclub.CapabilityListResponse{SchemaVersion: agentclub.SchemaVersion}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func writeAgentClubEventError(w http.ResponseWriter, err error) {
 	var conflict *sessionInputConflictError
 	var validation *sessionInputValidationError
@@ -56,8 +73,12 @@ func writeAgentClubEventError(w http.ResponseWriter, err error) {
 	case errors.Is(err, agentclub.ErrUnsupportedSchemaVersion),
 		errors.Is(err, agentclub.ErrInvalidIdentifier),
 		errors.Is(err, agentclub.ErrInvalidEvent),
-		errors.Is(err, agentclub.ErrInvalidOwner):
+		errors.Is(err, agentclub.ErrInvalidOwner),
+		errors.Is(err, agentclub.ErrInvalidBinding):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, agentclub.ErrUnknownCapability),
+		errors.Is(err, agentclub.ErrCapabilityDisabled):
+		writeError(w, http.StatusForbidden, err.Error())
 	case strings.Contains(err.Error(), "session not found"):
 		writeError(w, http.StatusNotFound, err.Error())
 	case strings.Contains(err.Error(), "session owner scope mismatch"),

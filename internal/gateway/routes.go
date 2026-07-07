@@ -65,6 +65,7 @@ func (s *Server) routeSpecs() []routeSpec {
 		{Method: "POST", Pattern: "/v1/auth/deepseek", Handler: s.handleDeepSeekAuth, Summary: "Save a DeepSeek API key", Request: "DeepSeekAuthRequest", Response: "credentials.ProviderStatus"},
 		{Method: "POST", Pattern: "/v1/auth/codex/import", Handler: s.handleCodexImport, Summary: "Import Codex OAuth credentials", Request: "CodexImportRequest", Response: "credentials.ProviderStatus"},
 		{Method: "GET", Pattern: "/v1/config", Handler: s.handleConfigStatus, Summary: "Return effective config with provenance", Response: "ConfigStatusResponse"},
+		{Method: "GET", Pattern: "/v1/agentclub/capabilities", Handler: s.handleAgentClubCapabilities, Summary: "List enabled agent-club capabilities", Response: "agentclub.CapabilityListResponse"},
 		{Method: "GET", Pattern: "/v1/tools", Handler: s.handleTools, Summary: "Return native tool catalog", Response: "[]protocol.ToolSpec"},
 		{Method: "GET", Pattern: "/v1/mcp", Handler: s.handleMCP, Summary: "Return MCP status snapshot", Response: "mcpstatus.Response"},
 		{Method: "GET", Pattern: "/v1/processes", Handler: s.handleManagedProcesses, Summary: "Return managed shell processes", Response: "ManagedProcessResponse"},

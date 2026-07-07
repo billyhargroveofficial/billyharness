@@ -30,6 +30,16 @@ route requires `client_type=ingress` and a non-empty client id, uses that actor
 as the ingress rule owner, admits the event as a queued session input, and
 returns only redacted ids, hashes, metadata keys, and `run_dispatched=false`.
 
+Agent-club descriptors and trusted bindings are the first registry layer over
+that route. A descriptor is metadata only (`id`, title, description, kind, risk,
+schemas, `dispatch=admit_only`, approval, version). A binding is trusted local
+gateway policy that links a descriptor to `client_type=ingress`, a concrete
+client id, optional source/event-type restrictions, optional safe metadata
+keys, and an enabled flag. When a registry is configured, the event route
+rejects unknown, disabled, or mismatched capability submissions before ingress
+audit or input admission. `GET /v1/agentclub/capabilities` exposes only enabled
+descriptors and safe binding metadata visible to the current actor.
+
 Ingress audit is stored in a separate redacted gateway-store ledger. It records
 hashes, decision reasons, target session id, admitted input id, duplicate
 state, client identity hash, and metadata keys, but not raw bodies, prompts,
@@ -40,6 +50,12 @@ external IDs, metadata values, or secrets.
 Future adapters such as project CLIs, cron, or webhook surfaces must enter
 through this contract before any runtime work happens. Billyharness core should
 not import concrete project adapters.
+
+The registry is an admission policy surface, not an execution surface. This
+decision still does not add a scheduler, webhook endpoint, project-local
+manifest loader, safe-output executor, action approval loop, generic command
+runner, raw API caller, raw SQL caller, browser auth bridge, or concrete
+project adapter.
 
 Retries become idempotent because input IDs include rule id, source, external
 event id, payload hash, and target session id. If local mapping changes while

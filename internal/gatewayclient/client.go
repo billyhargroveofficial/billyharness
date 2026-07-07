@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/billyhargroveofficial/billyharness/internal/agentclub"
 	"github.com/billyhargroveofficial/billyharness/internal/displayfmt"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
@@ -233,6 +234,14 @@ func (c *Client) AdmitSessionInput(ctx context.Context, sessionID string, input 
 	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/inputs"
 	if err := c.JSON(ctx, http.MethodPost, path, input, &out); err != nil {
 		return gatewayapi.SessionInputResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) AgentClubCapabilities(ctx context.Context) (agentclub.CapabilityListResponse, error) {
+	var out agentclub.CapabilityListResponse
+	if err := c.JSON(ctx, http.MethodGet, "/v1/agentclub/capabilities", nil, &out); err != nil {
+		return agentclub.CapabilityListResponse{}, err
 	}
 	return out, nil
 }

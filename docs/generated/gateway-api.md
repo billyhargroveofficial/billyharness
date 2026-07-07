@@ -10,6 +10,7 @@ DTO package: `github.com/billyhargroveofficial/billyharness/internal/gatewayapi`
 | ------ | ------------------------------------------------ | --------------- | --------------------------- | -------------------------------- | ------------------------------------------------- |
 | GET    | /health                                          | public          | -                           | HealthResponse                   | Return minimal process health                     |
 | GET    | /ready                                           | public          | -                           | ReadinessResponse                | Return readiness checks and catalog status        |
+| GET    | /v1/agentclub/capabilities                       | local-read      | -                           | agentclub.CapabilityListResponse | List enabled agent-club capabilities              |
 | POST   | /v1/auth/codex/import                            | bearer-mutation | CodexImportRequest          | credentials.ProviderStatus       | Import Codex OAuth credentials                    |
 | POST   | /v1/auth/deepseek                                | bearer-mutation | DeepSeekAuthRequest         | credentials.ProviderStatus       | Save a DeepSeek API key                           |
 | GET    | /v1/auth/status                                  | local-read      | -                           | credentials.Status               | Return redacted provider credential status        |
@@ -35,4 +36,4 @@ DTO package: `github.com/billyhargroveofficial/billyharness/internal/gatewayapi`
 | POST   | /v1/sessions/{id}/user_input/{request_id}/reject | bearer-mutation | UserInputRejectRequest      | UserInputResponse                | Reject a pending user-input request               |
 | GET    | /v1/tools                                        | local-read      | -                           | []protocol.ToolSpec              | Return native tool catalog                        |
 
-<!-- source-hash: 30ccd3c850cab0ebe8d8ad587f456153233002168c02975d88c202f922198993 -->
+<!-- source-hash: 8d52c45614e65c8f2846022c2dcbe78664381b9f761a06ceeb2bdfd38bf74408 -->

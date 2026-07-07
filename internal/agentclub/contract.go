@@ -24,11 +24,15 @@ const (
 	CapabilityKindReview   = "review"
 	CapabilityKindDecision = "decision"
 
-	RiskReadOnly = "read_only"
-	RiskNetwork  = "network"
-	RiskWrite    = "write"
-	RiskExecute  = "execute"
-	RiskExternal = "external"
+	RiskReadOnly         = "read_only"
+	RiskLocalRead        = "local_read"
+	RiskNetworkRead      = "network_read"
+	RiskLocalWrite       = "local_write"
+	RiskNetworkWrite     = "network_write"
+	RiskExternalMutation = "external_mutation"
+	RiskExecute          = "execute"
+	RiskSecretAccess     = "secret_access"
+	RiskUnknown          = "unknown"
 
 	ApprovalNone     = "none"
 	ApprovalRequired = "required"
@@ -78,6 +82,7 @@ type CapabilityDescriptor struct {
 	OutputSchema json.RawMessage `json:"output_schema,omitempty"`
 	Dispatch     string          `json:"dispatch"`
 	Approval     string          `json:"approval,omitempty"`
+	Version      string          `json:"version,omitempty"`
 }
 
 type AdmissionMapping struct {
@@ -175,20 +180,43 @@ func NormalizeEventRequest(req EventRequest) (EventRequest, []byte, error) {
 }
 
 func ValidateCapabilityDescriptor(desc CapabilityDescriptor) error {
+	_, err := NormalizeCapabilityDescriptor(desc)
+	return err
+}
+
+func NormalizeCapabilityDescriptor(desc CapabilityDescriptor) (CapabilityDescriptor, error) {
 	var err error
-	if _, err = normalizeIdentifier("id", desc.ID); err != nil {
-		return err
+	if desc.ID, err = normalizeIdentifier("id", desc.ID); err != nil {
+		return CapabilityDescriptor{}, err
 	}
-	if desc.Kind = strings.TrimSpace(desc.Kind); desc.Kind == "" {
-		return fmt.Errorf("%w: descriptor kind required", ErrInvalidEvent)
+	desc.Title = strings.TrimSpace(desc.Title)
+	desc.Description = strings.TrimSpace(desc.Description)
+	if desc.Kind = strings.TrimSpace(desc.Kind); !allowedCapabilityKinds[desc.Kind] {
+		return CapabilityDescriptor{}, fmt.Errorf("%w: unsupported descriptor kind %q", ErrInvalidEvent, desc.Kind)
 	}
-	if desc.Risk = strings.TrimSpace(desc.Risk); desc.Risk == "" {
-		return fmt.Errorf("%w: descriptor risk required", ErrInvalidEvent)
+	if desc.Risk = strings.TrimSpace(desc.Risk); !allowedRiskClasses[desc.Risk] {
+		return CapabilityDescriptor{}, fmt.Errorf("%w: unsupported descriptor risk %q", ErrInvalidEvent, desc.Risk)
 	}
 	if desc.Dispatch = strings.TrimSpace(desc.Dispatch); desc.Dispatch != DispatchAdmitOnly {
-		return fmt.Errorf("%w: descriptor dispatch must be %q", ErrInvalidEvent, DispatchAdmitOnly)
+		return CapabilityDescriptor{}, fmt.Errorf("%w: descriptor dispatch must be %q", ErrInvalidEvent, DispatchAdmitOnly)
 	}
-	return nil
+	desc.Approval = strings.TrimSpace(desc.Approval)
+	if desc.Approval == "" {
+		desc.Approval = ApprovalNone
+	}
+	if !allowedApprovalModes[desc.Approval] {
+		return CapabilityDescriptor{}, fmt.Errorf("%w: unsupported descriptor approval %q", ErrInvalidEvent, desc.Approval)
+	}
+	if desc.Version, err = normalizeOptionalIdentifier("version", desc.Version); err != nil {
+		return CapabilityDescriptor{}, err
+	}
+	if desc.InputSchema, err = normalizeOptionalJSONObject("input_schema", desc.InputSchema); err != nil {
+		return CapabilityDescriptor{}, err
+	}
+	if desc.OutputSchema, err = normalizeOptionalJSONObject("output_schema", desc.OutputSchema); err != nil {
+		return CapabilityDescriptor{}, err
+	}
+	return desc, nil
 }
 
 func ResponseFromAdmission(mapping AdmissionMapping, input gatewayapi.SessionInputResponse, admitted bool) EventAdmissionResponse {
@@ -247,6 +275,30 @@ func normalizeIdentifier(field, value string) (string, error) {
 	return value, nil
 }
 
+func normalizeOptionalIdentifier(field, value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	return normalizeIdentifier(field, value)
+}
+
+func normalizeOptionalJSONObject(field string, raw json.RawMessage) (json.RawMessage, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var value map[string]any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("%w: descriptor %s must be a JSON object", ErrInvalidEvent, field)
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, raw); err != nil {
+		return nil, fmt.Errorf("%w: descriptor %s must be valid JSON", ErrInvalidEvent, field)
+	}
+	return append(json.RawMessage(nil), compact.Bytes()...), nil
+}
+
 func normalizeOwner(owner gatewayapi.SessionOwner) gatewayapi.SessionOwner {
 	owner.ClientID = strings.TrimSpace(owner.ClientID)
 	owner.ClientType = strings.ToLower(strings.TrimSpace(owner.ClientType))
@@ -271,4 +323,27 @@ func copyStringMap(in map[string]string) map[string]string {
 		out[key] = value
 	}
 	return out
+}
+
+var allowedCapabilityKinds = map[string]bool{
+	CapabilityKindEvent:    true,
+	CapabilityKindReview:   true,
+	CapabilityKindDecision: true,
+}
+
+var allowedRiskClasses = map[string]bool{
+	RiskReadOnly:         true,
+	RiskLocalRead:        true,
+	RiskNetworkRead:      true,
+	RiskLocalWrite:       true,
+	RiskNetworkWrite:     true,
+	RiskExternalMutation: true,
+	RiskExecute:          true,
+	RiskSecretAccess:     true,
+	RiskUnknown:          true,
+}
+
+var allowedApprovalModes = map[string]bool{
+	ApprovalNone:     true,
+	ApprovalRequired: true,
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/billyhargroveofficial/billyharness/internal/agentclub"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/testkit"
@@ -445,6 +446,42 @@ func TestAdmitSessionInputPostsTypedRequest(t *testing.T) {
 	if got.InputID != "input-1" || got.Prompt != "hello" || got.InterruptPolicy != gatewayapi.InterruptPolicyInterrupt || got.ClientID != "telegram:1" ||
 		len(got.Attachments) != 1 || got.Attachments[0].ID != "att_test" {
 		t.Fatalf("request = %#v", got)
+	}
+}
+
+func TestAgentClubCapabilitiesFetchesTypedResponseWithOwnerHeaders(t *testing.T) {
+	var got http.Header
+	server := testkit.NewRouteServer(t, testkit.Route{
+		Method: http.MethodGet,
+		Path:   "/v1/agentclub/capabilities",
+		Handler: func(w http.ResponseWriter, r *http.Request) {
+			got = r.Header.Clone()
+			testkit.WriteJSON(t, w, agentclub.CapabilityListResponse{
+				SchemaVersion: agentclub.SchemaVersion,
+				Capabilities: []agentclub.CapabilityView{
+					{
+						Descriptor: agentclub.CapabilityDescriptor{
+							ID:       "event.review",
+							Kind:     agentclub.CapabilityKindReview,
+							Risk:     agentclub.RiskReadOnly,
+							Dispatch: agentclub.DispatchAdmitOnly,
+						},
+					},
+				},
+			})
+		},
+	})
+
+	owner := gatewayapi.SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"}
+	resp, err := New(server.URL).AgentClubCapabilities(WithSessionOwner(context.Background(), owner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Get(gatewayapi.HeaderSessionClientID) != owner.ClientID || got.Get(gatewayapi.HeaderSessionClientType) != owner.ClientType {
+		t.Fatalf("owner headers = %#v", got)
+	}
+	if resp.SchemaVersion != agentclub.SchemaVersion || len(resp.Capabilities) != 1 || resp.Capabilities[0].Descriptor.ID != "event.review" {
+		t.Fatalf("response = %#v", resp)
 	}
 }
 

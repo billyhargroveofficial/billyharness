@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/agent"
+	"github.com/billyhargroveofficial/billyharness/internal/agentclub"
 	"github.com/billyhargroveofficial/billyharness/internal/attachments"
 	"github.com/billyhargroveofficial/billyharness/internal/checkpoint"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
@@ -50,6 +51,7 @@ type Server struct {
 	sessions        map[string]*Session
 	store           *sessionStore
 	storeHealth     gatewayapi.SessionStoreHealth
+	agentClub       *agentclub.Registry
 	mu              sync.Mutex
 }
 
@@ -58,6 +60,7 @@ type ServerOptions struct {
 	SessionStoreDir                          string
 	RequireMutationAuth                      bool
 	DevAllowUnauthenticatedLoopbackMutations bool
+	AgentClubRegistry                        *agentclub.Registry
 }
 
 type ServerSettings struct {
@@ -175,6 +178,7 @@ func NewServerWithOptionsFromSettings(settings ServerSettings, prov provider.Pro
 		auth:            credentials.NewManagerFromAuthSettings(settings.Auth),
 		mux:             http.NewServeMux(),
 		sessions:        map[string]*Session{},
+		agentClub:       opts.AgentClubRegistry,
 	}
 	if strings.TrimSpace(opts.SessionStoreDir) != "" {
 		s.store = newSessionStore(opts.SessionStoreDir)

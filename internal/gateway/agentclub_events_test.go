@@ -145,6 +145,87 @@ func TestAgentClubEventRouteRejectsUnsafeMetadata(t *testing.T) {
 	}
 }
 
+func TestAgentClubEventRouteConfiguredRegistryEnforcesBindings(t *testing.T) {
+	cases := []struct {
+		name   string
+		req    agentclub.EventRequest
+		status int
+	}{
+		{name: "unknown capability", req: validRegistryAgentClubEvent("missing.review", "fixture", "event.created", nil), status: http.StatusForbidden},
+		{name: "disabled capability", req: validRegistryAgentClubEvent("disabled.review", "fixture", "event.created", nil), status: http.StatusForbidden},
+		{name: "source mismatch", req: validRegistryAgentClubEvent("event.review", "other", "event.created", nil), status: http.StatusForbidden},
+		{name: "event mismatch", req: validRegistryAgentClubEvent("event.review", "fixture", "event.deleted", nil), status: http.StatusForbidden},
+		{name: "metadata key mismatch", req: validRegistryAgentClubEvent("event.review", "fixture", "event.created", map[string]string{"actor": "me"}), status: http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server, storeDir := newAgentClubEventTestServer(t, testAgentClubRegistry(t))
+			owner := gatewayapi.SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"}
+			sessionID := createScopedTestSession(t, server, owner)
+			_, status, raw := postAgentClubEvent(t, server, sessionID, owner, tc.req)
+			if status != tc.status {
+				t.Fatalf("status = %d body=%s want %d", status, raw, tc.status)
+			}
+			if _, err := os.Stat(filepath.Join(storeDir, sessionID, sessionInputsJSONLName)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("rejected agentclub event should not write inputs, stat err=%v", err)
+			}
+		})
+	}
+
+	server, _ := newAgentClubEventTestServer(t, testAgentClubRegistry(t))
+	owner := gatewayapi.SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"}
+	sessionID := createScopedTestSession(t, server, owner)
+	resp, status, raw := postAgentClubEvent(t, server, sessionID, owner, validRegistryAgentClubEvent("event.review", "fixture", "event.created", map[string]string{"project": "fixture-project"}))
+	if status != http.StatusCreated || !resp.Admitted || resp.RunDispatched {
+		t.Fatalf("registered event status=%d raw=%s resp=%#v", status, raw, resp)
+	}
+}
+
+func TestAgentClubCapabilitiesRouteListsVisibleEnabledBindings(t *testing.T) {
+	registry := testAgentClubRegistry(t)
+	server, _ := newAgentClubEventTestServer(t, registry)
+	owner := gatewayapi.SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/agentclub/capabilities", nil)
+	setScopedTestOwnerHeaders(req, owner)
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var scoped agentclub.CapabilityListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &scoped); err != nil {
+		t.Fatal(err)
+	}
+	if scoped.SchemaVersion != agentclub.SchemaVersion || len(scoped.Capabilities) != 1 ||
+		scoped.Capabilities[0].Descriptor.ID != "event.review" ||
+		len(scoped.Capabilities[0].Bindings) != 1 ||
+		scoped.Capabilities[0].Bindings[0].ClientID != owner.ClientID {
+		t.Fatalf("scoped capabilities = %#v", scoped)
+	}
+
+	unscoped := httptest.NewRecorder()
+	server.Handler().ServeHTTP(unscoped, httptest.NewRequest(http.MethodGet, "/v1/agentclub/capabilities", nil))
+	var all agentclub.CapabilityListResponse
+	if err := json.Unmarshal(unscoped.Body.Bytes(), &all); err != nil {
+		t.Fatal(err)
+	}
+	if len(all.Capabilities) != 1 || len(all.Capabilities[0].Bindings) != 2 {
+		t.Fatalf("unscoped capabilities = %#v", all)
+	}
+
+	emptyServer, _ := newAgentClubEventTestServer(t, nil)
+	empty := httptest.NewRecorder()
+	emptyServer.Handler().ServeHTTP(empty, httptest.NewRequest(http.MethodGet, "/v1/agentclub/capabilities", nil))
+	var emptyResp agentclub.CapabilityListResponse
+	if err := json.Unmarshal(empty.Body.Bytes(), &emptyResp); err != nil {
+		t.Fatal(err)
+	}
+	if emptyResp.SchemaVersion != agentclub.SchemaVersion || len(emptyResp.Capabilities) != 0 {
+		t.Fatalf("empty capabilities = %#v", emptyResp)
+	}
+}
+
 func validAgentClubEventRequest() agentclub.EventRequest {
 	return agentclub.EventRequest{
 		SchemaVersion:   agentclub.SchemaVersion,
@@ -157,6 +238,19 @@ func validAgentClubEventRequest() agentclub.EventRequest {
 		Metadata: map[string]string{
 			"project": "fixture-project",
 		},
+	}
+}
+
+func validRegistryAgentClubEvent(capability, source, eventType string, metadata map[string]string) agentclub.EventRequest {
+	return agentclub.EventRequest{
+		SchemaVersion:   agentclub.SchemaVersion,
+		Source:          source,
+		Capability:      capability,
+		EventType:       eventType,
+		ExternalEventID: "delivery-1",
+		Prompt:          "Review this fixture event.",
+		Payload:         json.RawMessage(`{"ok":true}`),
+		Metadata:        metadata,
 	}
 }
 
@@ -174,12 +268,75 @@ func postAgentClubEvent(t *testing.T, server *Server, sessionID string, owner ga
 	return resp, rec.Code, rec.Body.String()
 }
 
-func newAgentClubEventTestServer(t *testing.T) (*Server, string) {
+func newAgentClubEventTestServer(t *testing.T, registry ...*agentclub.Registry) (*Server, string) {
 	t.Helper()
 	cfg := config.Default()
 	cfg.Provider = "mock"
 	cfg.Model = "mock"
 	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
-	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+	opts := ServerOptions{SessionStoreDir: storeDir}
+	if len(registry) > 0 {
+		opts.AgentClubRegistry = registry[0]
+	}
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), opts)
 	return server, storeDir
+}
+
+func testAgentClubRegistry(t *testing.T) *agentclub.Registry {
+	t.Helper()
+	registry, err := agentclub.NewRegistry(
+		[]agentclub.CapabilityDescriptor{
+			{
+				ID:           "event.review",
+				Title:        "Fixture Review",
+				Description:  "Review fixture events.",
+				Kind:         agentclub.CapabilityKindReview,
+				Risk:         agentclub.RiskReadOnly,
+				InputSchema:  json.RawMessage(`{"type":"object"}`),
+				OutputSchema: json.RawMessage(`{"type":"object"}`),
+				Dispatch:     agentclub.DispatchAdmitOnly,
+				Approval:     agentclub.ApprovalRequired,
+				Version:      "v0",
+			},
+			{
+				ID:       "disabled.review",
+				Kind:     agentclub.CapabilityKindReview,
+				Risk:     agentclub.RiskReadOnly,
+				Dispatch: agentclub.DispatchAdmitOnly,
+				Approval: agentclub.ApprovalNone,
+				Version:  "v0",
+			},
+		},
+		[]agentclub.TrustedBinding{
+			{
+				Capability:   "event.review",
+				ClientType:   "ingress",
+				ClientID:     "ingress:fixture:prod",
+				Sources:      []string{"fixture"},
+				EventTypes:   []string{"event.created"},
+				MetadataKeys: []string{"project"},
+				Enabled:      true,
+			},
+			{
+				Capability: "event.review",
+				ClientType: "ingress",
+				ClientID:   "ingress:fixture:stage",
+				Sources:    []string{"fixture"},
+				EventTypes: []string{"event.created"},
+				Enabled:    true,
+			},
+			{
+				Capability: "disabled.review",
+				ClientType: "ingress",
+				ClientID:   "ingress:fixture:prod",
+				Sources:    []string{"fixture"},
+				EventTypes: []string{"event.created"},
+				Enabled:    false,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return registry
 }
