@@ -137,3 +137,63 @@ git diff --check
 ```text
 /goal Implement loop-develop/current-todo/008-todo.md end to end. Keep it single-slice: add a read-only HH review queue adapter that captures only D:\repos\hh-applicant-tool `f228jobfckr cohort-review --limit N` output, converts it into a gateway-owned ingress admission for an existing Billyharness session, returns admitted input/audit information, and never dispatches a run. Use fixed argv execution with no shell, timeout, output cap, repo/profile validation, safe metadata, deterministic external event identity, and owner scope `client_type=ingress` plus `client_id=ingress:hh-applicant-tool:<profile>`. Do not implement a scheduler, generic project runner, raw command execution, raw call-api, raw SQL query, browser auth, `cohort-review --done`, `cohort-review --done-all`, `cohort-apply`, `cohort-reply`, `cohort-buttons`, `cohort-watch`, or any mutating HH action. Do not edit D:\repos\hh-applicant-tool except for read-only inspection if needed. Do not use Playwright, Puppeteer, Chrome MCP, headless Chrome/Edge, screenshots, browser network capture, or browser debug. Update docs and generated docs if the CLI/API surface changes. Verify with the TODO commands, then create a git commit and push the branch after verification passes.
 ```
+
+## Final Status
+
+Status: completed and verified.
+
+Implementation branch: `codex/gateway-ingress-foundation`.
+
+Implementation commit:
+
+- `cb5a256 Add HH review queue ingress admission`
+
+Verification summary:
+
+- Added `internal/agentclub/hhapplicant` as a narrow read-only adapter for
+  `f228jobfckr cohort-review --limit N`.
+- Added gateway route
+  `POST /v1/sessions/{id}/agentclub/hh/review-queue`.
+- Added typed gateway API and gatewayclient helper.
+- Confirmed the adapter uses fixed argv with `exec.CommandContext`, no shell,
+  timeout, output cap, repo root allowlist, profile validation, deterministic
+  external event identity, and owner scope
+  `client_type=ingress` plus `client_id=ingress:hh-applicant-tool:<profile>`.
+- Confirmed the route admits a queued input through ingress, returns input/audit
+  metadata, and does not dispatch a run.
+- Confirmed HH stdout can reach the queued prompt while ingress audit metadata
+  stores hashes/keys rather than recruiter text, external event id, or client id.
+- Confirmed mutating HH actions remain outside the implemented route: no raw
+  `call-api`, raw SQL `query`, browser auth, `cohort-review --done`,
+  `cohort-review --done-all`, `cohort-apply`, `cohort-reply`,
+  `cohort-buttons`, `cohort-watch`, scheduler, or generic project runner.
+- Confirmed docs and generated gateway/package docs were updated in the
+  implementation commit.
+
+Commands run:
+
+```sh
+go test -count=1 ./internal/agentclub/hhapplicant ./internal/gateway ./internal/gatewayclient ./cmd/fast-agent-harness
+go run ./cmd/fast-agent-harness docsgen -check
+go test -count=1 ./...
+go build -o ./bin/fast-agent-harness ./cmd/fast-agent-harness
+git diff --check
+```
+
+Verification notes:
+
+- All commands passed.
+- `git diff --check` exited 0 with only LF/CRLF warnings on pre-existing dirty
+  Windows worktree files.
+- Existing unrelated dirty Billyharness files were left alone:
+  - `internal/clipboard/image_clipboard_windows.go`
+  - `internal/tui/actions.go`
+  - `internal/tui/tui_test.go`
+  - `internal/clipboard/image_clipboard_windows_test.go`
+- `D:\repos\hh-applicant-tool` was inspected read-only for command shape; its
+  dirty local changes were not touched.
+
+Remaining follow-up:
+
+- Add a separate TODO for scheduler/jobqueue or for the next HH action only
+  after choosing a new narrow read-only or explicit review-gated slice.
