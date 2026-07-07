@@ -1,0 +1,4 @@
+interface:
+  display_name: "Loop Research"
+  short_description: "Generate or run guarded research loops"
+  default_prompt: "Use $loop-research to generate a guarded loop research prompt for Billyharness."
