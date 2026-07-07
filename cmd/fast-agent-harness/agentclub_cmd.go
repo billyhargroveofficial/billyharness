@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/agentclub"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
@@ -36,6 +40,8 @@ func agentclubCommand(args []string, out io.Writer) error {
 		return agentclubLocalBindingsCommand(args[1:], out)
 	case "triggers", "trigger":
 		return agentclubLocalTriggersCommand(args[1:], out)
+	case "scheduler":
+		return agentclubSchedulerCommand(args[1:], out)
 	case "enable":
 		return agentclubSetLocalItemCommand(args[1:], out, true)
 	case "disable":
@@ -46,6 +52,8 @@ func agentclubCommand(args []string, out io.Writer) error {
 		return agentclubDecisionCommand(args[1:], out, agentclub.ProposalDecisionApprove)
 	case "reject":
 		return agentclubDecisionCommand(args[1:], out, agentclub.ProposalDecisionReject)
+	case "apply":
+		return agentclubApplyCommand(args[1:], out)
 	case "help", "-h", "--help":
 		agentclubUsage(out)
 		return nil
@@ -197,6 +205,9 @@ func agentclubLocalBindingsCommand(args []string, out io.Writer) error {
 }
 
 func agentclubLocalTriggersCommand(args []string, out io.Writer) error {
+	if len(args) > 0 && strings.EqualFold(strings.TrimSpace(args[0]), "deliver") {
+		return agentclubTriggerDeliverCommand(args[1:], out)
+	}
 	fs := flag.NewFlagSet("agentclub triggers", flag.ExitOnError)
 	path := fs.String("path", "", "config file path override")
 	jsonOut := fs.Bool("json", false, "print redacted JSON")
@@ -215,6 +226,270 @@ func agentclubLocalTriggersCommand(args []string, out io.Writer) error {
 	}
 	fmt.Fprint(out, formatAgentClubTriggers(loaded.Config.Triggers))
 	return nil
+}
+
+func agentclubTriggerDeliverCommand(args []string, out io.Writer) error {
+	opts, err := parseAgentClubTriggerDeliverArgs(args)
+	if err != nil {
+		return err
+	}
+	loaded, files, err := loadAgentClubLocalConfig(opts.path)
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return fmt.Errorf("agentclub config file not found; run agentclub config init")
+	}
+	binding, err := loaded.Registry.TriggerBinding(opts.triggerID)
+	if err != nil {
+		return err
+	}
+	payload, err := readAgentClubDeliveryPayload(opts.payload, binding.MaxBodyBytes)
+	if err != nil {
+		return err
+	}
+	body, headers, err := buildAgentClubDeliveryBody(binding, payload, opts.deliveryID, opts.scheduledAt, opts.dryRunRegistration)
+	if err != nil {
+		return err
+	}
+	client, err := agentclubGatewayClient(opts.gatewayURL)
+	if err != nil {
+		return err
+	}
+	resp, err := client.DeliverAgentClubTrigger(context.Background(), gatewayclient.AgentClubTriggerDelivery{
+		BindingID: binding.ID,
+		Body:      body,
+		Headers:   headers,
+	})
+	if err != nil {
+		return safeAgentClubTriggerDeliveryError(err)
+	}
+	if opts.jsonOut {
+		return writeRedactedJSON(out, resp)
+	}
+	fmt.Fprint(out, formatAgentClubTriggerDelivery(files, loaded.Status, resp))
+	return nil
+}
+
+type agentClubTriggerDeliverOptions struct {
+	triggerID          string
+	gatewayURL         string
+	path               string
+	payload            string
+	deliveryID         string
+	scheduledAt        string
+	dryRunRegistration bool
+	jsonOut            bool
+}
+
+func parseAgentClubTriggerDeliverArgs(args []string) (agentClubTriggerDeliverOptions, error) {
+	opts := agentClubTriggerDeliverOptions{scheduledAt: "now"}
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		switch {
+		case arg == "":
+			continue
+		case arg == "-gateway" || arg == "--gateway":
+			value, next, err := agentclubNextFlagValue(args, i, arg)
+			if err != nil {
+				return opts, err
+			}
+			opts.gatewayURL = value
+			i = next
+		case strings.HasPrefix(arg, "-gateway="):
+			opts.gatewayURL = strings.TrimSpace(strings.TrimPrefix(arg, "-gateway="))
+		case strings.HasPrefix(arg, "--gateway="):
+			opts.gatewayURL = strings.TrimSpace(strings.TrimPrefix(arg, "--gateway="))
+		case arg == "-path" || arg == "--path":
+			value, next, err := agentclubNextFlagValue(args, i, arg)
+			if err != nil {
+				return opts, err
+			}
+			opts.path = value
+			i = next
+		case strings.HasPrefix(arg, "-path="):
+			opts.path = strings.TrimSpace(strings.TrimPrefix(arg, "-path="))
+		case strings.HasPrefix(arg, "--path="):
+			opts.path = strings.TrimSpace(strings.TrimPrefix(arg, "--path="))
+		case arg == "-payload" || arg == "--payload":
+			value, next, err := agentclubNextFlagValue(args, i, arg)
+			if err != nil {
+				return opts, err
+			}
+			opts.payload = value
+			i = next
+		case strings.HasPrefix(arg, "-payload="):
+			opts.payload = strings.TrimSpace(strings.TrimPrefix(arg, "-payload="))
+		case strings.HasPrefix(arg, "--payload="):
+			opts.payload = strings.TrimSpace(strings.TrimPrefix(arg, "--payload="))
+		case arg == "-delivery-id" || arg == "--delivery-id":
+			value, next, err := agentclubNextFlagValue(args, i, arg)
+			if err != nil {
+				return opts, err
+			}
+			opts.deliveryID = value
+			i = next
+		case strings.HasPrefix(arg, "-delivery-id="):
+			opts.deliveryID = strings.TrimSpace(strings.TrimPrefix(arg, "-delivery-id="))
+		case strings.HasPrefix(arg, "--delivery-id="):
+			opts.deliveryID = strings.TrimSpace(strings.TrimPrefix(arg, "--delivery-id="))
+		case arg == "-scheduled-at" || arg == "--scheduled-at":
+			value, next, err := agentclubNextFlagValue(args, i, arg)
+			if err != nil {
+				return opts, err
+			}
+			opts.scheduledAt = value
+			i = next
+		case strings.HasPrefix(arg, "-scheduled-at="):
+			opts.scheduledAt = strings.TrimSpace(strings.TrimPrefix(arg, "-scheduled-at="))
+		case strings.HasPrefix(arg, "--scheduled-at="):
+			opts.scheduledAt = strings.TrimSpace(strings.TrimPrefix(arg, "--scheduled-at="))
+		case arg == "-dry-run-registration" || arg == "--dry-run-registration":
+			opts.dryRunRegistration = true
+		case arg == "-json" || arg == "--json":
+			opts.jsonOut = true
+		case strings.HasPrefix(arg, "-"):
+			return opts, fmt.Errorf("unknown flag %s", arg)
+		default:
+			if opts.triggerID != "" {
+				return opts, fmt.Errorf("usage: agentclub trigger deliver TRIGGER_ID [-gateway URL] [-path CONFIG] [-payload JSON_OR_PATH_OR_-] [-delivery-id ID] [-scheduled-at RFC3339|now] [-dry-run-registration] [-json]")
+			}
+			opts.triggerID = arg
+		}
+	}
+	if strings.TrimSpace(opts.triggerID) == "" {
+		return opts, fmt.Errorf("usage: agentclub trigger deliver TRIGGER_ID [-gateway URL] [-path CONFIG] [-payload JSON_OR_PATH_OR_-] [-delivery-id ID] [-scheduled-at RFC3339|now] [-dry-run-registration] [-json]")
+	}
+	return opts, nil
+}
+
+func agentclubNextFlagValue(args []string, index int, flagName string) (string, int, error) {
+	next := index + 1
+	if next >= len(args) || strings.TrimSpace(args[next]) == "" {
+		return "", index, fmt.Errorf("%s requires a value", flagName)
+	}
+	return strings.TrimSpace(args[next]), next, nil
+}
+
+func readAgentClubDeliveryPayload(spec string, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		maxBytes = agentclub.DefaultTriggerMaxBodyBytes
+	}
+	var body []byte
+	var err error
+	spec = strings.TrimSpace(spec)
+	switch {
+	case spec == "":
+		body = []byte(`{}`)
+	case spec == "-":
+		body, err = readAgentClubBounded(os.Stdin, maxBytes)
+	case strings.HasPrefix(spec, "@"):
+		path := strings.TrimSpace(strings.TrimPrefix(spec, "@"))
+		if path == "" {
+			return nil, fmt.Errorf("payload file path required after @")
+		}
+		file, openErr := os.Open(path)
+		if openErr != nil {
+			return nil, openErr
+		}
+		defer file.Close()
+		body, err = readAgentClubBounded(file, maxBytes)
+	default:
+		body = []byte(spec)
+		if int64(len(body)) > maxBytes {
+			return nil, fmt.Errorf("payload exceeds trigger max body cap")
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		body = []byte(`{}`)
+	}
+	if !json.Valid(body) {
+		return nil, fmt.Errorf("payload must be valid JSON")
+	}
+	return body, nil
+}
+
+func readAgentClubBounded(r io.Reader, maxBytes int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxBytes {
+		return nil, fmt.Errorf("payload exceeds trigger max body cap")
+	}
+	return body, nil
+}
+
+func buildAgentClubDeliveryBody(binding agentclub.TriggerBinding, payload []byte, deliveryID, scheduledAt string, dryRunRegistration bool) ([]byte, map[string]string, error) {
+	switch binding.Kind {
+	case agentclub.TriggerKindWebhook:
+		if dryRunRegistration {
+			return nil, nil, fmt.Errorf("-dry-run-registration is only valid for manual and schedule triggers")
+		}
+		deliveryID = strings.TrimSpace(deliveryID)
+		if deliveryID == "" {
+			return nil, nil, fmt.Errorf("-delivery-id is required for webhook triggers")
+		}
+		headers := map[string]string{binding.DeliveryIDHeader: deliveryID}
+		if binding.AuthMethod == agentclub.TriggerAuthHMACSHA256 {
+			if len(binding.HMACSecret) == 0 {
+				return nil, nil, fmt.Errorf("hmac secret is not available for trigger %s", secrets.Redact(binding.ID))
+			}
+			signatureHeader, signature, timestampHeader, timestamp, err := agentclub.SignTriggerWebhookHMAC(binding, payload, time.Now().UTC())
+			if err != nil {
+				return nil, nil, err
+			}
+			if timestampHeader != "" {
+				headers[timestampHeader] = timestamp
+			}
+			headers[signatureHeader] = signature
+		}
+		return payload, headers, nil
+	case agentclub.TriggerKindManual, agentclub.TriggerKindSchedule:
+		if strings.TrimSpace(deliveryID) != "" {
+			return nil, nil, fmt.Errorf("-delivery-id is only valid for webhook triggers")
+		}
+		scheduled, err := parseAgentClubDeliveryScheduledAt(scheduledAt)
+		if err != nil {
+			return nil, nil, err
+		}
+		body, err := json.Marshal(agentclub.TriggerDeliveryRequest{
+			SchemaVersion:      agentclub.SchemaVersion,
+			ScheduledAtUTC:     scheduled,
+			Payload:            append(json.RawMessage(nil), payload...),
+			DryRunRegistration: dryRunRegistration,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return body, nil, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported trigger kind %q", binding.Kind)
+	}
+}
+
+func parseAgentClubDeliveryScheduledAt(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.EqualFold(value, "now") {
+		return time.Now().UTC().Format(time.RFC3339Nano), nil
+	}
+	ts, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return "", fmt.Errorf("-scheduled-at must be RFC3339 or now")
+	}
+	return ts.UTC().Format(time.RFC3339Nano), nil
+}
+
+func safeAgentClubTriggerDeliveryError(err error) error {
+	var status *gatewayclient.StatusError
+	if errors.As(err, &status) {
+		return fmt.Errorf("agentclub trigger delivery failed: gateway HTTP %d", status.StatusCode)
+	}
+	return fmt.Errorf("agentclub trigger delivery failed: %s", secrets.Redact(err.Error()))
 }
 
 func agentclubSetLocalItemCommand(args []string, out io.Writer, enabled bool) error {
@@ -379,6 +654,49 @@ func agentclubDecisionCommand(args []string, out io.Writer, action string) error
 	return nil
 }
 
+func agentclubApplyCommand(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("agentclub apply", flag.ExitOnError)
+	gatewayURL := fs.String("gateway", "", "gateway base URL")
+	sessionID := fs.String("session", "", "explicit gateway session id")
+	proposalID := fs.String("proposal", "", "explicit proposal id")
+	expectedHash := fs.String("hash", "", "expected proposal hash")
+	idempotencyKey := fs.String("idempotency-key", "", "optional idempotency key; defaults to a deterministic CLI key")
+	dryRun := fs.Bool("dry-run", false, "validate without writing an apply record")
+	jsonOut := fs.Bool("json", false, "print redacted JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || strings.TrimSpace(*sessionID) == "" || strings.TrimSpace(*proposalID) == "" || strings.TrimSpace(*expectedHash) == "" {
+		return fmt.Errorf("usage: agentclub apply -session SESSION_ID -proposal PROPOSAL_ID -hash EXPECTED_PROPOSAL_HASH [-idempotency-key KEY] [-dry-run] [-gateway URL] [-json]")
+	}
+	key := strings.TrimSpace(*idempotencyKey)
+	if key == "" {
+		key = derivedAgentClubApplyIdempotencyKey(*proposalID, *expectedHash)
+	}
+	client, err := agentclubGatewayClient(*gatewayURL)
+	if err != nil {
+		return err
+	}
+	resp, err := client.ApplyAgentClubProposal(context.Background(), *sessionID, *proposalID, agentclub.ProposalApplyRequest{
+		SchemaVersion:        agentclub.SchemaVersion,
+		ExpectedProposalHash: strings.TrimSpace(*expectedHash),
+		IdempotencyKey:       key,
+		DryRun:               *dryRun,
+	})
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return writeRedactedJSON(out, resp)
+	}
+	fmt.Fprint(out, gatewayclient.FormatAgentClubProposalApply(resp))
+	return nil
+}
+
+func derivedAgentClubApplyIdempotencyKey(proposalID, proposalHash string) string {
+	return "cli:" + strings.TrimSpace(proposalID) + ":" + gatewayclient.ShortAgentClubHash(proposalHash)
+}
+
 func agentclubGatewayClient(gatewayURL string) (*gatewayclient.Client, error) {
 	baseURL := normalizeGatewayURL(gatewayURL)
 	if baseURL == "" {
@@ -426,11 +744,14 @@ func agentclubUsage(out io.Writer) {
 	fmt.Fprintln(out, "  agentclub config <init|validate|status|path> [args]")
 	fmt.Fprintln(out, "  agentclub bindings [-path PATH] [-json]")
 	fmt.Fprintln(out, "  agentclub triggers [-path PATH] [-json]")
+	fmt.Fprintln(out, "  agentclub trigger deliver TRIGGER_ID [-gateway URL] [-path CONFIG] [-payload JSON_OR_PATH_OR_-] [-delivery-id ID] [-scheduled-at RFC3339|now] [-dry-run-registration] [-json]")
+	fmt.Fprintln(out, "  agentclub scheduler <run|status> [args]")
 	fmt.Fprintln(out, "  agentclub enable <binding|trigger> ID [-path PATH]")
 	fmt.Fprintln(out, "  agentclub disable <binding|trigger> ID [-path PATH]")
 	fmt.Fprintln(out, "  agentclub proposals -session SESSION_ID [-gateway URL] [-json]")
 	fmt.Fprintln(out, "  agentclub approve -session SESSION_ID -proposal PROPOSAL_ID -hash EXPECTED_PROPOSAL_HASH [-comment TEXT] [-gateway URL] [-json]")
 	fmt.Fprintln(out, "  agentclub reject -session SESSION_ID -proposal PROPOSAL_ID -hash EXPECTED_PROPOSAL_HASH [-comment TEXT] [-gateway URL] [-json]")
+	fmt.Fprintln(out, "  agentclub apply -session SESSION_ID -proposal PROPOSAL_ID -hash EXPECTED_PROPOSAL_HASH [-idempotency-key KEY] [-dry-run] [-gateway URL] [-json]")
 }
 
 func agentclubConfigUsage(out io.Writer) {
@@ -482,13 +803,14 @@ func formatAgentClubConfigStatus(files []string, status agentclub.ConfigStatus) 
 		b.WriteString("agent-club config: no files\n")
 		return b.String()
 	}
-	fmt.Fprintf(&b, "agent-club config: files=%d capabilities=%d bindings=%d enabled_bindings=%d triggers=%d enabled_triggers=%d missing_secret_envs=%d\n",
+	fmt.Fprintf(&b, "agent-club config: files=%d capabilities=%d bindings=%d enabled_bindings=%d triggers=%d enabled_triggers=%d auto_run=%d missing_secret_envs=%d\n",
 		len(files),
 		status.CapabilityCount,
 		status.BindingCount,
 		status.EnabledBindingCount,
 		status.TriggerCount,
 		status.EnabledTriggerCount,
+		status.EnabledAutoRunCount,
 		status.MissingSecretEnvCount,
 	)
 	for _, file := range files {
@@ -548,7 +870,74 @@ func formatAgentClubTriggers(triggers []agentclub.TriggerBindingConfig) string {
 		if trigger.HMACSecretEnv != "" {
 			fmt.Fprintf(&b, " hmac_secret_env=%s", secrets.Redact(trigger.HMACSecretEnv))
 		}
+		if trigger.RunPolicy != nil && trigger.RunPolicy.Enabled {
+			fmt.Fprintf(&b, " run_policy=%s", formatAgentClubRunPolicySummary(trigger.RunPolicy))
+		}
 		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func formatAgentClubRunPolicySummary(policy *agentclub.RunPolicyConfig) string {
+	if policy == nil || !policy.Enabled {
+		return "disabled"
+	}
+	parts := []string{"enabled"}
+	if strings.TrimSpace(policy.Mode) != "" {
+		parts = append(parts, "mode="+policy.Mode)
+	}
+	if policy.MaxRunsPerHour > 0 {
+		parts = append(parts, fmt.Sprintf("max_runs_per_hour=%d", policy.MaxRunsPerHour))
+	}
+	if strings.TrimSpace(policy.Cooldown) != "" {
+		parts = append(parts, "cooldown="+policy.Cooldown)
+	}
+	if policy.MaxToolRounds > 0 {
+		parts = append(parts, fmt.Sprintf("max_tool_rounds=%d", policy.MaxToolRounds))
+	}
+	if strings.TrimSpace(policy.AccessMode) != "" {
+		parts = append(parts, "access_mode="+policy.AccessMode)
+	}
+	return strings.Join(parts, ",")
+}
+
+func formatAgentClubTriggerDelivery(files []string, status agentclub.ConfigStatus, resp agentclub.TriggerDeliveryResponse) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "agent-club trigger delivery: admitted=%t state=%s duplicate=%t run_dispatched=%t\n",
+		resp.Admitted,
+		secrets.Redact(resp.State),
+		resp.Duplicate,
+		resp.RunDispatched,
+	)
+	fmt.Fprintf(&b, "binding=%s kind=%s source=%s capability=%s event=%s\n",
+		secrets.Redact(resp.BindingID),
+		resp.TriggerKind,
+		resp.Source,
+		resp.Capability,
+		resp.EventType,
+	)
+	if resp.TargetSessionID != "" || resp.InputID != "" {
+		fmt.Fprintf(&b, "target_session=%s input=%s\n", secrets.Redact(resp.TargetSessionID), secrets.Redact(resp.InputID))
+	}
+	if resp.PayloadSHA256 != "" || resp.ExternalEventIDHash != "" {
+		fmt.Fprintf(&b, "payload_sha256=%s external_event_hash=%s\n",
+			gatewayclient.ShortAgentClubHash(resp.PayloadSHA256),
+			gatewayclient.ShortAgentClubHash(resp.ExternalEventIDHash),
+		)
+	}
+	fmt.Fprintf(&b, "config: files=%d capabilities=%d bindings=%d enabled_bindings=%d triggers=%d enabled_triggers=%d\n",
+		len(files),
+		status.CapabilityCount,
+		status.BindingCount,
+		status.EnabledBindingCount,
+		status.TriggerCount,
+		status.EnabledTriggerCount,
+	)
+	if resp.Admitted && resp.InputID != "" && !resp.RunDispatched {
+		fmt.Fprintf(&b, "next: queued input %s; start a run through the existing session run route for session %s\n",
+			secrets.Redact(resp.InputID),
+			secrets.Redact(resp.TargetSessionID),
+		)
 	}
 	return b.String()
 }

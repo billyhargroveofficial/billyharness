@@ -45,6 +45,12 @@ type RunResult struct {
 	DroppedEvents int64
 }
 
+type AgentClubTriggerDelivery struct {
+	BindingID string
+	Body      []byte
+	Headers   map[string]string
+}
+
 type StatusError struct {
 	Method     string
 	Path       string
@@ -248,6 +254,15 @@ func (c *Client) AgentClubCapabilities(ctx context.Context) (agentclub.Capabilit
 	return out, nil
 }
 
+func (c *Client) DeliverAgentClubTrigger(ctx context.Context, delivery AgentClubTriggerDelivery) (agentclub.TriggerDeliveryResponse, error) {
+	var out agentclub.TriggerDeliveryResponse
+	path := "/v1/agentclub/triggers/" + url.PathEscape(strings.TrimSpace(delivery.BindingID)) + "/deliveries"
+	if err := c.JSONBytesWithHeaders(ctx, http.MethodPost, path, delivery.Body, delivery.Headers, &out); err != nil {
+		return agentclub.TriggerDeliveryResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) CreateAgentClubProposal(ctx context.Context, sessionID string, proposal agentclub.ProposalCreateRequest) (agentclub.ProposalCreateResponse, error) {
 	var out agentclub.ProposalCreateResponse
 	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/agentclub/proposals"
@@ -271,6 +286,15 @@ func (c *Client) DecideAgentClubProposal(ctx context.Context, sessionID, proposa
 	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/agentclub/proposals/" + url.PathEscape(strings.TrimSpace(proposalID)) + "/decision"
 	if err := c.JSON(ctx, http.MethodPost, path, decision, &out); err != nil {
 		return agentclub.ProposalDecisionResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) ApplyAgentClubProposal(ctx context.Context, sessionID, proposalID string, apply agentclub.ProposalApplyRequest) (agentclub.ProposalApplyResponse, error) {
+	var out agentclub.ProposalApplyResponse
+	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/agentclub/proposals/" + url.PathEscape(strings.TrimSpace(proposalID)) + "/apply"
+	if err := c.JSON(ctx, http.MethodPost, path, apply, &out); err != nil {
+		return agentclub.ProposalApplyResponse{}, err
 	}
 	return out, nil
 }
@@ -374,7 +398,26 @@ func (c *Client) JSON(ctx context.Context, method, path string, body any, out an
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
+func (c *Client) JSONBytesWithHeaders(ctx context.Context, method, path string, body []byte, headers map[string]string, out any) error {
+	resp, err := c.doWithHeaders(ctx, method, path, body, headers)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if err := statusError(resp, method, path); err != nil {
+		return err
+	}
+	if out == nil {
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
+	return c.doWithHeaders(ctx, method, path, body, nil)
+}
+
+func (c *Client) doWithHeaders(ctx context.Context, method, path string, body []byte, headers map[string]string) (*http.Response, error) {
 	baseURL := gatewayapi.NormalizeBaseURL(c.BaseURL)
 	if baseURL == "" {
 		return nil, fmt.Errorf("gateway URL is empty")
@@ -393,6 +436,14 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (*htt
 		}
 		if body != nil {
 			req.Header.Set("Content-Type", "application/json")
+		}
+		for key, value := range headers {
+			key = strings.TrimSpace(key)
+			value = strings.TrimSpace(value)
+			if key == "" || value == "" {
+				continue
+			}
+			req.Header.Set(key, value)
 		}
 		if owner, ok := SessionOwnerFromContext(ctx); ok {
 			setSessionOwnerHeaders(req, owner)
@@ -558,6 +609,30 @@ func FormatAgentClubProposal(proposal agentclub.Proposal) string {
 	}
 	if proposal.SupersededByProposalID != "" {
 		fmt.Fprintf(&b, "  superseded_by: %s\n", secrets.Redact(proposal.SupersededByProposalID))
+	}
+	return b.String()
+}
+
+func FormatAgentClubProposalApply(resp agentclub.ProposalApplyResponse) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "apply proposal %s apply=%s state=%s action=%s hash=%s dry_run=%t run_dispatched=%t",
+		secrets.Redact(strings.TrimSpace(resp.ProposalID)),
+		secrets.Redact(strings.TrimSpace(resp.ApplyID)),
+		firstNonEmpty(strings.TrimSpace(resp.State), "unknown"),
+		secrets.Redact(strings.TrimSpace(resp.ActionKind)),
+		ShortAgentClubHash(resp.ProposalHash),
+		resp.DryRun,
+		resp.RunDispatched,
+	)
+	if resp.Duplicate {
+		b.WriteString(" duplicate=true")
+	}
+	b.WriteByte('\n')
+	if outputRef := safeProposalPreview(resp.OutputRef, 180); outputRef != "" {
+		fmt.Fprintf(&b, "  output_ref: %s\n", outputRef)
+	}
+	if resp.PayloadSHA256 != "" {
+		fmt.Fprintf(&b, "  payload_sha256: %s\n", ShortAgentClubHash(resp.PayloadSHA256))
 	}
 	return b.String()
 }

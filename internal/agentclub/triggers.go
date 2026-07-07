@@ -52,6 +52,8 @@ type TriggerBinding struct {
 	DeliveryIDHeader  string                  `json:"delivery_id_header,omitempty"`
 	Metadata          map[string]string       `json:"metadata,omitempty"`
 	MaxBodyBytes      int64                   `json:"max_body_bytes,omitempty"`
+	Schedule          *ScheduleConfig         `json:"schedule,omitempty"`
+	RunPolicy         *RunPolicyConfig        `json:"run_policy,omitempty"`
 	Enabled           bool                    `json:"enabled"`
 	AllowFutureDryRun bool                    `json:"allow_future_dry_run,omitempty"`
 }
@@ -243,6 +245,33 @@ func BuildTriggerDelivery(input TriggerDeliveryInput) (TriggerDelivery, error) {
 	}, nil
 }
 
+func SignTriggerWebhookHMAC(binding TriggerBinding, body []byte, now time.Time) (signatureHeader, signature, timestampHeader, timestamp string, err error) {
+	binding, err = NormalizeTriggerBinding(binding)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	if binding.Kind != TriggerKindWebhook {
+		return "", "", "", "", fmt.Errorf("%w: hmac signing is only valid for webhook triggers", ErrInvalidTriggerBinding)
+	}
+	if binding.AuthMethod != TriggerAuthHMACSHA256 {
+		return "", "", "", "", nil
+	}
+	if len(binding.HMACSecret) == 0 {
+		return "", "", "", "", fmt.Errorf("%w: hmac secret required", ErrInvalidTriggerBinding)
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	timestampHeader = binding.TimestampHeader
+	includeTimestamp := timestampHeader != ""
+	if includeTimestamp {
+		timestamp = now.UTC().Format(time.RFC3339Nano)
+	}
+	signatureHeader = binding.SignatureHeader
+	signature = ingress.SignRawBodyHMACSHA256(binding.HMACSecret, body, timestamp, includeTimestamp)
+	return signatureHeader, signature, timestampHeader, timestamp, nil
+}
+
 func MapTriggerToIngress(delivery TriggerDelivery) (AdmissionMapping, error) {
 	req, payload, err := NormalizeEventRequest(delivery.Request)
 	if err != nil {
@@ -327,6 +356,8 @@ func ResponseFromTriggerDelivery(delivery TriggerDelivery, input gatewayapi.Sess
 func cloneTriggerBinding(binding TriggerBinding) TriggerBinding {
 	binding.HMACSecret = append([]byte(nil), binding.HMACSecret...)
 	binding.Metadata = copyStringMap(binding.Metadata)
+	binding.Schedule = cloneScheduleConfig(binding.Schedule)
+	binding.RunPolicy = cloneRunPolicyConfig(binding.RunPolicy)
 	return binding
 }
 

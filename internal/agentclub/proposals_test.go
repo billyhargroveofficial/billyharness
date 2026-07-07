@@ -3,6 +3,7 @@ package agentclub
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,6 +85,29 @@ func TestNewProposalValidationAndDecisionNormalization(t *testing.T) {
 	})
 	if !errors.Is(err, ErrInvalidDecision) {
 		t.Fatalf("decision hash err = %v", err)
+	}
+	_, err = NormalizeProposalApply(ProposalApplyRequest{
+		SchemaVersion:        SchemaVersion,
+		ExpectedProposalHash: "not-a-hash",
+		IdempotencyKey:       "operator-key",
+	})
+	if !errors.Is(err, ErrInvalidApply) {
+		t.Fatalf("apply hash err = %v", err)
+	}
+	apply, err := NormalizeProposalApply(ProposalApplyRequest{
+		SchemaVersion:        SchemaVersion,
+		ExpectedProposalHash: strings.Repeat("A", 64),
+		IdempotencyKey:       "operator:key-1",
+		DryRun:               true,
+	})
+	if err != nil {
+		t.Fatalf("apply normalize err = %v", err)
+	}
+	if apply.ExpectedProposalHash != strings.Repeat("a", 64) || !apply.DryRun {
+		t.Fatalf("apply = %#v", apply)
+	}
+	if got := ProposalApplyID("proposal-1", strings.Repeat("a", 64), "operator:key-1"); got == "" || got != ProposalApplyID("proposal-1", strings.Repeat("A", 64), "operator:key-1") {
+		t.Fatalf("apply id not deterministic: %q", got)
 	}
 }
 

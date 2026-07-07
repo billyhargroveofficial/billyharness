@@ -18,16 +18,21 @@ import (
 const (
 	ProposalPolicyVersion = "agentclub.safe_output.v0"
 
-	ProposalStatePending    = "pending"
-	ProposalStateApproved   = "approved"
-	ProposalStateRejected   = "rejected"
-	ProposalStateExpired    = "expired"
-	ProposalStateSuperseded = "superseded"
-	ProposalStateFailed     = "failed"
+	ProposalStatePending     = "pending"
+	ProposalStateApproved    = "approved"
+	ProposalStateRejected    = "rejected"
+	ProposalStateExpired     = "expired"
+	ProposalStateSuperseded  = "superseded"
+	ProposalStateFailed      = "failed"
+	ProposalStateApplied     = "applied"
+	ProposalStateApplyFailed = "apply_failed"
 
 	ProposalDecisionApprove = "approve"
 	ProposalDecisionReject  = "reject"
 	ProposalDecisionEdit    = "edit"
+
+	ProposalActionRecordNote = "record_note"
+	ProposalApplyStateDryRun = "dry_run"
 
 	MaxProposalPreviewBytes = 4096
 	MaxProposalPayloadBytes = 64 << 10
@@ -39,7 +44,9 @@ var (
 	ErrInvalidDecision      = errors.New("invalid agentclub proposal decision")
 	ErrProposalHashMismatch = errors.New("agentclub proposal hash mismatch")
 	ErrProposalNotPending   = errors.New("agentclub proposal is not pending")
+	ErrProposalNotApproved  = errors.New("agentclub proposal is not approved")
 	ErrProposalNotFound     = errors.New("agentclub proposal not found")
+	ErrInvalidApply         = errors.New("invalid agentclub proposal apply")
 )
 
 type ProposalCreateRequest struct {
@@ -106,6 +113,27 @@ type ProposalDecisionResponse struct {
 	Action        string    `json:"action"`
 	Proposal      Proposal  `json:"proposal"`
 	NewProposal   *Proposal `json:"new_proposal,omitempty"`
+}
+
+type ProposalApplyRequest struct {
+	SchemaVersion        int    `json:"schema_version"`
+	ExpectedProposalHash string `json:"expected_proposal_hash"`
+	IdempotencyKey       string `json:"idempotency_key"`
+	DryRun               bool   `json:"dry_run,omitempty"`
+}
+
+type ProposalApplyResponse struct {
+	SchemaVersion int    `json:"schema_version"`
+	ProposalID    string `json:"proposal_id"`
+	ProposalHash  string `json:"proposal_hash"`
+	ApplyID       string `json:"apply_id"`
+	State         string `json:"state"`
+	ActionKind    string `json:"action_kind"`
+	DryRun        bool   `json:"dry_run,omitempty"`
+	OutputRef     string `json:"output_ref,omitempty"`
+	PayloadSHA256 string `json:"payload_sha256,omitempty"`
+	RunDispatched bool   `json:"run_dispatched"`
+	Duplicate     bool   `json:"duplicate,omitempty"`
 }
 
 func NewProposal(req ProposalCreateRequest, sessionID string, owner gatewayapi.SessionOwner, now time.Time, supersedes string) (Proposal, []byte, error) {
@@ -228,6 +256,21 @@ func NormalizeProposalDecision(req ProposalDecisionRequest) (ProposalDecisionReq
 	return req, nil
 }
 
+func NormalizeProposalApply(req ProposalApplyRequest) (ProposalApplyRequest, error) {
+	if req.SchemaVersion != SchemaVersion {
+		return ProposalApplyRequest{}, fmt.Errorf("%w: got schema_version %d want %d", ErrUnsupportedSchemaVersion, req.SchemaVersion, SchemaVersion)
+	}
+	req.ExpectedProposalHash = strings.ToLower(strings.TrimSpace(req.ExpectedProposalHash))
+	if !isSHA256Hex(req.ExpectedProposalHash) {
+		return ProposalApplyRequest{}, fmt.Errorf("%w: expected_proposal_hash required", ErrInvalidApply)
+	}
+	var err error
+	if req.IdempotencyKey, err = normalizeIdentifier("idempotency_key", req.IdempotencyKey); err != nil {
+		return ProposalApplyRequest{}, fmt.Errorf("%w: %v", ErrInvalidApply, err)
+	}
+	return req, nil
+}
+
 func ProposalExpired(proposal Proposal, now time.Time) bool {
 	if proposal.ExpiresAt == nil || proposal.State != ProposalStatePending {
 		return false
@@ -247,6 +290,15 @@ func DecisionID(proposalID, action, proposalHash string, now time.Time) string {
 		now.Format(time.RFC3339Nano),
 	}, "\x00")))
 	return "decision-" + hex.EncodeToString(sum[:])[:32]
+}
+
+func ProposalApplyID(proposalID, proposalHash, idempotencyKey string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		strings.TrimSpace(proposalID),
+		strings.ToLower(strings.TrimSpace(proposalHash)),
+		strings.TrimSpace(idempotencyKey),
+	}, "\x00")))
+	return "apply-" + hex.EncodeToString(sum[:])[:32]
 }
 
 func normalizeProposalPayload(raw json.RawMessage) ([]byte, error) {

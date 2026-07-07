@@ -27,8 +27,9 @@ Primary code anchors:
   verified trigger delivery, raw-body HMAC handling, body caps, deterministic
   event identity, and redacted trigger audit.
 - [internal/gateway/agentclub_proposals.go](../../internal/gateway/agentclub_proposals.go):
-  safe-output proposal creation, listing, hash-bound decisions, expiration,
-  supersede handling, and session-scoped JSONL replay.
+  safe-output proposal creation, listing, hash-bound decisions, explicit
+  hash-bound apply, expiration, supersede handling, and session-scoped JSONL
+  replay.
 - [internal/gateway/response.go](../../internal/gateway/response.go):
   redacted JSON and NDJSON gateway responses.
 - [internal/gatewayapi/types.go](../../internal/gatewayapi/types.go) and
@@ -187,14 +188,17 @@ provider, model, thinking, reasoning effort, access mode, max tool rounds, MCP,
 tools, shell, command, environment, browser auth, raw API, raw SQL, or dispatch
 authority.
 
-The agent-club response is redacted and admit-only. It returns admitted state,
-duplicate state, input id, target session id, source, capability, event type,
-payload hash, external event id hash, metadata keys, and
-`run_dispatched=false`. It does not include raw prompt, raw payload, external
-event id, client id, or metadata values. Agent-club capability descriptors are
-metadata only (`id`, title, description, kind, risk, schemas,
-`dispatch=admit_only`, approval semantics); Billyharness does not load project
-manifests or execute capabilities in this slice.
+The normalized event route response is redacted and admit-only. It returns
+admitted state, duplicate state, input id, target session id, source,
+capability, event type, payload hash, external event id hash, metadata keys,
+and `run_dispatched=false`. Trigger delivery responses use the same redacted
+shape, but an explicit trusted trigger `run_policy` may set
+`run_dispatched=true` after input admission and policy checks. Neither response
+includes raw prompt, raw payload, external event id, client id, or metadata
+values. Agent-club capability descriptors are metadata only (`id`, title,
+description, kind, risk, schemas, `dispatch=admit_only`, approval semantics);
+Billyharness does not load project manifests or execute capabilities directly
+in this slice.
 
 When an agent-club registry is configured, the route checks descriptor and
 trusted binding policy before writing ingress audit or session inputs. Bindings
@@ -238,14 +242,34 @@ source/capability/event type, decision, reason, payload hash, external event id
 hash, target session id, input id, duplicate state, client type, client id hash,
 and metadata keys. It does not record raw bodies, prompts, delivery ids,
 signatures, HMAC secrets, metadata values, headers, command lines, or adapter
-secrets. Schedule/manual delivery has no daemon in this slice: future timestamps
-are rejected unless explicitly marked as dry registration, and dry registration
-does not admit an input.
+secrets. Schedule/manual future timestamps are rejected unless explicitly
+marked as dry registration, and dry registration does not admit an input.
+
+`fast-agent-harness agentclub scheduler run` is a separate local operator
+runner for enabled interval `kind=schedule` trigger config. It computes due UTC
+ticks, writes private `agentclub-scheduler-state.json` state, and posts only to
+the verified trigger delivery route. It does not call session run routes,
+execute shell commands, call MCP tools, load project manifests, mutate external
+APIs, or apply proposals. The gateway remains the owner of trigger
+verification, ingress audit, owner-scope authorization, and session input
+admission.
+
+Trigger auto-run is a separate opt-in trust layer, not payload authority. A
+configured trigger `run_policy` can dispatch only after the input was admitted.
+The gateway refuses duplicate inputs, cross-owner sessions, busy sessions for
+`start_if_idle`, cooldown/rate-limit violations, and policies that exceed the
+server's configured access mode or max tool rounds. The dispatched request uses
+the trusted prompt and admitted input id; payload metadata cannot set provider,
+model, reasoning effort, access mode, max tool rounds, tools, MCP, shell,
+browser auth, raw APIs, SQL, or dispatch behavior. Auto-run decisions are
+recorded in a redacted `agentclub-autorun-audit.jsonl` ledger when the gateway
+store is configured.
 
 Safe-output proposals are the review boundary for future external mutation.
 `POST /v1/sessions/{id}/agentclub/proposals`, `GET
-/v1/sessions/{id}/agentclub/proposals`, and `POST
-/v1/sessions/{id}/agentclub/proposals/{proposal_id}/decision` all sit behind
+/v1/sessions/{id}/agentclub/proposals`, `POST
+/v1/sessions/{id}/agentclub/proposals/{proposal_id}/decision`, and `POST
+/v1/sessions/{id}/agentclub/proposals/{proposal_id}/apply` all sit behind
 normal gateway session owner authorization. A proposal stores source,
 capability, action kind, risk, target scope, preview/output-ref summary,
 payload hash, policy version, proposal hash, owner/session scope, state,
@@ -259,10 +283,24 @@ inferred from ordinary conversation text. Recording an approval does not call
 external APIs, send HH replies, apply to jobs, modify GitHub, run shell
 commands, call MCP tools, edit files, dispatch a run, or apply an action.
 
+Apply is a second explicit gate. An apply request must provide the expected
+proposal hash and an idempotency key, and the gateway applies only the current
+approved artifact with matching owner scope. Duplicate apply requests return
+the existing apply result instead of invoking the executor again. Dry runs
+validate the same boundary without writing an apply record. The only v0
+executor is `record_note`, which writes a redacted `proposal_applied` record
+and synthetic `agentclub:apply:<apply_id>` output ref. Unsupported action
+kinds become `proposal_apply_failed` records. The apply ledger stores hashes
+and safe identifiers only, never raw payloads, metadata values, bearer tokens,
+external responses, command output, shell snippets, SQL, browser state, or MCP
+arguments. Apply never dispatches a run.
+
 Operator surfaces stay behind the same gateway APIs. The CLI requires explicit
 session id, proposal id, and expected proposal hash for approve/reject
-decisions. The TUI `/agentclub` view only lists enabled capabilities and the
-current gateway session's proposals. Telegram `/agentclub` is operator-only;
+decisions and for apply; CLI apply derives a deterministic idempotency key if
+the operator does not pass one. The TUI `/agentclub` view only lists enabled
+capabilities and the current gateway session's proposals. Telegram
+`/agentclub` is operator-only;
 pending proposal buttons carry a proposal id plus expected hash prefix, then
 the callback handler re-fetches the proposal under Telegram owner headers and
 submits the full current hash to the gateway. Stale hashes, terminal proposal

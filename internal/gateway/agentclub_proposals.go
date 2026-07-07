@@ -19,11 +19,13 @@ import (
 const (
 	agentClubProposalsJSONLName = "agentclub-proposals.jsonl"
 
-	agentClubProposalCreated    = "proposal_created"
-	agentClubDecisionRecorded   = "decision_recorded"
-	agentClubProposalExpired    = "proposal_expired"
-	agentClubProposalSuperseded = "proposal_superseded"
-	agentClubProposalFailed     = "proposal_failed"
+	agentClubProposalCreated     = "proposal_created"
+	agentClubDecisionRecorded    = "decision_recorded"
+	agentClubProposalExpired     = "proposal_expired"
+	agentClubProposalSuperseded  = "proposal_superseded"
+	agentClubProposalFailed      = "proposal_failed"
+	agentClubProposalApplied     = "proposal_applied"
+	agentClubProposalApplyFailed = "proposal_apply_failed"
 )
 
 var errAgentClubProposalStoreUnavailable = errors.New("agentclub proposal store unavailable")
@@ -43,6 +45,13 @@ type agentClubProposalRecord struct {
 	CommentSHA256          string             `json:"comment_sha256,omitempty"`
 	NewProposalID          string             `json:"new_proposal_id,omitempty"`
 	SupersededByProposalID string             `json:"superseded_by_proposal_id,omitempty"`
+	ApplyID                string             `json:"apply_id,omitempty"`
+	IdempotencyKeyHash     string             `json:"idempotency_key_hash,omitempty"`
+	ApplyState             string             `json:"apply_state,omitempty"`
+	ActionKind             string             `json:"action_kind,omitempty"`
+	OutputRef              string             `json:"output_ref,omitempty"`
+	PayloadSHA256          string             `json:"payload_sha256,omitempty"`
+	DryRun                 bool               `json:"dry_run,omitempty"`
 	Reason                 string             `json:"reason,omitempty"`
 }
 
@@ -112,6 +121,30 @@ func (s *Server) handleAgentClubProposalDecision(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (s *Server) handleAgentClubProposalApply(w http.ResponseWriter, r *http.Request) {
+	session, ok := s.sessionForRequest(w, r, sessionAccessMutate)
+	if !ok {
+		return
+	}
+	proposalID, err := url.PathUnescape(strings.TrimSpace(r.PathValue("proposal_id")))
+	if err != nil || strings.TrimSpace(proposalID) == "" {
+		writeError(w, http.StatusBadRequest, "proposal_id required")
+		return
+	}
+	var req agentclub.ProposalApplyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	owner := proposalOwnerForRequest(session, r)
+	resp, err := s.applyAgentClubProposal(session, proposalID, req, owner)
+	if err != nil {
+		writeAgentClubProposalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (s *Server) createAgentClubProposal(session *Session, req agentclub.ProposalCreateRequest, owner gatewayapi.SessionOwner, supersedes string) (agentclub.ProposalCreateResponse, error) {
 	if s == nil || s.store == nil {
 		return agentclub.ProposalCreateResponse{}, errAgentClubProposalStoreUnavailable
@@ -131,6 +164,13 @@ func (s *Server) recordAgentClubProposalDecision(session *Session, proposalID st
 		return agentclub.ProposalDecisionResponse{}, errAgentClubProposalStoreUnavailable
 	}
 	return s.store.RecordAgentClubProposalDecision(session, proposalID, req, owner, time.Now().UTC())
+}
+
+func (s *Server) applyAgentClubProposal(session *Session, proposalID string, req agentclub.ProposalApplyRequest, owner gatewayapi.SessionOwner) (agentclub.ProposalApplyResponse, error) {
+	if s == nil || s.store == nil {
+		return agentclub.ProposalApplyResponse{}, errAgentClubProposalStoreUnavailable
+	}
+	return s.store.ApplyAgentClubProposal(session, proposalID, req, owner, time.Now().UTC())
 }
 
 func (s *sessionStore) CreateAgentClubProposal(session *Session, req agentclub.ProposalCreateRequest, owner gatewayapi.SessionOwner, supersedes string, now time.Time) (agentclub.ProposalCreateResponse, error) {
@@ -330,6 +370,103 @@ func (s *sessionStore) RecordAgentClubProposalDecision(session *Session, proposa
 	}, nil
 }
 
+func (s *sessionStore) ApplyAgentClubProposal(session *Session, proposalID string, req agentclub.ProposalApplyRequest, owner gatewayapi.SessionOwner, now time.Time) (agentclub.ProposalApplyResponse, error) {
+	if s == nil || strings.TrimSpace(s.dir) == "" || session == nil {
+		return agentclub.ProposalApplyResponse{}, errAgentClubProposalStoreUnavailable
+	}
+	normalized, err := agentclub.NormalizeProposalApply(req)
+	if err != nil {
+		return agentclub.ProposalApplyResponse{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path, err := s.agentClubProposalsPathLocked(session)
+	if err != nil {
+		return agentclub.ProposalApplyResponse{}, err
+	}
+	replayed, err := replayAgentClubProposals(path, session.ID)
+	if err != nil {
+		return agentclub.ProposalApplyResponse{}, err
+	}
+	replayed, err = s.expireAgentClubProposalsLocked(path, session.ID, replayed, now)
+	if err != nil {
+		return agentclub.ProposalApplyResponse{}, err
+	}
+	proposalID = strings.TrimSpace(proposalID)
+	proposal, ok := replayed.proposals[proposalID]
+	if !ok {
+		return agentclub.ProposalApplyResponse{}, fmt.Errorf("%w: %s", agentclub.ErrProposalNotFound, proposalID)
+	}
+	if proposal.ProposalHash != normalized.ExpectedProposalHash {
+		return agentclub.ProposalApplyResponse{}, agentclub.ErrProposalHashMismatch
+	}
+	if proposalOwner := normalizeSessionOwner(proposal.Owner); proposalOwner != (gatewayapi.SessionOwner{}) && normalizeSessionOwner(owner) != proposalOwner {
+		return agentclub.ProposalApplyResponse{}, fmt.Errorf("session owner scope mismatch")
+	}
+	applyID := agentclub.ProposalApplyID(proposal.ProposalID, proposal.ProposalHash, normalized.IdempotencyKey)
+	if existing, ok := latestAgentClubApplyRecord(replayed.records, proposal.ProposalID, proposal.ProposalHash, applyID); ok {
+		return agentClubApplyResponseFromRecord(existing, true), nil
+	}
+	if existing, ok := latestSuccessfulAgentClubApplyRecord(replayed.records, proposal.ProposalID, proposal.ProposalHash); ok {
+		return agentClubApplyResponseFromRecord(existing, true), nil
+	}
+	if proposal.State != agentclub.ProposalStateApproved {
+		return agentclub.ProposalApplyResponse{}, fmt.Errorf("%w: %s is %s", agentclub.ErrProposalNotApproved, proposalID, proposal.State)
+	}
+	decisionID := latestApprovalDecisionID(replayed.records, proposal.ProposalID, proposal.ProposalHash)
+	if decisionID == "" {
+		return agentclub.ProposalApplyResponse{}, fmt.Errorf("%w: approval evidence missing", agentclub.ErrProposalNotApproved)
+	}
+	outputRef := agentClubApplyOutputRef(applyID)
+	base := agentClubProposalRecord{
+		SchemaVersion:        gatewaySessionSchemaVersion,
+		Seq:                  replayed.lastSeq + 1,
+		SessionID:            session.ID,
+		Timestamp:            now.UTC(),
+		ProposalID:           proposal.ProposalID,
+		ProposalHash:         proposal.ProposalHash,
+		DecisionID:           decisionID,
+		ExpectedProposalHash: normalized.ExpectedProposalHash,
+		ApplyID:              applyID,
+		IdempotencyKeyHash:   hashIngressAuditValue(normalized.IdempotencyKey),
+		ActionKind:           proposal.ActionKind,
+		OutputRef:            outputRef,
+		PayloadSHA256:        proposal.PayloadSHA256,
+		DryRun:               normalized.DryRun,
+	}
+	if normalized.DryRun {
+		return agentclub.ProposalApplyResponse{
+			SchemaVersion: agentclub.SchemaVersion,
+			ProposalID:    proposal.ProposalID,
+			ProposalHash:  proposal.ProposalHash,
+			ApplyID:       applyID,
+			State:         agentclub.ProposalApplyStateDryRun,
+			ActionKind:    proposal.ActionKind,
+			DryRun:        true,
+			OutputRef:     outputRef,
+			PayloadSHA256: proposal.PayloadSHA256,
+			RunDispatched: false,
+		}, nil
+	}
+	record := base
+	switch proposal.ActionKind {
+	case agentclub.ProposalActionRecordNote:
+		record.Kind = agentClubProposalApplied
+		record.ApplyState = agentclub.ProposalStateApplied
+	default:
+		record.Kind = agentClubProposalApplyFailed
+		record.ApplyState = agentclub.ProposalStateApplyFailed
+		record.Reason = "unsupported action_kind"
+	}
+	if err := validateAgentClubProposalRecordForAppend(record); err != nil {
+		return agentclub.ProposalApplyResponse{}, err
+	}
+	if err := eventlog.AppendJSONL(path, record); err != nil {
+		return agentclub.ProposalApplyResponse{}, err
+	}
+	return agentClubApplyResponseFromRecord(record, false), nil
+}
+
 func (s *sessionStore) expireAgentClubProposalsLocked(path, sessionID string, replayed replayedAgentClubProposals, now time.Time) (replayedAgentClubProposals, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -427,6 +564,11 @@ func applyAgentClubProposalRecord(proposals map[string]agentclub.Proposal, recor
 		proposal.State = agentclub.ProposalStateFailed
 		proposal.UpdatedAt = record.Timestamp
 		proposals[record.ProposalID] = proposal
+	case agentClubProposalApplied, agentClubProposalApplyFailed:
+		proposal := proposals[record.ProposalID]
+		proposal.State = record.ApplyState
+		proposal.UpdatedAt = record.Timestamp
+		proposals[record.ProposalID] = proposal
 	}
 }
 
@@ -439,7 +581,7 @@ func validateAgentClubProposalRecordForAppend(record agentClubProposalRecord) er
 
 func validateAgentClubProposalRecord(record agentClubProposalRecord, sessionID string) error {
 	switch record.Kind {
-	case agentClubProposalCreated, agentClubDecisionRecorded, agentClubProposalExpired, agentClubProposalSuperseded, agentClubProposalFailed:
+	case agentClubProposalCreated, agentClubDecisionRecorded, agentClubProposalExpired, agentClubProposalSuperseded, agentClubProposalFailed, agentClubProposalApplied, agentClubProposalApplyFailed:
 	default:
 		return fmt.Errorf("unsupported proposal record kind %q", record.Kind)
 	}
@@ -454,7 +596,72 @@ func validateAgentClubProposalRecord(record agentClubProposalRecord, sessionID s
 	if record.Kind != agentClubProposalCreated && strings.TrimSpace(record.ProposalID) == "" {
 		return fmt.Errorf("proposal record missing proposal_id")
 	}
+	if record.Kind == agentClubProposalApplied || record.Kind == agentClubProposalApplyFailed {
+		if strings.TrimSpace(record.ApplyID) == "" || strings.TrimSpace(record.ActionKind) == "" || strings.TrimSpace(record.PayloadSHA256) == "" || strings.TrimSpace(record.ProposalHash) == "" {
+			return fmt.Errorf("invalid proposal apply record")
+		}
+		if record.Kind == agentClubProposalApplied && record.ApplyState != agentclub.ProposalStateApplied {
+			return fmt.Errorf("invalid proposal applied state")
+		}
+		if record.Kind == agentClubProposalApplyFailed && record.ApplyState != agentclub.ProposalStateApplyFailed {
+			return fmt.Errorf("invalid proposal apply_failed state")
+		}
+	}
 	return nil
+}
+
+func latestAgentClubApplyRecord(records []agentClubProposalRecord, proposalID, proposalHash, applyID string) (agentClubProposalRecord, bool) {
+	for i := len(records) - 1; i >= 0; i-- {
+		record := records[i]
+		if record.ProposalID == proposalID && record.ProposalHash == proposalHash && record.ApplyID == applyID && isAgentClubApplyRecord(record) {
+			return record, true
+		}
+	}
+	return agentClubProposalRecord{}, false
+}
+
+func latestSuccessfulAgentClubApplyRecord(records []agentClubProposalRecord, proposalID, proposalHash string) (agentClubProposalRecord, bool) {
+	for i := len(records) - 1; i >= 0; i-- {
+		record := records[i]
+		if record.ProposalID == proposalID && record.ProposalHash == proposalHash && record.Kind == agentClubProposalApplied && record.ApplyState == agentclub.ProposalStateApplied {
+			return record, true
+		}
+	}
+	return agentClubProposalRecord{}, false
+}
+
+func latestApprovalDecisionID(records []agentClubProposalRecord, proposalID, proposalHash string) string {
+	for i := len(records) - 1; i >= 0; i-- {
+		record := records[i]
+		if record.Kind == agentClubDecisionRecorded && record.ProposalID == proposalID && record.ProposalHash == proposalHash && record.Decision == agentclub.ProposalDecisionApprove {
+			return record.DecisionID
+		}
+	}
+	return ""
+}
+
+func isAgentClubApplyRecord(record agentClubProposalRecord) bool {
+	return record.Kind == agentClubProposalApplied || record.Kind == agentClubProposalApplyFailed
+}
+
+func agentClubApplyResponseFromRecord(record agentClubProposalRecord, duplicate bool) agentclub.ProposalApplyResponse {
+	return agentclub.ProposalApplyResponse{
+		SchemaVersion: agentclub.SchemaVersion,
+		ProposalID:    record.ProposalID,
+		ProposalHash:  record.ProposalHash,
+		ApplyID:       record.ApplyID,
+		State:         record.ApplyState,
+		ActionKind:    record.ActionKind,
+		DryRun:        record.DryRun,
+		OutputRef:     record.OutputRef,
+		PayloadSHA256: record.PayloadSHA256,
+		RunDispatched: false,
+		Duplicate:     duplicate,
+	}
+}
+
+func agentClubApplyOutputRef(applyID string) string {
+	return "agentclub:apply:" + strings.TrimSpace(applyID)
 }
 
 func proposalOwnerForRequest(session *Session, r *http.Request) gatewayapi.SessionOwner {
@@ -475,10 +682,12 @@ func writeAgentClubProposalError(w http.ResponseWriter, err error) {
 	case errors.Is(err, agentclub.ErrUnsupportedSchemaVersion),
 		errors.Is(err, agentclub.ErrInvalidIdentifier),
 		errors.Is(err, agentclub.ErrInvalidProposal),
-		errors.Is(err, agentclub.ErrInvalidDecision):
+		errors.Is(err, agentclub.ErrInvalidDecision),
+		errors.Is(err, agentclub.ErrInvalidApply):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, agentclub.ErrProposalHashMismatch),
-		errors.Is(err, agentclub.ErrProposalNotPending):
+		errors.Is(err, agentclub.ErrProposalNotPending),
+		errors.Is(err, agentclub.ErrProposalNotApproved):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, agentclub.ErrProposalNotFound):
 		writeError(w, http.StatusNotFound, err.Error())

@@ -112,6 +112,104 @@ func TestReadConfigFileRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestScheduleTriggerConfigValidation(t *testing.T) {
+	cfg := testFileConfig()
+	cfg.Triggers[0].ID = "fixture.schedule"
+	cfg.Triggers[0].Kind = TriggerKindSchedule
+	cfg.Triggers[0].Schedule = nil
+	_, _, err := BuildRegistryFromConfig(cfg, nil)
+	if err == nil || !strings.Contains(err.Error(), "schedule required") {
+		t.Fatalf("missing schedule err = %v", err)
+	}
+
+	cfg.Triggers[0].Schedule = &ScheduleConfig{
+		Kind:       ScheduleKindInterval,
+		Every:      "30m",
+		StartAtUTC: "2026-07-07T00:00:00Z",
+		MaxCatchup: 2,
+	}
+	registry, _, err := BuildRegistryFromConfig(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trigger, err := registry.TriggerBinding("fixture.schedule")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trigger.Schedule == nil || trigger.Schedule.Every != "30m0s" || trigger.Schedule.MaxCatchup != 2 {
+		t.Fatalf("schedule = %#v", trigger.Schedule)
+	}
+
+	cfg = testFileConfig()
+	cfg.Triggers[0].Schedule = &ScheduleConfig{Kind: ScheduleKindInterval, Every: "30m", StartAtUTC: "2026-07-07T00:00:00Z"}
+	_, _, err = BuildRegistryFromConfig(cfg, nil)
+	if err == nil || !strings.Contains(err.Error(), "schedule is only valid") {
+		t.Fatalf("webhook schedule err = %v", err)
+	}
+}
+
+func TestRunPolicyConfigValidationAndStatus(t *testing.T) {
+	cfg := testFileConfig()
+	cfg.Triggers[0].RunPolicy = &RunPolicyConfig{
+		Enabled:         true,
+		Mode:            RunPolicyModeStartIfIdle,
+		MaxRunsPerHour:  4,
+		Cooldown:        "10m",
+		MaxToolRounds:   2,
+		AccessMode:      "guarded",
+		InterruptPolicy: "",
+	}
+	registry, status, err := BuildRegistryFromConfig(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.EnabledAutoRunCount != 1 {
+		t.Fatalf("status = %#v", status)
+	}
+	trigger, err := registry.TriggerBinding("fixture.webhook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trigger.RunPolicy == nil || trigger.RunPolicy.Cooldown != "10m0s" || trigger.RunPolicy.MaxRunsPerHour != 4 {
+		t.Fatalf("run policy = %#v", trigger.RunPolicy)
+	}
+
+	cfg.Triggers[0].RunPolicy.AccessMode = "root"
+	_, _, err = BuildRegistryFromConfig(cfg, nil)
+	if err == nil || !strings.Contains(err.Error(), "access_mode") {
+		t.Fatalf("invalid access mode err = %v", err)
+	}
+}
+
+func TestRunPolicyRejectsUnknownOverrideFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agentclub.config.json")
+	body := []byte(`{
+  "schema_version": 1,
+  "capabilities": [{"id":"fixture.review","kind":"review","risk":"read_only","dispatch":"admit_only"}],
+  "trusted_bindings": [{"id":"fixture.binding","capability":"fixture.review","client_type":"ingress","client_id":"ingress:fixture:prod","enabled":true}],
+  "triggers": [{
+    "id":"fixture.webhook",
+    "kind":"webhook",
+    "source":"fixture",
+    "capability":"fixture.review",
+    "event_type":"review_queue",
+    "owner":{"client_type":"ingress","client_id":"ingress:fixture:prod"},
+    "target_session_id":"session-1",
+    "prompt":"Review fixture.",
+    "auth_method":"none",
+    "run_policy":{"enabled":true,"provider":"nope"},
+    "enabled":true
+  }]
+}`)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ReadConfigFile(path)
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func testFileConfig() FileConfig {
 	return FileConfig{
 		SchemaVersion: SchemaVersion,

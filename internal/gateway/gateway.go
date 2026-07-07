@@ -627,108 +627,126 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	streamEvents(r.Context(), w, func(emit func(protocol.Event)) error {
-		completePreflightFailure := func(err error) error {
-			if err == nil {
-				return nil
-			}
-			if completeErr := s.completeSessionInputWithReason(session, admission.InputID, 0, "preflight_failed", err.Error()); completeErr != nil {
-				return errors.Join(err, fmt.Errorf("complete preflight-failed input: %w", completeErr))
-			}
-			return err
+		req.InterruptPolicy = interruptPolicy
+		return s.runAdmittedSessionInput(r.Context(), session, req, admission, "gateway_session", emit)
+	})
+}
+
+func (s *Server) runAdmittedSessionInput(ctx context.Context, session *Session, req RunRequest, admission gatewayapi.SessionInputResponse, source string, emit func(protocol.Event)) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if emit == nil {
+		emit = func(protocol.Event) {}
+	}
+	interruptPolicy, err := normalizeInterruptPolicy(req.InterruptPolicy)
+	if err != nil {
+		return err
+	}
+	completePreflightFailure := func(err error) error {
+		if err == nil {
+			return nil
 		}
-		if err := s.applySessionInterruptPolicy(r.Context(), session, interruptPolicy); err != nil {
-			return completePreflightFailure(err)
+		if completeErr := s.completeSessionInputWithReason(session, admission.InputID, 0, "preflight_failed", err.Error()); completeErr != nil {
+			return errors.Join(err, fmt.Errorf("complete preflight-failed input: %w", completeErr))
 		}
-		settings, err := s.runSettingsForRequest(r.Context(), req)
-		if err != nil {
-			return completePreflightFailure(err)
+		return err
+	}
+	if err := s.applySessionInterruptPolicy(ctx, session, interruptPolicy); err != nil {
+		return completePreflightFailure(err)
+	}
+	settings, err := s.runSettingsForRequest(ctx, req)
+	if err != nil {
+		return completePreflightFailure(err)
+	}
+	a, err := s.agentForSessionRunSettings(session, settings)
+	if err != nil {
+		return completePreflightFailure(err)
+	}
+	statusReq := runRequestFromSettings(settings)
+	userMessage := protocol.UserMessage(req.Prompt, req.Attachments)
+	contextEpochAdmission := s.sessionContextEpochAdmission(ctx, session, settings, userMessage)
+	runSeq, err := s.promoteSessionInput(session, admission.InputID)
+	if err != nil {
+		return completePreflightFailure(err)
+	}
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+	var persistenceMu sync.Mutex
+	var persistenceErr error
+	setPersistenceErr := func(err error) {
+		if err == nil {
+			return
 		}
-		a, err := s.agentForSessionRunSettings(session, settings)
-		if err != nil {
-			return completePreflightFailure(err)
+		persistenceMu.Lock()
+		if persistenceErr == nil {
+			persistenceErr = err
+			cancelRun()
 		}
-		statusReq := runRequestFromSettings(settings)
-		userMessage := protocol.UserMessage(req.Prompt, req.Attachments)
-		contextEpochAdmission := s.sessionContextEpochAdmission(r.Context(), session, settings, userMessage)
-		runSeq, err := s.promoteSessionInput(session, admission.InputID)
-		if err != nil {
-			return completePreflightFailure(err)
+		persistenceMu.Unlock()
+	}
+	getPersistenceErr := func() error {
+		persistenceMu.Lock()
+		defer persistenceMu.Unlock()
+		return persistenceErr
+	}
+	if source == "" {
+		source = "gateway_session"
+	}
+	err = session.Thread.RunMessage(runCtx, RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
+		return a.RunMessagesWithPromptOptions(ctx, messages, promptSubmitOptionsFromRun(req, source), emit)
+	}), userMessage, func(event protocol.Event) {
+		if getPersistenceErr() != nil {
+			return
 		}
-		runCtx, cancelRun := context.WithCancel(r.Context())
-		defer cancelRun()
-		var persistenceMu sync.Mutex
-		var persistenceErr error
-		setPersistenceErr := func(err error) {
-			if err == nil {
-				return
-			}
-			persistenceMu.Lock()
-			if persistenceErr == nil {
-				persistenceErr = err
-				cancelRun()
-			}
-			persistenceMu.Unlock()
-		}
-		getPersistenceErr := func() error {
-			persistenceMu.Lock()
-			defer persistenceMu.Unlock()
-			return persistenceErr
-		}
-		err = session.Thread.RunMessage(runCtx, RunnerFunc(func(ctx context.Context, messages []protocol.Message, emit func(protocol.Event)) ([]protocol.Message, error) {
-			return a.RunMessagesWithPromptOptions(ctx, messages, promptSubmitOptionsFromRun(req, "gateway_session"), emit)
-		}), userMessage, func(event protocol.Event) {
-			if getPersistenceErr() != nil {
-				return
-			}
-			if event.Type == protocol.EventRunStarted {
-				drift, err := session.beginRunStatusWithContextEpoch(statusReq, runSeq, contextEpochAdmission.Run, contextEpochAdmission.Current)
-				if err != nil {
-					setPersistenceErr(err)
-					return
-				}
-				event = addContextEpochToRunStarted(event, contextEpochAdmission.Run, drift)
-			}
-			observed, ok, err := session.observeRunEvent(event)
+		if event.Type == protocol.EventRunStarted {
+			drift, err := session.beginRunStatusWithContextEpoch(statusReq, runSeq, contextEpochAdmission.Run, contextEpochAdmission.Current)
 			if err != nil {
 				setPersistenceErr(err)
 				return
 			}
-			if ok {
-				emit(observed)
-			}
-		})
-		hadPersistenceErr := false
-		if persistErr := getPersistenceErr(); persistErr != nil {
-			err = persistErr
-			hadPersistenceErr = true
+			event = addContextEpochToRunStarted(event, contextEpochAdmission.Run, drift)
 		}
-		if !hadPersistenceErr && !errors.Is(err, ErrBusy) {
-			if saveErr := s.saveSession(session); saveErr != nil {
-				persistErr := fmt.Errorf("session save failed after run: %w", saveErr)
-				session.markPersistenceFailure(persistErr)
-				emit(protocol.Event{Type: protocol.EventSessionStatus, Data: session.Status()})
-				if err == nil {
-					err = persistErr
-				} else {
-					err = errors.Join(err, persistErr)
-				}
-			}
-		}
-		terminalStatus := "completed"
+		observed, ok, err := session.observeRunEvent(event)
 		if err != nil {
-			terminalStatus = "failed"
-			if errors.Is(err, ErrBusy) {
-				terminalStatus = "busy"
-			}
+			setPersistenceErr(err)
+			return
 		}
-		if completeErr := s.completeSessionInput(session, admission.InputID, runSeq, terminalStatus); completeErr != nil {
-			log.Printf("gateway session input complete failed id=%s input=%s: %v", session.ID, admission.InputID, completeErr)
-			if err == nil {
-				return completeErr
-			}
+		if ok {
+			emit(observed)
 		}
-		return err
 	})
+	hadPersistenceErr := false
+	if persistErr := getPersistenceErr(); persistErr != nil {
+		err = persistErr
+		hadPersistenceErr = true
+	}
+	if !hadPersistenceErr && !errors.Is(err, ErrBusy) {
+		if saveErr := s.saveSession(session); saveErr != nil {
+			persistErr := fmt.Errorf("session save failed after run: %w", saveErr)
+			session.markPersistenceFailure(persistErr)
+			emit(protocol.Event{Type: protocol.EventSessionStatus, Data: session.Status()})
+			if err == nil {
+				err = persistErr
+			} else {
+				err = errors.Join(err, persistErr)
+			}
+		}
+	}
+	terminalStatus := "completed"
+	if err != nil {
+		terminalStatus = "failed"
+		if errors.Is(err, ErrBusy) {
+			terminalStatus = "busy"
+		}
+	}
+	if completeErr := s.completeSessionInput(session, admission.InputID, runSeq, terminalStatus); completeErr != nil {
+		log.Printf("gateway session input complete failed id=%s input=%s: %v", session.ID, admission.InputID, completeErr)
+		if err == nil {
+			return completeErr
+		}
+	}
+	return err
 }
 
 func (s *Server) handleSessionInput(w http.ResponseWriter, r *http.Request) {

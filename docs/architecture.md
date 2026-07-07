@@ -73,6 +73,16 @@ makes the matching guard go red.
 
 `internal/store` is currently an empty/reserved directory, not a Go package.
 
+## Public Packages
+
+`pkg/agentclub` is the public adapter SDK for external projects. It may expose
+wire DTOs, JSON payload builders, raw-body HMAC signing, owner-header helpers,
+and a small HTTP client for the agent-club gateway routes. It must remain
+standard-library-only, must not import Billyharness `internal/*` packages in
+production code, and must not read Billyharness home config, dotenv files,
+project manifests, provider/model/tool knobs, scheduler state, or executor/apply
+state.
+
 ## Runtime Event Delivery
 
 Gateway session JSONL is the durable source of truth. Live `/run` responses and

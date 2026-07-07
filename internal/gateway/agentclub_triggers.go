@@ -123,11 +123,17 @@ func (s *Server) handleAgentClubTriggerDelivery(w http.ResponseWriter, r *http.R
 		return
 	}
 	s.appendAgentClubTriggerAudit(agentClubTriggerAuditContextFromDelivery(delivery), result.Input, agentClubTriggerAuditAdmitted, agentClubTriggerAuditAdmitted)
+	runDispatched := false
+	if result.Decision.Admitted {
+		runDispatched = s.maybeDispatchAgentClubAutoRun(r.Context(), delivery, result.Input)
+	}
 	status := http.StatusCreated
 	if result.Input.Duplicate {
 		status = http.StatusOK
 	}
-	writeJSON(w, status, agentclub.ResponseFromTriggerDelivery(delivery, result.Input, result.Decision.Admitted))
+	resp := agentclub.ResponseFromTriggerDelivery(delivery, result.Input, result.Decision.Admitted)
+	resp.RunDispatched = runDispatched
+	writeJSON(w, status, resp)
 }
 
 func buildAgentClubTriggerDeliveryFromRequest(r *http.Request, binding agentclub.TriggerBinding, rawBody []byte) (agentclub.TriggerDelivery, error) {

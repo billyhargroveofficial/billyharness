@@ -62,6 +62,8 @@ type TriggerBindingConfig struct {
 	DeliveryIDHeader  string                  `json:"delivery_id_header,omitempty"`
 	Metadata          map[string]string       `json:"metadata,omitempty"`
 	MaxBodyBytes      int64                   `json:"max_body_bytes,omitempty"`
+	Schedule          *ScheduleConfig         `json:"schedule,omitempty"`
+	RunPolicy         *RunPolicyConfig        `json:"run_policy,omitempty"`
 	Enabled           bool                    `json:"enabled"`
 	AllowFutureDryRun bool                    `json:"allow_future_dry_run,omitempty"`
 }
@@ -81,6 +83,7 @@ type ConfigStatus struct {
 	EnabledBindingCount    int      `json:"enabled_binding_count"`
 	TriggerCount           int      `json:"trigger_count"`
 	EnabledTriggerCount    int      `json:"enabled_trigger_count"`
+	EnabledAutoRunCount    int      `json:"enabled_auto_run_count,omitempty"`
 	HMACSecretEnvCount     int      `json:"hmac_secret_env_count"`
 	MissingSecretEnvCount  int      `json:"missing_secret_env_count"`
 	SecretEnvNames         []string `json:"secret_env_names,omitempty"`
@@ -245,6 +248,9 @@ func BuildRegistryFromConfig(cfg FileConfig, lookup SecretLookup) (*Registry, Co
 			return nil, status, fmt.Errorf("%w: duplicate trigger %q", ErrInvalidConfig, normalized.ID)
 		}
 		seenTriggers[normalized.ID] = true
+		if normalized.Enabled && normalized.RunPolicy != nil && normalized.RunPolicy.Enabled {
+			status.EnabledAutoRunCount++
+		}
 		if envName != "" {
 			secretEnvs[envName] = true
 			if len(normalized.HMACSecret) == 0 {
@@ -368,6 +374,14 @@ func (c TriggerBindingConfig) toTriggerBinding(lookup SecretLookup) (TriggerBind
 	if authMethod == "" {
 		authMethod = TriggerAuthNone
 	}
+	schedule, err := normalizeTriggerScheduleConfig(c.ID, c.Kind, c.Enabled, c.Schedule)
+	if err != nil {
+		return TriggerBinding{}, "", err
+	}
+	runPolicy, err := normalizeTriggerRunPolicyConfig(c.ID, c.RunPolicy)
+	if err != nil {
+		return TriggerBinding{}, "", err
+	}
 	envName := strings.TrimSpace(c.HMACSecretEnv)
 	var secret []byte
 	if authMethod == TriggerAuthHMACSHA256 {
@@ -403,6 +417,8 @@ func (c TriggerBindingConfig) toTriggerBinding(lookup SecretLookup) (TriggerBind
 		DeliveryIDHeader:  c.DeliveryIDHeader,
 		Metadata:          copyStringMap(c.Metadata),
 		MaxBodyBytes:      c.MaxBodyBytes,
+		Schedule:          schedule,
+		RunPolicy:         runPolicy,
 		Enabled:           c.Enabled,
 		AllowFutureDryRun: c.AllowFutureDryRun,
 	}, envName, nil
@@ -487,6 +503,8 @@ func cloneTriggerBindingConfigs(in []TriggerBindingConfig) []TriggerBindingConfi
 	out := make([]TriggerBindingConfig, len(in))
 	for i, item := range in {
 		item.Metadata = copyStringMap(item.Metadata)
+		item.Schedule = cloneScheduleConfig(item.Schedule)
+		item.RunPolicy = cloneRunPolicyConfig(item.RunPolicy)
 		out[i] = item
 	}
 	return out

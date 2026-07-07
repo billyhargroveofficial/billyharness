@@ -130,6 +130,7 @@ type AgentClubReadinessStatus struct {
 	EnabledBindingCount    int      `json:"enabled_binding_count"`
 	TriggerCount           int      `json:"trigger_count"`
 	EnabledTriggerCount    int      `json:"enabled_trigger_count"`
+	EnabledAutoRunCount    int      `json:"enabled_auto_run_count,omitempty"`
 	HMACSecretEnvCount     int      `json:"hmac_secret_env_count,omitempty"`
 	MissingSecretEnvCount  int      `json:"missing_secret_env_count,omitempty"`
 	Configured             bool     `json:"configured"`

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/agentclub"
+	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/ingress"
 )
@@ -166,6 +167,127 @@ func TestAgentClubTriggerDeliveryRejectsCrossOwnerSession(t *testing.T) {
 	}
 }
 
+func TestAgentClubTriggerDeliveryAutoRunDispatchesThroughSessionRun(t *testing.T) {
+	server, storeDir := newAgentClubEventTestServer(t)
+	owner := gatewayapi.SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"}
+	sessionID := createScopedTestSession(t, server, owner)
+	policy := &agentclub.RunPolicyConfig{Enabled: true, Mode: agentclub.RunPolicyModeStartIfIdle, MaxRunsPerHour: 4, MaxToolRounds: 1, AccessMode: config.AccessModePlan}
+	server.agentClub = testAgentClubTriggerRegistryWithRunPolicy(t, sessionID, owner, policy)
+
+	resp, status, raw := postAgentClubWebhookDelivery(t, server, "fixture-webhook", []byte(`{"body":"wake"}`), "delivery-auto-1", testAgentClubTriggerSecret)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", status, raw)
+	}
+	if !resp.Admitted || !resp.RunDispatched || resp.InputID == "" {
+		t.Fatalf("response = %#v", resp)
+	}
+	waitForSessionInputState(t, storeDir, sessionID, resp.InputID, sessionInputCompleted)
+	events := readSessionEventRecords(t, filepath.Join(storeDir, sessionID, sessionEventsJSONLName))
+	if len(events) == 0 {
+		t.Fatal("auto-run did not write session events")
+	}
+	audit, err := server.store.ReplayAgentClubAutoRunAudit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(audit) == 0 || audit[0].Decision != agentClubAutoRunDecisionDispatched || !audit[0].RunDispatched || audit[0].InputID != resp.InputID {
+		t.Fatalf("auto-run audit = %#v", audit)
+	}
+	auditJSON, _ := json.Marshal(audit)
+	for _, forbidden := range []string{"delivery-auto-1", "wake", string(testAgentClubTriggerSecret), owner.ClientID} {
+		if strings.Contains(string(auditJSON), forbidden) {
+			t.Fatalf("auto-run audit leaked %q: %s", forbidden, auditJSON)
+		}
+	}
+}
+
+func TestAgentClubTriggerDeliveryAutoRunSkipsBusyAndDuplicate(t *testing.T) {
+	server, storeDir := newAgentClubEventTestServer(t)
+	owner := gatewayapi.SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"}
+	sessionID := createScopedTestSession(t, server, owner)
+	policy := &agentclub.RunPolicyConfig{Enabled: true, Mode: agentclub.RunPolicyModeStartIfIdle, MaxRunsPerHour: 4}
+	server.agentClub = testAgentClubTriggerRegistryWithRunPolicy(t, sessionID, owner, policy)
+	if err := server.sessions[sessionID].beginRunStatus(RunRequest{Provider: "mock", Model: "mock"}); err != nil {
+		t.Fatal(err)
+	}
+	resp, status, raw := postAgentClubWebhookDelivery(t, server, "fixture-webhook", []byte(`{"body":"busy"}`), "delivery-busy-1", testAgentClubTriggerSecret)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", status, raw)
+	}
+	if resp.RunDispatched {
+		t.Fatalf("busy response dispatched: %#v", resp)
+	}
+	audit, err := server.store.ReplayAgentClubAutoRunAudit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(audit) == 0 || audit[len(audit)-1].Decision != agentClubAutoRunDecisionBusy {
+		t.Fatalf("busy audit = %#v", audit)
+	}
+
+	server.sessions[sessionID].mu.Lock()
+	server.sessions[sessionID].status.Running = false
+	server.sessions[sessionID].mu.Unlock()
+	first, status, raw := postAgentClubWebhookDelivery(t, server, "fixture-webhook", []byte(`{"body":"dedupe"}`), "delivery-dedupe-1", testAgentClubTriggerSecret)
+	if status != http.StatusCreated || !first.RunDispatched {
+		t.Fatalf("first status=%d response=%#v body=%s", status, first, raw)
+	}
+	waitForSessionInputState(t, storeDir, sessionID, first.InputID, sessionInputCompleted)
+	duplicate, duplicateStatus, _ := postAgentClubWebhookDelivery(t, server, "fixture-webhook", []byte(`{"body":"dedupe"}`), "delivery-dedupe-1", testAgentClubTriggerSecret)
+	if duplicateStatus != http.StatusOK || !duplicate.Duplicate || duplicate.RunDispatched {
+		t.Fatalf("duplicate status=%d response=%#v", duplicateStatus, duplicate)
+	}
+	audit, err = server.store.ReplayAgentClubAutoRunAudit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if audit[len(audit)-1].Decision != agentClubAutoRunDecisionSkipped || audit[len(audit)-1].Reason != "duplicate input" {
+		t.Fatalf("duplicate audit = %#v", audit)
+	}
+}
+
+func TestAgentClubTriggerDeliveryAutoRunRateLimitAndPolicyBounds(t *testing.T) {
+	server, storeDir := newAgentClubEventTestServer(t)
+	owner := gatewayapi.SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"}
+	sessionID := createScopedTestSession(t, server, owner)
+	policy := &agentclub.RunPolicyConfig{Enabled: true, Mode: agentclub.RunPolicyModeStartIfIdle, MaxRunsPerHour: 1}
+	server.agentClub = testAgentClubTriggerRegistryWithRunPolicy(t, sessionID, owner, policy)
+
+	first, status, raw := postAgentClubWebhookDelivery(t, server, "fixture-webhook", []byte(`{"body":"one"}`), "delivery-rate-1", testAgentClubTriggerSecret)
+	if status != http.StatusCreated || !first.RunDispatched {
+		t.Fatalf("first status=%d response=%#v body=%s", status, first, raw)
+	}
+	waitForSessionInputState(t, storeDir, sessionID, first.InputID, sessionInputCompleted)
+	second, secondStatus, _ := postAgentClubWebhookDelivery(t, server, "fixture-webhook", []byte(`{"body":"two"}`), "delivery-rate-2", testAgentClubTriggerSecret)
+	if secondStatus != http.StatusCreated || second.RunDispatched {
+		t.Fatalf("second status=%d response=%#v", secondStatus, second)
+	}
+	audit, err := server.store.ReplayAgentClubAutoRunAudit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if audit[len(audit)-1].Decision != agentClubAutoRunDecisionRateLimited {
+		t.Fatalf("rate audit = %#v", audit)
+	}
+
+	boundedServer, _ := newAgentClubEventTestServer(t)
+	boundedServer.toolPolicy.AccessMode = config.AccessModeGuarded
+	boundedSession := createScopedTestSession(t, boundedServer, owner)
+	boundedPolicy := &agentclub.RunPolicyConfig{Enabled: true, Mode: agentclub.RunPolicyModeStartIfIdle, MaxRunsPerHour: 4, AccessMode: config.AccessModeBuild}
+	boundedServer.agentClub = testAgentClubTriggerRegistryWithRunPolicy(t, boundedSession, owner, boundedPolicy)
+	bounded, boundedStatus, _ := postAgentClubWebhookDelivery(t, boundedServer, "fixture-webhook", []byte(`{"body":"bounded"}`), "delivery-bound-1", testAgentClubTriggerSecret)
+	if boundedStatus != http.StatusCreated || bounded.RunDispatched {
+		t.Fatalf("bounded status=%d response=%#v", boundedStatus, bounded)
+	}
+	boundedAudit, err := boundedServer.store.ReplayAgentClubAutoRunAudit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if boundedAudit[len(boundedAudit)-1].Decision != agentClubAutoRunDecisionFailed || !strings.Contains(boundedAudit[len(boundedAudit)-1].Reason, "access_mode") {
+		t.Fatalf("bounded audit = %#v", boundedAudit)
+	}
+}
+
 func TestAgentClubTriggerDeliveryScheduleDryRunAndUnsafeMetadata(t *testing.T) {
 	server, storeDir := newAgentClubEventTestServer(t)
 	owner := gatewayapi.SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"}
@@ -251,6 +373,10 @@ func ioNopCloserBytes(body []byte) io.ReadCloser {
 var testAgentClubTriggerSecret = []byte("fixture-trigger-secret")
 
 func testAgentClubTriggerRegistry(t *testing.T, sessionID string, owner gatewayapi.SessionOwner) *agentclub.Registry {
+	return testAgentClubTriggerRegistryWithRunPolicy(t, sessionID, owner, nil)
+}
+
+func testAgentClubTriggerRegistryWithRunPolicy(t *testing.T, sessionID string, owner gatewayapi.SessionOwner, policy *agentclub.RunPolicyConfig) *agentclub.Registry {
 	t.Helper()
 	descriptor := agentclub.CapabilityDescriptor{
 		ID:       "event.review",
@@ -282,6 +408,7 @@ func testAgentClubTriggerRegistry(t *testing.T, sessionID string, owner gatewaya
 		AuthMethod:       agentclub.TriggerAuthHMACSHA256,
 		HMACSecret:       testAgentClubTriggerSecret,
 		MaxBodyBytes:     64,
+		RunPolicy:        policy,
 		Enabled:          true,
 	}
 	disabled := webhook
@@ -302,4 +429,20 @@ func testAgentClubTriggerRegistry(t *testing.T, sessionID string, owner gatewaya
 		t.Fatal(err)
 	}
 	return registry
+}
+
+func waitForSessionInputState(t *testing.T, storeDir, sessionID, inputID, state string) {
+	t.Helper()
+	path := filepath.Join(storeDir, sessionID, sessionInputsJSONLName)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		records := readSessionInputRecords(t, path)
+		for _, record := range records {
+			if record.InputID == inputID && record.Kind == state {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("input %s did not reach state %s", inputID, state)
 }

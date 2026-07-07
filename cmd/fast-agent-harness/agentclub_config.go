@@ -41,6 +41,7 @@ func agentClubReadinessStatus(status agentclub.ConfigStatus) gatewayapi.AgentClu
 		EnabledBindingCount:    status.EnabledBindingCount,
 		TriggerCount:           status.TriggerCount,
 		EnabledTriggerCount:    status.EnabledTriggerCount,
+		EnabledAutoRunCount:    status.EnabledAutoRunCount,
 		HMACSecretEnvCount:     status.HMACSecretEnvCount,
 		MissingSecretEnvCount:  status.MissingSecretEnvCount,
 		Configured:             status.ConfiguredFileCount > 0,

@@ -112,6 +112,7 @@ Future agents should update this section from that route table, not from memory.
 | `POST /v1/sessions/{id}/agentclub/proposals` | create one hash-bound safe-output proposal without applying it |
 | `GET /v1/sessions/{id}/agentclub/proposals` | list safe-output proposals visible through session owner scope |
 | `POST /v1/sessions/{id}/agentclub/proposals/{proposal_id}/decision` | record an approve/reject/edit decision for an exact proposal hash without applying it |
+| `POST /v1/sessions/{id}/agentclub/proposals/{proposal_id}/apply` | explicitly apply one approved exact proposal through the narrow allowlisted executor surface |
 | `POST /v1/sessions/{id}/inputs` | admit an idempotent pending input without running it |
 | `POST /v1/sessions/{id}/inputs/{input_id}/complete` | terminally complete an admitted input with optional failure evidence |
 | `POST /v1/sessions/{id}/run` | admit/promote an input and run it through the session thread |
@@ -235,11 +236,24 @@ provider, model, reasoning, access mode, tool, MCP, shell, command, env, raw
 SQL, browser auth, or dispatch behavior. Metadata still passes through the
 existing ingress unsafe-key sanitizer.
 
-The response is intentionally small and redacted: schema version, admitted
-state, duplicate state, input id, target session id, source, capability, event
-type, payload SHA-256, external event id hash, metadata keys, and
-`run_dispatched=false`. It does not include raw prompt, raw payload, external
-event id, client id, metadata values, or adapter-specific command details.
+The default response is intentionally small and redacted: schema version,
+admitted state, duplicate state, input id, target session id, source,
+capability, event type, payload SHA-256, external event id hash, metadata keys,
+and `run_dispatched=false`. It does not include raw prompt, raw payload,
+external event id, client id, metadata values, or adapter-specific command
+details. Explicit trusted trigger `run_policy` can set `run_dispatched=true`
+only after input admission and policy checks.
+
+External Go adapters should use `pkg/agentclub` for this HTTP contract instead
+of importing `internal/agentclub` or shelling out to the CLI. The public
+package mirrors the schema-versioned wire DTOs, validates/canonicalizes JSON
+payloads, signs webhook bodies with the same HMAC-SHA256 payload as the
+gateway verifier, attaches bearer auth and session-owner headers, and returns
+typed status errors whose `Error()` strings omit raw response bodies. It does
+not read `$BILLYHARNESS_HOME`, dotenv files, local agent-club config, project
+manifests, provider/model/tool knobs, schedulers, executors, or proposal apply
+state. `examples/agentclub-adapter` is the generic reference shape for external
+projects.
 
 Agent-club capability descriptors are metadata only in this slice. A descriptor
 may declare `id`, `title`, `description`, `kind`, `risk`, `input_schema`,
@@ -285,7 +299,9 @@ trusted trigger binding
   -> deterministic external event id
   -> normalized agent-club event
   -> gateway ingress admission
-  -> queued session input, run_dispatched=false
+  -> queued session input
+  -> optional trusted run_policy check
+  -> maybe existing session run, run_dispatched reflects reality
 ```
 
 `POST /v1/agentclub/triggers/{binding_id}/deliveries` looks up a trusted
@@ -306,15 +322,30 @@ admitted input id, duplicate state, client type, client id hash, and metadata
 keys. It does not store raw bodies, prompts, delivery ids, signatures, HMAC
 secrets, metadata values, command lines, or external adapter secrets.
 
-Schedule/manual delivery is deterministic but not a scheduler daemon. A
-schedule/manual request must provide `scheduled_at_utc`; future timestamps are
-rejected unless the request is explicitly a dry registration, and dry
-registration does not admit a session input.
+Schedule/manual delivery is deterministic. A schedule/manual request must
+provide `scheduled_at_utc`; future timestamps are rejected unless the request
+is explicitly a dry registration, and dry registration does not admit a session
+input. A separate local operator runner,
+`fast-agent-harness agentclub scheduler run`, can load trusted
+`kind=schedule` trigger config, compute UTC interval ticks, persist private
+`agentclub-scheduler-state.json` state, and submit due ticks through the same
+trigger delivery route. The runner's only Billyharness side effects are trigger
+delivery plus its own state file; it does not call session run routes, execute
+tools, call MCP, run shell commands, or apply proposals. `agentclub scheduler
+status` reports configured schedules, due count, last success/error, and the
+state path. Service-manager integration is intentionally not added in this
+slice; operators can run the command directly or from their own timer.
 
 The gateway does not load project manifests, read `.billyharness` integration
-files, execute capabilities directly, run schedules, or auto-run sessions in
-this slice. The agent-club config is intentionally operator-home scoped; a
-project-local manifest still needs a separate install/hash story first.
+files, execute capabilities directly, or own scheduler state. Auto-run is only
+available through explicit trigger `run_policy` after successful admission; it
+uses the same session run machinery as `POST /v1/sessions/{id}/run`, refuses
+duplicate inputs, enforces owner scope, idle/interrupt mode, cooldown and
+hourly rate limits, and rejects policy requests that exceed the server's
+configured access mode or max tool rounds. Payload metadata cannot set
+provider, model, reasoning, access mode, tool rounds, tools, MCP, shell, or
+dispatch behavior. The agent-club config is intentionally operator-home scoped;
+a project-local manifest still needs a separate install/hash story first.
 
 Safe-output proposals are the durable review layer before any future external
 mutation:
@@ -323,7 +354,9 @@ mutation:
 proposal
   -> hash-bound review artifact
   -> owner-scoped decision
-  -> future apply slice
+  -> explicit hash-bound apply request
+  -> allowlisted executor
+  -> durable apply record
 ```
 
 `POST /v1/sessions/{id}/agentclub/proposals` creates a session-scoped proposal
@@ -342,22 +375,44 @@ passed, and returns the replayed states. `POST
 proposal hash; stale hashes are refused. `edit` creates a new proposal and
 supersedes the old one. The ledger vocabulary includes `proposal_created`,
 `decision_recorded`, `proposal_expired`, `proposal_superseded`, and
-`proposal_failed`.
+`proposal_failed`; the apply slice adds `proposal_applied` and
+`proposal_apply_failed`.
 
-Approval is not execution. The gateway records the decision only: it does not
-call external APIs, send HH replies, apply to jobs, modify GitHub, run shell
-commands, call MCP tools, edit files, dispatch a run, or resume/apply a paused
-runtime action in this slice.
+Approval alone is not execution. The gateway records the decision only until an
+operator calls `POST
+/v1/sessions/{id}/agentclub/proposals/{proposal_id}/apply` with the expected
+proposal hash and an idempotency key. Apply first replays the proposal ledger,
+requires the current proposal state to be `approved`, verifies the stored owner
+scope, refuses stale hashes, and returns an existing apply result for duplicate
+requests. Dry runs validate the same boundary without writing an apply record.
+
+The first executor kind is deliberately boring: `record_note` writes a
+redacted `proposal_applied` record to `agentclub-proposals.jsonl` and returns a
+gateway-owned `agentclub:apply:<apply_id>` output ref. Unsupported action kinds
+record `proposal_apply_failed`; they do not fall through to generic execution.
+Apply records store proposal id/hash, action kind, apply id, hashed
+idempotency key, approval evidence, payload hash, output ref, and redacted
+reason on failure. They do not store raw payload, metadata values, secrets, raw
+external responses, bearer tokens, or command output. Apply never dispatches a
+run.
+
+The apply surface does not call external APIs, send HH replies, apply to jobs,
+modify GitHub, run shell commands, call MCP tools, edit files, or resume/apply
+a paused runtime action.
 
 Operator UX is deliberately thin. Gateway-backed commands remain
 `fast-agent-harness agentclub capabilities`,
 `agentclub proposals -session SESSION_ID`, and
 `agentclub approve|reject -session SESSION_ID -proposal PROPOSAL_ID -hash
-EXPECTED_PROPOSAL_HASH`. Local operator config commands are
+EXPECTED_PROPOSAL_HASH`. `agentclub apply -session SESSION_ID -proposal
+PROPOSAL_ID -hash EXPECTED_PROPOSAL_HASH` calls the explicit apply route and
+derives a deterministic CLI idempotency key unless `-idempotency-key` is
+provided. Local operator config commands are
 `agentclub config init|validate|status|path`, `agentclub bindings`,
-`agentclub triggers`, and `agentclub enable|disable <binding|trigger> ID`;
-they edit only the operator JSON file and validate the resulting registry,
-not any adapter project. The TUI exposes the gateway read-only view through
+`agentclub triggers`, `agentclub trigger deliver`, `agentclub scheduler
+run|status`, and `agentclub enable|disable <binding|trigger> ID`; they edit
+only the operator JSON file and validate the resulting registry, not any
+adapter project. The TUI exposes the gateway read-only view through
 `/agentclub` for the current gateway session. Telegram exposes `/agentclub` as
 an operator-only command and renders pending proposals with approve/reject
 callback buttons; each callback re-fetches the proposal under Telegram owner
