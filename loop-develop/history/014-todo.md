@@ -173,7 +173,9 @@ go build ./cmd/fast-agent-harness
 
 Commit/push state:
 
-- Commit pending in this implementation chat.
+- Implementation commit is `c1a2c0a Add agent-club operator UX`.
+- Branch `codex/gateway-ingress-foundation` is pushed and aligned with
+  `origin/codex/gateway-ingress-foundation`.
 
 Remaining blockers:
 
