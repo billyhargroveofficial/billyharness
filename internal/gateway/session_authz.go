@@ -42,6 +42,7 @@ func sessionOwnerFromRequest(r *http.Request) gatewayapi.SessionOwner {
 		return gatewayapi.SessionOwner{}
 	}
 	return normalizeSessionOwner(gatewayapi.SessionOwner{
+		ClientID:         r.Header.Get(gatewayapi.HeaderSessionClientID),
 		ClientType:       r.Header.Get(gatewayapi.HeaderSessionClientType),
 		TelegramChatID:   parseInt64Header(r, gatewayapi.HeaderSessionTelegramChatID),
 		TelegramThreadID: parseIntHeader(r, gatewayapi.HeaderSessionTelegramThreadID),
@@ -87,7 +88,8 @@ func authorizeSessionAccess(session *Session, actor gatewayapi.SessionOwner, acc
 
 func sessionOwnerEmpty(owner gatewayapi.SessionOwner) bool {
 	owner = normalizeSessionOwner(owner)
-	return owner.ClientType == "" &&
+	return owner.ClientID == "" &&
+		owner.ClientType == "" &&
 		owner.TelegramChatID == 0 &&
 		owner.TelegramThreadID == 0 &&
 		owner.TelegramUserID == 0 &&
@@ -97,6 +99,14 @@ func sessionOwnerEmpty(owner gatewayapi.SessionOwner) bool {
 func sessionOwnerPrincipalMatches(owner, actor gatewayapi.SessionOwner) bool {
 	owner = normalizeSessionOwner(owner)
 	actor = normalizeSessionOwner(actor)
+	if owner.ClientID != "" {
+		if actor.ClientID != owner.ClientID {
+			return false
+		}
+		if owner.ClientType == "" {
+			return true
+		}
+	}
 	if owner.ClientType != "" && actor.ClientType != "" && owner.ClientType != actor.ClientType {
 		return false
 	}

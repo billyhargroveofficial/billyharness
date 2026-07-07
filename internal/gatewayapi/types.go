@@ -8,6 +8,7 @@ import (
 )
 
 const (
+	HeaderSessionClientID         = "X-Billyharness-Session-Client-ID"
 	HeaderSessionClientType       = "X-Billyharness-Session-Client-Type"
 	HeaderSessionTelegramChatID   = "X-Billyharness-Session-Telegram-Chat-ID"
 	HeaderSessionTelegramThreadID = "X-Billyharness-Session-Telegram-Thread-ID"
@@ -65,6 +66,7 @@ type CreateSessionRequest struct {
 }
 
 type SessionOwner struct {
+	ClientID         string `json:"client_id,omitempty"`
 	ClientType       string `json:"client_type,omitempty"`
 	TelegramChatID   int64  `json:"telegram_chat_id,omitempty"`
 	TelegramThreadID int    `json:"telegram_thread_id,omitempty"`

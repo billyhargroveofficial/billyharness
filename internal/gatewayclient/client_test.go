@@ -133,6 +133,7 @@ func TestCreateSessionWithOwnerSendsOwnerMetadata(t *testing.T) {
 	})
 
 	owner := gatewayapi.SessionOwner{
+		ClientID:         "telegram:123:u1001",
 		ClientType:       "telegram",
 		TelegramChatID:   123,
 		TelegramThreadID: 7,
@@ -164,6 +165,7 @@ func TestContextSessionOwnerSendsScopeHeaders(t *testing.T) {
 	})
 
 	owner := gatewayapi.SessionOwner{
+		ClientID:         "telegram:123:u1001",
 		ClientType:       "telegram",
 		TelegramChatID:   123,
 		TelegramThreadID: 7,
@@ -175,6 +177,7 @@ func TestContextSessionOwnerSendsScopeHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	for header, want := range map[string]string{
+		gatewayapi.HeaderSessionClientID:         "telegram:123:u1001",
 		gatewayapi.HeaderSessionClientType:       "telegram",
 		gatewayapi.HeaderSessionTelegramChatID:   "123",
 		gatewayapi.HeaderSessionTelegramThreadID: "7",

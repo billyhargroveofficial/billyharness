@@ -16,6 +16,9 @@ Primary code anchors:
   bearer, browser, mutation, host, content-type, and privilege clamp checks.
 - [internal/gateway/session_authz.go](../../internal/gateway/session_authz.go):
   session owner-header authorization.
+- [internal/gateway/ingress.go](../../internal/gateway/ingress.go) and
+  [internal/ingress](../../internal/ingress): external ingress admission,
+  HMAC verification helpers, unsafe metadata rejection, and redacted audit.
 - [internal/gateway/response.go](../../internal/gateway/response.go):
   redacted JSON and NDJSON gateway responses.
 - [internal/gatewayapi/types.go](../../internal/gatewayapi/types.go) and
@@ -63,6 +66,8 @@ The major boundaries are:
   provider credentials.
 - Session owner scope: owner headers are gateway-enforced scoping claims inside
   the HTTP security boundary. They are not cryptographic identity.
+- External ingress: webhook/scheduler/project triggers are untrusted until a
+  local rule verifies them and the gateway admits them as session inputs.
 - Telegram: Telegram is a scoped gateway client with its own allowlist and
   send/delete safety; it does not get direct gateway-server imports.
 - Tools: tool risk, access mode, workspace path checks, dangerous-tool config,
@@ -133,6 +138,30 @@ the mutation bearer token. It still allows stricter request knobs such as a
 lower `max_tool_rounds` or a less-privileged `access_mode`, and clamps requests
 that try to raise tool rounds or access privilege above server configuration.
 
+## External Ingress Boundary
+
+External ingress is gateway admission, not execution. The current foundation has
+no public webhook route and no scheduler, but future adapters must use the same
+shape:
+
+- verify raw request bodies before parsing when a shared secret is configured;
+- compare HMAC signatures in constant time and reject missing, stale, mutated,
+  or invalid signatures;
+- translate only allowlisted event sources into `IngressEvent`;
+- derive deterministic `input_id` values from rule id, source, external event
+  id, payload hash, and target session;
+- reject payload metadata that attempts provider, model, access-mode, tool,
+  MCP, shell, or command override authority;
+- authorize the target session through gateway owner scope before appending the
+  normal `inputs.jsonl` admission;
+- write the redacted ingress audit ledger even for rejected events when a
+  gateway store is configured.
+
+The audit ledger records hashes, decision reason, target session id, admitted
+input id, duplicate state, client type/id hash, and metadata keys. It does not
+store raw body text, prompt text, external event IDs, metadata values, secrets,
+or command payloads.
+
 ## Session Scope
 
 Session owner metadata is a routing and authorization claim, not a credential.
@@ -154,6 +183,12 @@ behavior adds [internal/gateway/session_authz.go](../../internal/gateway/session
 - scoped actors may not mutate legacy unowned sessions;
 - cross-owner reads and mutations are denied with `403`;
 - unscoped local callers remain unscoped gateway operators.
+
+`SessionOwner.ClientID` and `X-Billyharness-Session-Client-ID` are the generic
+principal for clients that do not have Telegram/TUI-specific IDs. If a stored
+session owner has `client_id`, scoped actors must present the same client ID.
+This lets ingress rules use a narrow owner such as `client_type=ingress` plus a
+project-specific client ID instead of sharing one broad external scope.
 
 The authority decision is recorded in
 [ADR 0002](../adr/0002-gateway-owns-session-authority.md). Future clients
@@ -394,6 +429,8 @@ Current code truth:
 - Provider/model/reasoning per-run overrides are bearer-gated under mutation
   auth; tool-round and access-mode requests are clamped.
 - Session owner headers scope list/read/mutation behavior.
+- External ingress is admitted through gateway session inputs and redacted audit,
+  not through direct tool, MCP, shell, or provider override execution.
 - Telegram carries owner scope through gateway requests and hardens
   secret-bearing auth commands.
 - MCP initialize instructions are metadata-only by default and require explicit
@@ -421,6 +458,9 @@ owning packages. The most relevant current test names are:
 - `TestGatewayRunRequestPrivilegeClamps`
 - `TestGatewaySessionOwnerMetadataPersistsAndLists`
 - `TestGatewaySessionOwnerScopeFiltersAndDeniesCrossOwner`
+- `TestGatewaySessionClientIDOwnerScopeFiltersAndDeniesCrossOwner`
+- `TestGatewayIngressAdmitsAuditsDuplicatesAndConflictsWithoutDispatch`
+- `TestGatewayIngressAuditsRejectedAdmission`
 - `TestStdioLifecycleCallEnvAndRedaction`
 - `TestRunMessagesDoesNotInjectUntrustedMCPInstructionsByDefault`
 - `TestClientRejectsLocalhostAndRFC1918Targets`

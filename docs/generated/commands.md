@@ -28,6 +28,7 @@ This reference joins the shared action metadata, TUI action registry, Telegram c
 | mcp.show            | /mcp                                                                   | -             | /mcp              | operator-only  | show connected MCP servers                     |
 | memory.manage       | /memory list\|search\|read\|add\|replace\|remove                       | -             | /memory           | operator-only  | manage local memory entries                    |
 | message.newline     | -                                                                      | alt+enter     | -                 | -              | insert newline                                 |
+| message.paste_image | -                                                                      | alt+v         | -                 | -              | paste image from clipboard                     |
 | message.send        | -                                                                      | enter, ctrl+s | -                 | -              | send message                                   |
 | model.set           | /model flash\|pro\|gpt\|id                                             | ctrl+n        | /model            | session-scoped | switch model                                   |
 | models.list         | /models                                                                | -             | /models           | public         | list known models                              |
@@ -55,19 +56,20 @@ This reference joins the shared action metadata, TUI action registry, Telegram c
 
 ## Keybinding-Only TUI Actions
 
-| ID                 | Keys          | Summary                           |
-| ------------------ | ------------- | --------------------------------- |
-| block.next         | ctrl+l        | select next block                 |
-| block.previous     | ctrl+p        | select previous block             |
-| block.toggle       | ctrl+e        | collapse or expand selected block |
-| gateway.reconnect  | ctrl+g        | reconnect gateway                 |
-| message.newline    | alt+enter     | insert newline                    |
-| message.send       | enter, ctrl+s | send message                      |
-| palette.open       | ctrl+k        | open command palette              |
-| viewport.bottom    | alt+end       | follow bottom                     |
-| viewport.page_down | pgdown        | scroll transcript down            |
-| viewport.page_up   | pgup          | scroll transcript up              |
-| viewport.top       | alt+home      | jump to top                       |
+| ID                  | Keys          | Summary                           |
+| ------------------- | ------------- | --------------------------------- |
+| block.next          | ctrl+l        | select next block                 |
+| block.previous      | ctrl+p        | select previous block             |
+| block.toggle        | ctrl+e        | collapse or expand selected block |
+| gateway.reconnect   | ctrl+g        | reconnect gateway                 |
+| message.newline     | alt+enter     | insert newline                    |
+| message.paste_image | alt+v         | paste image from clipboard        |
+| message.send        | enter, ctrl+s | send message                      |
+| palette.open        | ctrl+k        | open command palette              |
+| viewport.bottom     | alt+end       | follow bottom                     |
+| viewport.page_down  | pgdown        | scroll transcript down            |
+| viewport.page_up    | pgup          | scroll transcript up              |
+| viewport.top        | alt+home      | jump to top                       |
 
 ## Telegram Command Classes
 
@@ -89,4 +91,4 @@ This reference joins the shared action metadata, TUI action registry, Telegram c
 | profiles         | BuildOptions.Profiles from configured profile directories       | runtime-only         |
 | MCP prompts      | BuildOptions.MCPPrompts from connected MCP servers              | runtime-only         |
 
-<!-- source-hash: 50b7e408475435263435f8833f35510bd3fa6c55dce3c455eb1020a82c5e8a6e -->
+<!-- source-hash: 5b4163edf366296068931b35e0736cb1f365cfa9be7df41ffada89b672b48360 -->

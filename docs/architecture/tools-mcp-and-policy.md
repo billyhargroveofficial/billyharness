@@ -45,6 +45,13 @@ specs sorted by name and filters by access mode. In plan mode, only
 `read_only` and `network` specs remain visible; write, execute, and external
 specs are hidden.
 
+External ingress does not enter this registry. `internal/ingress` and
+`internal/gateway/ingress.go` can only build and audit a
+`gatewayapi.SessionInputRequest`; they do not call `Registry.Call`, `mcp_call`,
+shell helpers, provider clients, or project commands. Any future adapter that
+needs tools must first create an admitted session input and let a later normal
+gateway run exercise the existing tool policy boundary.
+
 Tool calls enter through `Registry.Call()` in `internal/tools/tools.go`.
 Current order is:
 
@@ -300,6 +307,9 @@ Current behavior is intentionally conservative around dynamic external
 capabilities: stdio MCP only, metadata-only MCP prompts, untrusted MCP
 initialize instructions by default, hidden dynamic MCP specs, public-host-safe
 web fetches, bounded inline output, and presentation-only rendering helpers.
+Gateway ingress also rejects external payload metadata that tries to smuggle
+provider/model/access-mode/tool/MCP/shell override authority into a session
+input; only local static rule metadata may label the admission.
 
 The code does not currently implement streamable HTTP MCP calls, direct model
 visibility for dynamic MCP schemas, executable MCP prompts, automatic trust of

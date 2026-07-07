@@ -366,6 +366,9 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (*htt
 
 func setSessionOwnerHeaders(req *http.Request, owner gatewayapi.SessionOwner) {
 	owner = normalizeSessionOwner(owner)
+	if owner.ClientID != "" {
+		req.Header.Set(gatewayapi.HeaderSessionClientID, owner.ClientID)
+	}
 	if owner.ClientType != "" {
 		req.Header.Set(gatewayapi.HeaderSessionClientType, owner.ClientType)
 	}
@@ -384,6 +387,7 @@ func setSessionOwnerHeaders(req *http.Request, owner gatewayapi.SessionOwner) {
 }
 
 func normalizeSessionOwner(owner gatewayapi.SessionOwner) gatewayapi.SessionOwner {
+	owner.ClientID = strings.TrimSpace(owner.ClientID)
 	owner.ClientType = strings.ToLower(strings.TrimSpace(owner.ClientType))
 	owner.TUIChatID = strings.TrimSpace(owner.TUIChatID)
 	owner.Profile = strings.TrimSpace(owner.Profile)

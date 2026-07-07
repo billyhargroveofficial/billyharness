@@ -37,7 +37,7 @@
 | reasoning_effort                 | string           | high                                         | DEEPSEEK_REASONING_EFFORT                                                                | no       | Reasoning effort level sent to capable providers            |
 | disable_spark                    | bool             | false                                        | BILLYHARNESS_DISABLE_SPARK, FAST_AGENT_DISABLE_SPARK                                     | no       | Rewrite Spark model aliases to the non-Spark default        |
 | max_tokens                       | int              | 8192                                         | FAST_AGENT_MAX_TOKENS                                                                    | no       | Maximum model output tokens requested per call              |
-| max_tool_rounds                  | int              | 100                                          | FAST_AGENT_MAX_TOOL_ROUNDS                                                               | no       | Maximum tool-call rounds allowed during one turn            |
+| max_tool_rounds                  | int              | 0                                            | FAST_AGENT_MAX_TOOL_ROUNDS                                                               | no       | Maximum tool-call rounds allowed during one turn            |
 | max_parallel_tools               | int              | 4                                            | FAST_AGENT_MAX_PARALLEL_TOOLS                                                            | no       | Maximum tool calls the runtime may execute concurrently     |
 | provider_max_retries             | int              | 2                                            | FAST_AGENT_PROVIDER_MAX_RETRIES                                                          | no       | Maximum provider retry attempts after retryable failures    |
 | context_window_tokens            | int64            | 1000000                                      | FAST_AGENT_CONTEXT_WINDOW_TOKENS                                                         | no       | Context window token budget for the active model            |
@@ -118,4 +118,4 @@ This file uses `config.BillySettings` as the canonical JSON shape. It stores TUI
 | $BILLYHARNESS_HOME/hooks.config.toml       | Hook sub-registry loaded by $BILLYHARNESS_HOME/hooks.config.toml              |
 | $BILLYHARNESS_HOME/diagnostics.config.toml | Diagnostics sub-registry loaded by $BILLYHARNESS_HOME/diagnostics.config.toml |
 
-<!-- source-hash: d879d9ca37b571598245f032357fbbf428f5d45a84aa9dfc7ae1f24054c03d14 -->
+<!-- source-hash: 0e3d4908bac973885ea82a71a0ab49d379645621ba47fb839ad1d4debf04ffbe -->

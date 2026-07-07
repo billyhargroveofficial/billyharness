@@ -1244,6 +1244,7 @@ func sessionSummary(session *Session) SessionSummary {
 }
 
 func normalizeSessionOwner(owner gatewayapi.SessionOwner) gatewayapi.SessionOwner {
+	owner.ClientID = strings.TrimSpace(owner.ClientID)
 	owner.ClientType = strings.ToLower(strings.TrimSpace(owner.ClientType))
 	owner.TUIChatID = strings.TrimSpace(owner.TUIChatID)
 	owner.Profile = strings.TrimSpace(owner.Profile)

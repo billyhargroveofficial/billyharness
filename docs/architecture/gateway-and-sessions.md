@@ -24,6 +24,10 @@ Code anchors:
   file permissions.
 - `internal/gateway/session_inputs.go`: durable input admission and
   idempotency state.
+- `internal/gateway/ingress.go`: gateway-owned ingress admission helper and
+  redacted append-only ingress audit ledger.
+- `internal/ingress/`: pure external-event admission DTOs, deterministic input
+  IDs, raw-body HMAC helpers, and payload metadata sanitization.
 - `internal/gateway/http_security.go`: HTTP bearer, mutation, origin, host,
   content-type, and privilege-clamping rules.
 - `internal/gateway/session_authz.go`: session-owner header parsing and
@@ -44,6 +48,8 @@ and remote clients. It owns:
 - gateway HTTP route registration and response encoding;
 - session creation, listing, status, context, event replay, input admission,
   run, cancel, undo, redo, and user-input routes;
+- gateway-owned external ingress admission into existing session input
+  ledgers, without adapter-specific execution;
 - durable session persistence when `ServerOptions.SessionStoreDir` is set;
 - startup manifest indexing of durable sessions into the in-memory session map;
 - event recording before live fanout for session runs;
@@ -56,6 +62,11 @@ It does not own client rendering. Shared transport DTOs belong in
 `internal/gatewayapi`; client request helpers belong in `internal/gatewayclient`;
 URL/auth/readiness helpers belong in `internal/gatewayapi`; neutral projection
 logic belongs in `internal/clientux`.
+
+It also does not let external triggers run commands, tools, MCP calls, provider
+overrides, or schedulers directly. External ingress must first become a
+gateway-admitted session input, and a separate gateway run must later promote
+that input before the runtime sees it.
 
 ## HTTP Surface
 
@@ -148,6 +159,36 @@ continues; save failure aborts the replacement stream. `POST
 `POST /v1/sessions/{id}/inputs` is intentionally separate from run execution.
 It gives clients a durable idempotency point before a run is promoted.
 
+## External Ingress Foundation
+
+The ingress foundation is internal-only in this slice. There is no HH adapter,
+webhook HTTP route, scheduler, UI, or arbitrary project command runner.
+
+`internal/ingress` owns the pure admission contract:
+
+- `IngressEvent`, `IngressRule`, and `AdmissionDecision` describe an external
+  event, a local allowlist rule, and the sanitized decision;
+- deterministic input IDs are derived from rule id, source, external event id,
+  raw payload SHA-256, and target session id;
+- raw-body HMAC helpers verify SHA-256 signatures with constant-time compare
+  and optional timestamp skew checks;
+- payload metadata keys that look like provider/model/access-mode/tool/MCP or
+  shell overrides are rejected before a `SessionInputRequest` is built;
+- rule/static metadata is treated as trusted local configuration, not external
+  payload authority.
+
+`Server.AdmitIngressEvent` in `internal/gateway/ingress.go` is the gateway-owned
+bridge. It asks `internal/ingress` to build a `SessionInputRequest`, authorizes
+the target session with the same owner-scope checks as HTTP routes, appends a
+redacted audit record, and then calls the existing input admission path. It does
+not promote the input, start a run, call tools, call MCP, or shell out.
+
+Generic owner scoping now includes `SessionOwner.ClientID` plus
+`X-Billyharness-Session-Client-ID`. Client ID can scope non-Telegram/non-TUI
+owners such as `client_type=ingress` rules. If a stored owner has `client_id`,
+the actor must present the same client ID before list/read/mutation access is
+allowed.
+
 ## Durable Store
 
 Durability is enabled only when `ServerOptions.SessionStoreDir` is non-empty.
@@ -166,6 +207,7 @@ Current store layout:
 
 ```text
 <store>/
+  ingress-audit.jsonl
   <session-id>/
     manifest.json
     history.jsonl
@@ -198,6 +240,12 @@ Store semantics:
 - `inputs.jsonl` stores input admission, promotion, completion, and
   restart-ambiguity records for idempotency. Completion records can include
   terminal status and failure reason.
+- `ingress-audit.jsonl` is a top-level gateway-store ledger for external
+  ingress decisions. It records only redacted data: sequence, timestamp,
+  admitted/rejected decision, reason, rule/source, external event id hash,
+  payload hash, target session id, admitted input id, duplicate marker, client
+  id hash, client type, and metadata keys. It does not store raw bodies,
+  prompts, metadata values, or external ids.
 - snapshot JSON files capture selected runtime/config/model/MCP state for
   offline inspection.
 - store directories are forced to `0700`; manifest, snapshots, legacy
@@ -210,6 +258,10 @@ monotonic sequence, expected `session_id`, event type, and lifecycle where
 applicable through `internal/eventlog`. Startup session listing intentionally
 defers history/event corruption to the first route that needs that specific
 session's replay.
+Ingress audit replay validates schema version, gapless sequence, decision
+vocabulary, and hash shapes. It is separate from session event replay because
+rejected ingress can happen before any session run exists, and admitted ingress
+is not itself runtime execution.
 Session event replay allows open active runs, turns, steps, and tool attempts;
 closed-lifecycle checks are reserved for callers that know an artifact is
 complete.
@@ -406,6 +458,9 @@ Current worktree owner/scope behavior:
 
 - clients can send session actor metadata through the shared
   `X-Billyharness-Session-*` headers;
+- `SessionOwner.ClientID` and `X-Billyharness-Session-Client-ID` provide a
+  generic owner principal for ingress and future clients that do not have
+  Telegram/TUI-specific IDs;
 - `gatewayclient.WithSessionOwner` is the intended way for clients to attach
   that metadata;
 - create requests may include `owner` in the JSON body. If the request also has
@@ -424,3 +479,5 @@ them as a substitute for bearer auth or network exposure controls.
 
 See `docs/adr/0002-gateway-owns-session-authority.md` for the durable decision
 behind this authority boundary.
+See `docs/adr/0009-external-ingress-is-gateway-admission.md` for the external
+ingress invariant.

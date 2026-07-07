@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -404,7 +405,11 @@ func TestGatewayAuthEndpointsSaveDeepSeekAndImportCodex(t *testing.T) {
 		t.Fatal(err)
 	}
 	codex := httptest.NewRecorder()
-	server.Handler().ServeHTTP(codex, httptest.NewRequest(http.MethodPost, "/v1/auth/codex/import", bytes.NewBufferString(`{"source_path":"`+source+`"}`)))
+	importReq, err := json.Marshal(gatewayapi.CodexImportRequest{SourcePath: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Handler().ServeHTTP(codex, httptest.NewRequest(http.MethodPost, "/v1/auth/codex/import", bytes.NewReader(importReq)))
 	if codex.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", codex.Code, codex.Body.String())
 	}
@@ -1119,6 +1124,9 @@ func assertPerm(t *testing.T, path string, want os.FileMode) {
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		return
 	}
 	if got := info.Mode().Perm(); got != want {
 		t.Fatalf("%s mode = %o, want %o", path, got, want)
