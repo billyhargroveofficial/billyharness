@@ -198,19 +198,28 @@ manifests or execute capabilities in this slice.
 
 When an agent-club registry is configured, the route checks descriptor and
 trusted binding policy before writing ingress audit or session inputs. Bindings
-are local gateway policy only: they link a capability to
-`client_type=ingress`, a concrete `client_id`, optional sources, optional
-event types, optional safe metadata keys, and an enabled flag. Unknown
+are local gateway policy only: they have stable local IDs and link a
+capability to `client_type=ingress`, a concrete `client_id`, optional sources,
+optional event types, optional safe metadata keys, and an enabled flag. Unknown
 capabilities, disabled bindings, source/event mismatches, and disallowed
 metadata keys are rejected at admission time. Binding metadata cannot contain
 secrets, executable commands, environment variables, raw API calls, SQL, browser
 auth material, prompts, or payload values.
 
+The registry is loaded from operator-owned JSON only:
+`$BILLYHARNESS_HOME/agentclub.config.json` or paths from
+`BILLYHARNESS_AGENTCLUB_CONFIG_FILES` /
+`FAST_AGENT_AGENTCLUB_CONFIG_FILES`. Missing default config preserves
+no-registry behavior. Any explicitly configured invalid file fails startup.
+Webhook trigger secrets are referenced by `hmac_secret_env` and resolved from
+environment/dotenv into runtime memory only; readiness, `/v1/config`, doctor,
+and CLI JSON never expose the secret value.
+
 `GET /v1/agentclub/capabilities` is the matching read-only discovery surface.
 It returns enabled descriptors and safe binding metadata visible to the current
 actor, and it does not grant authority to execute anything. Scheduler daemons,
-safe outputs, action approvals, project manifest loading, and capability
-execution are later slices.
+project manifest loading, and capability execution are not part of this
+surface.
 
 Verified trigger delivery is now a generic gateway admission path at
 `POST /v1/agentclub/triggers/{binding_id}/deliveries`. The trusted trigger

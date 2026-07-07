@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -138,6 +139,61 @@ func TestAgentclubProposalListAndDecisionCommandsUseExplicitHashOnly(t *testing.
 	}
 	if !strings.Contains(approveOut.String(), "approve proposal proposal-1 decision=decision-1 state=approved") {
 		t.Fatalf("approve output:\n%s", approveOut.String())
+	}
+}
+
+func TestAgentclubLocalConfigCommandsValidateListAndToggle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agentclub.config.json")
+	cfg := agentclub.FileConfig{
+		SchemaVersion: agentclub.SchemaVersion,
+		Capabilities: []agentclub.CapabilityDescriptor{{
+			ID:       "fixture.review",
+			Title:    "Fixture review",
+			Kind:     agentclub.CapabilityKindReview,
+			Risk:     agentclub.RiskReadOnly,
+			Dispatch: agentclub.DispatchAdmitOnly,
+			Approval: agentclub.ApprovalNone,
+		}},
+		TrustedBindings: []agentclub.TrustedBindingConfig{{
+			ID:         "fixture.binding",
+			Capability: "fixture.review",
+			ClientType: "ingress",
+			ClientID:   "ingress:fixture:prod",
+			Sources:    []string{"fixture"},
+			EventTypes: []string{"review_queue"},
+			Enabled:    true,
+		}},
+	}
+	if err := agentclub.WriteConfigFile(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var validateOut bytes.Buffer
+	if err := agentclubCommand([]string{"config", "validate", "-path", path}, &validateOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(validateOut.String(), "agent-club config: files=1 capabilities=1 bindings=1") {
+		t.Fatalf("validate output:\n%s", validateOut.String())
+	}
+
+	var bindingsOut bytes.Buffer
+	if err := agentclubCommand([]string{"bindings", "-path", path}, &bindingsOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(bindingsOut.String(), "fixture.binding") || !strings.Contains(bindingsOut.String(), "enabled=true") {
+		t.Fatalf("bindings output:\n%s", bindingsOut.String())
+	}
+
+	var disableOut bytes.Buffer
+	if err := agentclubCommand([]string{"disable", "binding", "fixture.binding", "-path", path}, &disableOut); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := agentclub.ReadConfigFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.TrustedBindings) != 1 || updated.TrustedBindings[0].Enabled {
+		t.Fatalf("updated config = %#v", updated.TrustedBindings)
 	}
 }
 

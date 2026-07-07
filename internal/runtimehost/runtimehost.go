@@ -21,6 +21,7 @@ type Settings struct {
 	ToolPolicy      config.ToolPolicySettings
 	Diagnostics     config.DiagnosticsSettings
 	MCP             config.MCPSettings
+	AgentClub       config.AgentClubSettings
 	Hooks           config.HookSettings
 	Instructions    config.InstructionSettings
 	GatewayAddr     string
@@ -53,6 +54,7 @@ func SettingsFromConfig(cfg config.Config) Settings {
 		ToolPolicy:      cfg.ToolPolicySettings(),
 		Diagnostics:     cfg.DiagnosticsSettings(),
 		MCP:             cfg.MCPSettings(),
+		AgentClub:       cfg.AgentClubSettings(),
 		Hooks:           cfg.HookSettings(),
 		Instructions:    cfg.InstructionSettings(),
 		GatewayAddr:     cfg.GatewayAddr,
@@ -69,6 +71,7 @@ func SettingsFromRuntimeDiffSettings(settings config.RuntimeDiffSettings) Settin
 		ToolPolicy:      cloneToolPolicy(settings.ToolPolicy),
 		Diagnostics:     cloneDiagnostics(settings.Diagnostics),
 		MCP:             cloneMCP(settings.MCP),
+		AgentClub:       cloneAgentClub(settings.AgentClub),
 		Hooks:           cloneHooks(settings.Hooks),
 		Instructions:    InstructionSettingsFromRuntimeDiffSettings(settings),
 		GatewayAddr:     settings.GatewayAddr,
@@ -242,6 +245,7 @@ func (s Settings) RuntimeDiffSettings() config.RuntimeDiffSettings {
 		ToolPolicy:  s.ToolPolicy,
 		Diagnostics: s.Diagnostics,
 		MCP:         s.MCP,
+		AgentClub:   s.AgentClub,
 		Hooks:       s.Hooks,
 		GatewayAddr: s.GatewayAddr,
 	}
@@ -251,6 +255,7 @@ func (s Settings) Clone() Settings {
 	s.ToolPolicy = cloneToolPolicy(s.ToolPolicy)
 	s.Diagnostics = cloneDiagnostics(s.Diagnostics)
 	s.MCP = cloneMCP(s.MCP)
+	s.AgentClub = cloneAgentClub(s.AgentClub)
 	s.Hooks = cloneHooks(s.Hooks)
 	s.Instructions = cloneInstructions(s.Instructions)
 	return s
@@ -345,6 +350,12 @@ func cloneMCP(settings config.MCPSettings) config.MCPSettings {
 		MCPPromoteServerInstructions: settings.PromoteServerInstructions,
 		MCPServers:                   settings.Servers,
 	}.MCPSettings()
+}
+
+func cloneAgentClub(settings config.AgentClubSettings) config.AgentClubSettings {
+	return config.Config{
+		AgentClubConfigFiles: settings.ConfigFiles,
+	}.AgentClubSettings()
 }
 
 func cloneHooks(settings config.HookSettings) config.HookSettings {

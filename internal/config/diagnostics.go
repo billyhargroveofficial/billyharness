@@ -85,6 +85,7 @@ type RuntimeToolSnapshot struct {
 	AccessMode                          string            `json:"access_mode"`
 	MCPEnabled                          bool              `json:"mcp_enabled"`
 	MCPAllowedServers                   string            `json:"mcp_allowed_servers"`
+	AgentClubConfigFiles                string            `json:"agentclub_config_files,omitempty"`
 	MaxToolOutputBytes                  int               `json:"max_tool_output_bytes"`
 	DiagnosticsEnabled                  bool              `json:"diagnostics_enabled"`
 	DiagnosticsConfigFiles              string            `json:"diagnostics_config_files,omitempty"`
@@ -215,6 +216,7 @@ func (c Config) RuntimeToolSnapshot() RuntimeToolSnapshot {
 		AccessMode:                    tools.AccessMode,
 		MCPEnabled:                    mcp.Enabled,
 		MCPAllowedServers:             strings.Join(mcp.AllowedServers, ","),
+		AgentClubConfigFiles:          strings.Join(c.AgentClubSettings().ConfigFiles, ","),
 		MaxToolOutputBytes:            tools.MaxToolOutputBytes,
 		DiagnosticsEnabled:            diagnostics.Enabled,
 		DiagnosticsConfigFiles:        strings.Join(diagnostics.ConfigFiles, ","),

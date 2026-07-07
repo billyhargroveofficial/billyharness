@@ -469,7 +469,11 @@ func FormatAgentClubCapabilities(resp agentclub.CapabilityListResponse) string {
 		}
 		b.WriteByte('\n')
 		for _, binding := range capability.Bindings {
-			fmt.Fprintf(&b, "  binding %s/%s enabled=%t",
+			fmt.Fprintf(&b, "  binding")
+			if strings.TrimSpace(binding.ID) != "" {
+				fmt.Fprintf(&b, " id=%s", secrets.Redact(strings.TrimSpace(binding.ID)))
+			}
+			fmt.Fprintf(&b, " %s/%s enabled=%t",
 				secrets.Redact(strings.TrimSpace(binding.ClientType)),
 				secrets.Redact(strings.TrimSpace(binding.ClientID)),
 				binding.Enabled,

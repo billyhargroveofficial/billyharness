@@ -39,6 +39,8 @@ type Server struct {
 	toolPolicy      config.ToolPolicySettings
 	diagnostics     config.DiagnosticsSettings
 	mcpSettings     config.MCPSettings
+	agentClubConfig config.AgentClubSettings
+	agentClubStatus gatewayapi.AgentClubReadinessStatus
 	hookSettings    config.HookSettings
 	instructions    config.InstructionSettings
 	gatewayAddr     string
@@ -61,6 +63,7 @@ type ServerOptions struct {
 	RequireMutationAuth                      bool
 	DevAllowUnauthenticatedLoopbackMutations bool
 	AgentClubRegistry                        *agentclub.Registry
+	AgentClubStatus                          gatewayapi.AgentClubReadinessStatus
 }
 
 type ServerSettings struct {
@@ -71,6 +74,7 @@ type ServerSettings struct {
 	ToolPolicy      config.ToolPolicySettings
 	Diagnostics     config.DiagnosticsSettings
 	MCP             config.MCPSettings
+	AgentClub       config.AgentClubSettings
 	Hooks           config.HookSettings
 	Instructions    config.InstructionSettings
 	GatewayAddr     string
@@ -149,6 +153,7 @@ func ServerSettingsFromRuntimeHost(settings runtimehost.Settings) ServerSettings
 		ToolPolicy:      settings.ToolPolicy,
 		Diagnostics:     settings.Diagnostics,
 		MCP:             settings.MCP,
+		AgentClub:       settings.AgentClub,
 		Hooks:           settings.Hooks,
 		Instructions:    settings.Instructions,
 		GatewayAddr:     settings.GatewayAddr,
@@ -170,6 +175,8 @@ func NewServerWithOptionsFromSettings(settings ServerSettings, prov provider.Pro
 		toolPolicy:      settings.ToolPolicy,
 		diagnostics:     settings.Diagnostics,
 		mcpSettings:     settings.MCP,
+		agentClubConfig: settings.AgentClub,
+		agentClubStatus: opts.AgentClubStatus,
 		hookSettings:    settings.Hooks,
 		instructions:    settings.Instructions,
 		gatewayAddr:     settings.GatewayAddr,
@@ -218,6 +225,7 @@ func runtimeHostSettingsFromServerSettings(settings ServerSettings) runtimehost.
 		ToolPolicy:      settings.ToolPolicy,
 		Diagnostics:     settings.Diagnostics,
 		MCP:             settings.MCP,
+		AgentClub:       settings.AgentClub,
 		Hooks:           settings.Hooks,
 		Instructions:    settings.Instructions,
 		GatewayAddr:     settings.GatewayAddr,
@@ -240,6 +248,9 @@ func cloneServerSettings(settings ServerSettings) ServerSettings {
 		MCPPromoteServerInstructions: settings.MCP.PromoteServerInstructions,
 		MCPServers:                   settings.MCP.Servers,
 	}.MCPSettings()
+	settings.AgentClub = config.Config{
+		AgentClubConfigFiles: settings.AgentClub.ConfigFiles,
+	}.AgentClubSettings()
 	settings.Hooks = config.Config{
 		HooksEnabled:    settings.Hooks.Enabled,
 		HookConfigFiles: settings.Hooks.ConfigFiles,
@@ -1280,6 +1291,7 @@ func (s *Server) runtimeDiffSettings() config.RuntimeDiffSettings {
 		ToolPolicy:  s.toolPolicy,
 		Diagnostics: s.diagnostics,
 		MCP:         s.mcpSettings,
+		AgentClub:   s.agentClubConfig,
 		Hooks:       s.hookSettings,
 		GatewayAddr: s.gatewayAddr,
 	}

@@ -92,6 +92,7 @@ func publicConfigRedactedKey(key string) bool {
 		"web_hermes_env_files",
 		"diagnostics_config_files",
 		"mcp_config_files",
+		"agentclub_config_files",
 		"hooks_config_files":
 		return true
 	default:

@@ -326,11 +326,17 @@ func serve(args []string) error {
 		return err
 	}
 	defer registry.Close()
+	agentClubRegistry, agentClubStatus, err := loadAgentClubRegistryForConfig(&cfg)
+	if err != nil {
+		return fmt.Errorf("load agentclub config: %w", err)
+	}
 	server := gateway.NewServerWithOptionsFromSettings(gateway.ServerSettingsFromConfig(cfg), provider.Mock{}, registry, gateway.ServerOptions{
 		AuthToken:                                *authToken,
 		SessionStoreDir:                          gateway.DefaultSessionStoreDir(),
 		RequireMutationAuth:                      true,
 		DevAllowUnauthenticatedLoopbackMutations: *devAllowLoopbackMutationNoAuth,
+		AgentClubRegistry:                        agentClubRegistry,
+		AgentClubStatus:                          agentClubStatus,
 	})
 	listenURL := normalizeGatewayURL(listener.Addr().String())
 	status := "fast-agent-harness gateway listening on " + listenURL

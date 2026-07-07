@@ -143,7 +143,7 @@ func NormalizeTriggerBinding(binding TriggerBinding) (TriggerBinding, error) {
 	if !allowedTriggerAuthMethods[binding.AuthMethod] {
 		return TriggerBinding{}, fmt.Errorf("%w: unsupported auth_method %q", ErrInvalidTriggerBinding, binding.AuthMethod)
 	}
-	if binding.AuthMethod == TriggerAuthHMACSHA256 && len(binding.HMACSecret) == 0 {
+	if binding.AuthMethod == TriggerAuthHMACSHA256 && binding.Enabled && len(binding.HMACSecret) == 0 {
 		return TriggerBinding{}, fmt.Errorf("%w: hmac secret required", ErrInvalidTriggerBinding)
 	}
 	if binding.Kind != TriggerKindWebhook && binding.AuthMethod != TriggerAuthNone {
@@ -175,6 +175,9 @@ func BuildTriggerDelivery(input TriggerDeliveryInput) (TriggerDelivery, error) {
 	binding, err := NormalizeTriggerBinding(input.Binding)
 	if err != nil {
 		return TriggerDelivery{}, err
+	}
+	if !binding.Enabled {
+		return TriggerDelivery{}, fmt.Errorf("%w: %s", ErrTriggerDisabled, binding.ID)
 	}
 	now := input.Now
 	if now.IsZero() {
@@ -248,6 +251,9 @@ func MapTriggerToIngress(delivery TriggerDelivery) (AdmissionMapping, error) {
 	binding, err := NormalizeTriggerBinding(delivery.Binding)
 	if err != nil {
 		return AdmissionMapping{}, err
+	}
+	if !binding.Enabled {
+		return AdmissionMapping{}, fmt.Errorf("%w: %s", ErrTriggerDisabled, binding.ID)
 	}
 	if req.Source != binding.Source || req.Capability != binding.Capability || req.EventType != binding.EventType {
 		return AdmissionMapping{}, fmt.Errorf("%w: trigger request does not match binding", ErrInvalidTrigger)

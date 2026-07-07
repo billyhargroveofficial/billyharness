@@ -300,6 +300,7 @@ func TestCollectDoctorReportCheckNamesFollowDescriptors(t *testing.T) {
 		"gateway bind address",
 		"auth configured",
 		"mcp allowlist",
+		"agentclub config",
 		"tool catalog",
 		"session store access",
 		"attachments store usage",

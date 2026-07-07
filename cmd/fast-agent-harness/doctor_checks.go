@@ -109,6 +109,9 @@ func doctorCheckRuns() map[string]func(*doctorContext) []doctorCheck {
 		"mcp allowlist": func(ctx *doctorContext) []doctorCheck {
 			return []doctorCheck{doctorMCPAllowlistCheck(ctx.Config)}
 		},
+		"agentclub config": func(ctx *doctorContext) []doctorCheck {
+			return []doctorCheck{doctorAgentClubConfigCheck(ctx.Runtime.AgentClub)}
+		},
 		"tool catalog": func(ctx *doctorContext) []doctorCheck {
 			return []doctorCheck{doctorToolCatalogStatus(ctx.Config)}
 		},

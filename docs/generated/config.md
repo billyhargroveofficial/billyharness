@@ -82,6 +82,7 @@
 | mcp_config_files                 | string_list      | []                                           | FAST_AGENT_MCP_CONFIG_FILES                                                              | no       | MCP config files to load                                    |
 | mcp_allowed_servers              | string_list      | telegram, telegram-parilka, github, context7 | FAST_AGENT_MCP_ALLOWED_SERVERS                                                           | no       | Allowlist of MCP server names visible to the runtime        |
 | mcp_promote_server_instructions  | bool             | false                                        | BILLYHARNESS_MCP_PROMOTE_SERVER_INSTRUCTIONS, FAST_AGENT_MCP_PROMOTE_SERVER_INSTRUCTIONS | no       | Promote MCP server instructions into trusted prompt context |
+| agentclub_config_files           | string_list      | []                                           | BILLYHARNESS_AGENTCLUB_CONFIG_FILES, FAST_AGENT_AGENTCLUB_CONFIG_FILES                   | no       | Agent-club registry config JSON files to load               |
 | hooks_enabled                    | bool             | true                                         | BILLYHARNESS_HOOKS_ENABLED, FAST_AGENT_HOOKS_ENABLED                                     | no       | Enable configured hook execution                            |
 | hooks_config_files               | string_list      | []                                           | BILLYHARNESS_HOOKS_CONFIG_FILES, FAST_AGENT_HOOKS_CONFIG_FILES                           | no       | Hook config files to load                                   |
 
@@ -118,4 +119,4 @@ This file uses `config.BillySettings` as the canonical JSON shape. It stores TUI
 | $BILLYHARNESS_HOME/hooks.config.toml       | Hook sub-registry loaded by $BILLYHARNESS_HOME/hooks.config.toml              |
 | $BILLYHARNESS_HOME/diagnostics.config.toml | Diagnostics sub-registry loaded by $BILLYHARNESS_HOME/diagnostics.config.toml |
 
-<!-- source-hash: 0e3d4908bac973885ea82a71a0ab49d379645621ba47fb839ad1d4debf04ffbe -->
+<!-- source-hash: e9a6825e17866d33b208c7d56825e6df8262cee92da2be5fc5761d40f769585d -->

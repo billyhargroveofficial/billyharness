@@ -13,6 +13,7 @@ type RuntimeDiffSettings struct {
 	ToolPolicy  ToolPolicySettings
 	Diagnostics DiagnosticsSettings
 	MCP         MCPSettings
+	AgentClub   AgentClubSettings
 	Hooks       HookSettings
 	GatewayAddr string
 }
@@ -35,6 +36,7 @@ func RuntimeDiffSettingsFromConfig(cfg Config) RuntimeDiffSettings {
 		ToolPolicy:  cfg.ToolPolicySettings(),
 		Diagnostics: cfg.DiagnosticsSettings(),
 		MCP:         cfg.MCPSettings(),
+		AgentClub:   cfg.AgentClubSettings(),
 		Hooks:       cfg.HookSettings(),
 		GatewayAddr: cfg.GatewayAddr,
 	}
@@ -178,6 +180,7 @@ func runtimeDiffConfigFromSettings(base Config, settings RuntimeDiffSettings) Co
 	cfg.MCPAllowedServers = cloneStrings(settings.MCP.AllowedServers)
 	cfg.MCPPromoteServerInstructions = settings.MCP.PromoteServerInstructions
 	cfg.MCPServers = cloneMCPServers(settings.MCP.Servers)
+	cfg.AgentClubConfigFiles = cloneStrings(settings.AgentClub.ConfigFiles)
 	cfg.HooksEnabled = settings.Hooks.Enabled
 	cfg.HookConfigFiles = cloneStrings(settings.Hooks.ConfigFiles)
 	cfg.Hooks = cloneHooks(settings.Hooks.Hooks)

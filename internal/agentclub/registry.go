@@ -1,6 +1,8 @@
 package agentclub
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -17,6 +19,7 @@ var (
 )
 
 type TrustedBinding struct {
+	ID           string   `json:"id,omitempty"`
 	Capability   string   `json:"capability"`
 	ClientType   string   `json:"client_type"`
 	ClientID     string   `json:"client_id"`
@@ -27,6 +30,7 @@ type TrustedBinding struct {
 }
 
 type BindingView struct {
+	ID           string   `json:"id,omitempty"`
 	Capability   string   `json:"capability"`
 	ClientType   string   `json:"client_type"`
 	ClientID     string   `json:"client_id"`
@@ -81,6 +85,11 @@ func NewRegistryWithTriggers(descriptors []CapabilityDescriptor, bindings []Trus
 		if err != nil {
 			return nil, err
 		}
+		for _, existing := range r.bindings {
+			if existing.ID == normalized.ID {
+				return nil, fmt.Errorf("%w: duplicate trusted binding %q", ErrInvalidBinding, normalized.ID)
+			}
+		}
 		if _, ok := r.capabilities[normalized.Capability]; !ok {
 			return nil, fmt.Errorf("%w: binding references %q", ErrUnknownCapability, normalized.Capability)
 		}
@@ -99,6 +108,10 @@ func NewRegistryWithTriggers(descriptors []CapabilityDescriptor, bindings []Trus
 		}
 		if _, ok := r.capabilities[normalized.Capability]; !ok {
 			return nil, fmt.Errorf("%w: trigger references %q", ErrUnknownCapability, normalized.Capability)
+		}
+		if !normalized.Enabled {
+			r.triggerBindings[normalized.ID] = normalized
+			continue
 		}
 		req := EventRequest{
 			SchemaVersion:   SchemaVersion,
@@ -119,6 +132,9 @@ func NewRegistryWithTriggers(descriptors []CapabilityDescriptor, bindings []Trus
 
 func NormalizeTrustedBinding(binding TrustedBinding) (TrustedBinding, error) {
 	var err error
+	if binding.ID, err = normalizeOptionalIdentifier("binding_id", binding.ID); err != nil {
+		return TrustedBinding{}, err
+	}
 	if binding.Capability, err = normalizeIdentifier("capability", binding.Capability); err != nil {
 		return TrustedBinding{}, err
 	}
@@ -141,6 +157,9 @@ func NormalizeTrustedBinding(binding TrustedBinding) (TrustedBinding, error) {
 	}
 	if binding.MetadataKeys, err = normalizeMetadataKeys(binding.MetadataKeys); err != nil {
 		return TrustedBinding{}, err
+	}
+	if binding.ID == "" {
+		binding.ID = derivedTrustedBindingID(binding)
 	}
 	return binding, nil
 }
@@ -198,6 +217,7 @@ func (r *Registry) CapabilitiesForActor(actor gatewayapi.SessionOwner) Capabilit
 			viewsByID[descriptor.ID] = view
 		}
 		view.Bindings = append(view.Bindings, BindingView{
+			ID:           binding.ID,
 			Capability:   binding.Capability,
 			ClientType:   binding.ClientType,
 			ClientID:     binding.ClientID,
@@ -234,6 +254,36 @@ func (r *Registry) TriggerBinding(id string) (TriggerBinding, error) {
 		return TriggerBinding{}, fmt.Errorf("%w: %s", ErrTriggerDisabled, id)
 	}
 	return cloneTriggerBinding(binding), nil
+}
+
+type RegistrySummary struct {
+	CapabilityCount     int `json:"capability_count"`
+	BindingCount        int `json:"binding_count"`
+	EnabledBindingCount int `json:"enabled_binding_count"`
+	TriggerCount        int `json:"trigger_count"`
+	EnabledTriggerCount int `json:"enabled_trigger_count"`
+}
+
+func (r *Registry) Summary() RegistrySummary {
+	if r == nil {
+		return RegistrySummary{}
+	}
+	summary := RegistrySummary{
+		CapabilityCount: len(r.capabilities),
+		BindingCount:    len(r.bindings),
+		TriggerCount:    len(r.triggerBindings),
+	}
+	for _, binding := range r.bindings {
+		if binding.Enabled {
+			summary.EnabledBindingCount++
+		}
+	}
+	for _, trigger := range r.triggerBindings {
+		if trigger.Enabled {
+			summary.EnabledTriggerCount++
+		}
+	}
+	return summary
 }
 
 func normalizeIdentifierList(field string, values []string) ([]string, error) {
@@ -319,6 +369,7 @@ func sessionOwnerEmpty(owner gatewayapi.SessionOwner) bool {
 
 func bindingSortKey(binding TrustedBinding) string {
 	return strings.Join([]string{
+		binding.ID,
 		binding.Capability,
 		binding.ClientType,
 		binding.ClientID,
@@ -329,10 +380,24 @@ func bindingSortKey(binding TrustedBinding) string {
 
 func bindingViewSortKey(binding BindingView) string {
 	return strings.Join([]string{
+		binding.ID,
 		binding.Capability,
 		binding.ClientType,
 		binding.ClientID,
 		strings.Join(binding.Sources, ","),
 		strings.Join(binding.EventTypes, ","),
 	}, "\x00")
+}
+
+func derivedTrustedBindingID(binding TrustedBinding) string {
+	canonical := strings.Join([]string{
+		binding.Capability,
+		binding.ClientType,
+		binding.ClientID,
+		strings.Join(binding.Sources, ","),
+		strings.Join(binding.EventTypes, ","),
+		strings.Join(binding.MetadataKeys, ","),
+	}, "\x00")
+	sum := sha256.Sum256([]byte(canonical))
+	return "binding." + hex.EncodeToString(sum[:])[:16]
 }

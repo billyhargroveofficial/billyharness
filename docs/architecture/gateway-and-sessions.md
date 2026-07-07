@@ -248,15 +248,28 @@ Conservative risk values are `read_only`, `local_read`, `network_read`,
 `local_write`, `network_write`, `external_mutation`, `execute`,
 `secret_access`, and `unknown`; approval is `none` or `required`.
 
-Trusted bindings link a descriptor to `client_type=ingress`, a concrete
-`client_id`, optional source restrictions, optional event-type restrictions,
-optional safe metadata keys, and an enabled flag. They are gateway-owned local
-policy, not project-provided authority. When a registry is configured, the
-event route rejects unknown capabilities, disabled capabilities, source/event
-mismatches, and disallowed metadata keys before writing ingress audit or
-session inputs. When no registry is configured, the lower-level normalized
-event route remains permissive for local tests and direct operator-owned
-adapters.
+Trusted bindings have stable local `id` values and link a descriptor to
+`client_type=ingress`, a concrete `client_id`, optional source restrictions,
+optional event-type restrictions, optional safe metadata keys, and an enabled
+flag. They are gateway-owned local policy, not project-provided authority.
+When a registry is configured, the event route rejects unknown capabilities,
+disabled capabilities, source/event mismatches, and disallowed metadata keys
+before writing ingress audit or session inputs. When no registry is
+configured, the lower-level normalized event route remains permissive for
+local tests and direct operator-owned adapters.
+
+The persisted registry source is operator-owned JSON at
+`$BILLYHARNESS_HOME/agentclub.config.json`, or the comma-separated paths from
+`BILLYHARNESS_AGENTCLUB_CONFIG_FILES` /
+`FAST_AGENT_AGENTCLUB_CONFIG_FILES`. A missing default file is not an error and
+preserves the no-registry behavior. If a configured file exists or is supplied
+explicitly, invalid JSON, unsupported schema versions, duplicate IDs, missing
+capabilities, unsafe metadata keys, or enabled HMAC triggers without a
+resolvable secret fail closed at startup. Trigger configs store
+`hmac_secret_env`; the loader resolves it from environment or dotenv into the
+runtime-only trigger secret and never returns the secret value. Disabled HMAC
+examples can remain in the file without their secret present; readiness and
+doctor report only counts and env names.
 
 `GET /v1/agentclub/capabilities` is read-only discovery. It returns enabled
 descriptors and safe binding metadata visible to the current actor. It does
@@ -300,9 +313,8 @@ registration does not admit a session input.
 
 The gateway does not load project manifests, read `.billyharness` integration
 files, execute capabilities directly, run schedules, or auto-run sessions in
-this slice. A later configuration slice can add a trusted gateway config file
-under the operator's Billyharness home, but project-local manifests need a
-separate install/hash story first.
+this slice. The agent-club config is intentionally operator-home scoped; a
+project-local manifest still needs a separate install/hash story first.
 
 Safe-output proposals are the durable review layer before any future external
 mutation:
@@ -337,17 +349,21 @@ call external APIs, send HH replies, apply to jobs, modify GitHub, run shell
 commands, call MCP tools, edit files, dispatch a run, or resume/apply a paused
 runtime action in this slice.
 
-Operator UX is deliberately thin and gateway-backed. `fast-agent-harness
-agentclub capabilities` calls `GET /v1/agentclub/capabilities`; `agentclub
-proposals -session SESSION_ID` lists the session proposal queue; and
+Operator UX is deliberately thin. Gateway-backed commands remain
+`fast-agent-harness agentclub capabilities`,
+`agentclub proposals -session SESSION_ID`, and
 `agentclub approve|reject -session SESSION_ID -proposal PROPOSAL_ID -hash
-EXPECTED_PROPOSAL_HASH` records a hash-bound decision with an optional comment.
-The TUI exposes the same read-only view through `/agentclub` for the current
-gateway session. Telegram exposes `/agentclub` as an operator-only command and
-renders pending proposals with approve/reject callback buttons; each callback
-re-fetches the proposal under Telegram owner scope before sending the full
-expected hash to the gateway decision route. These surfaces render redacted
-summaries and output refs only, and none of them applies the proposal.
+EXPECTED_PROPOSAL_HASH`. Local operator config commands are
+`agentclub config init|validate|status|path`, `agentclub bindings`,
+`agentclub triggers`, and `agentclub enable|disable <binding|trigger> ID`;
+they edit only the operator JSON file and validate the resulting registry,
+not any adapter project. The TUI exposes the gateway read-only view through
+`/agentclub` for the current gateway session. Telegram exposes `/agentclub` as
+an operator-only command and renders pending proposals with approve/reject
+callback buttons; each callback re-fetches the proposal under Telegram owner
+scope before sending the full expected hash to the gateway decision route.
+These surfaces render redacted summaries and output refs only, and none of
+them applies the proposal.
 
 Generic owner scoping now includes `SessionOwner.ClientID` plus
 `X-Billyharness-Session-Client-ID`. Client ID can scope non-Telegram/non-TUI

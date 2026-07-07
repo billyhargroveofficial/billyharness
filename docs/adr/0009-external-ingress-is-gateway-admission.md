@@ -68,6 +68,12 @@ scheduler, project-local manifest loader, safe-output executor, action approval
 loop, generic command runner, raw API caller, raw SQL caller, browser auth
 bridge, or concrete project adapter.
 
+The registry can be persisted in operator-owned JSON under
+`$BILLYHARNESS_HOME/agentclub.config.json` or explicit env-configured files.
+Those files define descriptors, stable trusted binding IDs, trigger bindings,
+and HMAC secret env references; startup resolves secrets into runtime memory
+only and fails closed for invalid enabled config.
+
 The trigger delivery endpoint is not an auto-run endpoint. It writes redacted
 trigger audit evidence and, on success, a queued session input. A separate
 operator/client action must still run the session later.

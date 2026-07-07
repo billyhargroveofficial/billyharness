@@ -728,6 +728,65 @@ func TestGatewayHealthAndReadinessAreSplit(t *testing.T) {
 	}
 }
 
+func TestGatewayReadinessAndConfigExposeAgentClubStatus(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	cfg.AgentClubConfigFiles = []string{`C:\secret\agentclub.config.json`}
+	registry := testAgentClubRegistry(t)
+	status := gatewayapi.AgentClubReadinessStatus{
+		ConfiguredFileCount:    1,
+		ConfiguredFileBasename: []string{"agentclub.config.json"},
+		CapabilityCount:        2,
+		BindingCount:           3,
+		EnabledBindingCount:    2,
+		TriggerCount:           1,
+		EnabledTriggerCount:    1,
+		HMACSecretEnvCount:     1,
+		Configured:             true,
+	}
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{
+		AuthToken:         "secret",
+		AgentClubRegistry: registry,
+		AgentClubStatus:   status,
+	})
+
+	ready := httptest.NewRecorder()
+	server.Handler().ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	if ready.Code != http.StatusOK {
+		t.Fatalf("ready status = %d body=%s", ready.Code, ready.Body.String())
+	}
+	var got ReadinessResponse
+	if err := json.Unmarshal(ready.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.AgentClub.ConfiguredFileCount != 1 || got.AgentClub.EnabledBindingCount != 2 || got.AgentClub.EnabledTriggerCount != 1 {
+		t.Fatalf("agentclub readiness = %#v", got.AgentClub)
+	}
+	if strings.Contains(ready.Body.String(), `C:\secret`) {
+		t.Fatalf("readiness leaked config path: %s", ready.Body.String())
+	}
+
+	cfgStatus := httptest.NewRecorder()
+	cfgReq := httptest.NewRequest(http.MethodGet, "/v1/config", nil)
+	cfgReq.Header.Set("Authorization", "Bearer secret")
+	server.Handler().ServeHTTP(cfgStatus, cfgReq)
+	if cfgStatus.Code != http.StatusOK {
+		t.Fatalf("config status = %d body=%s", cfgStatus.Code, cfgStatus.Body.String())
+	}
+	if strings.Contains(cfgStatus.Body.String(), `C:\secret`) {
+		t.Fatalf("config status leaked config path: %s", cfgStatus.Body.String())
+	}
+	var public ConfigStatusResponse
+	if err := json.Unmarshal(cfgStatus.Body.Bytes(), &public); err != nil {
+		t.Fatal(err)
+	}
+	agentClub, ok := public.Diagnostics["agent_club"].(map[string]any)
+	if !ok || agentClub["configured"].(bool) != true {
+		t.Fatalf("agentclub config diagnostics = %#v", public.Diagnostics["agent_club"])
+	}
+}
+
 func TestGatewayMutationAuthProtectsLoopbackBrowserRoutes(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = "mock"

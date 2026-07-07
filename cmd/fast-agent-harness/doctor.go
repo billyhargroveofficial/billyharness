@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/billyhargroveofficial/billyharness/internal/agentclub"
 	"github.com/billyhargroveofficial/billyharness/internal/attachments"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
@@ -39,22 +40,23 @@ type doctorOptions struct {
 }
 
 type doctorReport struct {
-	Version           string              `json:"version"`
-	BuildCommit       string              `json:"build_commit"`
-	BuildTime         string              `json:"build_time"`
-	GeneratedAt       string              `json:"generated_at"`
-	Mode              string              `json:"mode"`
-	CWD               string              `json:"cwd"`
-	RepoDir           string              `json:"repo_dir,omitempty"`
-	BillyHome         string              `json:"billy_home"`
-	SettingsPath      string              `json:"settings_path"`
-	EnvPath           string              `json:"env_path"`
-	MCPConfigPath     string              `json:"mcp_config_path"`
-	CodexAuthPath     string              `json:"codex_auth_path"`
-	GatewaySessionDir string              `json:"gateway_session_dir"`
-	Config            doctorConfigStatus  `json:"config"`
-	Runtime           doctorRuntimeStatus `json:"runtime"`
-	Checks            []doctorCheck       `json:"checks"`
+	Version             string              `json:"version"`
+	BuildCommit         string              `json:"build_commit"`
+	BuildTime           string              `json:"build_time"`
+	GeneratedAt         string              `json:"generated_at"`
+	Mode                string              `json:"mode"`
+	CWD                 string              `json:"cwd"`
+	RepoDir             string              `json:"repo_dir,omitempty"`
+	BillyHome           string              `json:"billy_home"`
+	SettingsPath        string              `json:"settings_path"`
+	EnvPath             string              `json:"env_path"`
+	MCPConfigPath       string              `json:"mcp_config_path"`
+	AgentClubConfigPath string              `json:"agentclub_config_path"`
+	CodexAuthPath       string              `json:"codex_auth_path"`
+	GatewaySessionDir   string              `json:"gateway_session_dir"`
+	Config              doctorConfigStatus  `json:"config"`
+	Runtime             doctorRuntimeStatus `json:"runtime"`
+	Checks              []doctorCheck       `json:"checks"`
 }
 
 type doctorConfigStatus struct {
@@ -64,15 +66,16 @@ type doctorConfigStatus struct {
 }
 
 type doctorRuntimeStatus struct {
-	Provider            string              `json:"provider"`
-	Model               string              `json:"model"`
-	GatewayURL          string              `json:"gateway_url,omitempty"`
-	Auth                doctorAuthPresence  `json:"auth"`
-	ServiceBinary       doctorFileStatus    `json:"service_binary"`
-	GatewaySessionStore doctorPathUsage     `json:"gateway_session_store"`
-	ToolOutputStore     doctorPathUsage     `json:"tool_output_store"`
-	AttachmentsStore    doctorPathUsage     `json:"attachments_store"`
-	StrictHygiene       doctorHygieneStatus `json:"strict_hygiene"`
+	Provider            string                `json:"provider"`
+	Model               string                `json:"model"`
+	GatewayURL          string                `json:"gateway_url,omitempty"`
+	Auth                doctorAuthPresence    `json:"auth"`
+	ServiceBinary       doctorFileStatus      `json:"service_binary"`
+	GatewaySessionStore doctorPathUsage       `json:"gateway_session_store"`
+	ToolOutputStore     doctorPathUsage       `json:"tool_output_store"`
+	AttachmentsStore    doctorPathUsage       `json:"attachments_store"`
+	AgentClub           doctorAgentClubStatus `json:"agent_club"`
+	StrictHygiene       doctorHygieneStatus   `json:"strict_hygiene"`
 }
 
 type doctorAuthPresence struct {
@@ -112,6 +115,19 @@ type doctorHygieneStatus struct {
 	MissingFiles      int    `json:"missing_files,omitempty"`
 	AllowedLargeFiles int    `json:"allowed_large_files,omitempty"`
 	Detail            string `json:"detail,omitempty"`
+}
+
+type doctorAgentClubStatus struct {
+	Status                string   `json:"status"`
+	ConfiguredFileCount   int      `json:"configured_file_count"`
+	CapabilityCount       int      `json:"capability_count,omitempty"`
+	BindingCount          int      `json:"binding_count,omitempty"`
+	EnabledBindingCount   int      `json:"enabled_binding_count,omitempty"`
+	TriggerCount          int      `json:"trigger_count,omitempty"`
+	EnabledTriggerCount   int      `json:"enabled_trigger_count,omitempty"`
+	MissingSecretEnvCount int      `json:"missing_secret_env_count,omitempty"`
+	SecretEnvNames        []string `json:"secret_env_names,omitempty"`
+	Error                 string   `json:"error,omitempty"`
 }
 
 type doctorCheck struct {
@@ -207,17 +223,18 @@ func collectDoctorReport(ctx context.Context, cfg config.Config, opts doctorOpti
 	billyHome := config.BillyHomeDir()
 	build := currentBuildMetadata()
 	report := doctorReport{
-		Version:           build.Version,
-		BuildCommit:       build.Commit,
-		BuildTime:         build.BuiltAt,
-		GeneratedAt:       time.Now().UTC().Format(time.RFC3339),
-		CWD:               cwd,
-		BillyHome:         billyHome,
-		SettingsPath:      filepath.Join(billyHome, "settings.json"),
-		EnvPath:           filepath.Join(billyHome, ".env"),
-		MCPConfigPath:     config.DefaultMCPConfigFile(),
-		CodexAuthPath:     cfg.ProviderAuthSnapshot().CodexAuthFile,
-		GatewaySessionDir: gateway.DefaultSessionStoreDir(),
+		Version:             build.Version,
+		BuildCommit:         build.Commit,
+		BuildTime:           build.BuiltAt,
+		GeneratedAt:         time.Now().UTC().Format(time.RFC3339),
+		CWD:                 cwd,
+		BillyHome:           billyHome,
+		SettingsPath:        filepath.Join(billyHome, "settings.json"),
+		EnvPath:             filepath.Join(billyHome, ".env"),
+		MCPConfigPath:       config.DefaultMCPConfigFile(),
+		AgentClubConfigPath: config.DefaultAgentClubConfigFile(),
+		CodexAuthPath:       cfg.ProviderAuthSnapshot().CodexAuthFile,
+		GatewaySessionDir:   gateway.DefaultSessionStoreDir(),
 		Config: doctorConfigStatus{
 			ProviderAuthSnapshot: cfg.ProviderAuthSnapshot(),
 			ProviderCapability:   cfg.ProviderCapabilitySnapshot(),
@@ -309,6 +326,7 @@ func collectDoctorRuntime(ctx context.Context, cfg config.Config, repoDir string
 		GatewaySessionStore: doctorPathUsageFor(gateway.DefaultSessionStoreDir()),
 		ToolOutputStore:     doctorPathUsageFor(filepath.Join(config.BillyHomeDir(), "tool-output")),
 		AttachmentsStore:    doctorPathUsageFor(attachments.DefaultStoreRoot()),
+		AgentClub:           doctorAgentClubConfigStatus(cfg),
 		StrictHygiene:       doctorStrictHygieneStatus(ctx, repoDir, opts, runner),
 	}
 }
@@ -332,6 +350,7 @@ func doctorConfigChecks(cfg config.Config, auth doctorAuthPresence) []doctorChec
 		doctorGatewayBindCheck(cfg),
 		doctorActiveAuthCheck(auth),
 		doctorMCPAllowlistCheck(cfg),
+		doctorAgentClubConfigCheck(doctorAgentClubConfigStatus(cfg)),
 	}
 	return checks
 }
@@ -449,6 +468,52 @@ func doctorMCPAllowlistCheck(cfg config.Config) doctorCheck {
 		return doctorCheck{Name: "mcp allowlist", Status: "fail", Detail: strings.Join(parts, " ")}
 	}
 	return doctorCheck{Name: "mcp allowlist", Status: "ok", Detail: fmt.Sprintf("%d allowed server(s) available", len(allowed))}
+}
+
+func doctorAgentClubConfigStatus(cfg config.Config) doctorAgentClubStatus {
+	files := agentClubConfigFilesFor(cfg)
+	if len(files) == 0 {
+		return doctorAgentClubStatus{Status: "not_configured"}
+	}
+	loaded, err := agentclub.LoadConfigFiles(agentclub.LoadConfigOptions{
+		Files:        files,
+		SecretLookup: agentClubSecretLookup,
+	})
+	if err != nil {
+		return doctorAgentClubStatus{
+			Status:              "fail",
+			ConfiguredFileCount: len(files),
+			Error:               err.Error(),
+		}
+	}
+	status := "ok"
+	if loaded.Status.MissingSecretEnvCount > 0 {
+		status = "warn"
+	}
+	return doctorAgentClubStatus{
+		Status:                status,
+		ConfiguredFileCount:   loaded.Status.ConfiguredFileCount,
+		CapabilityCount:       loaded.Status.CapabilityCount,
+		BindingCount:          loaded.Status.BindingCount,
+		EnabledBindingCount:   loaded.Status.EnabledBindingCount,
+		TriggerCount:          loaded.Status.TriggerCount,
+		EnabledTriggerCount:   loaded.Status.EnabledTriggerCount,
+		MissingSecretEnvCount: loaded.Status.MissingSecretEnvCount,
+		SecretEnvNames:        append([]string(nil), loaded.Status.SecretEnvNames...),
+	}
+}
+
+func doctorAgentClubConfigCheck(status doctorAgentClubStatus) doctorCheck {
+	switch status.Status {
+	case "not_configured":
+		return doctorCheck{Name: "agentclub config", Status: "ok", Detail: "no config files"}
+	case "fail":
+		return doctorCheck{Name: "agentclub config", Status: "fail", Detail: status.Error}
+	case "warn":
+		return doctorCheck{Name: "agentclub config", Status: "warn", Detail: fmt.Sprintf("files=%d capabilities=%d enabled_bindings=%d enabled_triggers=%d missing_secrets=%d", status.ConfiguredFileCount, status.CapabilityCount, status.EnabledBindingCount, status.EnabledTriggerCount, status.MissingSecretEnvCount)}
+	default:
+		return doctorCheck{Name: "agentclub config", Status: "ok", Detail: fmt.Sprintf("files=%d capabilities=%d enabled_bindings=%d enabled_triggers=%d", status.ConfiguredFileCount, status.CapabilityCount, status.EnabledBindingCount, status.EnabledTriggerCount)}
+	}
 }
 
 func doctorAllowedMCPNames(in []string) []string {
@@ -1138,6 +1203,7 @@ func printDoctorReport(w io.Writer, report doctorReport) {
 	fmt.Fprintf(w, "settings: %s\n", report.SettingsPath)
 	fmt.Fprintf(w, "env: %s\n", report.EnvPath)
 	fmt.Fprintf(w, "mcp config: %s\n", report.MCPConfigPath)
+	fmt.Fprintf(w, "agentclub config: %s\n", report.AgentClubConfigPath)
 	fmt.Fprintf(w, "sessions: %s\n", report.GatewaySessionDir)
 	fmt.Fprintf(w, "config: provider=%s model=%s profile=%s reasoning=%s/%s spark_disabled=%v context=%d compact_at=%d compact=%s/%s/%s websum=%s/%s/%s webcache=%v/%s/%d gateway=%s\n",
 		report.Config.Provider,
@@ -1191,6 +1257,14 @@ func printDoctorReport(w io.Writer, report doctorReport) {
 		doctorPathUsageSummary(report.Runtime.GatewaySessionStore),
 		doctorPathUsageSummary(report.Runtime.ToolOutputStore),
 		doctorPathUsageSummary(report.Runtime.AttachmentsStore),
+	)
+	fmt.Fprintf(w, "agentclub: status=%s files=%d capabilities=%d enabled_bindings=%d enabled_triggers=%d missing_secret_envs=%d\n",
+		report.Runtime.AgentClub.Status,
+		report.Runtime.AgentClub.ConfiguredFileCount,
+		report.Runtime.AgentClub.CapabilityCount,
+		report.Runtime.AgentClub.EnabledBindingCount,
+		report.Runtime.AgentClub.EnabledTriggerCount,
+		report.Runtime.AgentClub.MissingSecretEnvCount,
 	)
 	fmt.Fprintf(w, "auth: provider=%s model=%s cost_mode=%s api_key_env=%s credential_file=%s codex_auth=%s\n",
 		report.Runtime.Auth.Provider,
