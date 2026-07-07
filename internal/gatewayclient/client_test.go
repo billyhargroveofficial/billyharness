@@ -485,6 +485,101 @@ func TestAgentClubCapabilitiesFetchesTypedResponseWithOwnerHeaders(t *testing.T)
 	}
 }
 
+func TestAgentClubProposalClientMethodsUseTypedRoutesAndOwnerHeaders(t *testing.T) {
+	owner := gatewayapi.SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"}
+	var gotCreate agentclub.ProposalCreateRequest
+	var gotDecision agentclub.ProposalDecisionRequest
+	var sawOwnerHeaders int
+	proposal := agentclub.Proposal{
+		SchemaVersion: agentclub.SchemaVersion,
+		ProposalID:    "proposal-1",
+		SessionID:     "session-1",
+		Source:        "fixture",
+		Capability:    "reply.draft",
+		ActionKind:    "hh.reply",
+		Risk:          agentclub.RiskExternalMutation,
+		State:         agentclub.ProposalStatePending,
+		ProposalHash:  strings.Repeat("a", 64),
+	}
+	server := testkit.NewRouteServer(t,
+		testkit.Route{
+			Method: http.MethodPost,
+			Path:   "/v1/sessions/session-1/agentclub/proposals",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get(gatewayapi.HeaderSessionClientID) == owner.ClientID && r.Header.Get(gatewayapi.HeaderSessionClientType) == owner.ClientType {
+					sawOwnerHeaders++
+				}
+				if !testkit.DecodeJSON(t, r, &gotCreate) {
+					return
+				}
+				testkit.WriteJSON(t, w, agentclub.ProposalCreateResponse{SchemaVersion: agentclub.SchemaVersion, Proposal: proposal})
+			},
+		},
+		testkit.Route{
+			Method: http.MethodGet,
+			Path:   "/v1/sessions/session-1/agentclub/proposals",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get(gatewayapi.HeaderSessionClientID) == owner.ClientID && r.Header.Get(gatewayapi.HeaderSessionClientType) == owner.ClientType {
+					sawOwnerHeaders++
+				}
+				testkit.WriteJSON(t, w, agentclub.ProposalListResponse{SchemaVersion: agentclub.SchemaVersion, Proposals: []agentclub.Proposal{proposal}})
+			},
+		},
+		testkit.Route{
+			Method: http.MethodPost,
+			Path:   "/v1/sessions/session-1/agentclub/proposals/proposal-1/decision",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get(gatewayapi.HeaderSessionClientID) == owner.ClientID && r.Header.Get(gatewayapi.HeaderSessionClientType) == owner.ClientType {
+					sawOwnerHeaders++
+				}
+				if !testkit.DecodeJSON(t, r, &gotDecision) {
+					return
+				}
+				approved := proposal
+				approved.State = agentclub.ProposalStateApproved
+				testkit.WriteJSON(t, w, agentclub.ProposalDecisionResponse{SchemaVersion: agentclub.SchemaVersion, DecisionID: "decision-1", Action: agentclub.ProposalDecisionApprove, Proposal: approved})
+			},
+		},
+	)
+	client := New(server.URL)
+	ctx := WithSessionOwner(context.Background(), owner)
+	created, err := client.CreateAgentClubProposal(ctx, "session-1", agentclub.ProposalCreateRequest{
+		SchemaVersion: agentclub.SchemaVersion,
+		Source:        "fixture",
+		Capability:    "reply.draft",
+		ActionKind:    "hh.reply",
+		Risk:          agentclub.RiskExternalMutation,
+		Preview:       "preview",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Proposal.ProposalID != proposal.ProposalID || gotCreate.ActionKind != "hh.reply" {
+		t.Fatalf("created=%#v gotCreate=%#v", created, gotCreate)
+	}
+	listed, err := client.AgentClubProposals(ctx, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Proposals) != 1 || listed.Proposals[0].ProposalID != proposal.ProposalID {
+		t.Fatalf("listed = %#v", listed)
+	}
+	decision, err := client.DecideAgentClubProposal(ctx, "session-1", "proposal-1", agentclub.ProposalDecisionRequest{
+		SchemaVersion:        agentclub.SchemaVersion,
+		Action:               agentclub.ProposalDecisionApprove,
+		ExpectedProposalHash: proposal.ProposalHash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Proposal.State != agentclub.ProposalStateApproved || gotDecision.Action != agentclub.ProposalDecisionApprove {
+		t.Fatalf("decision=%#v gotDecision=%#v", decision, gotDecision)
+	}
+	if sawOwnerHeaders != 3 {
+		t.Fatalf("sawOwnerHeaders = %d", sawOwnerHeaders)
+	}
+}
+
 func TestUserInputAnsweredAndRejectedPostTypedRequests(t *testing.T) {
 	var gotAnswer gatewayapi.UserInputAnswerRequest
 	var gotReject gatewayapi.UserInputRejectRequest

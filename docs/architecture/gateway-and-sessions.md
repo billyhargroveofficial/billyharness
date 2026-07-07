@@ -4,8 +4,8 @@ Status note: this document is written against the current worktree on
 2026-07-07. Mutation-auth hardening, session-owner header scoping,
 stored-session projector inspection, fail-closed persistence behavior,
 manifest-only session startup, the neutral agent-club registry/discovery ingress
-route, and verified agent-club trigger delivery are current worktree contracts,
-not assumptions from older releases.
+route, verified agent-club trigger delivery, and safe-output proposal queues are
+current worktree contracts, not assumptions from older releases.
 
 Code anchors:
 
@@ -33,9 +33,11 @@ Code anchors:
 - `internal/gateway/agentclub_triggers.go`: verified agent-club trigger
   delivery adapter, raw-body HMAC handling, body caps, deterministic trigger
   identity, and redacted trigger audit.
+- `internal/gateway/agentclub_proposals.go`: safe-output proposal and decision
+  HTTP adapter plus session-scoped JSONL proposal ledger.
 - `internal/agentclub/`: neutral v0 event contract, capability metadata,
-  trusted binding and trigger binding validation, discovery views, canonical
-  payload hashing, and ingress event/rule conversion.
+  trusted binding and trigger binding validation, safe-output proposal models,
+  discovery views, canonical payload hashing, and ingress event/rule conversion.
 - `internal/ingress/`: pure external-event admission DTOs, deterministic input
   IDs, raw-body HMAC helpers, and payload metadata sanitization.
 - `internal/gateway/http_security.go`: HTTP bearer, mutation, origin, host,
@@ -57,7 +59,8 @@ and remote clients. It owns:
 
 - gateway HTTP route registration and response encoding;
 - session creation, listing, status, context, event replay, input admission,
-  run, cancel, undo, redo, and user-input routes;
+  run, cancel, undo, redo, user-input routes, and agent-club proposal decision
+  routes;
 - gateway-owned external ingress admission into existing session input
   ledgers, with neutral adapter-event normalization plus optional trusted
   registry/binding and trigger-delivery checks before admission;
@@ -106,6 +109,9 @@ Future agents should update this section from that route table, not from memory.
 | `GET /v1/sessions/{id}/inspect` | return redacted live/durable session inspection and replay readiness |
 | `GET /v1/sessions/{id}/events` | NDJSON replay/follow stream for session events |
 | `POST /v1/sessions/{id}/agentclub/events` | admit one normalized agent-club adapter event as an ingress input without running the session |
+| `POST /v1/sessions/{id}/agentclub/proposals` | create one hash-bound safe-output proposal without applying it |
+| `GET /v1/sessions/{id}/agentclub/proposals` | list safe-output proposals visible through session owner scope |
+| `POST /v1/sessions/{id}/agentclub/proposals/{proposal_id}/decision` | record an approve/reject/edit decision for an exact proposal hash without applying it |
 | `POST /v1/sessions/{id}/inputs` | admit an idempotent pending input without running it |
 | `POST /v1/sessions/{id}/inputs/{input_id}/complete` | terminally complete an admitted input with optional failure evidence |
 | `POST /v1/sessions/{id}/run` | admit/promote an input and run it through the session thread |
@@ -297,6 +303,39 @@ files, execute capabilities directly, run schedules, or auto-run sessions in
 this slice. A later configuration slice can add a trusted gateway config file
 under the operator's Billyharness home, but project-local manifests need a
 separate install/hash story first.
+
+Safe-output proposals are the durable review layer before any future external
+mutation:
+
+```text
+proposal
+  -> hash-bound review artifact
+  -> owner-scoped decision
+  -> future apply slice
+```
+
+`POST /v1/sessions/{id}/agentclub/proposals` creates a session-scoped proposal
+with source, capability, action kind, risk, target scope, preview or output ref,
+payload hash, policy version, proposal hash, timestamps, optional expiry, and
+metadata keys. The normalized payload is hashed into `proposal_hash`; raw
+payload and metadata values are not returned in list responses. `proposal_id`
+is derived from the exact proposal hash, so duplicate submissions of the same
+artifact are idempotent.
+
+`GET /v1/sessions/{id}/agentclub/proposals` replays
+`agentclub-proposals.jsonl`, expires pending proposals whose `expires_at` has
+passed, and returns the replayed states. `POST
+/v1/sessions/{id}/agentclub/proposals/{proposal_id}/decision` records
+`approve`, `reject`, or `edit`. Every decision must include the expected
+proposal hash; stale hashes are refused. `edit` creates a new proposal and
+supersedes the old one. The ledger vocabulary includes `proposal_created`,
+`decision_recorded`, `proposal_expired`, `proposal_superseded`, and
+`proposal_failed`.
+
+Approval is not execution. The gateway records the decision only: it does not
+call external APIs, send HH replies, apply to jobs, modify GitHub, run shell
+commands, call MCP tools, edit files, dispatch a run, or resume/apply a paused
+runtime action in this slice.
 
 Generic owner scoping now includes `SessionOwner.ClientID` plus
 `X-Billyharness-Session-Client-ID`. Client ID can scope non-Telegram/non-TUI

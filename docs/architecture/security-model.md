@@ -26,6 +26,9 @@ Primary code anchors:
 - [internal/gateway/agentclub_triggers.go](../../internal/gateway/agentclub_triggers.go):
   verified trigger delivery, raw-body HMAC handling, body caps, deterministic
   event identity, and redacted trigger audit.
+- [internal/gateway/agentclub_proposals.go](../../internal/gateway/agentclub_proposals.go):
+  safe-output proposal creation, listing, hash-bound decisions, expiration,
+  supersede handling, and session-scoped JSONL replay.
 - [internal/gateway/response.go](../../internal/gateway/response.go):
   redacted JSON and NDJSON gateway responses.
 - [internal/gatewayapi/types.go](../../internal/gatewayapi/types.go) and
@@ -79,6 +82,8 @@ The major boundaries are:
   or verified trigger deliveries, but configured registries can first require
   trusted descriptor/binding/trigger matches, and admitted events must still
   become scoped gateway inputs before any run can happen.
+- Agent-club proposals: agents or adapters may propose exact future side-effect
+  artifacts, but decisions are hash-bound records only and do not execute.
 - Telegram: Telegram is a scoped gateway client with its own allowlist and
   send/delete safety; it does not get direct gateway-server imports.
 - Tools: tool risk, access mode, workspace path checks, dangerous-tool config,
@@ -227,6 +232,23 @@ signatures, HMAC secrets, metadata values, headers, command lines, or adapter
 secrets. Schedule/manual delivery has no daemon in this slice: future timestamps
 are rejected unless explicitly marked as dry registration, and dry registration
 does not admit an input.
+
+Safe-output proposals are the review boundary for future external mutation.
+`POST /v1/sessions/{id}/agentclub/proposals`, `GET
+/v1/sessions/{id}/agentclub/proposals`, and `POST
+/v1/sessions/{id}/agentclub/proposals/{proposal_id}/decision` all sit behind
+normal gateway session owner authorization. A proposal stores source,
+capability, action kind, risk, target scope, preview/output-ref summary,
+payload hash, policy version, proposal hash, owner/session scope, state,
+timestamps, optional expiry, and metadata keys. Raw payloads and metadata
+values are not returned in list responses.
+
+Decisions must provide the expected proposal hash and can approve, reject, or
+edit as a new proposal. Expiration and supersede state are replayed from
+`agentclub-proposals.jsonl`; approvals are not chat messages and are not
+inferred from ordinary conversation text. Recording an approval does not call
+external APIs, send HH replies, apply to jobs, modify GitHub, run shell
+commands, call MCP tools, edit files, dispatch a run, or apply an action.
 
 ## Session Scope
 

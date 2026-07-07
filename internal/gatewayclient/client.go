@@ -246,6 +246,33 @@ func (c *Client) AgentClubCapabilities(ctx context.Context) (agentclub.Capabilit
 	return out, nil
 }
 
+func (c *Client) CreateAgentClubProposal(ctx context.Context, sessionID string, proposal agentclub.ProposalCreateRequest) (agentclub.ProposalCreateResponse, error) {
+	var out agentclub.ProposalCreateResponse
+	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/agentclub/proposals"
+	if err := c.JSON(ctx, http.MethodPost, path, proposal, &out); err != nil {
+		return agentclub.ProposalCreateResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) AgentClubProposals(ctx context.Context, sessionID string) (agentclub.ProposalListResponse, error) {
+	var out agentclub.ProposalListResponse
+	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/agentclub/proposals"
+	if err := c.JSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return agentclub.ProposalListResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) DecideAgentClubProposal(ctx context.Context, sessionID, proposalID string, decision agentclub.ProposalDecisionRequest) (agentclub.ProposalDecisionResponse, error) {
+	var out agentclub.ProposalDecisionResponse
+	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/agentclub/proposals/" + url.PathEscape(strings.TrimSpace(proposalID)) + "/decision"
+	if err := c.JSON(ctx, http.MethodPost, path, decision, &out); err != nil {
+		return agentclub.ProposalDecisionResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) CompleteSessionInput(ctx context.Context, sessionID, inputID string, input gatewayapi.SessionInputCompleteRequest) (gatewayapi.SessionInputResponse, error) {
 	var out gatewayapi.SessionInputResponse
 	path := "/v1/sessions/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/inputs/" + url.PathEscape(strings.TrimSpace(inputID)) + "/complete"

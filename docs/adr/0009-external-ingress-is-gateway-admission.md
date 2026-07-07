@@ -72,6 +72,19 @@ The trigger delivery endpoint is not an auto-run endpoint. It writes redacted
 trigger audit evidence and, on success, a queued session input. A separate
 operator/client action must still run the session later.
 
+Safe-output proposals are also admission state, not execution. A proposal is a
+durable session-scoped review artifact with action kind, risk, preview or
+output ref, payload hash, target scope, policy version, proposal hash, owner,
+timestamps, optional expiry, and metadata keys. Decisions are separate
+hash-bound records: `approve`, `reject`, or `edit` as a new proposal. The
+JSONL ledger records proposal creation, decision, expiration, supersede, and
+failure states so replay can reconstruct the queue.
+
+Approving a proposal does not apply it. This decision intentionally stops at
+Proposal -> Decision -> Future Apply; any future executor must prove that it
+applies the exact approved artifact and must add its own tests, docs, and
+security review.
+
 Retries become idempotent because input IDs include rule id, source, external
 event id, payload hash, and target session id. If local mapping changes while
 those identity fields stay the same, existing session input conflict behavior
@@ -89,6 +102,8 @@ Code paths:
 - `internal/ingress`
 - `internal/agentclub`
 - `internal/gateway/agentclub_events.go`
+- `internal/gateway/agentclub_triggers.go`
+- `internal/gateway/agentclub_proposals.go`
 - `internal/gateway/ingress.go`
 - `internal/gateway/session_inputs.go`
 - `internal/gateway/session_authz.go`
