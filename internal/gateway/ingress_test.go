@@ -68,7 +68,11 @@ func TestGatewayIngressAdmitsAuditsDuplicatesAndConflictsWithoutDispatch(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(audit) != 1 || audit[0].Decision != ingressAuditAdmitted || audit[0].InputID != result.Input.InputID || audit[0].ExternalEventIDHash == "" {
+	if len(audit) != 2 ||
+		audit[0].Decision != ingressAuditReceived ||
+		audit[1].Decision != ingressAuditAdmitted ||
+		audit[1].InputID != result.Input.InputID ||
+		audit[1].ExternalEventIDHash == "" {
 		t.Fatalf("audit = %#v", audit)
 	}
 	auditJSON, err := json.Marshal(audit)
@@ -80,8 +84,8 @@ func TestGatewayIngressAdmitsAuditsDuplicatesAndConflictsWithoutDispatch(t *test
 			t.Fatalf("audit leaked %q: %s", forbidden, auditJSON)
 		}
 	}
-	if !hasString(audit[0].MetadataKeys, "project") || !hasString(audit[0].MetadataKeys, "ingress.policy") {
-		t.Fatalf("audit metadata keys = %#v", audit[0].MetadataKeys)
+	if !hasString(audit[1].MetadataKeys, "project") || !hasString(audit[1].MetadataKeys, "ingress.policy") {
+		t.Fatalf("audit metadata keys = %#v", audit[1].MetadataKeys)
 	}
 
 	duplicate, err := server.AdmitIngressEvent(context.Background(), event, rule)
@@ -102,11 +106,13 @@ func TestGatewayIngressAdmitsAuditsDuplicatesAndConflictsWithoutDispatch(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(audit) != 3 ||
-		audit[1].Decision != ingressAuditAdmitted ||
-		!audit[1].Duplicate ||
-		audit[2].Decision != ingressAuditRejected ||
-		!strings.Contains(audit[2].Reason, "input admission failed") {
+	if len(audit) != 6 ||
+		audit[2].Decision != ingressAuditReceived ||
+		audit[3].Decision != ingressAuditAdmitted ||
+		!audit[3].Duplicate ||
+		audit[4].Decision != ingressAuditReceived ||
+		audit[5].Decision != ingressAuditRejected ||
+		!strings.Contains(audit[5].Reason, "input admission failed") {
 		t.Fatalf("audit after duplicate/conflict = %#v", audit)
 	}
 }
@@ -129,7 +135,37 @@ func TestGatewayIngressAuditsRejectedAdmission(t *testing.T) {
 	if replayErr != nil {
 		t.Fatal(replayErr)
 	}
-	if len(audit) != 1 || audit[0].Decision != ingressAuditRejected || audit[0].Reason != "source not allowed" {
+	if len(audit) != 1 ||
+		audit[0].Decision != ingressAuditRejected ||
+		audit[0].Reason != "source not allowed" ||
+		audit[0].TargetSessionID != "session-1" {
+		t.Fatalf("audit = %#v", audit)
+	}
+}
+
+func TestGatewayIngressDeniesUnscopedRuleBeforeInputWrite(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+	sessionID := createScopedTestSession(t, server, gatewayapi.SessionOwner{ClientID: "ingress:hh:prod", ClientType: "ingress"})
+
+	_, err := server.AdmitIngressEvent(context.Background(),
+		ingress.IngressEvent{Source: "hh", TargetSessionID: sessionID, Prompt: "hello"},
+		ingress.IngressRule{ID: "hh-message-review", Source: "hh"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "client_id required") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(storeDir, sessionID, sessionInputsJSONLName)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unscoped ingress should not write inputs, stat err=%v", statErr)
+	}
+	audit, replayErr := server.store.ReplayIngressAudit()
+	if replayErr != nil {
+		t.Fatal(replayErr)
+	}
+	if len(audit) != 1 || audit[0].Decision != ingressAuditRejected || !strings.Contains(audit[0].Reason, "client_id required") {
 		t.Fatalf("audit = %#v", audit)
 	}
 }
@@ -158,6 +194,30 @@ func TestGatewayIngressDeniesCrossOwnerBeforeInputWrite(t *testing.T) {
 	}
 	if len(audit) != 1 || audit[0].Decision != ingressAuditRejected || !strings.Contains(audit[0].Reason, "session owner scope mismatch") {
 		t.Fatalf("audit = %#v", audit)
+	}
+}
+
+func TestGatewayIngressAuditFailurePreventsInputWrite(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	storeDir := filepath.Join(t.TempDir(), "gateway-sessions")
+	server := NewServerWithOptions(cfg, provider.Mock{}, tools.NewRegistry(cfg), ServerOptions{SessionStoreDir: storeDir})
+	owner := gatewayapi.SessionOwner{ClientID: "ingress:hh:prod", ClientType: "ingress"}
+	sessionID := createScopedTestSession(t, server, owner)
+	if err := os.WriteFile(filepath.Join(storeDir, ingressAuditJSONLName), []byte("{not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := server.AdmitIngressEvent(context.Background(),
+		ingress.IngressEvent{Source: "hh", TargetSessionID: sessionID, Prompt: "hello"},
+		ingress.IngressRule{ID: "hh-message-review", Source: "hh", Owner: owner},
+	)
+	if err == nil {
+		t.Fatalf("expected audit replay error")
+	}
+	if _, statErr := os.Stat(filepath.Join(storeDir, sessionID, sessionInputsJSONLName)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("audit failure should not write inputs, stat err=%v", statErr)
 	}
 }
 

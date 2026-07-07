@@ -17,6 +17,7 @@ import (
 
 const (
 	ingressAuditJSONLName = "ingress-audit.jsonl"
+	ingressAuditReceived  = "received"
 	ingressAuditAdmitted  = "admitted"
 	ingressAuditRejected  = "rejected"
 )
@@ -90,6 +91,10 @@ func (s *Server) AdmitIngressEvent(ctx context.Context, event ingress.IngressEve
 			return result, auditErr
 		}
 		return result, err
+	}
+	result.Decision.Reason = ingressAuditReceived
+	if auditErr := s.appendIngressAudit(result.Decision, result.Input, ingressAuditReceived, ingressAuditReceived); auditErr != nil {
+		return result, auditErr
 	}
 	input, err := s.admitSessionInput(session, decision.Request)
 	result.Input = input
@@ -227,16 +232,16 @@ func validateIngressAuditRecordForAppend(record ingressAuditRecord) error {
 
 func validateIngressAuditRecord(record ingressAuditRecord) error {
 	switch record.Decision {
-	case ingressAuditAdmitted, ingressAuditRejected:
+	case ingressAuditReceived, ingressAuditAdmitted, ingressAuditRejected:
 	default:
 		return fmt.Errorf("unsupported decision %q", record.Decision)
 	}
-	if record.Decision == ingressAuditAdmitted {
+	if record.Decision == ingressAuditReceived || record.Decision == ingressAuditAdmitted {
 		if strings.TrimSpace(record.InputID) == "" {
-			return fmt.Errorf("admitted ingress audit record missing input_id")
+			return fmt.Errorf("%s ingress audit record missing input_id", record.Decision)
 		}
 		if strings.TrimSpace(record.TargetSessionID) == "" {
-			return fmt.Errorf("admitted ingress audit record missing target_session_id")
+			return fmt.Errorf("%s ingress audit record missing target_session_id", record.Decision)
 		}
 	}
 	if record.PayloadSHA256 != "" && !isHexSHA256(record.PayloadSHA256) {

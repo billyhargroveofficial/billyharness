@@ -12,12 +12,13 @@ import (
 )
 
 var (
-	ErrMissingHMACSecret    = errors.New("hmac secret required")
-	ErrMissingHMACSignature = errors.New("hmac signature required")
-	ErrInvalidHMACSignature = errors.New("hmac signature invalid")
-	ErrMissingHMACTimestamp = errors.New("hmac timestamp required")
-	ErrInvalidHMACTimestamp = errors.New("hmac timestamp invalid")
-	ErrStaleHMACTimestamp   = errors.New("hmac timestamp outside allowed skew")
+	ErrMissingHMACSecret     = errors.New("hmac secret required")
+	ErrMissingHMACSignature  = errors.New("hmac signature required")
+	ErrInvalidHMACSignature  = errors.New("hmac signature invalid")
+	ErrMissingHMACTimestamp  = errors.New("hmac timestamp required")
+	ErrInvalidHMACTimestamp  = errors.New("hmac timestamp invalid")
+	ErrStaleHMACTimestamp    = errors.New("hmac timestamp outside allowed skew")
+	ErrUnsignedHMACTimestamp = errors.New("hmac timestamp must be signed")
 )
 
 type HMACVerification struct {
@@ -46,6 +47,9 @@ func VerifyRawBodyHMACSHA256(v HMACVerification) error {
 		return ErrMissingHMACSignature
 	}
 	if v.MaxSkew > 0 {
+		if !v.IncludeTimestamp {
+			return ErrUnsignedHMACTimestamp
+		}
 		if strings.TrimSpace(v.Timestamp) == "" {
 			return ErrMissingHMACTimestamp
 		}

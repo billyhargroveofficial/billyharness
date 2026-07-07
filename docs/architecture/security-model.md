@@ -170,9 +170,9 @@ It is represented by `gatewayapi.SessionOwner` and the
 [internal/gatewayapi/types.go](../../internal/gatewayapi/types.go). The shared
 gateway client attaches those headers from `gatewayclient.WithSessionOwner`.
 
-Committed HEAD stores owner metadata when supplied in create-session bodies,
-but it does not enforce owner scope on reads or mutations. Current worktree
-behavior adds [internal/gateway/session_authz.go](../../internal/gateway/session_authz.go):
+Committed HEAD stores owner metadata when supplied in create-session bodies and
+enforces owner scope on reads and mutations through
+[internal/gateway/session_authz.go](../../internal/gateway/session_authz.go):
 
 - create-session body owner must match scoped request headers when both are
   present;
@@ -435,10 +435,6 @@ Current code truth:
   secret-bearing auth commands.
 - MCP initialize instructions are metadata-only by default and require explicit
   operator promotion before model-context injection.
-
-These dirty-worktree behaviors are documented because they are visible in this
-checkout and referenced by adjacent architecture docs. They should not be
-described as clean-release behavior until the hardening files are committed.
 
 ## Verification Anchors
 

@@ -180,8 +180,10 @@ webhook HTTP route, scheduler, UI, or arbitrary project command runner.
 `Server.AdmitIngressEvent` in `internal/gateway/ingress.go` is the gateway-owned
 bridge. It asks `internal/ingress` to build a `SessionInputRequest`, authorizes
 the target session with the same owner-scope checks as HTTP routes, appends a
-redacted audit record, and then calls the existing input admission path. It does
-not promote the input, start a run, call tools, call MCP, or shell out.
+redacted `received` audit record, and then calls the existing input admission
+path. The final `admitted` or `rejected` audit record follows input admission,
+so a durable input cannot be written without prior ingress audit evidence. It
+does not promote the input, start a run, call tools, call MCP, or shell out.
 
 Generic owner scoping now includes `SessionOwner.ClientID` plus
 `X-Billyharness-Session-Client-ID`. Client ID can scope non-Telegram/non-TUI

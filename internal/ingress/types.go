@@ -68,6 +68,7 @@ func Admit(event IngressEvent, rule IngressRule) (AdmissionDecision, error) {
 		Source:          event.Source,
 		ExternalEventID: event.ExternalEventID,
 		PayloadSHA256:   payloadSHA,
+		TargetSessionID: firstNonEmpty(event.TargetSessionID, rule.TargetSessionID),
 	}
 	if rule.ID == "" {
 		return reject(decision, "rule id required")
@@ -93,6 +94,14 @@ func Admit(event IngressEvent, rule IngressRule) (AdmissionDecision, error) {
 	if strings.TrimSpace(prompt) == "" {
 		return reject(decision, "prompt required")
 	}
+	clientID := firstNonEmpty(rule.ClientID, rule.Owner.ClientID)
+	clientType := firstNonEmpty(rule.ClientType, rule.Owner.ClientType)
+	if clientID == "" {
+		return reject(decision, "ingress owner client_id required")
+	}
+	if clientType == "" {
+		return reject(decision, "ingress owner client_type required")
+	}
 	metadata, err := SanitizeMetadata(event.Metadata)
 	if err != nil {
 		return reject(decision, err.Error())
@@ -110,8 +119,6 @@ func Admit(event IngressEvent, rule IngressRule) (AdmissionDecision, error) {
 		PayloadSHA256:   payloadSHA,
 		TargetSessionID: targetSessionID,
 	})
-	clientID := firstNonEmpty(rule.ClientID, rule.Owner.ClientID)
-	clientType := firstNonEmpty(rule.ClientType, rule.Owner.ClientType)
 	req := gatewayapi.SessionInputRequest{
 		InputID:    inputID,
 		Prompt:     prompt,

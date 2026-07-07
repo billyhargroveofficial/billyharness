@@ -89,12 +89,30 @@ func TestAdmitRejectsUnsafePayloadMetadataOverrides(t *testing.T) {
 					Prompt:          "hello",
 					Metadata:        map[string]string{key: "override"},
 				},
-				IngressRule{ID: "github-pr", Source: "github"},
+				IngressRule{ID: "github-pr", Source: "github", Owner: testIngressOwner()},
 			)
 			if err == nil || !strings.Contains(err.Error(), key) {
 				t.Fatalf("metadata override error = %v", err)
 			}
 		})
+	}
+}
+
+func TestAdmitRejectsMissingOwnerScope(t *testing.T) {
+	_, err := Admit(
+		IngressEvent{Source: "github", TargetSessionID: "session-1", Prompt: "hello"},
+		IngressRule{ID: "github-pr", Source: "github"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "client_id required") {
+		t.Fatalf("missing client_id error = %v", err)
+	}
+
+	_, err = Admit(
+		IngressEvent{Source: "github", TargetSessionID: "session-1", Prompt: "hello"},
+		IngressRule{ID: "github-pr", Source: "github", ClientID: "ingress:github:prod"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "client_type required") {
+		t.Fatalf("missing client_type error = %v", err)
 	}
 }
 
@@ -104,6 +122,7 @@ func TestAdmitAllowsRuleStaticMetadataForTrustedPolicyLabels(t *testing.T) {
 		IngressRule{
 			ID:     "github-pr",
 			Source: "github",
+			Owner:  testIngressOwner(),
 			StaticMetadata: map[string]string{
 				"provider":    "gateway-default",
 				"access_mode": "configured",
@@ -199,4 +218,55 @@ func TestVerifyRawBodyHMACSHA256(t *testing.T) {
 	}); !errors.Is(err, ErrStaleHMACTimestamp) {
 		t.Fatalf("stale timestamp error = %v", err)
 	}
+
+	bodyOnlySignature := SignRawBodyHMACSHA256(secret, body, "", false)
+	if err := VerifyRawBodyHMACSHA256(HMACVerification{
+		Secret:           secret,
+		Body:             body,
+		Signature:        bodyOnlySignature,
+		Timestamp:        timestamp,
+		Now:              now,
+		MaxSkew:          time.Minute,
+		IncludeTimestamp: false,
+	}); !errors.Is(err, ErrUnsignedHMACTimestamp) {
+		t.Fatalf("unsigned timestamp error = %v", err)
+	}
+
+	if err := VerifyRawBodyHMACSHA256(HMACVerification{
+		Secret:           secret,
+		Body:             body,
+		Signature:        signature,
+		Now:              now,
+		MaxSkew:          time.Minute,
+		IncludeTimestamp: true,
+	}); !errors.Is(err, ErrMissingHMACTimestamp) {
+		t.Fatalf("missing timestamp error = %v", err)
+	}
+
+	if err := VerifyRawBodyHMACSHA256(HMACVerification{
+		Secret:           secret,
+		Body:             body,
+		Signature:        signature,
+		Timestamp:        "not-a-time",
+		Now:              now,
+		MaxSkew:          time.Minute,
+		IncludeTimestamp: true,
+	}); !errors.Is(err, ErrInvalidHMACTimestamp) {
+		t.Fatalf("invalid timestamp error = %v", err)
+	}
+
+	if err := VerifyRawBodyHMACSHA256(HMACVerification{
+		Body:             body,
+		Signature:        signature,
+		Timestamp:        timestamp,
+		Now:              now,
+		MaxSkew:          time.Minute,
+		IncludeTimestamp: true,
+	}); !errors.Is(err, ErrMissingHMACSecret) {
+		t.Fatalf("missing secret error = %v", err)
+	}
+}
+
+func testIngressOwner() gatewayapi.SessionOwner {
+	return gatewayapi.SessionOwner{ClientID: "ingress:github:prod", ClientType: "ingress"}
 }
