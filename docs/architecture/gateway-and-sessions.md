@@ -337,6 +337,18 @@ call external APIs, send HH replies, apply to jobs, modify GitHub, run shell
 commands, call MCP tools, edit files, dispatch a run, or resume/apply a paused
 runtime action in this slice.
 
+Operator UX is deliberately thin and gateway-backed. `fast-agent-harness
+agentclub capabilities` calls `GET /v1/agentclub/capabilities`; `agentclub
+proposals -session SESSION_ID` lists the session proposal queue; and
+`agentclub approve|reject -session SESSION_ID -proposal PROPOSAL_ID -hash
+EXPECTED_PROPOSAL_HASH` records a hash-bound decision with an optional comment.
+The TUI exposes the same read-only view through `/agentclub` for the current
+gateway session. Telegram exposes `/agentclub` as an operator-only command and
+renders pending proposals with approve/reject callback buttons; each callback
+re-fetches the proposal under Telegram owner scope before sending the full
+expected hash to the gateway decision route. These surfaces render redacted
+summaries and output refs only, and none of them applies the proposal.
+
 Generic owner scoping now includes `SessionOwner.ClientID` plus
 `X-Billyharness-Session-Client-ID`. Client ID can scope non-Telegram/non-TUI
 owners such as `client_type=ingress` rules. If a stored owner has `client_id`,

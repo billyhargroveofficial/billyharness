@@ -33,8 +33,9 @@ var subcommandRuns = map[string]func([]string) error{
 	"inspect-session": func(args []string) error {
 		return sessionsInspectCommand(args, os.Stdout)
 	},
-	"memory":   memoryCmd,
-	"commands": commandsCmd,
+	"memory":    memoryCmd,
+	"commands":  commandsCmd,
+	"agentclub": agentclubCmd,
 	"tools": func([]string) error {
 		return printTools()
 	},

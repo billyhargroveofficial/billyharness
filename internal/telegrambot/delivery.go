@@ -12,6 +12,11 @@ func (b *Bot) sendHTML(ctx context.Context, msg Message, text string) error {
 	return err
 }
 
+func (b *Bot) sendHTMLWithReplyMarkup(ctx context.Context, msg Message, text string, replyMarkup InlineKeyboardMarkup) error {
+	_, err := b.sendWithReplyMarkup(ctx, msg.Chat.ID, msg.ThreadID, text, "HTML", replyMarkup, false)
+	return err
+}
+
 func (b *Bot) sendPlain(ctx context.Context, msg Message, text string) error {
 	_, err := b.send(ctx, msg.Chat.ID, msg.ThreadID, text, "", false)
 	return err
@@ -24,6 +29,30 @@ func (b *Bot) send(ctx context.Context, chatID int64, threadID int, text, parseM
 		return SentMessage{MessageID: int(time.Now().UnixNano() % 1_000_000), Chat: Chat{ID: chatID}}, nil
 	}
 	return b.client.SendMessage(ctx, chatID, text, parseMode, threadID)
+}
+
+func (b *Bot) sendWithReplyMarkup(ctx context.Context, chatID int64, threadID int, text, parseMode string, replyMarkup InlineKeyboardMarkup, force bool) (SentMessage, error) {
+	text = redactTelegramText(text)
+	if !b.opts.SendEnabled || (b.opts.DryRunDefault && !force) {
+		log.Printf("telegram dry-run send chat=%d thread=%d text=%q reply_markup=%d", chatID, threadID, preview(text, 300), len(replyMarkup.InlineKeyboard))
+		return SentMessage{MessageID: int(time.Now().UnixNano() % 1_000_000), Chat: Chat{ID: chatID}}, nil
+	}
+	return b.client.SendMessageWithReplyMarkup(ctx, chatID, text, parseMode, threadID, replyMarkup)
+}
+
+func (b *Bot) answerCallback(ctx context.Context, callbackID, text string) {
+	callbackID = strings.TrimSpace(callbackID)
+	if callbackID == "" {
+		return
+	}
+	text = redactTelegramText(text)
+	if !b.opts.SendEnabled || b.opts.DryRunDefault {
+		log.Printf("telegram dry-run callback id=%s text=%q", callbackID, preview(text, 120))
+		return
+	}
+	if err := b.client.AnswerCallbackQuery(ctx, callbackID, text); err != nil {
+		log.Printf("telegram answer callback: %v", err)
+	}
 }
 
 func (b *Bot) edit(ctx context.Context, chatID int64, messageID int, text, parseMode string) error {

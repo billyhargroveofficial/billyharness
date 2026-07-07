@@ -113,6 +113,7 @@ var cliCommandDocs = []CLICommandDoc{
 	{Name: "inspect-session", Summary: "inspect one stored session"},
 	{Name: "memory", Summary: "manage local memory entries"},
 	{Name: "commands", Aliases: []string{"command"}, Summary: "list and search the command registry"},
+	{Name: "agentclub", Aliases: []string{"agent-club"}, Summary: "inspect agent-club capabilities and proposals"},
 	{Name: "tools", Summary: "print native tool registry JSON"},
 	{Name: "doctor", Aliases: []string{"health"}, Summary: "run diagnostics and readiness checks"},
 	{Name: "hygiene", Summary: "run source and artifact hygiene checks"},

@@ -9,6 +9,7 @@ This reference joins the shared action metadata, TUI action registry, Telegram c
 | ID                  | TUI slash                                                              | TUI keys      | Telegram aliases  | Class          | Summary                                        |
 | ------------------- | ---------------------------------------------------------------------- | ------------- | ----------------- | -------------- | ---------------------------------------------- |
 | access.mode         | /mode build\|guarded\|plan (aliases: /access)                          | -             | /mode, /access    | session-scoped | set run access mode                            |
+| agentclub.show      | /agentclub                                                             | -             | /agentclub        | operator-only  | show agent-club capabilities and proposals     |
 | auth.configure      | /auth deepseek\|codex                                                  | -             | /auth             | owner-only     | save DeepSeek key or Codex OAuth               |
 | block.next          | -                                                                      | ctrl+l        | -                 | -              | select next block                              |
 | block.previous      | -                                                                      | ctrl+p        | -                 | -              | select previous block                          |
@@ -86,9 +87,9 @@ This reference joins the shared action metadata, TUI action registry, Telegram c
 
 | Source           | How it enters the registry                                      | Docsgen behavior     |
 | ---------------- | --------------------------------------------------------------- | -------------------- |
-| built-in actions | clientux.ActionDefinitions() through commandregistry.Build()    | 33 generated entries |
+| built-in actions | clientux.ActionDefinitions() through commandregistry.Build()    | 34 generated entries |
 | prompt commands  | BuildOptions.PromptCommands from local Markdown prompt commands | runtime-only         |
 | profiles         | BuildOptions.Profiles from configured profile directories       | runtime-only         |
 | MCP prompts      | BuildOptions.MCPPrompts from connected MCP servers              | runtime-only         |
 
-<!-- source-hash: 5b4163edf366296068931b35e0736cb1f365cfa9be7df41ffada89b672b48360 -->
+<!-- source-hash: ff0c68a3b5c18987a5b04e79f0df268a27924177a8c8f140a6fb14530e3c5e60 -->

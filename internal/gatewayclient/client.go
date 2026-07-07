@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/agentclub"
 	"github.com/billyhargroveofficial/billyharness/internal/displayfmt"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
+	"github.com/billyhargroveofficial/billyharness/internal/secrets"
 )
 
 var (
@@ -437,6 +439,160 @@ func (c *Client) client() *http.Client {
 	}
 	c.Client = &http.Client{Timeout: 0}
 	return c.Client
+}
+
+func FormatAgentClubCapabilities(resp agentclub.CapabilityListResponse) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "agent-club capabilities: %d\n", len(resp.Capabilities))
+	if len(resp.Capabilities) == 0 {
+		b.WriteString("capabilities: none\n")
+		return b.String()
+	}
+	for _, capability := range resp.Capabilities {
+		descriptor := capability.Descriptor
+		title := strings.TrimSpace(descriptor.Title)
+		if title == "" {
+			title = descriptor.ID
+		}
+		fmt.Fprintf(&b, "- %s", strings.TrimSpace(descriptor.ID))
+		if title != descriptor.ID {
+			fmt.Fprintf(&b, " %q", secrets.Redact(title))
+		}
+		var attrs []string
+		attrs = appendNonEmptyAttr(attrs, "kind", descriptor.Kind)
+		attrs = appendNonEmptyAttr(attrs, "risk", descriptor.Risk)
+		attrs = appendNonEmptyAttr(attrs, "dispatch", descriptor.Dispatch)
+		attrs = appendNonEmptyAttr(attrs, "approval", descriptor.Approval)
+		attrs = appendNonEmptyAttr(attrs, "version", descriptor.Version)
+		if len(attrs) > 0 {
+			fmt.Fprintf(&b, " %s", strings.Join(attrs, " "))
+		}
+		b.WriteByte('\n')
+		for _, binding := range capability.Bindings {
+			fmt.Fprintf(&b, "  binding %s/%s enabled=%t",
+				secrets.Redact(strings.TrimSpace(binding.ClientType)),
+				secrets.Redact(strings.TrimSpace(binding.ClientID)),
+				binding.Enabled,
+			)
+			if len(binding.Sources) > 0 {
+				fmt.Fprintf(&b, " sources=%s", secrets.Redact(strings.Join(binding.Sources, ",")))
+			}
+			if len(binding.EventTypes) > 0 {
+				fmt.Fprintf(&b, " events=%s", secrets.Redact(strings.Join(binding.EventTypes, ",")))
+			}
+			if len(binding.MetadataKeys) > 0 {
+				fmt.Fprintf(&b, " metadata=%s", secrets.Redact(strings.Join(binding.MetadataKeys, ",")))
+			}
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+func FormatAgentClubProposals(resp agentclub.ProposalListResponse) string {
+	var b strings.Builder
+	pending := 0
+	for _, proposal := range resp.Proposals {
+		if proposal.State == agentclub.ProposalStatePending {
+			pending++
+		}
+	}
+	fmt.Fprintf(&b, "agent-club proposals: %d pending=%d\n", len(resp.Proposals), pending)
+	if len(resp.Proposals) == 0 {
+		b.WriteString("proposals: none\n")
+		return b.String()
+	}
+	for _, proposal := range resp.Proposals {
+		formatted := FormatAgentClubProposal(proposal)
+		b.WriteString(formatted)
+		if !strings.HasSuffix(formatted, "\n") {
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+func FormatAgentClubProposal(proposal agentclub.Proposal) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "- %s state=%s hash=%s",
+		secrets.Redact(strings.TrimSpace(proposal.ProposalID)),
+		firstNonEmpty(strings.TrimSpace(proposal.State), "unknown"),
+		ShortAgentClubHash(proposal.ProposalHash),
+	)
+	var attrs []string
+	attrs = appendNonEmptyAttr(attrs, "risk", proposal.Risk)
+	attrs = appendNonEmptyAttr(attrs, "source", proposal.Source)
+	attrs = appendNonEmptyAttr(attrs, "capability", proposal.Capability)
+	attrs = appendNonEmptyAttr(attrs, "action", proposal.ActionKind)
+	attrs = appendNonEmptyAttr(attrs, "target", proposal.TargetScope)
+	if proposal.CreatedAt.IsZero() {
+		attrs = append(attrs, "created=-")
+	} else {
+		attrs = append(attrs, "created="+proposal.CreatedAt.UTC().Format(time.RFC3339))
+	}
+	if proposal.ExpiresAt != nil {
+		attrs = append(attrs, "expires="+proposal.ExpiresAt.UTC().Format(time.RFC3339))
+	}
+	if len(attrs) > 0 {
+		fmt.Fprintf(&b, " %s", strings.Join(redactAttrs(attrs), " "))
+	}
+	b.WriteByte('\n')
+	if preview := safeProposalPreview(proposal.Preview, 240); preview != "" {
+		fmt.Fprintf(&b, "  preview: %s\n", preview)
+	}
+	if outputRef := safeProposalPreview(proposal.OutputRef, 180); outputRef != "" {
+		fmt.Fprintf(&b, "  output_ref: %s\n", outputRef)
+	}
+	if proposal.PayloadSHA256 != "" {
+		fmt.Fprintf(&b, "  payload_sha256: %s\n", ShortAgentClubHash(proposal.PayloadSHA256))
+	}
+	if len(proposal.MetadataKeys) > 0 {
+		fmt.Fprintf(&b, "  metadata_keys: %s\n", secrets.Redact(strings.Join(proposal.MetadataKeys, ",")))
+	}
+	if proposal.SupersedesProposalID != "" {
+		fmt.Fprintf(&b, "  supersedes: %s\n", secrets.Redact(proposal.SupersedesProposalID))
+	}
+	if proposal.SupersededByProposalID != "" {
+		fmt.Fprintf(&b, "  superseded_by: %s\n", secrets.Redact(proposal.SupersededByProposalID))
+	}
+	return b.String()
+}
+
+func ShortAgentClubHash(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if len(value) <= 12 {
+		return value
+	}
+	return value[:12]
+}
+
+func appendNonEmptyAttr(attrs []string, key, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return attrs
+	}
+	return append(attrs, key+"="+value)
+}
+
+func redactAttrs(attrs []string) []string {
+	out := make([]string, len(attrs))
+	for i, attr := range attrs {
+		out[i] = secrets.Redact(attr)
+	}
+	return out
+}
+
+func safeProposalPreview(value string, maxRunes int) string {
+	value = strings.TrimSpace(secrets.Redact(value))
+	if value == "" {
+		return ""
+	}
+	value = strings.Join(strings.Fields(value), " ")
+	runes := []rune(value)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes]) + "..."
+	}
+	return value
 }
 
 func FormatSessionContext(resp gatewayapi.SessionContextResponse) string {

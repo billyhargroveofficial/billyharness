@@ -7,9 +7,9 @@ handling, while gateway sessions, admission, replay, authorization, and runtime
 execution stay behind the typed gateway APIs.
 
 Status note: this document was reviewed against the current implementation on
-2026-07-05 for Telegram operator command policy, secret-bearing auth command
-semantics, and media rejection behavior. Claims describe this checkout, not
-necessarily a clean release commit.
+2026-07-07 for Telegram operator command policy, agent-club proposal callbacks,
+secret-bearing auth command semantics, and media rejection behavior. Claims
+describe this checkout, not necessarily a clean release commit.
 
 The decision record is [ADR 0006](../adr/0006-telegram-is-a-gateway-client.md).
 The shared event/replay rules are in
@@ -25,8 +25,10 @@ The shared event/replay rules are in
   ([client.go](../../internal/telegrambot/client.go)).
 - Per-chat state ([store.go](../../internal/telegrambot/store.go)).
 - Telegram command dispatch, message admission, rendering, progress edits,
-  rich-message final delivery, and media attachment ingestion
+  rich-message final delivery, agent-club proposal callbacks, and media
+  attachment ingestion
   ([commands.go](../../internal/telegrambot/commands.go),
+  [agentclub_proposals.go](../../internal/telegrambot/agentclub_proposals.go),
   [runner.go](../../internal/telegrambot/runner.go),
   [render.go](../../internal/telegrambot/render.go),
   [media.go](../../internal/telegrambot/media.go)).
@@ -89,10 +91,11 @@ Admission accepts a message when any of these is true:
 
 Admission only decides whether the adapter may process the incoming Telegram
 message. Operator command authorization is a second gate. Commands that expose
-local config, MCP status, managed processes, memory management, undo/redo, or
-auth mutation require an identified human Telegram operator. Operators come
-from `AllowedOperatorUserIDs` when configured; otherwise the adapter falls back
-to `AllowedUserIDs` for compatibility. The CLI exposes this through
+local config, MCP status, managed processes, memory management, agent-club
+proposal approval, undo/redo, or auth mutation require an identified human
+Telegram operator. Operators come from `AllowedOperatorUserIDs` when
+configured; otherwise the adapter falls back to `AllowedUserIDs` for
+compatibility. The CLI exposes this through
 `-operator-user`, `BILLYHARNESS_TELEGRAM_OPERATOR_USER_IDS`, and legacy
 `TELEGRAM_OPERATOR_USER_IDS`
 ([service_cmd.go](../../cmd/fast-agent-harness/service_cmd.go),
@@ -186,11 +189,32 @@ readable to scoped clients. Continuing such a session from Telegram is not a
 stable mutation path: the gateway rejects scoped mutating routes for legacy
 unowned sessions. Forking a readable legacy session creates a new owned session.
 
+## Agent-Club Proposals
+
+`/agentclub` is an operator-only command. It calls the gateway-backed
+agent-club capability discovery endpoint and the current session's proposal
+list endpoint, then renders compact redacted summaries. Pending proposals get
+explicit approve/reject inline buttons. Button callback data contains the
+proposal id and a short expected hash prefix; the callback handler re-fetches
+the proposal under Telegram owner scope, verifies that the current proposal
+hash still has that prefix, and only then records `approve` or `reject` with
+the full proposal hash through
+`POST /v1/sessions/{id}/agentclub/proposals/{proposal_id}/decision`.
+
+Telegram approval is a durable decision record, not execution. It does not
+call external APIs, send replies, apply outputs, dispatch gateway runs, run
+shell commands, call MCP tools, or mutate HH/GitHub/project state. Terminal
+proposals (`approved`, `rejected`, `expired`, `superseded`, or `failed`) do
+not receive actionable buttons, and callback decisions still rely on gateway
+owner authorization before the ledger changes.
+
 ## Message Admission And Run Flow
 
-The poller handles only Telegram `message` updates
-([poller.go](../../internal/telegrambot/poller.go)). Empty or unsupported
-updates are logged as ignored before their update offset is acknowledged.
+The poller handles Telegram `message` and `callback_query` updates
+([poller.go](../../internal/telegrambot/poller.go)). Callback queries are
+routed to bounded operator actions such as agent-club proposal decisions before
+normal message processing. Empty or unsupported updates are logged as ignored
+before their update offset is acknowledged.
 
 Normal prompt flow:
 

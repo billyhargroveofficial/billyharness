@@ -22,6 +22,7 @@ This reference documents the top-level command table. Run `fast-agent-harness <c
 | inspect-session | -          | inspect one stored session                                |
 | memory          | -          | manage local memory entries                               |
 | commands        | command    | list and search the command registry                      |
+| agentclub       | agent-club | inspect agent-club capabilities and proposals             |
 | tools           | -          | print native tool registry JSON                           |
 | doctor          | health     | run diagnostics and readiness checks                      |
 | hygiene         | -          | run source and artifact hygiene checks                    |
@@ -63,4 +64,4 @@ Doctor check names come from the descriptor table that `doctor` ranges over at r
 | gateway /health                               | local, production       | Probe the local gateway health endpoint unless -gateway=false disables it.                                                 |
 | gateway /ready                                | local, production       | Probe the local gateway readiness endpoint unless -gateway=false disables it.                                              |
 
-<!-- source-hash: 83ab024746f1583301f14bb7657c40df33195ca414551a69e82f20b79c399148 -->
+<!-- source-hash: 09d1d946b40d19edea2d28e68532f440457b16a03add9246d499a7e4118fda25 -->

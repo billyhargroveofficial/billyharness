@@ -198,6 +198,21 @@ func actionRegistry() []actionSpec {
 			},
 		},
 		{
+			id:       "agentclub.show",
+			title:    "Show Agent Club",
+			category: "session",
+			slash:    "/agentclub",
+			summary:  "show agent-club capabilities and proposals",
+			run: func(m *Model, arg string) (bool, tea.Cmd) {
+				if strings.TrimSpace(arg) != "" {
+					m.status = "agent-club command takes no arguments"
+					return false, nil
+				}
+				m.status = "loading agent-club"
+				return true, m.agentClubStatusCmd()
+			},
+		},
+		{
 			id:       "debug.full",
 			title:    "Debug Snapshot",
 			category: "session",

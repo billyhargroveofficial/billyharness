@@ -250,6 +250,16 @@ inferred from ordinary conversation text. Recording an approval does not call
 external APIs, send HH replies, apply to jobs, modify GitHub, run shell
 commands, call MCP tools, edit files, dispatch a run, or apply an action.
 
+Operator surfaces stay behind the same gateway APIs. The CLI requires explicit
+session id, proposal id, and expected proposal hash for approve/reject
+decisions. The TUI `/agentclub` view only lists enabled capabilities and the
+current gateway session's proposals. Telegram `/agentclub` is operator-only;
+pending proposal buttons carry a proposal id plus expected hash prefix, then
+the callback handler re-fetches the proposal under Telegram owner headers and
+submits the full current hash to the gateway. Stale hashes, terminal proposal
+states, and cross-owner decisions are refused by the gateway rather than by
+chat text convention.
+
 ## Session Scope
 
 Session owner metadata is a routing and authorization claim, not a credential.

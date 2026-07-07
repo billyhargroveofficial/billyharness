@@ -83,7 +83,7 @@ func (c *Client) GetUpdates(ctx context.Context, offset, timeoutSec int) ([]Upda
 	err := c.post(ctx, 0, "getUpdates", map[string]any{
 		"offset":          offset,
 		"timeout":         timeoutSec,
-		"allowed_updates": []string{"message"},
+		"allowed_updates": []string{"message", "callback_query"},
 	}, &updates)
 	return updates, err
 }
@@ -133,6 +133,14 @@ func (c *Client) DownloadFile(ctx context.Context, filePath string, maxBytes int
 }
 
 func (c *Client) SendMessage(ctx context.Context, chatID int64, text, parseMode string, threadID int) (SentMessage, error) {
+	return c.sendMessage(ctx, chatID, text, parseMode, threadID, nil)
+}
+
+func (c *Client) SendMessageWithReplyMarkup(ctx context.Context, chatID int64, text, parseMode string, threadID int, replyMarkup InlineKeyboardMarkup) (SentMessage, error) {
+	return c.sendMessage(ctx, chatID, text, parseMode, threadID, replyMarkup)
+}
+
+func (c *Client) sendMessage(ctx context.Context, chatID int64, text, parseMode string, threadID int, replyMarkup any) (SentMessage, error) {
 	var msg SentMessage
 	payload := map[string]any{
 		"chat_id":                  chatID,
@@ -145,6 +153,9 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text, parseMode 
 	if threadID > 0 {
 		payload["message_thread_id"] = threadID
 	}
+	if replyMarkup != nil {
+		payload["reply_markup"] = replyMarkup
+	}
 	err := c.postWithRetry(ctx, chatID, "sendMessage", payload, &msg)
 	if err == nil || parseMode == "" || !isTelegramParseError(err) {
 		return msg, err
@@ -153,6 +164,15 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text, parseMode 
 	payload["text"] = fallbackText(text, parseMode)
 	err = c.postWithRetry(ctx, chatID, "sendMessage", payload, &msg)
 	return msg, err
+}
+
+func (c *Client) AnswerCallbackQuery(ctx context.Context, callbackID, text string) error {
+	payload := map[string]any{"callback_query_id": strings.TrimSpace(callbackID)}
+	if strings.TrimSpace(text) != "" {
+		payload["text"] = text
+	}
+	var out bool
+	return c.post(ctx, 0, "answerCallbackQuery", payload, &out)
 }
 
 func (c *Client) SendRichMessageMarkdown(ctx context.Context, chatID int64, markdown string, threadID int) (SentMessage, error) {

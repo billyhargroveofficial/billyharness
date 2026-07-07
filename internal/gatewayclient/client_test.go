@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/agentclub"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
@@ -577,6 +578,67 @@ func TestAgentClubProposalClientMethodsUseTypedRoutesAndOwnerHeaders(t *testing.
 	}
 	if sawOwnerHeaders != 3 {
 		t.Fatalf("sawOwnerHeaders = %d", sawOwnerHeaders)
+	}
+}
+
+func TestFormatAgentClubCapabilitiesAndProposalsRedactsOperatorSurface(t *testing.T) {
+	capabilities := FormatAgentClubCapabilities(agentclub.CapabilityListResponse{
+		SchemaVersion: agentclub.SchemaVersion,
+		Capabilities: []agentclub.CapabilityView{{
+			Descriptor: agentclub.CapabilityDescriptor{
+				ID:       "event.review",
+				Title:    "Review queue",
+				Kind:     agentclub.CapabilityKindReview,
+				Risk:     agentclub.RiskReadOnly,
+				Dispatch: agentclub.DispatchAdmitOnly,
+				Approval: agentclub.ApprovalRequired,
+			},
+			Bindings: []agentclub.BindingView{{
+				Capability:   "event.review",
+				ClientType:   "ingress",
+				ClientID:     "ingress:hh-applicant-tool:prod",
+				Sources:      []string{"hh_applicant_tool"},
+				EventTypes:   []string{"review_queue"},
+				MetadataKeys: []string{"profile"},
+				Enabled:      true,
+			}},
+		}},
+	})
+	for _, want := range []string{"agent-club capabilities: 1", "event.review", "binding ingress/ingress:hh-applicant-tool:prod", "dispatch=admit_only"} {
+		if !strings.Contains(capabilities, want) {
+			t.Fatalf("capability output missing %q:\n%s", want, capabilities)
+		}
+	}
+
+	created := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	proposals := FormatAgentClubProposals(agentclub.ProposalListResponse{
+		SchemaVersion: agentclub.SchemaVersion,
+		Proposals: []agentclub.Proposal{{
+			SchemaVersion: agentclub.SchemaVersion,
+			ProposalID:    "proposal-123",
+			SessionID:     "session-1",
+			Source:        "hh_applicant_tool",
+			Capability:    "safe_output.reply",
+			ActionKind:    "reply",
+			Risk:          agentclub.RiskExternalMutation,
+			State:         agentclub.ProposalStatePending,
+			ProposalHash:  strings.Repeat("a", 64),
+			PayloadSHA256: strings.Repeat("b", 64),
+			Preview:       "draft uses https://user-secret:pass-secret@example.com/path?token=query-secret and should be redacted",
+			OutputRef:     "file:///tmp/output?api_key=secret",
+			CreatedAt:     created,
+			MetadataKeys:  []string{"profile"},
+		}},
+	})
+	for _, want := range []string{"agent-club proposals: 1 pending=1", "proposal-123", "hash=aaaaaaaaaaaa", "payload_sha256: bbbbbbbbbbbb", "preview:"} {
+		if !strings.Contains(proposals, want) {
+			t.Fatalf("proposal output missing %q:\n%s", want, proposals)
+		}
+	}
+	for _, leaked := range []string{"user-secret", "pass-secret", "query-secret", "api_key=secret"} {
+		if strings.Contains(proposals, leaked) {
+			t.Fatalf("proposal output leaked %q:\n%s", leaked, proposals)
+		}
 	}
 }
 
