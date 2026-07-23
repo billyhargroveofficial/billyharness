@@ -41,6 +41,7 @@ makes the matching guard go red.
 | `internal/gatewayclient` | Shared gateway HTTP client helpers, typed status errors, session JSON/NDJSON methods, and client-side context formatting. | `displayfmt`, `gatewayapi`, `protocol` | Must not import gateway server, agent, provider, tools, TUI, or Telegram. |
 | `internal/hooks` | Hook process execution and hook event payloads. | `config`, `protocol`, `secrets` | Must not import agent, tools, provider, or presentation packages. |
 | `internal/instructions` | Instruction file discovery and initial instruction assembly. | `config`, `protocol` | Must stay independent of runtime adapters and provider implementations. |
+| `internal/jobs` | Pure provider-neutral multi-agent job domain, fail-closed authority envelopes, deterministic state reduction, bounded batch workflows, and built-in preset compilation. | none | Must not import agent, provider, tools, gateway, UI, or persistence adapters. Provider execution and durable storage belong in later composition packages. |
 | `internal/mcpclient` | Managed MCP stdio clients, server lifecycle, tool discovery, and status. | `config`, `protocol`, `secrets` | Must not depend on agent, gateway, TUI, or Telegram. |
 | `internal/mcpserver` | Local MCP server adapter exposing harness tools. | `protocol`, `tools` | Tool risk decisions must go through the central tools policy boundary. |
 | `internal/mcpstatus` | Presentation-friendly MCP status formatting. | `mcpclient` | Keep status formatting small; do not import runtime adapters. |
