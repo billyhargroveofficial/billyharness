@@ -160,6 +160,7 @@ func sessionConfigSnapshot(providerAuth config.ProviderAuthSnapshot, limits conf
 		"disable_spark":                    providerAuth.DisableSpark,
 		"max_tokens":                       limits.MaxTokens,
 		"max_tool_rounds":                  limits.MaxToolRounds,
+		"max_tool_calls":                   limits.MaxToolCalls,
 		"max_parallel_tools":               limits.MaxParallelTools,
 		"provider_max_retries":             limits.ProviderMaxRetries,
 		"context_window_tokens":            limits.ContextWindowTokens,

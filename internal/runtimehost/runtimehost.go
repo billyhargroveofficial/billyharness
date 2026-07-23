@@ -13,19 +13,20 @@ import (
 )
 
 type Settings struct {
-	ProviderAuth    config.ProviderAuthSnapshot
-	ProviderBinding config.ProviderBinding
-	ProviderCaps    config.ProviderCapabilitySnapshot
-	Profile         config.ProfileSelection
-	Runtime         config.RuntimeLimits
-	ToolPolicy      config.ToolPolicySettings
-	Diagnostics     config.DiagnosticsSettings
-	MCP             config.MCPSettings
-	AgentClub       config.AgentClubSettings
-	Hooks           config.HookSettings
-	Instructions    config.InstructionSettings
-	GatewayAddr     string
-	Auth            config.AuthSettings
+	ProviderAuth      config.ProviderAuthSnapshot
+	ProviderBinding   config.ProviderBinding
+	ProviderCaps      config.ProviderCapabilitySnapshot
+	Profile           config.ProfileSelection
+	Runtime           config.RuntimeLimits
+	ToolPolicy        config.ToolPolicySettings
+	Diagnostics       config.DiagnosticsSettings
+	MCP               config.MCPSettings
+	AgentClub         config.AgentClubSettings
+	Hooks             config.HookSettings
+	Instructions      config.InstructionSettings
+	GatewayAddr       string
+	Auth              config.AuthSettings
+	ExecutionContract *protocol.ExecutionContractAttestation
 }
 
 type Host struct {
@@ -181,6 +182,18 @@ func WithAskUser(handler agent.AskUserHandler) AgentOption {
 	}
 }
 
+func WithRunCapabilities(capabilities tools.RunCapabilities) AgentOption {
+	return func(settings *agent.Settings) {
+		settings.RunCapabilities = capabilities.Clone()
+	}
+}
+
+func WithContextMode(mode string) AgentOption {
+	return func(settings *agent.Settings) {
+		settings.ContextMode = mode
+	}
+}
+
 func NewRegistry(ctx context.Context, settings Settings) (*tools.Registry, error) {
 	return tools.NewRegistryWithMCPFromSettings(ctx, settings.RegistrySettings(), registryOptions(settings)...)
 }
@@ -217,13 +230,14 @@ func PromptSubmitOptions(source string, metadata map[string]string) agent.Prompt
 
 func (s Settings) AgentSettings() agent.Settings {
 	return agent.Settings{
-		ProviderBinding: s.ProviderBinding,
-		Profile:         s.Profile,
-		Runtime:         s.Runtime,
-		ToolPolicy:      s.ToolPolicy,
-		MCP:             s.MCP,
-		Hooks:           s.Hooks,
-		Instructions:    s.Instructions,
+		ProviderBinding:   s.ProviderBinding,
+		Profile:           s.Profile,
+		Runtime:           s.Runtime,
+		ToolPolicy:        s.ToolPolicy,
+		MCP:               s.MCP,
+		Hooks:             s.Hooks,
+		Instructions:      s.Instructions,
+		ExecutionContract: cloneExecutionContract(s.ExecutionContract),
 	}
 }
 
@@ -258,7 +272,16 @@ func (s Settings) Clone() Settings {
 	s.AgentClub = cloneAgentClub(s.AgentClub)
 	s.Hooks = cloneHooks(s.Hooks)
 	s.Instructions = cloneInstructions(s.Instructions)
+	s.ExecutionContract = cloneExecutionContract(s.ExecutionContract)
 	return s
+}
+
+func cloneExecutionContract(contract *protocol.ExecutionContractAttestation) *protocol.ExecutionContractAttestation {
+	if contract == nil {
+		return nil
+	}
+	cloned := *contract
+	return &cloned
 }
 
 func registryOptions(settings Settings) []tools.RegistryOption {

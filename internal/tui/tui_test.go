@@ -131,6 +131,7 @@ func TestSlashCommands(t *testing.T) {
 		{input: "/theme light", wantTheme: "light"},
 		{input: "/model pro", wantModel: "deepseek-v4-pro"},
 		{input: "/model flash", wantModel: "deepseek-v4-flash"},
+		{input: "/model qwen", wantModel: "qwen3.8-max-preview"},
 		{input: "/model gpt", wantModel: "gpt-5.5"},
 		{input: "/model spark", wantModel: "gpt-5.3-codex-spark"},
 		{input: "/reasoning max", wantThink: "max"},

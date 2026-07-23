@@ -12,6 +12,7 @@ import (
 	uxprojector "github.com/billyhargroveofficial/billyharness/internal/clientux/projector"
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	tuirender "github.com/billyhargroveofficial/billyharness/internal/tui/render"
 	"github.com/billyhargroveofficial/billyharness/internal/tui/transcript"
@@ -409,10 +410,7 @@ func (m Model) modelsText() string {
 		if i == m.modelIndex {
 			marker = "*"
 		}
-		provider := "deepseek"
-		if isCodexModel(model) {
-			provider = "openai-codex"
-		}
+		provider := modelinfo.ProviderForModel(model, "")
 		lines = append(lines, fmt.Sprintf("%s %-24s %s", marker, model, provider))
 	}
 	return strings.Join(lines, "\n")

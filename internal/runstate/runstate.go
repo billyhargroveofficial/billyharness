@@ -224,6 +224,7 @@ func runtimeConfigHash(input SnapshotInput) string {
 		ReasoningMode           string `json:"reasoning_mode,omitempty"`
 		ContextBudgetTokens     int64  `json:"context_budget_tokens,omitempty"`
 		MaxToolRounds           int    `json:"max_tool_rounds,omitempty"`
+		MaxToolCalls            int    `json:"max_tool_calls,omitempty"`
 		DangerousPermissionMode string `json:"dangerous_permission_mode,omitempty"`
 		AccessMode              string `json:"access_mode,omitempty"`
 		MCPSettingsHash         string `json:"mcp_settings_hash,omitempty"`
@@ -234,6 +235,7 @@ func runtimeConfigHash(input SnapshotInput) string {
 		ReasoningMode:           reasoningMode(input.Provider.Model),
 		ContextBudgetTokens:     input.Runtime.ContextWindowTokens,
 		MaxToolRounds:           input.Runtime.MaxToolRounds,
+		MaxToolCalls:            input.Runtime.MaxToolCalls,
 		DangerousPermissionMode: dangerousPermissionMode(input.ToolPolicy),
 		AccessMode:              config.NormalizeAccessMode(input.ToolPolicy.AccessMode),
 		MCPSettingsHash:         mcpSnapshotHash(input.MCP),

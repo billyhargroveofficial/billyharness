@@ -312,12 +312,13 @@ func actionRegistry() []actionSpec {
 			title:     "Switch Model",
 			category:  "runtime",
 			slash:     "/model",
-			slashArgs: "flash|pro|gpt|id",
+			slashArgs: "flash|pro|qwen|gpt|id",
 			summary:   "switch model",
 			args: func(m Model) []slashArg {
 				values := []slashArg{
 					{"flash", "deepseek-v4-flash"},
 					{"pro", "deepseek-v4-pro"},
+					{"qwen", "qwen3.8-max-preview via Qwen Cloud Token Plan"},
 					{"gpt", "gpt-5.5 via Codex subscription"},
 					{"gpt-5.5", "Codex/ChatGPT subscription"},
 					{"gpt-5.4", "Codex/ChatGPT subscription"},
@@ -325,6 +326,7 @@ func actionRegistry() []actionSpec {
 					{"gpt-5.3-codex-spark", "ultra-fast Codex coding model"},
 					{"deepseek-v4-flash", "full model id"},
 					{"deepseek-v4-pro", "full model id"},
+					{"qwen3.8-max-preview", "Qwen Cloud Token Plan model id"},
 					{"toggle", "switch to the other configured model"},
 				}
 				switch m.currentModel() {
@@ -332,6 +334,8 @@ func actionRegistry() []actionSpec {
 					return rotateSlashArgs(values, "flash")
 				case "deepseek-v4-pro":
 					return rotateSlashArgs(values, "pro")
+				case "qwen3.8-max-preview":
+					return rotateSlashArgs(values, "qwen")
 				case "gpt-5.5":
 					return rotateSlashArgs(values, "gpt")
 				}

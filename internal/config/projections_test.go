@@ -38,6 +38,53 @@ func TestConfigProjectionsNormalizeModelRoutingAndSparkDisablement(t *testing.T)
 	}
 }
 
+func TestProviderBindingUsesOfficialQwenTokenPlanTransport(t *testing.T) {
+	cfg := builtInConfig()
+	cfg.Model = "qwen3.8-max-preview"
+	cfg.BaseURL = "https://override.invalid/v1"
+	cfg.APIKeyEnv = "OVERRIDE_QWEN_KEY"
+	cfg.baseURLExplicitOverride = true
+	cfg.apiKeyEnvExplicitOverride = true
+
+	binding := cfg.ProviderBinding()
+	if binding.Provider.Provider != "qwen" ||
+		binding.Provider.BaseURL != "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1" ||
+		binding.Auth.APIKeyEnv != "QWEN_TOKEN_PLAN_API_KEY" ||
+		binding.Limits.ContextWindowTokens != 983_616 {
+		t.Fatalf("Qwen binding = %#v", binding)
+	}
+	settings := RuntimeDiffSettingsFromConfig(cfg)
+	if settings.Runtime.ContextWindowTokens != 983_616 ||
+		settings.Provider.Limits.ContextWindowTokens != settings.Runtime.ContextWindowTokens {
+		t.Fatalf("Qwen runtime context = outer:%d binding:%d", settings.Runtime.ContextWindowTokens, settings.Provider.Limits.ContextWindowTokens)
+	}
+}
+
+func TestRuntimeModelSwitchRebindsQwenAndDeepSeekTransports(t *testing.T) {
+	cfg := builtInConfig()
+	settings := RuntimeDiffSettingsFromConfig(cfg)
+
+	settings, err := RuntimeDiffSettingsWithRunOverrides(settings, RunOverrideSettings{Model: "qwen3.8-max-preview"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Provider.Provider.Provider != "qwen" ||
+		settings.Provider.Provider.BaseURL != "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1" ||
+		settings.Provider.Auth.APIKeyEnv != "QWEN_TOKEN_PLAN_API_KEY" {
+		t.Fatalf("Qwen runtime binding = %#v", settings.Provider)
+	}
+
+	settings, err = RuntimeDiffSettingsWithRunOverrides(settings, RunOverrideSettings{Model: "deepseek-v4-flash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Provider.Provider.Provider != "deepseek" ||
+		settings.Provider.Provider.BaseURL != "https://api.deepseek.com" ||
+		settings.Provider.Auth.APIKeyEnv != "DEEPSEEK_API_KEY" {
+		t.Fatalf("DeepSeek runtime binding = %#v", settings.Provider)
+	}
+}
+
 func TestAccessModeNormalizesAndProjects(t *testing.T) {
 	if NormalizeAccessMode("") != AccessModeBuild ||
 		NormalizeAccessMode("SAFE") != AccessModeGuarded ||

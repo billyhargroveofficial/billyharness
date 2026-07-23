@@ -31,11 +31,12 @@ func (f ResolverFunc) LookupIPAddr(ctx context.Context, host string) ([]net.IPAd
 type DialContextFunc func(context.Context, string, string) (net.Conn, error)
 
 type Client struct {
-	Resolver     Resolver
-	DialContext  DialContextFunc
-	Timeout      time.Duration
-	MaxRedirects int
-	UserAgent    string
+	Resolver           Resolver
+	DialContext        DialContextFunc
+	Timeout            time.Duration
+	MaxRedirects       int
+	UserAgent          string
+	AllowedURLPrefixes []string
 }
 
 type Response struct {
@@ -110,6 +111,10 @@ func ValidatePublicHTTPURL(ctx context.Context, rawURL string, resolver Resolver
 	return Client{Resolver: resolver}.validatePublicHTTPURL(ctx, rawURL)
 }
 
+func ValidatePublicHTTPURLWithClient(ctx context.Context, rawURL string, client Client) (*url.URL, error) {
+	return client.validatePublicHTTPURL(ctx, rawURL)
+}
+
 func (c Client) validatePublicHTTPURL(ctx context.Context, rawURL string) (*url.URL, error) {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
@@ -117,6 +122,9 @@ func (c Client) validatePublicHTTPURL(ctx context.Context, rawURL string) (*url.
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, fmt.Errorf("only http and https URLs are allowed")
+	}
+	if err := validateAllowedHTTPSURL(u, c.AllowedURLPrefixes); err != nil {
+		return nil, err
 	}
 	host := u.Hostname()
 	if host == "" {

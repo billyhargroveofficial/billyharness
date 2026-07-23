@@ -128,6 +128,11 @@ func RequestMetadataFromError(err error) (RequestMetadata, bool) {
 
 func NewFromBinding(binding config.ProviderBinding) (Provider, error) {
 	providerID := modelinfo.ProviderForModel(binding.Model.Model, binding.Provider.Provider)
+	if providerID == modelinfo.ProviderQwen {
+		qwen := modelinfo.Provider(modelinfo.ProviderQwen)
+		binding.Provider.BaseURL = qwen.BaseURL
+		binding.Auth.APIKeyEnv = qwen.APIKeyEnv
+	}
 	if err := modelinfo.ValidateCapabilityPolicy(modelinfo.CapabilityPolicyRequest{
 		Provider:           providerID,
 		Model:              binding.Model.Model,
@@ -172,17 +177,19 @@ func NewFromBinding(binding config.ProviderBinding) (Provider, error) {
 			Client:            client,
 		}, nil
 	}
-	apiKey, err := credentials.NewManagerFromAuthSettings(binding.Auth).ResolveDeepSeekAPIKey()
+	apiKey, err := credentials.NewManagerFromAuthSettings(binding.Auth).ResolveProviderAPIKey(providerID)
 	if err != nil {
 		return nil, err
 	}
 	return &DeepSeek{
+		ProviderID:        providerID,
 		BaseURL:           strings.TrimRight(binding.Provider.BaseURL, "/"),
 		APIKey:            apiKey.Value,
 		Model:             binding.Model.Model,
 		Thinking:          binding.Model.Thinking,
 		ReasoningEffort:   binding.Model.ReasoningEffort,
 		MaxTokens:         binding.Model.MaxTokens,
+		MaxParallelTools:  binding.Limits.MaxParallelTools,
 		RequestTimeout:    binding.Limits.RequestTimeout,
 		StreamIdleTimeout: binding.Limits.StreamIdleTimeout,
 		MaxRetries:        binding.Limits.ProviderMaxRetries,
@@ -216,16 +223,25 @@ func (Mock) Stream(ctx context.Context, req Request) (<-chan Event, <-chan error
 }
 
 type DeepSeek struct {
+	ProviderID        string
 	BaseURL           string
 	APIKey            string
 	Model             string
 	Thinking          string
 	ReasoningEffort   string
 	MaxTokens         int
+	MaxParallelTools  int
 	RequestTimeout    time.Duration
 	StreamIdleTimeout time.Duration
 	MaxRetries        int
 	Client            *http.Client
+}
+
+func (d *DeepSeek) providerID() string {
+	if providerID := modelinfo.NormalizeProvider(d.ProviderID); providerID != "" {
+		return providerID
+	}
+	return modelinfo.ProviderDeepSeek
 }
 
 func (d *DeepSeek) Stream(ctx context.Context, req Request) (<-chan Event, <-chan error) {
@@ -246,7 +262,7 @@ func (d *DeepSeek) stream(ctx context.Context, req Request, events chan<- Event)
 	var respCancel context.CancelFunc
 	baseMeta := RequestMetadata{
 		RequestID:  req.RequestID,
-		ProviderID: modelinfo.ProviderDeepSeek,
+		ProviderID: d.providerID(),
 		ModelID:    req.Model,
 	}
 	meta := baseMeta
@@ -276,11 +292,11 @@ func (d *DeepSeek) stream(ctx context.Context, req Request, events chan<- Event)
 		if err != nil {
 			cancelReq()
 			meta = attemptMeta
-			return providerTransportError("deepseek", err)
+			return providerTransportError(d.providerID(), err)
 		}
 		if attemptResp.StatusCode < 200 || attemptResp.StatusCode >= 300 {
 			limited, _ := io.ReadAll(io.LimitReader(attemptResp.Body, 4096))
-			providerErr := providerHTTPError("deepseek", attemptResp.StatusCode, attemptResp.Header, secrets.Redact(string(limited), d.APIKey))
+			providerErr := providerHTTPError(d.providerID(), attemptResp.StatusCode, attemptResp.Header, secrets.Redact(string(limited), d.APIKey))
 			_ = attemptResp.Body.Close()
 			cancelReq()
 			attemptMeta.ProviderRequestID = providerErr.RequestID
@@ -309,17 +325,18 @@ func (d *DeepSeek) stream(ctx context.Context, req Request, events chan<- Event)
 }
 
 func (d *DeepSeek) body(req Request) ([]byte, error) {
+	providerID := d.providerID()
 	if count := protocol.MessageAttachmentCount(req.Messages); count > 0 {
 		model := firstNonEmpty(req.Model, d.Model)
 		err := modelinfo.ValidateCapabilityPolicy(modelinfo.CapabilityPolicyRequest{
-			Provider:           modelinfo.ProviderDeepSeek,
+			Provider:           providerID,
 			Model:              model,
 			RequireVisionInput: true,
 		})
 		if err != nil {
 			return nil, err
 		}
-		return nil, fmt.Errorf("unsupported model %q on provider %q: image input is required for %d attachment(s)", model, modelinfo.ProviderDeepSeek, count)
+		return nil, fmt.Errorf("unsupported model %q on provider %q: image input is required for %d attachment(s)", model, providerID, count)
 	}
 	messages := make([]map[string]any, 0, len(req.Messages))
 	for _, msg := range req.Messages {
@@ -330,12 +347,12 @@ func (d *DeepSeek) body(req Request) ([]byte, error) {
 		} else {
 			item["content"] = msg.Content
 		}
+		if msg.Role == protocol.RoleAssistant && msg.ReasoningContent != "" {
+			item["reasoning_content"] = msg.ReasoningContent
+		}
 		if msg.Role == protocol.RoleAssistant && len(msg.ToolCalls) > 0 {
 			if msg.Content == "" {
 				item["content"] = nil
-			}
-			if msg.ReasoningContent != "" {
-				item["reasoning_content"] = msg.ReasoningContent
 			}
 			toolCalls := make([]map[string]any, 0, len(msg.ToolCalls))
 			for _, call := range msg.ToolCalls {
@@ -376,11 +393,20 @@ func (d *DeepSeek) body(req Request) ([]byte, error) {
 	if len(tools) > 0 {
 		payload["tools"] = tools
 		payload["tool_choice"] = "auto"
+		if providerID == modelinfo.ProviderQwen && d.MaxParallelTools > 1 {
+			payload["parallel_tool_calls"] = true
+		}
 	}
-	if d.MaxTokens > 0 {
+	if d.MaxTokens > 0 && providerID == modelinfo.ProviderQwen {
+		payload["max_completion_tokens"] = d.MaxTokens
+	} else if d.MaxTokens > 0 {
 		payload["max_tokens"] = d.MaxTokens
 	}
-	if d.Thinking != "" {
+	if providerID == modelinfo.ProviderQwen {
+		payload["enable_thinking"] = true
+		payload["preserve_thinking"] = true
+		payload["reasoning_effort"] = modelinfo.NormalizeQwenReasoningEffort(d.ReasoningEffort)
+	} else if d.Thinking != "" {
 		payload["thinking"] = map[string]any{"type": d.Thinking}
 		if d.Thinking == "enabled" && d.ReasoningEffort != "" {
 			payload["reasoning_effort"] = d.ReasoningEffort

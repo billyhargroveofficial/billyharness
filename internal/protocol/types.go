@@ -147,6 +147,12 @@ type ToolSpec struct {
 	Risk        Risk            `json:"risk"`
 }
 
+const (
+	CapabilityScopeIsolatedPlanV1        = "isolated-plan-v1"
+	CapabilityScopeBoundedIsolatedPlanV1 = "bounded-isolated-plan-v1"
+	ContextModeIsolated                  = "isolated"
+)
+
 type PromptSection struct {
 	Name         string `json:"name"`
 	Role         Role   `json:"role,omitempty"`
@@ -197,6 +203,15 @@ type ContextEpochDrift struct {
 	Warning       string        `json:"warning,omitempty"`
 	Locked        *ContextEpoch `json:"locked,omitempty"`
 	Current       *ContextEpoch `json:"current,omitempty"`
+}
+
+// ExecutionContractAttestation records effective, provider-facing limits for a
+// versioned bounded run. It is emitted in run.started before any model call.
+type ExecutionContractAttestation struct {
+	ExecutionContract       string `json:"execution_contract"`
+	ProviderMaxRetries      int    `json:"provider_max_retries"`
+	ProviderFailoverEnabled bool   `json:"provider_failover_enabled"`
+	MaxToolCalls            int    `json:"max_tool_calls"`
 }
 
 type EventType string
@@ -441,39 +456,45 @@ type StepEvent struct {
 }
 
 type ModelCallEvent struct {
-	RequestID               string            `json:"request_id"`
-	Round                   int               `json:"round,omitempty"`
-	MessageCount            int               `json:"message_count,omitempty"`
-	ToolCount               int               `json:"tool_count,omitempty"`
-	ProviderID              string            `json:"provider_id,omitempty"`
-	ModelID                 string            `json:"model_id,omitempty"`
-	Reasoning               string            `json:"reasoning,omitempty"`
-	ReasoningMode           string            `json:"reasoning_mode,omitempty"`
-	ContextBudgetTokens     int64             `json:"context_budget_tokens,omitempty"`
-	ConfigHash              string            `json:"config_hash,omitempty"`
-	ToolSnapshotHash        string            `json:"tool_snapshot_hash,omitempty"`
-	MCPStatusSnapshotHash   string            `json:"mcp_status_snapshot_hash,omitempty"`
-	ProfileInstructionHash  string            `json:"profile_instruction_hash,omitempty"`
-	PromptInventoryHash     string            `json:"prompt_inventory_hash,omitempty"`
-	PromptInventory         *PromptInventory  `json:"prompt_inventory,omitempty"`
-	PromptCacheBreak        *PromptCacheBreak `json:"prompt_cache_break,omitempty"`
-	ContextEpochHash        string            `json:"context_epoch_hash,omitempty"`
-	ContextEpoch            *ContextEpoch     `json:"context_epoch,omitempty"`
-	DangerousPermissionMode string            `json:"dangerous_permission_mode,omitempty"`
-	AccessMode              string            `json:"access_mode,omitempty"`
-	Status                  string            `json:"status"`
-	ProviderRequestID       string            `json:"provider_request_id,omitempty"`
-	Attempts                int               `json:"attempts,omitempty"`
-	Retries                 int               `json:"retries"`
-	StatusCode              int               `json:"status_code,omitempty"`
-	TotalLatencyMS          *int64            `json:"total_latency_ms,omitempty"`
-	FirstDeltaMS            *int64            `json:"first_delta_ms,omitempty"`
-	InputTokens             int64             `json:"input_tokens,omitempty"`
-	OutputTokens            int64             `json:"output_tokens,omitempty"`
-	CacheHitTokens          int64             `json:"cache_hit_tokens,omitempty"`
-	CacheMissTokens         int64             `json:"cache_miss_tokens,omitempty"`
-	ReasoningTokens         int64             `json:"reasoning_tokens,omitempty"`
-	Error                   string            `json:"error,omitempty"`
+	RequestID                string            `json:"request_id"`
+	Round                    int               `json:"round,omitempty"`
+	MessageCount             int               `json:"message_count,omitempty"`
+	ToolCount                int               `json:"tool_count,omitempty"`
+	ProviderID               string            `json:"provider_id,omitempty"`
+	ModelID                  string            `json:"model_id,omitempty"`
+	Reasoning                string            `json:"reasoning,omitempty"`
+	ReasoningMode            string            `json:"reasoning_mode,omitempty"`
+	ContextBudgetTokens      int64             `json:"context_budget_tokens,omitempty"`
+	ConfigHash               string            `json:"config_hash,omitempty"`
+	ToolSnapshotHash         string            `json:"tool_snapshot_hash,omitempty"`
+	MCPStatusSnapshotHash    string            `json:"mcp_status_snapshot_hash,omitempty"`
+	ProfileInstructionHash   string            `json:"profile_instruction_hash,omitempty"`
+	PromptInventoryHash      string            `json:"prompt_inventory_hash,omitempty"`
+	PromptInventory          *PromptInventory  `json:"prompt_inventory,omitempty"`
+	PromptCacheBreak         *PromptCacheBreak `json:"prompt_cache_break,omitempty"`
+	ContextEpochHash         string            `json:"context_epoch_hash,omitempty"`
+	ContextEpoch             *ContextEpoch     `json:"context_epoch,omitempty"`
+	DangerousPermissionMode  string            `json:"dangerous_permission_mode,omitempty"`
+	AccessMode               string            `json:"access_mode,omitempty"`
+	CapabilityScope          string            `json:"capability_scope,omitempty"`
+	ContextMode              string            `json:"context_mode,omitempty"`
+	AllowedToolsCount        int               `json:"allowed_tools_count,omitempty"`
+	AllowedToolsSHA256       string            `json:"allowed_tools_sha256,omitempty"`
+	AllowedURLPrefixesCount  int               `json:"allowed_url_prefixes_count,omitempty"`
+	AllowedURLPrefixesSHA256 string            `json:"allowed_url_prefixes_sha256,omitempty"`
+	Status                   string            `json:"status"`
+	ProviderRequestID        string            `json:"provider_request_id,omitempty"`
+	Attempts                 int               `json:"attempts,omitempty"`
+	Retries                  int               `json:"retries"`
+	StatusCode               int               `json:"status_code,omitempty"`
+	TotalLatencyMS           *int64            `json:"total_latency_ms,omitempty"`
+	FirstDeltaMS             *int64            `json:"first_delta_ms,omitempty"`
+	InputTokens              int64             `json:"input_tokens,omitempty"`
+	OutputTokens             int64             `json:"output_tokens,omitempty"`
+	CacheHitTokens           int64             `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens          int64             `json:"cache_miss_tokens,omitempty"`
+	ReasoningTokens          int64             `json:"reasoning_tokens,omitempty"`
+	Error                    string            `json:"error,omitempty"`
 }
 
 type ToolProgressEvent struct {

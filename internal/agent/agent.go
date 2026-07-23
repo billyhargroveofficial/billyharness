@@ -23,27 +23,33 @@ import (
 )
 
 type Agent struct {
-	providerBinding config.ProviderBinding
-	profile         config.ProfileSelection
-	runtime         config.RuntimeLimits
-	toolPolicy      config.ToolPolicySettings
-	mcpSettings     config.MCPSettings
-	hookSettings    config.HookSettings
-	instructions    config.InstructionSettings
-	provider        provider.Provider
-	tools           *tools.Registry
-	askUser         AskUserHandler
+	providerBinding   config.ProviderBinding
+	profile           config.ProfileSelection
+	runtime           config.RuntimeLimits
+	toolPolicy        config.ToolPolicySettings
+	mcpSettings       config.MCPSettings
+	hookSettings      config.HookSettings
+	instructions      config.InstructionSettings
+	runCapabilities   tools.RunCapabilities
+	contextMode       string
+	provider          provider.Provider
+	tools             *tools.Registry
+	askUser           AskUserHandler
+	executionContract *protocol.ExecutionContractAttestation
 }
 
 type Settings struct {
-	ProviderBinding config.ProviderBinding
-	Profile         config.ProfileSelection
-	Runtime         config.RuntimeLimits
-	ToolPolicy      config.ToolPolicySettings
-	MCP             config.MCPSettings
-	Hooks           config.HookSettings
-	Instructions    config.InstructionSettings
-	AskUser         AskUserHandler
+	ProviderBinding   config.ProviderBinding
+	Profile           config.ProfileSelection
+	Runtime           config.RuntimeLimits
+	ToolPolicy        config.ToolPolicySettings
+	MCP               config.MCPSettings
+	Hooks             config.HookSettings
+	Instructions      config.InstructionSettings
+	RunCapabilities   tools.RunCapabilities
+	ContextMode       string
+	AskUser           AskUserHandler
+	ExecutionContract *protocol.ExecutionContractAttestation
 }
 
 type AskUserHandler func(context.Context, protocol.UserInputRequestEvent, func(protocol.Event)) (protocol.UserInputAnswerEvent, error)
@@ -70,17 +76,43 @@ func New(cfg config.Config, provider provider.Provider, registry *tools.Registry
 }
 
 func NewFromSettings(settings Settings, provider provider.Provider, registry *tools.Registry) *Agent {
+	if settings.ContextMode == protocol.ContextModeIsolated {
+		settings.Runtime.ContextCompactStrategy = "deterministic"
+		settings.Runtime.ContextCompactSummaryProvider = ""
+		settings.Runtime.ContextCompactSummaryModel = ""
+		settings.ToolPolicy.WebSummaryMode = "extractive"
+		settings.ToolPolicy.WebSummaryProvider = ""
+		settings.ToolPolicy.WebSummaryModel = ""
+		settings.ToolPolicy.WebCacheEnabled = false
+		settings.ToolPolicy.WebSearchBackend = "native"
+		settings.ToolPolicy.WebExtractBackend = "native"
+		settings.ToolPolicy.WebTavilyAPIKeyEnv = ""
+		settings.ToolPolicy.WebExaAPIKeyEnv = ""
+		settings.ToolPolicy.WebHermesEnvFiles = nil
+		settings.Profile = config.ProfileSelection{}
+		settings.MCP = config.MCPSettings{}
+		settings.Hooks = config.HookSettings{}
+		settings.Instructions = config.InstructionSettings{}
+	}
+	var executionContract *protocol.ExecutionContractAttestation
+	if settings.ExecutionContract != nil {
+		cloned := *settings.ExecutionContract
+		executionContract = &cloned
+	}
 	return &Agent{
-		providerBinding: settings.ProviderBinding,
-		profile:         settings.Profile,
-		runtime:         settings.Runtime,
-		toolPolicy:      settings.ToolPolicy,
-		mcpSettings:     settings.MCP,
-		hookSettings:    settings.Hooks,
-		instructions:    settings.Instructions,
-		provider:        provider,
-		tools:           registry,
-		askUser:         settings.AskUser,
+		providerBinding:   settings.ProviderBinding,
+		profile:           settings.Profile,
+		runtime:           settings.Runtime,
+		toolPolicy:        settings.ToolPolicy,
+		mcpSettings:       settings.MCP,
+		hookSettings:      settings.Hooks,
+		instructions:      settings.Instructions,
+		runCapabilities:   settings.RunCapabilities.Clone(),
+		contextMode:       settings.ContextMode,
+		provider:          provider,
+		tools:             registry,
+		askUser:           settings.AskUser,
+		executionContract: executionContract,
 	}
 }
 
@@ -667,33 +699,47 @@ func (a *Agent) modelCallMetadata(requestID string, round, messageCount, toolCou
 	if reasoning := a.reasoningEffort(); reasoning != "" {
 		metadata["reasoning"] = reasoning
 	}
+	if attestation := a.runCapabilities.Attestation(); attestation.Scope != "" {
+		metadata["capability_scope"] = attestation.Scope
+		metadata["context_mode"] = a.contextMode
+		metadata["allowed_tools_count"] = attestation.AllowedToolsCount
+		metadata["allowed_tools_sha256"] = attestation.AllowedToolsSHA256
+		metadata["allowed_url_prefixes_count"] = attestation.AllowedURLPrefixesCount
+		metadata["allowed_url_prefixes_sha256"] = attestation.AllowedURLPrefixesSHA256
+	}
 	return metadata
 }
 
 func modelCallEventData(base map[string]any, status string, totalLatencyMS, firstDeltaMS int64, usage provider.Usage, meta provider.RequestMetadata, errText string) protocol.ModelCallEvent {
 	data := protocol.ModelCallEvent{
-		RequestID:               metadataString(base, "request_id"),
-		Round:                   int(metadataInt64(base, "round")),
-		MessageCount:            int(metadataInt64(base, "message_count")),
-		ToolCount:               int(metadataInt64(base, "tool_count")),
-		ProviderID:              metadataString(base, "provider_id"),
-		ModelID:                 metadataString(base, "model_id"),
-		Reasoning:               metadataString(base, "reasoning"),
-		ReasoningMode:           metadataString(base, "reasoning_mode"),
-		ContextBudgetTokens:     metadataInt64(base, "context_budget_tokens"),
-		ConfigHash:              metadataString(base, "config_hash"),
-		ToolSnapshotHash:        metadataString(base, "tool_snapshot_hash"),
-		MCPStatusSnapshotHash:   metadataString(base, "mcp_status_snapshot_hash"),
-		ProfileInstructionHash:  metadataString(base, "profile_instruction_hash"),
-		PromptInventoryHash:     metadataString(base, "prompt_inventory_hash"),
-		PromptInventory:         metadataPromptInventory(base, "prompt_inventory"),
-		PromptCacheBreak:        metadataPromptCacheBreak(base, "prompt_cache_break"),
-		ContextEpochHash:        metadataString(base, "context_epoch_hash"),
-		ContextEpoch:            metadataContextEpoch(base, "context_epoch"),
-		DangerousPermissionMode: metadataString(base, "dangerous_permission_mode"),
-		AccessMode:              metadataString(base, "access_mode"),
-		Status:                  status,
-		Retries:                 meta.Retries,
+		RequestID:                metadataString(base, "request_id"),
+		Round:                    int(metadataInt64(base, "round")),
+		MessageCount:             int(metadataInt64(base, "message_count")),
+		ToolCount:                int(metadataInt64(base, "tool_count")),
+		ProviderID:               metadataString(base, "provider_id"),
+		ModelID:                  metadataString(base, "model_id"),
+		Reasoning:                metadataString(base, "reasoning"),
+		ReasoningMode:            metadataString(base, "reasoning_mode"),
+		ContextBudgetTokens:      metadataInt64(base, "context_budget_tokens"),
+		ConfigHash:               metadataString(base, "config_hash"),
+		ToolSnapshotHash:         metadataString(base, "tool_snapshot_hash"),
+		MCPStatusSnapshotHash:    metadataString(base, "mcp_status_snapshot_hash"),
+		ProfileInstructionHash:   metadataString(base, "profile_instruction_hash"),
+		PromptInventoryHash:      metadataString(base, "prompt_inventory_hash"),
+		PromptInventory:          metadataPromptInventory(base, "prompt_inventory"),
+		PromptCacheBreak:         metadataPromptCacheBreak(base, "prompt_cache_break"),
+		ContextEpochHash:         metadataString(base, "context_epoch_hash"),
+		ContextEpoch:             metadataContextEpoch(base, "context_epoch"),
+		DangerousPermissionMode:  metadataString(base, "dangerous_permission_mode"),
+		AccessMode:               metadataString(base, "access_mode"),
+		CapabilityScope:          metadataString(base, "capability_scope"),
+		ContextMode:              metadataString(base, "context_mode"),
+		AllowedToolsCount:        int(metadataInt64(base, "allowed_tools_count")),
+		AllowedToolsSHA256:       metadataString(base, "allowed_tools_sha256"),
+		AllowedURLPrefixesCount:  int(metadataInt64(base, "allowed_url_prefixes_count")),
+		AllowedURLPrefixesSHA256: metadataString(base, "allowed_url_prefixes_sha256"),
+		Status:                   status,
+		Retries:                  meta.Retries,
 	}
 	if meta.RequestID != "" {
 		data.RequestID = meta.RequestID
@@ -752,6 +798,14 @@ func modelCallEventMetadata(data protocol.ModelCallEvent) map[string]any {
 		"access_mode":               data.AccessMode,
 		"status":                    data.Status,
 		"retries":                   data.Retries,
+	}
+	if data.CapabilityScope != "" {
+		metadata["capability_scope"] = data.CapabilityScope
+		metadata["context_mode"] = data.ContextMode
+		metadata["allowed_tools_count"] = data.AllowedToolsCount
+		metadata["allowed_tools_sha256"] = data.AllowedToolsSHA256
+		metadata["allowed_url_prefixes_count"] = data.AllowedURLPrefixesCount
+		metadata["allowed_url_prefixes_sha256"] = data.AllowedURLPrefixesSHA256
 	}
 	addStringMetadata(metadata, "reasoning", data.Reasoning)
 	addStringMetadata(metadata, "reasoning_mode", data.ReasoningMode)

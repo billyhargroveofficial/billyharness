@@ -36,7 +36,11 @@ func (s *Server) handleTools(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleAuthStatus(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, credentials.RuntimeStatus(s.auth.Status(), s.providerBinding.Provider.Provider, s.providerBinding.Model.Model))
+	writeJSON(w, http.StatusOK, credentials.CurrentStatusForRuntime(
+		s.providerBinding.Auth,
+		s.providerBinding.Provider.Provider,
+		s.providerBinding.Model.Model,
+	))
 }
 
 func (s *Server) handleConfigStatus(w http.ResponseWriter, _ *http.Request) {

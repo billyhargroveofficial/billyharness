@@ -75,31 +75,66 @@ func (r *Registry) Snapshot(ctx context.Context) ToolSet {
 }
 
 func (r *Registry) SnapshotWithToolPolicy(ctx context.Context, policy config.ToolPolicySettings) ToolSet {
+	return r.SnapshotWithToolPolicyAndCapabilities(ctx, policy, RunCapabilities{})
+}
+
+func (r *Registry) SnapshotWithToolPolicyAndCapabilities(ctx context.Context, policy config.ToolPolicySettings, capabilities RunCapabilities) ToolSet {
 	if r == nil {
 		return ToolSet{}
 	}
-	r.refreshMCPTools(ctx)
+	isolated := capabilities.Scope() != ""
+	if !isolated {
+		r.refreshMCPTools(ctx)
+	}
 
 	snapshot := &Registry{
 		toolPolicy:      cloneToolPolicySettings(policy),
+		runCapabilities: capabilities.Clone(),
 		profile:         r.profile,
 		mcpSettings:     cloneMCPSettings(r.mcpSettings),
 		tools:           cloneToolMap(r.tools),
 		mcpTools:        map[string]Tool{},
 		webSummarizer:   r.webSummarizer,
 		webSummarySlots: r.webSummarySlots,
+		webBackendHTTP:  r.webBackendHTTP,
+		webBackendSleep: r.webBackendSleep,
+		tavilyBaseURL:   r.tavilyBaseURL,
+		exaBaseURL:      r.exaBaseURL,
 	}
+	if isolated {
+		snapshot.mcpSettings = config.MCPSettings{}
+		snapshot.toolPolicy.WebSummaryMode = "extractive"
+		snapshot.toolPolicy.WebSummaryProvider = ""
+		snapshot.toolPolicy.WebSummaryModel = ""
+		snapshot.toolPolicy.WebCacheEnabled = false
+		snapshot.toolPolicy.WebSearchBackend = "native"
+		snapshot.toolPolicy.WebExtractBackend = "native"
+		snapshot.toolPolicy.WebTavilyAPIKeyEnv = ""
+		snapshot.toolPolicy.WebExaAPIKeyEnv = ""
+		snapshot.toolPolicy.WebHermesEnvFiles = nil
+		snapshot.webSummarizer = nil
+	}
+	webClient := r.nativeWebHTTPClient()
+	if capabilities.HasURLRestrictions() {
+		webClient.AllowedURLPrefixes = capabilities.AllowedURLPrefixes()
+	}
+	snapshot.nativeWebClient = &webClient
 	snapshot.webSummarySeq.Store(r.webSummarySeq.Load())
-	r.mcpMu.RLock()
-	snapshot.mcpTools = cloneToolMap(r.mcpTools)
-	snapshot.mcpCatalog = cloneMCPCatalogState(r.mcpCatalog)
-	snapshot.instructions = append([]string(nil), r.instructions...)
-	snapshot.mcpServerInstructions = append([]string(nil), r.mcpServerInstructions...)
-	r.mcpMu.RUnlock()
-	snapshot.mcpStatuses = cloneMCPStatuses(r.MCPStatuses())
+	if !isolated {
+		r.mcpMu.RLock()
+		snapshot.mcpTools = cloneToolMap(r.mcpTools)
+		snapshot.mcpCatalog = cloneMCPCatalogState(r.mcpCatalog)
+		snapshot.instructions = append([]string(nil), r.instructions...)
+		snapshot.mcpServerInstructions = append([]string(nil), r.mcpServerInstructions...)
+		r.mcpMu.RUnlock()
+		snapshot.mcpStatuses = cloneMCPStatuses(r.MCPStatuses())
+	}
 	snapshot.mcpCatalog.Kind = "dynamic_mcp_catalog"
 	snapshot.mcpCatalog.ToolCount = len(snapshot.mcpTools)
 	snapshot.mcpCatalog.ModelVisible = false
+	if isolated {
+		snapshot.instructions = nil
+	}
 
 	if _, ok := snapshot.tools["tool_search"]; ok {
 		snapshot.addToolSearch()
@@ -124,6 +159,7 @@ func (s ToolSet) Call(ctx context.Context, call protocol.ToolCall) (Result, erro
 		return errorResult("tool_registry_unavailable", "tool registry unavailable"), nil
 	}
 	ctx = contextWithToolPolicy(ctx, s.registry.toolPolicy)
+	ctx = contextWithRunCapabilities(ctx, s.registry.runCapabilities)
 	return s.registry.Call(ctx, call)
 }
 

@@ -31,7 +31,7 @@ This reference joins the shared action metadata, TUI action registry, Telegram c
 | message.newline     | -                                                                      | alt+enter     | -                 | -              | insert newline                                 |
 | message.paste_image | -                                                                      | alt+v         | -                 | -              | paste image from clipboard                     |
 | message.send        | -                                                                      | enter, ctrl+s | -                 | -              | send message                                   |
-| model.set           | /model flash\|pro\|gpt\|id                                             | ctrl+n        | /model            | session-scoped | switch model                                   |
+| model.set           | /model flash\|pro\|qwen\|gpt\|id                                       | ctrl+n        | /model            | session-scoped | switch model                                   |
 | models.list         | /models                                                                | -             | /models           | public         | list known models                              |
 | palette.open        | -                                                                      | ctrl+k        | -                 | -              | open command palette                           |
 | processes.show      | /processes (aliases: /ps)                                              | -             | /processes, /ps   | operator-only  | show managed shell processes                   |
@@ -92,4 +92,4 @@ This reference joins the shared action metadata, TUI action registry, Telegram c
 | profiles         | BuildOptions.Profiles from configured profile directories       | runtime-only         |
 | MCP prompts      | BuildOptions.MCPPrompts from connected MCP servers              | runtime-only         |
 
-<!-- source-hash: ff0c68a3b5c18987a5b04e79f0df268a27924177a8c8f140a6fb14530e3c5e60 -->
+<!-- source-hash: 00f11dece692406ab106674bb1701c083daee8bc7ab28b17d4193746a7f1fc31 -->

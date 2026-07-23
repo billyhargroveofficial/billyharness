@@ -29,7 +29,7 @@ func tuiCmd(args []string) error {
 	}
 	fs := flag.NewFlagSet("tui", flag.ExitOnError)
 	gatewayURL := fs.String("gateway", "", "gateway base URL override; auto-discovered when omitted")
-	model := fs.String("model", "", "initial model: deepseek-v4-flash or deepseek-v4-pro")
+	model := fs.String("model", "", "initial model: deepseek-v4-flash, deepseek-v4-pro, qwen3.8-max-preview, or a Codex model")
 	dangerous := fs.Bool("dangerous", true, "enable write and shell tools for local TUI runs")
 	maxRounds := fs.Int("max-rounds", 0, "max model/tool rounds per request; 0 means unlimited")
 	accessMode := fs.String("access-mode", "", "run access mode: build, guarded, or plan")

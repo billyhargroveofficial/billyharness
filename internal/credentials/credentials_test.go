@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/testkit"
 )
 
@@ -56,6 +57,30 @@ func TestManagerResolveDeepSeekAPIKeyUsesConfiguredEnvName(t *testing.T) {
 	status := manager.DeepSeekStatus()
 	if !status.Configured || status.Source != filepath.Join(root, ".env") || status.Path != filepath.Join(root, ".env") || status.Provenance != "dotenv" {
 		t.Fatalf("status = %#v", status)
+	}
+}
+
+func TestManagerResolvesQwenTokenPlanKeyWithoutExposingIt(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	t.Setenv("QWEN_TOKEN_PLAN_API_KEY", "sk-sp-test-qwen")
+
+	manager := NewManagerFromAuthSettings(config.AuthSettings{APIKeyEnv: "QWEN_TOKEN_PLAN_API_KEY"})
+	qwen, err := manager.ResolveProviderAPIKey(modelinfo.ProviderQwen)
+	if err != nil || qwen.Value != "sk-sp-test-qwen" {
+		t.Fatalf("Qwen secret = %#v err=%v", qwen, err)
+	}
+	status := CurrentStatusForRuntime(
+		config.AuthSettings{APIKeyEnv: "QWEN_TOKEN_PLAN_API_KEY"},
+		modelinfo.ProviderQwen,
+		"qwen3.8-max-preview",
+	)
+	formatted := FormatStatusText(status)
+	if !status.Qwen.Configured ||
+		status.DeepSeek.Configured ||
+		status.CostMode != "subscription" ||
+		strings.Contains(formatted, qwen.Value) ||
+		!strings.Contains(formatted, "qwen: configured") {
+		t.Fatalf("Qwen status = %#v\n%s", status, formatted)
 	}
 }
 

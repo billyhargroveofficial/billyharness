@@ -3,6 +3,8 @@ package config
 import (
 	"strings"
 	"time"
+
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 )
 
 type AuthSettings struct {
@@ -36,6 +38,7 @@ type ProfileSelection struct {
 type RuntimeLimits struct {
 	MaxTokens                     int
 	MaxToolRounds                 int
+	MaxToolCalls                  int
 	MaxParallelTools              int
 	ProviderMaxRetries            int
 	MaxToolOutputBytes            int
@@ -125,25 +128,63 @@ type ProviderBinding struct {
 }
 
 func (c Config) AuthSettings() AuthSettings {
+	cfg := c
+	cfg.ApplyModelProviderDefaults()
+	apiKeyEnv := strings.TrimSpace(cfg.APIKeyEnv)
+	if cfg.Provider == modelinfo.ProviderQwen {
+		apiKeyEnv = modelinfo.Provider(modelinfo.ProviderQwen).APIKeyEnv
+	} else if !cfg.apiKeyEnvExplicitOverride && (apiKeyEnv == "" || knownProviderAPIKeyEnv(apiKeyEnv)) {
+		if providerEnv := modelinfo.Provider(cfg.Provider).APIKeyEnv; providerEnv != "" {
+			apiKeyEnv = providerEnv
+		}
+	}
 	return AuthSettings{
-		APIKeyEnv:           c.APIKeyEnv,
-		CredentialFile:      c.CredentialFile,
-		CodexAuthFile:       c.CodexAuthFile,
-		CodexRefreshURL:     c.CodexRefreshURL,
-		CodexAuthAPIBaseURL: c.CodexAuthAPIBaseURL,
-		CodexClientID:       c.CodexClientID,
-		CodexOriginator:     c.CodexOriginator,
+		APIKeyEnv:           apiKeyEnv,
+		CredentialFile:      cfg.CredentialFile,
+		CodexAuthFile:       cfg.CodexAuthFile,
+		CodexRefreshURL:     cfg.CodexRefreshURL,
+		CodexAuthAPIBaseURL: cfg.CodexAuthAPIBaseURL,
+		CodexClientID:       cfg.CodexClientID,
+		CodexOriginator:     cfg.CodexOriginator,
 	}
 }
 
 func (c Config) ProviderSelection() ProviderSelection {
 	cfg := c
 	cfg.ApplyModelProviderDefaults()
+	baseURL := strings.TrimSpace(cfg.BaseURL)
+	if cfg.Provider == modelinfo.ProviderQwen {
+		baseURL = modelinfo.Provider(modelinfo.ProviderQwen).BaseURL
+	} else if !cfg.baseURLExplicitOverride && (baseURL == "" || knownProviderBaseURL(baseURL)) {
+		if providerURL := modelinfo.Provider(cfg.Provider).BaseURL; providerURL != "" {
+			baseURL = providerURL
+		}
+	}
 	return ProviderSelection{
 		Provider:     cfg.Provider,
-		BaseURL:      cfg.BaseURL,
+		BaseURL:      baseURL,
 		CodexBaseURL: cfg.CodexBaseURL,
 	}
+}
+
+func knownProviderBaseURL(value string) bool {
+	value = strings.TrimRight(strings.TrimSpace(value), "/")
+	for _, provider := range modelinfo.Providers() {
+		if provider.BaseURL != "" && value == strings.TrimRight(provider.BaseURL, "/") {
+			return true
+		}
+	}
+	return false
+}
+
+func knownProviderAPIKeyEnv(value string) bool {
+	value = strings.TrimSpace(value)
+	for _, provider := range modelinfo.Providers() {
+		if provider.APIKeyEnv != "" && value == provider.APIKeyEnv {
+			return true
+		}
+	}
+	return false
 }
 
 func (c Config) ModelSelection() ModelSelection {
@@ -282,6 +323,7 @@ func (c Config) InstructionSettings() InstructionSettings {
 }
 
 func (c Config) ProviderBinding() ProviderBinding {
+	c.ApplyModelProviderDefaults()
 	return ProviderBinding{
 		Provider: c.ProviderSelection(),
 		Model:    c.ModelSelection(),

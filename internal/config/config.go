@@ -73,4 +73,6 @@ type Config struct {
 	HooksEnabled                   bool
 	HookConfigFiles                []string
 	Hooks                          []Hook
+	baseURLExplicitOverride        bool
+	apiKeyEnvExplicitOverride      bool
 }

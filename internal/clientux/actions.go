@@ -206,9 +206,9 @@ var sharedActionDefinitions = []ActionDefinition{
 		Title:           "Switch Model",
 		Category:        "runtime",
 		Slash:           "/model",
-		SlashArgs:       "flash|pro|gpt|id",
+		SlashArgs:       "flash|pro|qwen|gpt|id",
 		TelegramAliases: []string{"/model"},
-		TelegramUsage:   "/model flash|pro|gpt|gpt-5.5",
+		TelegramUsage:   "/model flash|pro|qwen|gpt|gpt-5.5",
 		Summary:         "switch model",
 	},
 	{

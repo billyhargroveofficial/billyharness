@@ -1,6 +1,7 @@
 package modelinfo
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -9,6 +10,8 @@ func TestNormalizeAlias(t *testing.T) {
 	tests := map[string]string{
 		"flash":       "deepseek-v4-flash",
 		"v4 pro":      "deepseek-v4-pro",
+		"qwen":        "qwen3.8-max-preview",
+		"qn max":      "qwen3.8-max-preview",
 		"gpt":         "gpt-5.5",
 		"gpt mini":    "gpt-5.4-mini",
 		"codex spark": "gpt-5.3-codex-spark",
@@ -27,8 +30,14 @@ func TestProviderForModelFollowsKnownFamilies(t *testing.T) {
 	if got := ProviderForModel("deepseek-v4-flash", "openai-codex"); got != ProviderDeepSeek {
 		t.Fatalf("provider = %q", got)
 	}
+	if got := ProviderForModel("qwen3.8-max-preview", "deepseek"); got != ProviderQwen {
+		t.Fatalf("qwen provider = %q", got)
+	}
 	if got := ProviderForModel("custom-model", "mock"); got != ProviderMock {
 		t.Fatalf("provider = %q", got)
+	}
+	if got := ProviderForModel("gpt-5.5", "mock"); got != ProviderMock {
+		t.Fatalf("explicit mock provider = %q", got)
 	}
 }
 
@@ -55,6 +64,14 @@ func TestLookupIncludesBillingHints(t *testing.T) {
 	gpt := Lookup("gpt-5.5")
 	if gpt.Provider != ProviderOpenAICodex || !gpt.Subscription || gpt.Pricing.OutputPer1M != 0 {
 		t.Fatalf("gpt = %#v", gpt)
+	}
+	qwen := Lookup("qwen3.8-max-preview")
+	if qwen.Provider != ProviderQwen ||
+		!qwen.Subscription ||
+		qwen.ContextWindowTokens != 983_616 ||
+		qwen.MaxOutputTokens != 131_072 ||
+		!reflect.DeepEqual(qwen.ReasoningModes, []string{"low", "medium", "xhigh"}) {
+		t.Fatalf("qwen = %#v", qwen)
 	}
 }
 
@@ -191,12 +208,51 @@ func TestProviderCatalogIncludesCoreAndCustomProviders(t *testing.T) {
 	if codex.ID != ProviderOpenAICodex || !codex.Subscription || codex.Auth != "codex-oauth" {
 		t.Fatalf("codex provider = %#v", codex)
 	}
+	qwen := Provider("qwen")
+	if qwen.BaseURL != "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1" ||
+		qwen.APIKeyEnv != "QWEN_TOKEN_PLAN_API_KEY" ||
+		!qwen.Subscription {
+		t.Fatalf("qwen provider = %#v", qwen)
+	}
 	custom := Provider("my-openai-compatible")
 	if !custom.Custom || !custom.OpenAICompatible || custom.Transport != "openai-compatible-chat-completions" {
 		t.Fatalf("custom provider = %#v", custom)
 	}
 	if len(Providers()) < 3 {
 		t.Fatalf("providers = %#v", Providers())
+	}
+}
+
+func TestQwenReasoningIsAlwaysMappedToSupportedEffort(t *testing.T) {
+	tests := map[string]string{
+		"":        "low",
+		"off":     "low",
+		"minimal": "low",
+		"low":     "low",
+		"medium":  "medium",
+		"high":    "xhigh",
+		"xhigh":   "xhigh",
+		"max":     "xhigh",
+	}
+	for input, want := range tests {
+		if got := NormalizeQwenReasoningEffort(input); got != want {
+			t.Fatalf("NormalizeQwenReasoningEffort(%q) = %q, want %q", input, got, want)
+		}
+		if err := ValidateCapabilityPolicy(CapabilityPolicyRequest{
+			Provider:        ProviderQwen,
+			Model:           "qwen3.8-max-preview",
+			Thinking:        "disabled",
+			ReasoningEffort: input,
+		}); err != nil {
+			t.Fatalf("ValidateCapabilityPolicy(%q): %v", input, err)
+		}
+	}
+	if err := ValidateCapabilityPolicy(CapabilityPolicyRequest{
+		Provider:        ProviderQwen,
+		Model:           "qwen3.8-max-preview",
+		ReasoningEffort: "warp",
+	}); err == nil || !strings.Contains(err.Error(), "unsupported reasoning_effort") {
+		t.Fatalf("invalid Qwen effort error = %v", err)
 	}
 }
 

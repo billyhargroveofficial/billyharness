@@ -336,6 +336,7 @@ func NewModel(cfg config.Config, opts Options) Model {
 	models := []string{
 		"deepseek-v4-flash",
 		"deepseek-v4-pro",
+		"qwen3.8-max-preview",
 		"gpt-5.5",
 		"gpt-5.4",
 		"gpt-5.4-mini",

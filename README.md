@@ -1,6 +1,7 @@
 # billyharness
 
-Fast Go agent harness with a gateway API, TUI chat, native tools, MCP server, and benchmark runner.
+Fast Go agent harness with a gateway API, TUI chat, native tools, MCP server,
+and DeepSeek, Qwen Cloud Token Plan, Codex, and mock provider paths.
 
 ## Docs
 
@@ -85,6 +86,46 @@ readiness details for effective config, tool/MCP status, and session-store start
 health. The `run`, `chat`, and `telegram` gateway clients read
 `BILLYHARNESS_GATEWAY_AUTH_TOKEN` automatically when calling a protected gateway.
 
+### Bounded gateway runs
+
+`POST /v1/run` supports two rollout-safe, versioned execution contracts:
+
+```json
+{"prompt":"draft a bounded activity","access_mode":"bounded-automation-v1","max_tool_calls":12}
+```
+
+```json
+{
+  "prompt":"research one source",
+  "access_mode":"bounded-isolated-plan-v1",
+  "context_mode":"isolated",
+  "allowed_tools":["web_fetch"],
+  "allowed_url_prefixes":["https://example.com/news"],
+  "max_tool_calls":4
+}
+```
+
+Both contracts force provider retries to zero, disable provider failover, use
+deterministic/extractive helpers, and reject missing or mismatched caps before
+the provider is called. The cumulative tool-call cap is checked before a whole
+parallel batch, so an overflowing batch executes no partial subset. The first
+event is `run.started`; its data contains exactly `submission_id`, `run_id`,
+`status`, `execution_contract`, `provider_max_retries`,
+`provider_failover_enabled`, and `max_tool_calls`.
+
+The isolated contract is one-shot only and cannot be used on an existing
+session. It rejects ambient profile, attachment, provider, model, thinking,
+memory, MCP, hook, cache, and helper-model authority. Its tool allowlist is
+limited to `time_now`, `web_fetch`, `web_extract`, and `web_crawl` and must
+include at least one web tool. Despite the historical
+`allowed_url_prefixes` field name, entries are exact canonical HTTPS
+origin/path allowlists; request query strings do not affect the match.
+
+`isolated-plan-v1` remains accepted for rollout compatibility but does not
+carry the new fixed cap attestation. Unknown versioned access modes fail
+closed. An ordinary run may supply a positive `max_tool_calls` only to reduce
+its otherwise unbounded cumulative tool-call allowance.
+
 For SSH terminals with broken alt-screen or key handling:
 
 ```bash
@@ -100,7 +141,7 @@ Slash commands autocomplete in the composer with `Tab`, `Up`, and `Down`.
 /auth deepseek|codex
 /auth status
 /theme light|dark
-/model flash|pro|gpt|spark|<model-id>
+/model flash|pro|qwen|gpt|spark|<model-id>
 /reasoning low|medium|high|xhigh|max|off
 /toolview auto|expanded|collapsed|hidden
 /thinkview expanded|collapsed|hidden
@@ -148,6 +189,38 @@ curl http://127.0.0.1:8765/v1/auth/status
 
 Auth status responses show only metadata such as configured/missing, path, mode, account id, and expiry.
 They do not return API keys, access tokens, or refresh tokens.
+
+### Qwen Cloud Token Plan
+
+`qwen`, `qwen max`, and `qn max` normalize to the exact supported model
+`qwen3.8-max-preview`. Selecting it derives provider `qwen`, the fixed official
+Token Plan endpoint
+`https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1`, and
+the `QWEN_TOKEN_PLAN_API_KEY` credential name:
+
+```bash
+export FAST_AGENT_PROVIDER=qwen
+export FAST_AGENT_MODEL=qwen3.8-max-preview
+export QWEN_TOKEN_PLAN_API_KEY='sk-sp-...'
+```
+
+The key can also live in the effective Billyharness dotenv file. It is
+reported only as configured/missing and is redacted from status, doctor,
+gateway errors, and exports. There is no `/auth qwen` write route.
+
+For this exact model, thinking is always enabled. Shared reasoning settings
+map to Qwen's accepted `low`, `medium`, or `xhigh` values; an off/minimal
+setting becomes `low`, while high/max becomes `xhigh`. Requests use
+`max_completion_tokens`, preserve assistant `reasoning_content` verbatim
+between tool rounds, enable parallel tool calls when the runtime permits them,
+and scrub reasoning from returned/persisted transcripts unless
+`store_reasoning=true`. The wire mapping follows Qwen Cloud's
+[OpenAI-compatible Chat API](https://docs.qwencloud.com/api-reference/chat/openai-chat).
+
+Qwen Cloud Token Plan usage must follow the provider's
+[Token Plan terms](https://docs.qwencloud.com/token-plan/personal/token-plan-personal-overview);
+do not use the subscription path for unattended background automation.
+Production canaries are explicit operator actions.
 
 ## MCP
 

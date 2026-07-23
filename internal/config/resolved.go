@@ -287,17 +287,17 @@ func configSpecs() []configSpec {
 		stringSpec("provider", "Which LLM backend serves requests", []string{"FAST_AGENT_PROVIDER"}, func(c Config) any { return c.Provider }, func(c *Config, v string) { c.Provider = v }),
 		stringSpec("model", "Which model name or alias the active provider uses", []string{"FAST_AGENT_MODEL"}, func(c Config) any { return c.Model }, func(c *Config, v string) { c.Model = v }),
 		stringSpec("profile", "Which Billy profile supplies persona and runtime defaults", []string{"BILLYHARNESS_PROFILE", "FAST_AGENT_PROFILE"}, func(c Config) any { return c.Profile }, func(c *Config, v string) { c.Profile = NormalizeProfileName(v) }),
-		stringSpec("base_url", "DeepSeek-compatible API base URL", []string{"DEEPSEEK_BASE_URL"}, func(c Config) any { return c.BaseURL }, func(c *Config, v string) { c.BaseURL = v }),
-		stringSpec("api_key_env", "Environment variable that stores the DeepSeek API key", []string{"DEEPSEEK_API_KEY_ENV"}, func(c Config) any { return c.APIKeyEnv }, func(c *Config, v string) { c.APIKeyEnv = v }),
-		stringSpec("credential_file", "Path to the DeepSeek credential fallback file", []string{"BILLYHARNESS_CREDENTIAL_FILE", "FAST_AGENT_CREDENTIAL_FILE"}, func(c Config) any { return c.CredentialFile }, func(c *Config, v string) { c.CredentialFile = v }),
+		stringSpec("base_url", "OpenAI-compatible API base URL override for the active provider", []string{"BILLYHARNESS_BASE_URL", "FAST_AGENT_BASE_URL", "DEEPSEEK_BASE_URL"}, func(c Config) any { return c.BaseURL }, func(c *Config, v string) { c.BaseURL = v }),
+		stringSpec("api_key_env", "Environment variable override that stores the active provider API key", []string{"BILLYHARNESS_API_KEY_ENV", "FAST_AGENT_API_KEY_ENV", "DEEPSEEK_API_KEY_ENV"}, func(c Config) any { return c.APIKeyEnv }, func(c *Config, v string) { c.APIKeyEnv = v }),
+		stringSpec("credential_file", "Path to the API-key and Codex credential fallback file", []string{"BILLYHARNESS_CREDENTIAL_FILE", "FAST_AGENT_CREDENTIAL_FILE"}, func(c Config) any { return c.CredentialFile }, func(c *Config, v string) { c.CredentialFile = v }),
 		stringSpec("codex_base_url", "Codex backend API base URL", []string{"FAST_AGENT_CODEX_BASE_URL"}, func(c Config) any { return c.CodexBaseURL }, func(c *Config, v string) { c.CodexBaseURL = v }),
 		stringSpec("codex_auth_file", "Path to the Codex OAuth token file", []string{"FAST_AGENT_CODEX_AUTH_FILE"}, func(c Config) any { return c.CodexAuthFile }, func(c *Config, v string) { c.CodexAuthFile = v }),
 		stringSpec("codex_refresh_url", "OAuth token refresh endpoint for Codex credentials", []string{"FAST_AGENT_CODEX_REFRESH_URL"}, func(c Config) any { return c.CodexRefreshURL }, func(c *Config, v string) { c.CodexRefreshURL = v }),
 		stringSpec("codex_auth_api_base_url", "Codex account API base URL used for auth status", []string{"CODEX_AUTHAPI_BASE_URL"}, func(c Config) any { return c.CodexAuthAPIBaseURL }, func(c *Config, v string) { c.CodexAuthAPIBaseURL = v }),
 		stringSpec("codex_client_id", "OAuth client id used for Codex refreshes", []string{"FAST_AGENT_CODEX_CLIENT_ID"}, func(c Config) any { return c.CodexClientID }, func(c *Config, v string) { c.CodexClientID = v }),
 		stringSpec("codex_originator", "Originator label sent with Codex requests", []string{"FAST_AGENT_CODEX_ORIGINATOR"}, func(c Config) any { return c.CodexOriginator }, func(c *Config, v string) { c.CodexOriginator = v }),
-		stringSpec("thinking", "Reasoning mode requested from DeepSeek-style providers", []string{"DEEPSEEK_THINKING"}, func(c Config) any { return c.Thinking }, func(c *Config, v string) { c.Thinking = v }),
-		stringSpec("reasoning_effort", "Reasoning effort level sent to capable providers", []string{"DEEPSEEK_REASONING_EFFORT"}, func(c Config) any { return c.ReasoningEffort }, func(c *Config, v string) { c.ReasoningEffort = v }),
+		stringSpec("thinking", "Reasoning mode requested from compatible providers", []string{"FAST_AGENT_THINKING", "DEEPSEEK_THINKING"}, func(c Config) any { return c.Thinking }, func(c *Config, v string) { c.Thinking = v }),
+		stringSpec("reasoning_effort", "Reasoning effort level sent to capable providers", []string{"FAST_AGENT_REASONING_EFFORT", "DEEPSEEK_REASONING_EFFORT"}, func(c Config) any { return c.ReasoningEffort }, func(c *Config, v string) { c.ReasoningEffort = v }),
 		boolSpec("disable_spark", "Rewrite Spark model aliases to the non-Spark default", []string{"BILLYHARNESS_DISABLE_SPARK", "FAST_AGENT_DISABLE_SPARK"}, func(c Config) any { return c.DisableSpark }, func(c *Config, v bool) { c.DisableSpark = v }),
 		intSpec("max_tokens", "Maximum model output tokens requested per call", []string{"FAST_AGENT_MAX_TOKENS"}, func(c Config) any { return c.MaxTokens }, func(c *Config, v int) { c.MaxTokens = v }),
 		intSpec("max_tool_rounds", "Maximum tool-call rounds allowed during one turn", []string{"FAST_AGENT_MAX_TOOL_ROUNDS"}, func(c Config) any { return c.MaxToolRounds }, func(c *Config, v int) { c.MaxToolRounds = v }),
@@ -622,6 +622,12 @@ func (s *resolveState) applyValue(key string, value any, source, sourcePath, sou
 		s.cfg.contextWindowExplicitOverride = isExplicitContextWindowOverrideSource(source) ||
 			isExplicitProfileContextWindowOverride(source, s.cfg.ContextWindowTokens)
 	}
+	if key == "base_url" {
+		s.cfg.baseURLExplicitOverride = isExplicitTransportOverrideSource(source)
+	}
+	if key == "api_key_env" {
+		s.cfg.apiKeyEnvExplicitOverride = isExplicitTransportOverrideSource(source)
+	}
 	if key == "context_compact_tokens" {
 		s.cfg.contextCompactExplicitOverride = isExplicitContextCompactOverrideSource(source)
 	}
@@ -716,6 +722,15 @@ func projectConfigDeniedKey(key string) bool {
 		"codex_auth_api_base_url",
 		"codex_client_id",
 		"codex_originator":
+		return true
+	default:
+		return false
+	}
+}
+
+func isExplicitTransportOverrideSource(source string) bool {
+	switch source {
+	case SourceHomeConfig, SourceDotenv, SourceEnvironment, SourceCLI, SourceGateway, SourceProfile:
 		return true
 	default:
 		return false

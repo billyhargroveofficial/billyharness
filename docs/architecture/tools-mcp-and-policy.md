@@ -229,6 +229,21 @@ Current public-host safety:
   rebinding before the second connection.
 - Non-2xx responses fail with bounded body text.
 
+For `isolated-plan-v1` and `bounded-isolated-plan-v1`, the registry freezes a
+per-run capability snapshot before the provider turn. Only explicitly allowed
+`time_now`, `web_fetch`, `web_extract`, and `web_crawl` specs are visible, and
+at least one web tool is required. The historical `allowed_url_prefixes` wire
+name is exact rather than prefix-based: entries are canonical HTTPS
+origin/path values with no query, userinfo, fragment, escaped path, empty
+segment, or dot segment. A request may add query parameters, but its canonical
+origin/path must equal an entry. Redirect targets are rechecked against the
+same immutable list as well as normal public-host protections.
+
+The isolated tool context also disables provider-backed summaries, third-party
+search/extract backends, and the shared web cache. Capability hashes/counts are
+attached to model-call events and to tool snapshots, so a later policy change
+cannot silently expand a running turn.
+
 `web_fetch`, `web_extract`, and `web_crawl` fetch public textual pages and
 return compact JSON digests. They save the full extracted text to an output ref
 instead of dumping raw page text into model context by default. `include_text`

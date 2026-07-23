@@ -24,6 +24,7 @@ var patterns = []redactPattern{
 	{regexp.MustCompile(`(?i)("?(?:api[_-]?key|apikey|client[_-]?secret|secret|password)"?\s*[:=]\s*"?)[^&\["',}\]\s]+`), `${1}[redacted]`},
 	{regexp.MustCompile(`(?i)(bot)\d{6,12}:[A-Za-z0-9_-]{20,}`), `${1}[redacted]`},
 	{regexp.MustCompile(`\b\d{6,12}:[A-Za-z0-9_-]{20,}\b`), `[redacted]`},
+	{regexp.MustCompile(`\bsk-sp-[A-Za-z0-9._-]{12,}\b`), `[redacted]`},
 	{regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{12,}\b`), `[redacted]`},
 	{regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{20,}\b`), `[redacted]`},
 	{regexp.MustCompile(`\bgh[opsu]_[A-Za-z0-9_]{20,}\b`), `[redacted]`},

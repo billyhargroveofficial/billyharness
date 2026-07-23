@@ -534,6 +534,7 @@ func TestResolveModelContextWindowsFollowModelInfo(t *testing.T) {
 		"gpt-5.3-codex-spark": 128_000,
 		"deepseek-v4-flash":   1_000_000,
 		"deepseek-v4-pro":     1_000_000,
+		"qwen3.8-max-preview": 983_616,
 	}
 	for model, want := range tests {
 		t.Run(model, func(t *testing.T) {

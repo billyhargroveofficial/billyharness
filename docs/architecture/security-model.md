@@ -155,6 +155,26 @@ the mutation bearer token. It still allows stricter request knobs such as a
 lower `max_tool_rounds` or a less-privileged `access_mode`, and clamps requests
 that try to raise tool rounds or access privilege above server configuration.
 
+Versioned bounded requests add an execution boundary inside authenticated
+gateway admission. `bounded-automation-v1` requires the exact cumulative
+12-tool cap; `bounded-isolated-plan-v1` requires the exact four-tool cap plus
+an isolated context, immutable tool allowlist, and exact canonical HTTPS
+origin/path allowlist. Both reject malformed contracts before provider
+construction, force zero provider retries, attest failover as disabled, and
+reject a whole tool batch before any member runs when it would exceed the
+remaining cap.
+
+The isolated contract is only available on stateless `POST /v1/run`. It strips
+ambient profile, project instructions, memory, MCP, hooks, helper providers,
+web cache, and third-party web backends; forbids provider/model/reasoning and
+attachment overrides; and maps effective access to `plan`. Redirects are
+revalidated against both the public-host SSRF policy and the run's exact URL
+allowlist. Capability scope and allowlist hashes are recorded on model-call
+events, while the first `run.started` event records the exact effective
+execution contract. See
+[Gateway and sessions](gateway-and-sessions.md#versioned-bounded-runs) for the
+wire contract.
+
 ## External Ingress Boundary
 
 External ingress is gateway admission, not execution. There is no public
@@ -505,8 +525,13 @@ metadata, but prompt invocation is not current behavior.
 
 Secret handling is layered:
 
-- `internal/credentials` resolves and persists DeepSeek API keys and Codex auth
-  payloads. Status values report `credential=redacted` instead of raw tokens.
+- `internal/credentials` resolves and persists DeepSeek API keys, resolves the
+  Qwen Token Plan key from the fixed `QWEN_TOKEN_PLAN_API_KEY`
+  environment/dotenv/credential lookup without exposing a write route, and
+  resolves Codex auth payloads. Status values report `credential=redacted`
+  instead of raw tokens. Config projection and provider construction force the
+  official Qwen Token Plan endpoint so the subscription key cannot be sent to
+  a configured override host.
 - `internal/config.Resolve` tracks redacted config keys, and status surfaces
   use `SanitizedValues` and `SanitizedConfig`.
 - Gateway JSON and NDJSON responses pass through `marshalRedactedJSON` in
@@ -520,12 +545,12 @@ Secret handling is layered:
 `internal/secrets.Redact` is pattern and environment based. It handles common
 bearer and proxy-auth headers, cookie and API-key headers, credential-bearing
 URLs, secret query parameters, token/api-key/password fields, common provider
-and GitHub tokens, Telegram bot-token URLs, MCP-style secret argv flags, JWTs,
-Yandex tokens, and image data URLs. It also replaces secret-looking environment
-values whose variable names contain token, secret, password, api_key, or
-apikey. Structured helpers redact JSON strings, JSON object keys, URL
-credentials, and secret-looking argv pairs without changing the durable event
-log as the replay source of truth.
+and GitHub tokens (including dotted `sk-sp-...` Qwen keys), Telegram bot-token
+URLs, MCP-style secret argv flags, JWTs, Yandex tokens, and image data URLs. It
+also replaces secret-looking environment values whose variable names contain
+token, secret, password, api_key, or apikey. Structured helpers redact JSON
+strings, JSON object keys, URL credentials, and secret-looking argv pairs
+without changing the durable event log as the replay source of truth.
 
 Redaction is a leak-reduction boundary, not a guarantee that secrets never
 exist. Secrets still exist in local files, environment variables, provider

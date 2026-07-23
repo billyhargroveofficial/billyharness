@@ -35,7 +35,7 @@ func (s *Server) contextEpochForMessages(ctx context.Context, settings runSettin
 	var specs []protocol.ToolSpec
 	var mcpStatusHash string
 	if s != nil && s.registry != nil {
-		toolSet := s.registry.SnapshotWithToolPolicy(ctx, settings.toolPolicy)
+		toolSet := s.registry.SnapshotWithToolPolicyAndCapabilities(ctx, settings.toolPolicy, settings.capabilities)
 		specs = toolSet.Specs()
 		mcpStatusHash = toolSet.MCPStatusSnapshotHash()
 	}

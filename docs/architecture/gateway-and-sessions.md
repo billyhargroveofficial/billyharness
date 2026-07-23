@@ -126,6 +126,54 @@ The gateway returns JSON for ordinary responses and `application/x-ndjson` for
 run and event streams. Response encoding runs through `marshalRedactedJSON`, so
 secret-looking strings are redacted before they leave the gateway.
 
+## Versioned Bounded Runs
+
+`POST /v1/run` has two versioned execution-contract sentinels:
+
+- `bounded-automation-v1` requires `max_tool_calls=12`. It preserves the
+  gateway's configured access mode and ordinary ambient runtime context, but
+  fixes the cumulative call budget and provider-call behavior.
+- `bounded-isolated-plan-v1` requires `context_mode=isolated`,
+  `max_tool_calls=4`, non-empty `allowed_tools`, and non-empty
+  `allowed_url_prefixes`. It maps the effective access mode to `plan` and is
+  supported only by the stateless one-shot route.
+
+Both contracts are validated before admission/provider construction. They set
+provider retries to zero, attest provider failover as disabled, force
+deterministic context compaction and extractive web summaries, and prevent
+helper-model calls. Unknown sentinels, missing caps, or mismatched caps return
+`400` before a provider request. Ordinary requests keep their existing
+behavior; an optional positive `max_tool_calls` can only reduce their
+otherwise-unbounded cumulative tool budget.
+
+The cap counts tool calls across all model rounds. Before executing any model
+tool-call batch, the agent compares the whole batch with the remaining budget.
+An overflowing parallel batch fails without executing a partial subset.
+
+For either bounded contract, the first emitted event is `run.started`. Its
+`data` object has exactly seven fields:
+`submission_id`, `run_id`, `status`, `execution_contract`,
+`provider_max_retries`, `provider_failover_enabled`, and `max_tool_calls`.
+The following `model.call_started`/`model.call_finished` events carry effective
+provider/model accounting; isolated events additionally carry
+`capability_scope=bounded-isolated-plan-v1`, effective `access_mode=plan`,
+`context_mode=isolated`, and hashes/counts for both allowlists.
+
+The isolated request decoder is fail-closed: the JSON object is capped at
+1 MiB and rejects unknown fields, duplicate or case-variant canonical fields,
+and trailing JSON. It rejects profile, attachment, provider, model, thinking,
+and reasoning overrides. The only eligible tools are `time_now`, `web_fetch`,
+`web_extract`, and `web_crawl`, with at least one web tool required. Ambient
+profile/project/memory/MCP/hook/helper/cache state is removed. The historical
+wire name `allowed_url_prefixes` is retained, but each entry is an exact
+canonical HTTPS origin/path allowlist; query parameters on the fetched URL are
+ignored for matching, and every redirect is checked again.
+
+The older `isolated-plan-v1` capability sentinel remains accepted so a staged
+rollout does not break existing callers. It keeps the isolated capability
+boundary but has no fixed `max_tool_calls` execution attestation. Existing
+session run routes reject both isolated sentinels and capability fields.
+
 ## Session Model
 
 The gateway `Session` wraps a gateway-local `runThread`. The lower-level thread

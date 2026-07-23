@@ -7,6 +7,7 @@ import (
 
 const (
 	ProviderDeepSeek    = "deepseek"
+	ProviderQwen        = "qwen"
 	ProviderOpenAICodex = "openai-codex"
 	ProviderMock        = "mock"
 )
@@ -50,6 +51,8 @@ type ProviderInfo struct {
 	Name             string   `json:"name"`
 	Transport        string   `json:"transport"`
 	Auth             string   `json:"auth"`
+	BaseURL          string   `json:"base_url,omitempty"`
+	APIKeyEnv        string   `json:"api_key_env,omitempty"`
 	OpenAICompatible bool     `json:"openai_compatible"`
 	Subscription     bool     `json:"subscription"`
 	Custom           bool     `json:"custom"`
@@ -81,6 +84,8 @@ func Lookup(model string) Info {
 		info := deepSeekInfo(model)
 		info.Pricing = Pricing{CacheHitPer1M: 0.003625, CacheMissPer1M: 0.435, InputPer1M: 0.435, OutputPer1M: 0.87}
 		return info
+	case "qwen3.8-max-preview":
+		return qwenInfo(model)
 	case "gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex-spark":
 		return codexInfo(model, true)
 	case "mock", "mock-summarizer", "mock-summary":
@@ -123,6 +128,28 @@ func deepSeekInfo(model string) Info {
 		DefaultSummaryModel:   "deepseek-v4-flash",
 		HelperModels:          HelperModels{WebSummary: "deepseek-v4-flash", Memory: "deepseek-v4-flash"},
 		CostMode:              "metered",
+	}
+}
+
+func qwenInfo(model string) Info {
+	return Info{
+		Model:                 model,
+		Provider:              ProviderQwen,
+		Subscription:          true,
+		Known:                 true,
+		InputModalities:       []string{"text"},
+		ContextWindowTokens:   983_616,
+		MaxOutputTokens:       131_072,
+		ReasoningModes:        []string{"low", "medium", "xhigh"},
+		Reasoning:             true,
+		ToolCalls:             true,
+		ParallelToolCalls:     true,
+		Streaming:             true,
+		TokenAccountingFields: []string{"input_tokens", "output_tokens", "reasoning_tokens"},
+		CacheAccountingFields: []string{"cache_hit_tokens", "cache_miss_tokens"},
+		DefaultSummaryModel:   model,
+		HelperModels:          HelperModels{WebSummary: model, Memory: model},
+		CostMode:              "subscription",
 	}
 }
 
@@ -195,8 +222,22 @@ func Provider(id string) ProviderInfo {
 			Name:             "DeepSeek",
 			Transport:        "openai-compatible-chat-completions",
 			Auth:             "api-key",
+			BaseURL:          "https://api.deepseek.com",
+			APIKeyEnv:        "DEEPSEEK_API_KEY",
 			OpenAICompatible: true,
 			Models:           []string{"deepseek-v4-flash", "deepseek-v4-pro"},
+		}
+	case ProviderQwen:
+		return ProviderInfo{
+			ID:               ProviderQwen,
+			Name:             "Qwen Cloud Token Plan",
+			Transport:        "openai-compatible-chat-completions",
+			Auth:             "api-key",
+			BaseURL:          "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+			APIKeyEnv:        "QWEN_TOKEN_PLAN_API_KEY",
+			OpenAICompatible: true,
+			Subscription:     true,
+			Models:           []string{"qwen3.8-max-preview"},
 		}
 	case ProviderOpenAICodex:
 		return ProviderInfo{
@@ -229,6 +270,7 @@ func Provider(id string) ProviderInfo {
 func Providers() []ProviderInfo {
 	return []ProviderInfo{
 		Provider(ProviderDeepSeek),
+		Provider(ProviderQwen),
 		Provider(ProviderOpenAICodex),
 		Provider("custom"),
 	}
@@ -286,6 +328,9 @@ func ValidateCapabilityPolicy(req CapabilityPolicyRequest) error {
 	if provider == ProviderDeepSeek && !thinkingEnabled(req.Thinking) {
 		effort = "off"
 	}
+	if provider == ProviderQwen {
+		effort = NormalizeQwenReasoningEffort(req.ReasoningEffort)
+	}
 	if effort != "off" {
 		if info.Known && !info.Reasoning {
 			return fmt.Errorf("unsupported %s %q on provider %q: reasoning is not supported", scope, model, provider)
@@ -301,6 +346,23 @@ func NormalizeReasoningEffort(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "off", "disabled", "none", "false":
 		return "off"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+}
+
+// NormalizeQwenReasoningEffort maps BillyHarness' shared reasoning vocabulary
+// onto the three values accepted by Qwen Cloud's qwen3.8-max-preview Chat API.
+// Qwen thinking is always enabled for that model, so "off" is intentionally
+// reduced to the lowest supported effort instead of disabling thinking.
+func NormalizeQwenReasoningEffort(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "off", "disabled", "none", "false", "minimal", "low":
+		return "low"
+	case "medium":
+		return "medium"
+	case "high", "xhigh", "max":
+		return "xhigh"
 	default:
 		return strings.ToLower(strings.TrimSpace(value))
 	}
@@ -332,6 +394,8 @@ func NormalizeAlias(value string) string {
 		return "deepseek-v4-flash"
 	case "pro", "v4 pro", "v4-pro", "deepseek pro", "deepseek-v4-pro":
 		return "deepseek-v4-pro"
+	case "qwen", "qwen max", "qwen 3.8 max", "qwen3.8 max", "qwen3.8-max", "qn", "qn max", "qn 3.8 max", "qwen3.8-max-preview":
+		return "qwen3.8-max-preview"
 	case "gpt", "codex", "chatgpt", "gpt max", "gpt-5.5":
 		return "gpt-5.5"
 	case "gpt fast", "gpt mini", "gpt-5.4-mini":
@@ -346,15 +410,11 @@ func NormalizeAlias(value string) string {
 func ProviderForModel(model, currentProvider string) string {
 	info := Lookup(model)
 	provider := NormalizeProvider(currentProvider)
-	switch info.Provider {
-	case ProviderOpenAICodex:
-		if provider == "" || provider == ProviderDeepSeek {
-			return ProviderOpenAICodex
-		}
-	case ProviderDeepSeek:
-		if provider == "" || provider == ProviderOpenAICodex {
-			return ProviderDeepSeek
-		}
+	if provider == ProviderMock {
+		return ProviderMock
+	}
+	if info.Provider != "" && (provider == "" || (provider != info.Provider && !Provider(provider).Custom)) {
+		return info.Provider
 	}
 	if provider != "" {
 		return provider
@@ -368,6 +428,8 @@ func NormalizeProvider(provider string) string {
 		return ProviderOpenAICodex
 	case "deepseek":
 		return ProviderDeepSeek
+	case "qwen", "qwen-cloud", "qwencloud", "qn":
+		return ProviderQwen
 	case "mock":
 		return ProviderMock
 	default:

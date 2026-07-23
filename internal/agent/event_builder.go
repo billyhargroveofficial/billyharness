@@ -21,12 +21,19 @@ type turnCompletion struct {
 	Err           error
 }
 
-func emitAgentRunStarted(run runstate.Run, emit func(protocol.Event)) {
-	emit(protocol.Event{Type: protocol.EventRunStarted, Data: map[string]any{
+func emitAgentRunStarted(run runstate.Run, contract *protocol.ExecutionContractAttestation, emit func(protocol.Event)) {
+	data := map[string]any{
 		"submission_id": run.SubmissionID,
 		"run_id":        run.ID,
 		"status":        run.Status,
-	}})
+	}
+	if contract != nil {
+		data["execution_contract"] = contract.ExecutionContract
+		data["provider_max_retries"] = contract.ProviderMaxRetries
+		data["provider_failover_enabled"] = contract.ProviderFailoverEnabled
+		data["max_tool_calls"] = contract.MaxToolCalls
+	}
+	emit(protocol.Event{Type: protocol.EventRunStarted, Data: data})
 }
 
 func emitAgentRunCompleted(emit func(protocol.Event)) {

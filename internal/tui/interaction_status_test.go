@@ -299,6 +299,7 @@ func TestInlineStatusContextWindowFollowsModelInfo(t *testing.T) {
 		"gpt-5.3-codex-spark",
 		"deepseek-v4-flash",
 		"deepseek-v4-pro",
+		"qwen3.8-max-preview",
 	}
 	for _, model := range models {
 		t.Run(model, func(t *testing.T) {
@@ -318,6 +319,16 @@ func TestInlineStatusContextWindowFollowsModelInfo(t *testing.T) {
 				t.Fatalf("inline status should omit denominator/compact/override noise: %q", status)
 			}
 		})
+	}
+}
+
+func TestModelsTextLabelsQwenProvider(t *testing.T) {
+	m := newTestModel(t)
+	m.models = []string{"qwen3.8-max-preview"}
+	m.modelIndex = 0
+	text := m.modelsText()
+	if !strings.Contains(text, "qwen3.8-max-preview") || !strings.Contains(text, "qwen") || strings.Contains(text, "deepseek") {
+		t.Fatalf("models text = %q", text)
 	}
 }
 

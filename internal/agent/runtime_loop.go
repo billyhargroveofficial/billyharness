@@ -7,6 +7,7 @@ import (
 	"time"
 
 	runtimehooks "github.com/billyhargroveofficial/billyharness/internal/hooks"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/projectcontext"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/runstate"
@@ -33,7 +34,7 @@ func (a *Agent) Run(ctx context.Context, prompt string, emit func(protocol.Event
 }
 
 func (a *Agent) RunWithPromptOptions(ctx context.Context, prompt string, opts PromptSubmitOptions, emit func(protocol.Event)) error {
-	messages := InitialMessagesFromSettings(a.instructions)
+	messages := a.InitialMessages()
 	messages = append(messages, protocol.Message{Role: protocol.RoleUser, Content: prompt})
 	_, err := a.RunMessagesWithPromptOptions(ctx, messages, opts, emit)
 	return err
@@ -43,7 +44,12 @@ func (a *Agent) RunMessages(ctx context.Context, messages []protocol.Message, em
 	return a.RunMessagesWithPromptOptions(ctx, messages, PromptSubmitOptions{Source: "direct"}, emit)
 }
 
-func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []protocol.Message, opts PromptSubmitOptions, emit func(protocol.Event)) ([]protocol.Message, error) {
+func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []protocol.Message, opts PromptSubmitOptions, emit func(protocol.Event)) (returned []protocol.Message, returnedErr error) {
+	if a != nil && a.providerID() == modelinfo.ProviderQwen && !a.toolPolicy.StoreReasoningContent {
+		defer func() {
+			returned = withoutReasoningContent(returned)
+		}()
+	}
 	if emit == nil {
 		emit = func(protocol.Event) {}
 	}
@@ -58,7 +64,13 @@ func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []pro
 	var stopLiveness func()
 	emit, stopLiveness = a.withStreamLiveness(emit)
 	defer stopLiveness()
-	emitAgentRunStarted(run, emit)
+	emitAgentRunStarted(run, a.executionContract, emit)
+	if a != nil && a.contextMode == protocol.ContextModeIsolated {
+		if err := validateIsolatedInitialMessages(messages); err != nil {
+			emitAgentRunFailed(err, emit)
+			return messages, err
+		}
+	}
 	hookRunner := runtimehooks.New(a.hookSettings)
 	if err := hookRunner.Run(ctx, "session_start", map[string]any{
 		"submission_id": run.SubmissionID,
@@ -81,6 +93,7 @@ func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []pro
 	var previousTurnSnapshot *runstate.Snapshot
 	emittedContextThresholds := map[int]bool{}
 	contextEpoch := 0
+	executedToolCalls := 0
 	emitContextThresholdEvents(messages, a.runtime, 0, "initial", contextEpoch, emittedContextThresholds, emit)
 	for round := 0; a.runtime.MaxToolRounds <= 0 || round < a.runtime.MaxToolRounds; round++ {
 		roundNum := round + 1
@@ -148,8 +161,19 @@ func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []pro
 			}
 			return messages, nil
 		}
+		if a.runtime.MaxToolCalls > 0 && len(modelStep.ToolCalls) > a.runtime.MaxToolCalls-executedToolCalls {
+			err := fmt.Errorf(
+				"exceeded max tool calls: requested batch of %d after %d executed (limit %d)",
+				len(modelStep.ToolCalls),
+				executedToolCalls,
+				a.runtime.MaxToolCalls,
+			)
+			err = a.failTurn(ctx, hookRunner, run, turnID, roundNum, turnStarted, err, emit)
+			return messages, err
+		}
 		messages = a.appendModelResponse(messages, modelStep)
 		results := a.executeToolCalls(ctx, hookRunner, toolSet, run.ID, turnID, roundNum, modelStep.ToolCalls, emit)
+		executedToolCalls += len(modelStep.ToolCalls)
 		messages = appendToolResultMessages(messages, results)
 		emitContextThresholdEvents(messages, a.runtime, roundNum, "after_tool_results", contextEpoch, emittedContextThresholds, emit)
 		a.emitTurnCompleted(emit, turnCompletion{
@@ -272,7 +296,10 @@ func (a *Agent) snapshotToolSet(ctx context.Context) tools.ToolSet {
 	if a == nil || a.tools == nil {
 		return tools.ToolSet{}
 	}
-	return a.tools.SnapshotWithToolPolicy(ctx, a.toolPolicy)
+	if a.contextMode == protocol.ContextModeIsolated && a.runCapabilities.Scope() == "" {
+		return tools.ToolSet{}
+	}
+	return a.tools.SnapshotWithToolPolicyAndCapabilities(ctx, a.toolPolicy, a.runCapabilities)
 }
 
 func (a *Agent) executeToolCalls(ctx context.Context, hookRunner *runtimehooks.Runner, toolSet tools.ToolSet, runID, turnID string, round int, calls []protocol.ToolCall, emit func(protocol.Event)) []toolExecutionResult {

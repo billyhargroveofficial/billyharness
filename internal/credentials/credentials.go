@@ -37,6 +37,7 @@ type ProviderStatus struct {
 
 type Status struct {
 	DeepSeek       ProviderStatus `json:"deepseek"`
+	Qwen           ProviderStatus `json:"qwen"`
 	Codex          ProviderStatus `json:"codex"`
 	ActiveProvider string         `json:"active_provider,omitempty"`
 	ActiveModel    string         `json:"active_model,omitempty"`
@@ -79,7 +80,18 @@ func CurrentStatusFromAuthSettings(auth config.AuthSettings) Status {
 }
 
 func CurrentStatusForRuntime(auth config.AuthSettings, provider, model string) Status {
-	return RuntimeStatus(NewManagerFromAuthSettings(auth).Status(), provider, model)
+	manager := NewManagerFromAuthSettings(auth)
+	baselineAuth := auth
+	baselineAuth.APIKeyEnv = deepSeekKeyEnv
+	status := NewManagerFromAuthSettings(baselineAuth).Status()
+	provider = modelinfo.ProviderForModel(modelinfo.NormalizeAlias(model), provider)
+	switch provider {
+	case modelinfo.ProviderDeepSeek:
+		status.DeepSeek = manager.ProviderAPIKeyStatus(provider)
+	case modelinfo.ProviderQwen:
+		status.Qwen = manager.ProviderAPIKeyStatus(provider)
+	}
+	return RuntimeStatus(status, provider, model)
 }
 
 func RuntimeStatus(status Status, provider, model string) Status {
@@ -92,8 +104,13 @@ func RuntimeStatus(status Status, provider, model string) Status {
 }
 
 func (m Manager) Status() Status {
+	deepSeekManager := m
+	if strings.TrimSpace(m.auth.APIKeyEnv) == modelinfo.Provider(modelinfo.ProviderQwen).APIKeyEnv {
+		deepSeekManager = m.managerForProvider(modelinfo.ProviderDeepSeek)
+	}
 	return Status{
-		DeepSeek: m.DeepSeekStatus(),
+		DeepSeek: deepSeekManager.DeepSeekStatus(),
+		Qwen:     m.managerForProvider(modelinfo.ProviderQwen).ProviderAPIKeyStatus(modelinfo.ProviderQwen),
 		Codex:    m.CodexStatus(),
 	}
 }
@@ -103,22 +120,50 @@ func DeepSeekStatus() ProviderStatus {
 }
 
 func (m Manager) DeepSeekStatus() ProviderStatus {
-	secret, err := m.ResolveDeepSeekAPIKey()
+	return m.ProviderAPIKeyStatus(modelinfo.ProviderDeepSeek)
+}
+
+func (m Manager) ProviderAPIKeyStatus(provider string) ProviderStatus {
+	provider = modelinfo.NormalizeProvider(provider)
+	secret, err := m.ResolveProviderAPIKey(provider)
 	if err != nil {
-		return classifyProviderStatus("deepseek", "api-key", ProviderStatus{Path: deepSeekDotenvPath()})
+		return classifyProviderStatus(provider, "api-key", ProviderStatus{Path: deepSeekDotenvPath()})
 	}
-	return classifyProviderStatus("deepseek", "api-key", ProviderStatus{Configured: true, Source: secret.Source, Provenance: secret.Provenance, Path: secret.Path})
+	return classifyProviderStatus(provider, "api-key", ProviderStatus{Configured: true, Source: secret.Source, Provenance: secret.Provenance, Path: secret.Path})
 }
 
 func (m Manager) ResolveDeepSeekAPIKey() (SecretValue, error) {
+	return m.ResolveProviderAPIKey(modelinfo.ProviderDeepSeek)
+}
+
+func (m Manager) ResolveProviderAPIKey(provider string) (SecretValue, error) {
+	provider = modelinfo.NormalizeProvider(provider)
+	providerInfo := modelinfo.Provider(provider)
 	envKey := strings.TrimSpace(m.auth.APIKeyEnv)
 	if envKey == "" {
-		envKey = deepSeekKeyEnv
+		envKey = providerInfo.APIKeyEnv
 	}
-	if secret := m.lookupSecret(envKey, "deepseek_api_key"); strings.TrimSpace(secret.Value) != "" {
+	if envKey == "" {
+		return SecretValue{Path: deepSeekDotenvPath()}, fmt.Errorf("provider %s does not define an API key environment variable", provider)
+	}
+	fileKey := strings.ReplaceAll(provider, "-", "_") + "_api_key"
+	if secret := m.lookupSecret(envKey, fileKey); strings.TrimSpace(secret.Value) != "" {
 		return secret, nil
 	}
+	if providerInfo.Custom {
+		if secret := m.lookupCredentialFileSecret(envKey, "deepseek_api_key"); strings.TrimSpace(secret.Value) != "" {
+			return secret, nil
+		}
+	}
 	return SecretValue{Path: deepSeekDotenvPath(), EnvVar: envKey}, fmt.Errorf("missing API key env var %s", envKey)
+}
+
+func (m Manager) managerForProvider(provider string) Manager {
+	auth := m.auth
+	if envKey := modelinfo.Provider(provider).APIKeyEnv; envKey != "" {
+		auth.APIKeyEnv = envKey
+	}
+	return NewManagerFromAuthSettings(auth)
 }
 
 func (m Manager) ResolveCodexAuth() CodexAuthResolution {
@@ -293,7 +338,7 @@ func costModeForRuntime(provider, model string) string {
 		return mode
 	}
 	switch modelinfo.NormalizeProvider(provider) {
-	case modelinfo.ProviderOpenAICodex:
+	case modelinfo.ProviderOpenAICodex, modelinfo.ProviderQwen:
 		return "subscription"
 	case modelinfo.ProviderMock:
 		return "none"
@@ -321,6 +366,7 @@ func FormatStatusText(status Status) string {
 	}
 	parts = append(parts,
 		FormatProviderStatusText("deepseek", status.DeepSeek),
+		FormatProviderStatusText("qwen", status.Qwen),
 		FormatProviderStatusText("codex", status.Codex),
 	)
 	return strings.Join(parts, "\n\n")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
@@ -59,6 +61,163 @@ func TestDeepSeekBodyThinkingHigh(t *testing.T) {
 	tools, ok := payload["tools"].([]any)
 	if !ok || len(tools) != 1 {
 		t.Fatalf("tools = %#v", payload["tools"])
+	}
+}
+
+func TestQwenBodyUsesAlwaysOnThinkingAndCompletionBudget(t *testing.T) {
+	temp := 0.7
+	qwen := &DeepSeek{
+		ProviderID:       modelinfo.ProviderQwen,
+		Thinking:         "disabled",
+		ReasoningEffort:  "high",
+		MaxTokens:        4096,
+		MaxParallelTools: 4,
+	}
+	body, err := qwen.body(Request{
+		Model:       "qwen3.8-max-preview",
+		Temperature: &temp,
+		Messages: []protocol.Message{
+			{Role: protocol.RoleUser, Content: "first"},
+			{Role: protocol.RoleAssistant, Content: "answer", ReasoningContent: "historical reasoning"},
+			{Role: protocol.RoleUser, Content: "continue"},
+		},
+		Tools: []protocol.ToolSpec{{
+			Name:       "time_now",
+			Parameters: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["enable_thinking"] != true ||
+		payload["preserve_thinking"] != true ||
+		payload["reasoning_effort"] != "xhigh" ||
+		payload["max_completion_tokens"] != float64(4096) ||
+		payload["parallel_tool_calls"] != true {
+		t.Fatalf("Qwen payload = %s", body)
+	}
+	for _, forbidden := range []string{"thinking", "temperature", "max_tokens"} {
+		if _, ok := payload[forbidden]; ok {
+			t.Fatalf("Qwen payload contains %q: %s", forbidden, body)
+		}
+	}
+	messages, ok := payload["messages"].([]any)
+	if !ok || len(messages) != 3 {
+		t.Fatalf("Qwen messages = %#v", payload["messages"])
+	}
+	assistant, ok := messages[1].(map[string]any)
+	if !ok || assistant["reasoning_content"] != "historical reasoning" {
+		t.Fatalf("Qwen historical assistant message = %#v", messages[1])
+	}
+}
+
+func TestNewFromBindingBuildsOfficialQwenTokenPlanProvider(t *testing.T) {
+	t.Setenv("QWEN_TOKEN_PLAN_API_KEY", "sk-sp-qwen-test")
+	cfg := config.BuiltIn()
+	cfg.Provider = modelinfo.ProviderQwen
+	cfg.Model = "qwen3.8-max-preview"
+	cfg.ProviderMaxRetries = 0
+	t.Setenv("OVERRIDE_QWEN_KEY", "sk-sp-wrong-key")
+	binding := cfg.ProviderBinding()
+	binding.Provider.BaseURL = "https://override.invalid/v1"
+	binding.Auth.APIKeyEnv = "OVERRIDE_QWEN_KEY"
+
+	prov, err := NewFromBinding(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	qwen, ok := prov.(*DeepSeek)
+	if !ok {
+		t.Fatalf("provider = %T, want *DeepSeek OpenAI-compatible transport", prov)
+	}
+	if qwen.ProviderID != modelinfo.ProviderQwen ||
+		qwen.BaseURL != "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1" ||
+		qwen.APIKey != "sk-sp-qwen-test" ||
+		qwen.Model != "qwen3.8-max-preview" ||
+		qwen.MaxParallelTools != cfg.MaxParallelTools ||
+		qwen.MaxRetries != 0 {
+		t.Fatalf("Qwen provider = %#v", qwen)
+	}
+}
+
+func TestQwenStreamUsesChatCompletionsBearerAndEmitsAccounting(t *testing.T) {
+	type capturedRequest struct {
+		Method        string
+		Path          string
+		Authorization string
+		Body          []byte
+	}
+	captured := make(chan capturedRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		captured <- capturedRequest{
+			Method:        r.Method,
+			Path:          r.URL.Path,
+			Authorization: r.Header.Get("Authorization"),
+			Body:          body,
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("x-request-id", "qwen-request-1")
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	qwen := &DeepSeek{
+		ProviderID:        modelinfo.ProviderQwen,
+		BaseURL:           server.URL,
+		APIKey:            "sk-sp-qwen-secret",
+		Model:             "qwen3.8-max-preview",
+		Thinking:          "disabled",
+		ReasoningEffort:   "medium",
+		MaxTokens:         1024,
+		RequestTimeout:    time.Second,
+		StreamIdleTimeout: time.Second,
+		MaxRetries:        0,
+		Client:            server.Client(),
+	}
+	events, errs := qwen.Stream(context.Background(), Request{
+		RequestID: "local-qwen-request",
+		Model:     "qwen3.8-max-preview",
+		Messages:  []protocol.Message{{Role: protocol.RoleUser, Content: "ping"}},
+	})
+	var metadata RequestMetadata
+	for event := range events {
+		if event.Kind == EventRequestMetadata {
+			metadata = event.Request
+		}
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	request := <-captured
+	if request.Method != http.MethodPost ||
+		request.Path != "/chat/completions" ||
+		request.Authorization != "Bearer sk-sp-qwen-secret" {
+		t.Fatalf("Qwen request = %#v", request)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(request.Body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["enable_thinking"] != true ||
+		payload["preserve_thinking"] != true ||
+		payload["reasoning_effort"] != "medium" ||
+		payload["max_completion_tokens"] != float64(1024) {
+		t.Fatalf("Qwen HTTP payload = %s", request.Body)
+	}
+	if metadata.RequestID != "local-qwen-request" ||
+		metadata.ProviderID != modelinfo.ProviderQwen ||
+		metadata.ModelID != "qwen3.8-max-preview" ||
+		metadata.ProviderRequestID != "qwen-request-1" ||
+		metadata.Attempts != 1 ||
+		metadata.Retries != 0 ||
+		metadata.StatusCode != http.StatusOK {
+		t.Fatalf("Qwen request metadata = %#v", metadata)
 	}
 }
 

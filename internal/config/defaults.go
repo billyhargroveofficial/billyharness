@@ -25,10 +25,11 @@ func (c Config) APIKey() string {
 	if c.Provider == "mock" {
 		return ""
 	}
-	if value := os.Getenv(c.APIKeyEnv); value != "" {
+	envKey := c.AuthSettings().APIKeyEnv
+	if value := os.Getenv(envKey); value != "" {
 		return value
 	}
-	return dotenvValue(c.APIKeyEnv)
+	return dotenvValue(envKey)
 }
 
 func (c *Config) ApplyModelProviderDefaults() {
@@ -50,8 +51,17 @@ func (c *Config) applyModelContextWindowDefault() {
 	if c.contextWindowExplicitOverride && c.ContextWindowTokens > 0 {
 		return
 	}
-	if c.ContextWindowTokens <= 0 || c.ContextWindowTokens == 128_000 || (info.Provider == modelinfo.ProviderOpenAICodex && c.ContextWindowTokens == legacySettingsContextWindowTokens) {
+	if c.ContextWindowTokens <= 0 || knownDerivedContextWindow(c.ContextWindowTokens) || (info.Provider == modelinfo.ProviderOpenAICodex && c.ContextWindowTokens == legacySettingsContextWindowTokens) {
 		c.ContextWindowTokens = info.ContextWindowTokens
+	}
+}
+
+func knownDerivedContextWindow(tokens int64) bool {
+	switch tokens {
+	case 128_000, 256_000, 983_616, 1_000_000:
+		return true
+	default:
+		return false
 	}
 }
 

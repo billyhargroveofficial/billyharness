@@ -19,7 +19,7 @@ commit.
   metadata.
 - `internal/credentials` owns credential lookup, persistence, and auth status
   formatting. `internal/codexauth` is pure JWT/auth-payload parsing.
-- `internal/provider` builds DeepSeek, Codex, and mock providers from
+- `internal/provider` builds DeepSeek, Qwen Cloud Token Plan, Codex, and mock providers from
   `config.ProviderBinding`; it validates capability policy before loading
   provider credentials.
 - `internal/instructions`, `internal/projectcontext`, and `internal/memory`
@@ -136,6 +136,17 @@ required for non-mock providers, and parallel tool calls required when
 `MaxParallelTools > 1`. This validation happens before credential lookup, so
 unsupported model/provider/capability combinations fail without probing secrets.
 
+Known OpenAI-compatible providers carry their official base URL and API-key
+environment name in `internal/modelinfo`. `ProviderSelection` and
+`AuthSettings` derive those values when a model change crosses a known provider
+family, while an explicit trusted transport override normally remains
+authoritative. Qwen Token Plan is the exception: both config projection and
+provider construction force its official endpoint and
+`QWEN_TOKEN_PLAN_API_KEY`, so that subscription credential cannot be redirected
+by a stale or custom transport override. This also prevents a runtime switch
+from keeping DeepSeek's endpoint or credential name when
+`qwen3.8-max-preview` is selected.
+
 DeepSeek uses the OpenAI-compatible chat completions transport in
 `internal/provider/provider.go`. Its API key is resolved by
 `credentials.Manager.ResolveDeepSeekAPIKey` from the configured env var through
@@ -146,6 +157,28 @@ streaming, optional tools, `max_tokens`, and DeepSeek thinking/reasoning fields
 when configured. Provider errors redact secrets and classify transport, auth,
 rate limit, bad request, context overflow, server, stream closed, and unknown
 failures.
+
+Qwen Cloud Token Plan reuses the OpenAI-compatible chat-completions transport
+with a distinct provider identity. The only catalogued Qwen model is
+`qwen3.8-max-preview`; arbitrary Qwen-looking IDs remain unknown and fail
+capability validation. Its binding is fixed to
+`https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` and
+`QWEN_TOKEN_PLAN_API_KEY`, and its cost mode is `subscription`.
+
+For that exact model the request always sends `enable_thinking=true` and
+`preserve_thinking=true`. Shared reasoning values map onto the provider's
+`low`, `medium`, and `xhigh` values; an off/minimal setting becomes `low`, and
+high/max becomes `xhigh`. Qwen uses `max_completion_tokens` so the configured
+limit covers reasoning plus final output. It sends
+`parallel_tool_calls=true` when tools are present and
+`MaxParallelTools > 1`.
+
+Qwen requires historical assistant `reasoning_content` to be replayed
+verbatim when thinking is preserved. The agent therefore retains it in memory
+between tool rounds. If `StoreReasoningContent` is false, the returned
+transcript is scrubbed before gateway/session persistence; if true, the normal
+explicit persistence behavior applies. This preserves tool-loop correctness
+without silently changing the persistence setting.
 
 Codex/OpenAI subscription models use the Responses transport in
 `internal/provider/codex_provider.go`. Auth is loaded by `loadCodexAuth` from
@@ -166,17 +199,20 @@ Tools are sent with `strict=false`; `parallel_tool_calls` is disabled when no
 tools are present. Reasoning is included only when the configured reasoning
 effort is not off.
 
-Auth status is separate from provider construction. `credentials.Status` reports
-DeepSeek and Codex configured/missing state, redacted credentials, account ID,
-expiry, refresh status, active runtime provider/model, and cost mode. It is used
-by gateway/TUI auth and diagnostics surfaces.
+Auth status is separate from provider construction. `credentials.Status`
+reports DeepSeek, Qwen, and Codex configured/missing state, redacted
+credentials, account ID, expiry, refresh status, active runtime provider/model,
+and cost mode. It is used by gateway/TUI auth and diagnostics surfaces. Qwen
+has no credential-write HTTP route; its Token Plan key is supplied through the
+fixed environment name or effective dotenv/credential lookup.
 
 ## Model Catalog And Capabilities
 
 `internal/modelinfo` is a local catalog. It knows DeepSeek V4 flash/pro,
-Codex/OpenAI subscription model families such as `gpt-5.5`, `gpt-5.4-mini`,
-and `gpt-5.3-codex-spark`, plus mock models. Unknown `gpt-`, `o1`, `o3`, and
-`o4` model IDs are treated as Codex-family with inferred Codex defaults.
+Qwen Cloud Token Plan `qwen3.8-max-preview`, Codex/OpenAI subscription model
+families such as `gpt-5.5`, `gpt-5.4-mini`, and `gpt-5.3-codex-spark`, plus
+mock models. Unknown `gpt-`, `o1`, `o3`, and `o4` model IDs are treated as
+Codex-family with inferred Codex defaults.
 Unknown custom OpenAI-compatible models are allowed only when the provider is
 custom or mock and the caller explicitly allows unknown models.
 
@@ -193,10 +229,12 @@ runtime is DeepSeek `deepseek-v4-flash` with a model-derived 1,000,000-token
 context window and a 60 percent compaction threshold. Codex/GPT subscription
 models default compaction to 90 percent of their selected context window unless
 `context_compact_tokens` is explicitly overridden. Codex-family models route to
-`openai-codex`; DeepSeek-family models route to `deepseek`. If an explicit
-provider conflicts with a known model family, the model wins and the resolver
-records a warning. When `DisableSpark` is true and the selected shorthand alias
-is `spark`, the model is replaced with `gpt-5.4-mini`.
+`openai-codex`; DeepSeek-family models route to `deepseek`;
+`qwen3.8-max-preview` routes to `qwen`. The Qwen model-derived context window
+is 983,616 tokens and its maximum completion budget is 131,072 tokens. If an
+explicit provider conflicts with a known model family, the model wins and the
+resolver records a warning. When `DisableSpark` is true and the selected
+shorthand alias is `spark`, the model is replaced with `gpt-5.4-mini`.
 
 ## Instruction Assembly
 

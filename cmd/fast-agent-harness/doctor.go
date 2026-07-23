@@ -89,6 +89,7 @@ type doctorAuthPresence struct {
 	CodexAuthFile        string                     `json:"codex_auth_file,omitempty"`
 	CodexAuthFileExists  bool                       `json:"codex_auth_file_exists"`
 	DeepSeek             credentials.ProviderStatus `json:"deepseek"`
+	Qwen                 credentials.ProviderStatus `json:"qwen"`
 	Codex                credentials.ProviderStatus `json:"codex"`
 }
 
@@ -415,6 +416,12 @@ func doctorActiveAuthCheck(auth doctorAuthPresence) doctorCheck {
 		}
 		return doctorCheck{Name: "auth configured", Status: "fail", Detail: "deepseek api key missing"}
 	}
+	if provider == "qwen" {
+		if auth.Qwen.Configured {
+			return doctorCheck{Name: "auth configured", Status: "ok", Detail: "qwen token plan key configured"}
+		}
+		return doctorCheck{Name: "auth configured", Status: "fail", Detail: "qwen token plan key missing"}
+	}
 	if auth.APIKeyEnvSet || auth.CredentialFileExists || auth.CodexAuthFileExists {
 		return doctorCheck{Name: "auth configured", Status: "ok", Detail: "credential material present for " + provider}
 	}
@@ -643,6 +650,7 @@ func doctorAuthPresenceStatus(auth config.ProviderAuthSnapshot) doctorAuthPresen
 		CodexAuthFile:        auth.CodexAuthFile,
 		CodexAuthFileExists:  regularFileExists(auth.CodexAuthFile),
 		DeepSeek:             status.DeepSeek,
+		Qwen:                 status.Qwen,
 		Codex:                status.Codex,
 	}
 }
@@ -1276,6 +1284,7 @@ func printDoctorReport(w io.Writer, report doctorReport) {
 	)
 	fmt.Fprintf(w, "auth status:\n%s\n", indentLines(credentials.FormatStatusText(credentials.Status{
 		DeepSeek:       report.Runtime.Auth.DeepSeek,
+		Qwen:           report.Runtime.Auth.Qwen,
 		Codex:          report.Runtime.Auth.Codex,
 		ActiveProvider: report.Runtime.Auth.Provider,
 		ActiveModel:    report.Runtime.Auth.Model,

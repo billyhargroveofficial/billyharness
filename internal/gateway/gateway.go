@@ -122,14 +122,17 @@ type UserInputResponse = gatewayapi.UserInputResponse
 type ManagedProcessResponse = gatewayapi.ManagedProcessResponse
 
 type runSettings struct {
-	provider     config.ProviderBinding
-	profile      config.ProfileSelection
-	runtime      config.RuntimeLimits
-	toolPolicy   config.ToolPolicySettings
-	diagnostics  config.DiagnosticsSettings
-	mcp          config.MCPSettings
-	hooks        config.HookSettings
-	instructions config.InstructionSettings
+	provider          config.ProviderBinding
+	profile           config.ProfileSelection
+	runtime           config.RuntimeLimits
+	toolPolicy        config.ToolPolicySettings
+	capabilities      tools.RunCapabilities
+	contextMode       string
+	diagnostics       config.DiagnosticsSettings
+	mcp               config.MCPSettings
+	hooks             config.HookSettings
+	instructions      config.InstructionSettings
+	executionContract *protocol.ExecutionContractAttestation
 }
 
 func NewServer(cfg config.Config, prov provider.Provider, registry *tools.Registry) *Server {
@@ -559,13 +562,25 @@ func parseEventFollow(r *http.Request) (bool, error) {
 }
 
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
-	var req RunRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	req, decodeInfo, err := decodeRunRequest(r.Body)
+	if err != nil {
+		if errors.Is(err, errRunRequestBodyTooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
 	if !runRequestHasInput(req) {
 		writeError(w, http.StatusBadRequest, "prompt or attachment required")
+		return
+	}
+	if err := validateRunExecutionLimits(req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, _, err := s.runCapabilitiesForRequestWithPresence(req, decodeInfo.capabilityFieldsPresent); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := validateAttachmentRefs(req.Attachments); err != nil {
@@ -581,7 +596,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		messages := agent.InitialMessagesFromSettings(settings.instructions)
+		messages := a.InitialMessages()
 		messages = append(messages, protocol.UserMessage(req.Prompt, req.Attachments))
 		_, err = a.RunMessagesWithPromptOptions(r.Context(), messages, promptSubmitOptionsFromRun(req, "gateway"), emit)
 		return err
@@ -593,13 +608,25 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var req RunRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	req, decodeInfo, err := decodeRunRequest(r.Body)
+	if err != nil {
+		if errors.Is(err, errRunRequestBodyTooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
 	if !runRequestHasInput(req) {
 		writeError(w, http.StatusBadRequest, "prompt or attachment required")
+		return
+	}
+	if err := validateRunExecutionLimits(req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateSessionRunCapabilityScopeWithPresence(req, decodeInfo.capabilityFieldsPresent); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	interruptPolicy, err := normalizeInterruptPolicy(req.InterruptPolicy)
@@ -1286,6 +1313,14 @@ func normalizeSessionOwner(owner gatewayapi.SessionOwner) gatewayapi.SessionOwne
 }
 
 func (s *Server) runSettingsForRequest(ctx context.Context, req RunRequest) (runSettings, error) {
+	executionContract, err := executionContractForRunRequest(req)
+	if err != nil {
+		return runSettings{}, err
+	}
+	contextMode, capabilities, err := s.runCapabilitiesForRequest(req)
+	if err != nil {
+		return runSettings{}, err
+	}
 	mayOverrideProviderModel := s.requestMayOverrideProviderModel(ctx)
 	overrides := s.runOverrideSettingsForRequest(ctx, req)
 	if err := s.validateRunProviderModelOverride(overrides); err != nil {
@@ -1298,7 +1333,30 @@ func (s *Server) runSettingsForRequest(ctx context.Context, req RunRequest) (run
 	if !mayOverrideProviderModel {
 		settings.Provider = s.providerBinding
 	}
-	return runSettingsFromRuntimeDiffSettings(settings), nil
+	applyRunExecutionLimits(&settings, req, executionContract)
+	out := runSettingsFromRuntimeDiffSettings(settings)
+	out.capabilities = capabilities
+	out.contextMode = contextMode
+	out.executionContract = executionContract
+	if contextMode == protocol.ContextModeIsolated {
+		out.runtime.ContextCompactStrategy = "deterministic"
+		out.runtime.ContextCompactSummaryProvider = ""
+		out.runtime.ContextCompactSummaryModel = ""
+		out.toolPolicy.WebSummaryMode = "extractive"
+		out.toolPolicy.WebSummaryProvider = ""
+		out.toolPolicy.WebSummaryModel = ""
+		out.toolPolicy.WebCacheEnabled = false
+		out.toolPolicy.WebSearchBackend = "native"
+		out.toolPolicy.WebExtractBackend = "native"
+		out.toolPolicy.WebTavilyAPIKeyEnv = ""
+		out.toolPolicy.WebExaAPIKeyEnv = ""
+		out.toolPolicy.WebHermesEnvFiles = nil
+		out.profile = config.ProfileSelection{}
+		out.mcp = config.MCPSettings{}
+		out.hooks = config.HookSettings{}
+		out.instructions = config.InstructionSettings{}
+	}
+	return out, nil
 }
 
 func (s *Server) runtimeDiffSettings() config.RuntimeDiffSettings {
@@ -1335,7 +1393,13 @@ func (s *Server) agentForRunSettings(settings runSettings) (*agent.Agent, error)
 	if err != nil {
 		return nil, err
 	}
-	return runtimehost.NewAgent(hostSettings, prov, s.registry), nil
+	return runtimehost.NewAgent(
+		hostSettings,
+		prov,
+		s.registry,
+		runtimehost.WithRunCapabilities(settings.capabilities),
+		runtimehost.WithContextMode(settings.contextMode),
+	), nil
 }
 
 func (s *Server) agentForSessionRunSettings(session *Session, settings runSettings) (*agent.Agent, error) {
@@ -1344,23 +1408,31 @@ func (s *Server) agentForSessionRunSettings(session *Session, settings runSettin
 	if err != nil {
 		return nil, err
 	}
-	return runtimehost.NewAgent(hostSettings, prov, s.registry, runtimehost.WithAskUser(func(ctx context.Context, request protocol.UserInputRequestEvent, emit func(protocol.Event)) (protocol.UserInputAnswerEvent, error) {
-		return session.askUser(ctx, request, emit)
-	})), nil
+	return runtimehost.NewAgent(
+		hostSettings,
+		prov,
+		s.registry,
+		runtimehost.WithRunCapabilities(settings.capabilities),
+		runtimehost.WithContextMode(settings.contextMode),
+		runtimehost.WithAskUser(func(ctx context.Context, request protocol.UserInputRequestEvent, emit func(protocol.Event)) (protocol.UserInputAnswerEvent, error) {
+			return session.askUser(ctx, request, emit)
+		}),
+	), nil
 }
 
 func runtimeHostSettingsFromRunSettings(settings runSettings) runtimehost.Settings {
 	return runtimehost.Settings{
-		ProviderBinding: settings.provider,
-		ProviderCaps:    config.Config{Provider: settings.provider.Provider.Provider, Model: settings.provider.Model.Model}.ProviderCapabilitySnapshot(),
-		Profile:         settings.profile,
-		Runtime:         settings.runtime,
-		ToolPolicy:      settings.toolPolicy,
-		Diagnostics:     settings.diagnostics,
-		MCP:             settings.mcp,
-		Hooks:           settings.hooks,
-		Instructions:    settings.instructions,
-		Auth:            settings.provider.Auth,
+		ProviderBinding:   settings.provider,
+		ProviderCaps:      config.Config{Provider: settings.provider.Provider.Provider, Model: settings.provider.Model.Model}.ProviderCapabilitySnapshot(),
+		Profile:           settings.profile,
+		Runtime:           settings.runtime,
+		ToolPolicy:        settings.toolPolicy,
+		Diagnostics:       settings.diagnostics,
+		MCP:               settings.mcp,
+		Hooks:             settings.hooks,
+		Instructions:      settings.instructions,
+		Auth:              settings.provider.Auth,
+		ExecutionContract: settings.executionContract,
 	}
 }
 
@@ -1384,7 +1456,7 @@ func (s *Server) runOverrideSettingsForRequest(ctx context.Context, req RunReque
 		Thinking:        req.Thinking,
 		ReasoningEffort: req.ReasoningEffort,
 		MaxToolRounds:   req.MaxToolRounds,
-		AccessMode:      req.AccessMode,
+		AccessMode:      effectiveRunAccessMode(req),
 	}
 	if !s.requestMayOverrideProviderModel(ctx) {
 		overrides.Provider = ""

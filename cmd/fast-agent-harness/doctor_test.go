@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/docsgen"
 )
 
@@ -24,6 +25,23 @@ type fakeDoctorRunner struct {
 type fakeDoctorResponse struct {
 	out string
 	err error
+}
+
+func TestDoctorActiveAuthCheckRecognizesQwenTokenPlan(t *testing.T) {
+	auth := doctorAuthPresence{
+		Provider: "qwen",
+		Qwen: credentials.ProviderStatus{
+			Configured: true,
+			Credential: "redacted",
+		},
+	}
+	if check := doctorActiveAuthCheck(auth); check.Status != "ok" || check.Detail != "qwen token plan key configured" {
+		t.Fatalf("configured Qwen check = %#v", check)
+	}
+	auth.Qwen = credentials.ProviderStatus{}
+	if check := doctorActiveAuthCheck(auth); check.Status != "fail" || check.Detail != "qwen token plan key missing" {
+		t.Fatalf("missing Qwen check = %#v", check)
+	}
 }
 
 func (f *fakeDoctorRunner) CombinedOutput(_ context.Context, dir, name string, args ...string) (string, error) {

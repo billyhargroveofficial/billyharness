@@ -66,7 +66,7 @@ func (r *Registry) addWebExtract() {
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
 			}
-			if backend := r.webExtractBackend(); backend != webtools.BackendNative {
+			if backend := r.webExtractBackend(); backend != webtools.BackendNative && !r.runCapabilitiesForContext(ctx).HasURLRestrictions() {
 				return r.fetchProviderExtractPageResult(ctx, backend, in.URL, webFetchOptions{
 					Query:       in.Query,
 					MaxBytes:    in.MaxBytes,

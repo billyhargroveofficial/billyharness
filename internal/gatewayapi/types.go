@@ -14,23 +14,32 @@ const (
 	HeaderSessionTelegramThreadID = "X-Billyharness-Session-Telegram-Thread-ID"
 	HeaderSessionTelegramUserID   = "X-Billyharness-Session-Telegram-User-ID"
 	HeaderSessionTUIChatID        = "X-Billyharness-Session-TUI-Chat-ID"
+
+	AccessModeIsolatedPlanV1        = protocol.CapabilityScopeIsolatedPlanV1
+	AccessModeBoundedAutomationV1   = "bounded-automation-v1"
+	AccessModeBoundedIsolatedPlanV1 = protocol.CapabilityScopeBoundedIsolatedPlanV1
+	ContextModeIsolated             = protocol.ContextModeIsolated
 )
 
 type RunRequest struct {
-	Prompt          string                   `json:"prompt"`
-	Attachments     []protocol.AttachmentRef `json:"attachments,omitempty"`
-	InputID         string                   `json:"input_id,omitempty"`
-	ClientID        string                   `json:"client_id,omitempty"`
-	ClientType      string                   `json:"client_type,omitempty"`
-	Provider        string                   `json:"provider,omitempty"`
-	Model           string                   `json:"model,omitempty"`
-	Profile         string                   `json:"profile,omitempty"`
-	Thinking        string                   `json:"thinking,omitempty"`
-	ReasoningEffort string                   `json:"reasoning_effort,omitempty"`
-	MaxToolRounds   int                      `json:"max_tool_rounds,omitempty"`
-	AccessMode      string                   `json:"access_mode,omitempty"`
-	InterruptPolicy string                   `json:"interrupt_policy,omitempty"`
-	Metadata        map[string]string        `json:"metadata,omitempty"`
+	Prompt             string                   `json:"prompt"`
+	Attachments        []protocol.AttachmentRef `json:"attachments,omitempty"`
+	InputID            string                   `json:"input_id,omitempty"`
+	ClientID           string                   `json:"client_id,omitempty"`
+	ClientType         string                   `json:"client_type,omitempty"`
+	Provider           string                   `json:"provider,omitempty"`
+	Model              string                   `json:"model,omitempty"`
+	Profile            string                   `json:"profile,omitempty"`
+	Thinking           string                   `json:"thinking,omitempty"`
+	ReasoningEffort    string                   `json:"reasoning_effort,omitempty"`
+	MaxToolRounds      int                      `json:"max_tool_rounds,omitempty"`
+	MaxToolCalls       *int                     `json:"max_tool_calls,omitempty"`
+	AccessMode         string                   `json:"access_mode,omitempty"`
+	ContextMode        string                   `json:"context_mode,omitempty"`
+	AllowedTools       []string                 `json:"allowed_tools,omitempty"`
+	AllowedURLPrefixes []string                 `json:"allowed_url_prefixes,omitempty"`
+	InterruptPolicy    string                   `json:"interrupt_policy,omitempty"`
+	Metadata           map[string]string        `json:"metadata,omitempty"`
 }
 
 const InterruptPolicyInterrupt = "interrupt"

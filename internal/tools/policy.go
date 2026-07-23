@@ -28,6 +28,15 @@ func (r *Registry) PolicyDecision(name string) PolicyDecision {
 			Reason:   "tool_registry_unavailable",
 		}
 	}
+	if !r.runCapabilities.AllowsTool(name) {
+		return PolicyDecision{
+			Name:       name,
+			Decision:   "deny",
+			Source:     "run_capabilities",
+			Reason:     "tool_not_allowlisted_for_run",
+			AccessMode: config.NormalizeAccessMode(r.toolPolicy.AccessMode),
+		}
+	}
 	risk, ok := r.Risk(name)
 	if !ok {
 		return PolicyDecision{
@@ -160,6 +169,8 @@ func PolicyDeniedMessage(decision PolicyDecision) string {
 		return "tool disabled in guarded mode; switch access_mode=build to enable write/execute/side-effecting tools"
 	case "mcp_side_effect_requires_allowlist":
 		return "MCP tool disabled; side-effecting MCP tools require enabled_tools allowlisting in MCP config"
+	case "tool_not_allowlisted_for_run":
+		return "tool disabled by the per-run allowed_tools capability"
 	default:
 		return DangerousToolDisabledMessage()
 	}

@@ -21,6 +21,7 @@ func TestRedactExactEnvironmentAndPatterns(t *testing.T) {
 		"https://user-secret-123:pass-secret-456@example.com/mcp?token=query-secret&ok=1",
 		"telegram 123456789:AABBCCDDEEFF00112233445566778899",
 		"sk-testsecret123456789",
+		"qwen sk-sp-qwen.secret_with.dots-123456789",
 		"github_pat_123456789012345678901234567890",
 		"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
 	}, "\n")
@@ -41,6 +42,7 @@ func TestRedactExactEnvironmentAndPatterns(t *testing.T) {
 		"query-secret",
 		"123456789:AABB",
 		"sk-testsecret",
+		"sk-sp-qwen.secret",
 		"github_pat_",
 		"data:image",
 		"iVBORw0KGgo",

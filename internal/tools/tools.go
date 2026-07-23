@@ -87,6 +87,7 @@ const (
 
 type Registry struct {
 	toolPolicy            config.ToolPolicySettings
+	runCapabilities       RunCapabilities
 	profile               config.ProfileSelection
 	diagnostics           config.DiagnosticsSettings
 	diagnosticsErr        string
@@ -536,15 +537,29 @@ func mcpCatalogReadyState(toolCount int, collisions []string) string {
 }
 
 func (r *Registry) modelVisibleToolCatalogSnapshot() modelVisibleToolCatalog {
-	count := 0
+	return r.modelVisibleToolCatalogSnapshotWithCapabilities(r.runCapabilities)
+}
+
+func (r *Registry) modelVisibleToolCatalogSnapshotWithCapabilities(capabilities RunCapabilities) modelVisibleToolCatalog {
+	var names []string
 	if r != nil {
-		count = len(r.tools)
+		for _, tool := range r.tools {
+			if capabilities.AllowsTool(tool.Spec.Name) && toolVisibleForPolicy(tool.Spec, r.toolPolicy) {
+				names = append(names, tool.Spec.Name)
+			}
+		}
+	}
+	var discoveryTools []string
+	for _, name := range []string{"tool_search", "mcp_list_tools", "mcp_call"} {
+		if r != nil && capabilities.AllowsTool(name) {
+			discoveryTools = append(discoveryTools, name)
+		}
 	}
 	return modelVisibleToolCatalog{
 		Kind:                    "static_gateway_tools",
-		ToolCount:               count,
+		ToolCount:               len(names),
 		IncludesDynamicMCPTools: false,
-		MCPDiscoveryTools:       []string{"tool_search", "mcp_list_tools", "mcp_call"},
+		MCPDiscoveryTools:       discoveryTools,
 	}
 }
 
@@ -605,6 +620,9 @@ func (r *Registry) hasMCPServer(server string) bool {
 func (r *Registry) Specs() []protocol.ToolSpec {
 	specs := make([]protocol.ToolSpec, 0, len(r.tools))
 	for _, tool := range r.tools {
+		if !r.runCapabilities.AllowsTool(tool.Spec.Name) {
+			continue
+		}
 		if !toolVisibleForPolicy(tool.Spec, r.toolPolicy) {
 			continue
 		}
@@ -622,11 +640,23 @@ func toolVisibleForPolicy(spec protocol.ToolSpec, policy config.ToolPolicySettin
 }
 
 func (r *Registry) Call(ctx context.Context, call protocol.ToolCall) (Result, error) {
+	if r != nil && !r.runCapabilities.AllowsTool(call.Name) {
+		err := fmt.Errorf("tool %s is outside the per-run allowed_tools capability", call.Name)
+		result := errorResult("permission_denied", err.Error())
+		result.Metadata = map[string]any{
+			"permission_decision": "deny",
+			"permission_source":   "run_capabilities",
+			"permission_reason":   "tool_not_allowlisted_for_run",
+			"capability_scope":    r.runCapabilities.Scope(),
+		}
+		return result, err
+	}
 	tool, ok := r.lookup(call.Name)
 	if !ok {
 		return errorResult("unknown_tool", fmt.Sprintf("unknown tool %s", call.Name)), fmt.Errorf("unknown tool %s", call.Name)
 	}
 	ctx = contextWithToolPolicy(ctx, r.toolPolicy)
+	ctx = contextWithRunCapabilities(ctx, r.runCapabilities)
 	call.Arguments = normalizeArgs(call.Arguments)
 	if decision, err := r.checkPolicy(tool); err != nil {
 		result := errorResult("permission_denied", err.Error())
@@ -635,6 +665,16 @@ func (r *Registry) Call(ctx context.Context, call protocol.ToolCall) (Result, er
 	}
 	if err := validateArgs(tool.Spec.Parameters, call.Arguments); err != nil {
 		return validationErrorResult(call.Name, err), err
+	}
+	if err := r.validateRunURLCapability(ctx, call); err != nil {
+		result := errorResult("permission_denied", err.Error())
+		result.Metadata = map[string]any{
+			"permission_decision": "deny",
+			"permission_source":   "run_capabilities",
+			"permission_reason":   "url_not_allowlisted_for_run",
+			"capability_scope":    r.runCapabilities.Scope(),
+		}
+		return result, err
 	}
 	return tool.Handler(ctx, call.Arguments)
 }
