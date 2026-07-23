@@ -16,9 +16,10 @@ import (
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, HealthResponse{
-		OK:       true,
-		Provider: s.providerAuth.Provider,
-		Model:    s.providerAuth.Model,
+		OK:                   true,
+		Provider:             s.providerAuth.Provider,
+		Model:                s.providerAuth.Model,
+		AllowedRunAccessMode: s.publicAllowedRunAccessMode(),
 	})
 }
 

@@ -201,6 +201,38 @@ func TestAgentClubTriggerDeliveryAutoRunDispatchesThroughSessionRun(t *testing.T
 	}
 }
 
+func TestAgentClubTriggerDeliveryAutoRunCannotBypassGatewayRunAccessPolicy(t *testing.T) {
+	server, _ := newAgentClubEventTestServer(t)
+	server.allowedRunAccessMode = gatewayapi.AccessModeBoundedIsolatedPlanV1
+	owner := gatewayapi.SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"}
+	sessionID := createScopedTestSession(t, server, owner)
+	policy := &agentclub.RunPolicyConfig{
+		Enabled:        true,
+		Mode:           agentclub.RunPolicyModeStartIfIdle,
+		MaxRunsPerHour: 4,
+		MaxToolRounds:  1,
+		AccessMode:     config.AccessModePlan,
+	}
+	server.agentClub = testAgentClubTriggerRegistryWithRunPolicy(t, sessionID, owner, policy)
+
+	resp, status, raw := postAgentClubWebhookDelivery(t, server, "fixture-webhook", []byte(`{"body":"wake"}`), "delivery-policy-1", testAgentClubTriggerSecret)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", status, raw)
+	}
+	if !resp.Admitted || resp.RunDispatched {
+		t.Fatalf("response = %#v", resp)
+	}
+	audit, err := server.store.ReplayAgentClubAutoRunAudit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := audit[len(audit)-1]
+	if last.Decision != agentClubAutoRunDecisionFailed ||
+		!strings.Contains(last.Reason, "gateway allows only access_mode") {
+		t.Fatalf("auto-run policy audit = %#v", audit)
+	}
+}
+
 func TestAgentClubTriggerDeliveryAutoRunSkipsBusyAndDuplicate(t *testing.T) {
 	server, storeDir := newAgentClubEventTestServer(t)
 	owner := gatewayapi.SessionOwner{ClientID: "ingress:fixture:prod", ClientType: "ingress"}

@@ -95,21 +95,23 @@ type CodexImportRequest struct {
 }
 
 type HealthResponse struct {
-	OK       bool   `json:"ok"`
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
+	OK                   bool   `json:"ok"`
+	Provider             string `json:"provider"`
+	Model                string `json:"model"`
+	AllowedRunAccessMode string `json:"allowed_run_access_mode,omitempty"`
 }
 
 type ReadinessResponse struct {
-	OK           bool                     `json:"ok"`
-	Provider     string                   `json:"provider"`
-	Model        string                   `json:"model"`
-	GatewayAddr  string                   `json:"gateway_addr,omitempty"`
-	Checks       []ReadinessCheck         `json:"checks"`
-	Tools        ReadinessCatalogStatus   `json:"tools"`
-	MCP          ReadinessMCPStatus       `json:"mcp"`
-	AgentClub    AgentClubReadinessStatus `json:"agent_club"`
-	SessionStore *SessionStoreHealth      `json:"session_store,omitempty"`
+	OK                   bool                     `json:"ok"`
+	Provider             string                   `json:"provider"`
+	Model                string                   `json:"model"`
+	GatewayAddr          string                   `json:"gateway_addr,omitempty"`
+	AllowedRunAccessMode string                   `json:"allowed_run_access_mode,omitempty"`
+	Checks               []ReadinessCheck         `json:"checks"`
+	Tools                ReadinessCatalogStatus   `json:"tools"`
+	MCP                  ReadinessMCPStatus       `json:"mcp"`
+	AgentClub            AgentClubReadinessStatus `json:"agent_club"`
+	SessionStore         *SessionStoreHealth      `json:"session_store,omitempty"`
 }
 
 type ReadinessCheck struct {

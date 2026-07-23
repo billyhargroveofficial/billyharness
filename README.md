@@ -126,6 +126,21 @@ carry the new fixed cap attestation. Unknown versioned access modes fail
 closed. An ordinary run may supply a positive `max_tool_calls` only to reduce
 its otherwise unbounded cumulative tool-call allowance.
 
+An operator can restrict a gateway deployment to the bounded isolated contract:
+
+```bash
+export BILLYHARNESS_GATEWAY_ALLOWED_RUN_ACCESS_MODE=bounded-isolated-plan-v1
+./bin/fast-agent-harness gateway
+```
+
+When this variable is set, every stateless or session run whose
+`access_mode` is not exactly `bounded-isolated-plan-v1` receives `403` before
+provider construction or tool execution. This intentionally disables session
+runs and agent-club auto-runs on that gateway because the isolated contract is
+one-shot only. Invalid non-empty values fail gateway CLI startup; `/health` and
+`/ready` expose the effective `allowed_run_access_mode`. Leaving the variable
+unset preserves the normal local-first gateway behavior.
+
 For SSH terminals with broken alt-screen or key handling:
 
 ```bash

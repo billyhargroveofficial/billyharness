@@ -104,6 +104,16 @@ After resolution, config is projected into smaller contracts:
   gateway/TUI runtime state back through the resolver with
   `SourceGateway` provenance for status display.
 
+The gateway-only deployment variable
+`BILLYHARNESS_GATEWAY_ALLOWED_RUN_ACCESS_MODE` is intentionally outside
+`Config` and `configSpecs`: it controls HTTP run admission for the `serve`
+process, not provider/runtime settings. `serve` reads it as the default for
+`-allowed-run-access-mode`, validates it before binding the listener, and
+passes the result through `gateway.ServerOptions`. The only supported
+non-empty value is `bounded-isolated-plan-v1`; unset preserves default
+behavior. Because this variable is command-specific, it is documented in the
+gateway and operations docs rather than the generated general config table.
+
 ## Runtime Overrides
 
 CLI flags are converted to `ResolveOverride` values with `SourceCLI`. Gateway

@@ -146,6 +146,19 @@ helper-model calls. Unknown sentinels, missing caps, or mismatched caps return
 behavior; an optional positive `max_tool_calls` can only reduce their
 otherwise-unbounded cumulative tool budget.
 
+Gateway deployments may set
+`BILLYHARNESS_GATEWAY_ALLOWED_RUN_ACCESS_MODE=bounded-isolated-plan-v1`.
+That policy is checked immediately after request decoding and again at the
+shared run-settings boundary. Any other or omitted request `access_mode`
+returns `403` before stream creation, input admission, provider construction,
+or tool execution. The shared check also prevents trusted agent-club auto-run
+dispatch from bypassing HTTP admission. Since bounded isolated runs are
+stateless-only, the restricted deployment rejects every session run.
+Invalid non-empty policy values fail CLI startup; a directly constructed server
+with an invalid option rejects all runs and reports failed readiness. The
+effective allow mode is public, non-secret state in `/health` and `/ready`.
+An unset policy preserves the ordinary local-first surface.
+
 The cap counts tool calls across all model rounds. Before executing any model
 tool-call batch, the agent compares the whole batch with the remaining budget.
 An overflowing parallel batch fails without executing a partial subset.

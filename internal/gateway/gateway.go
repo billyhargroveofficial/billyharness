@@ -32,33 +32,36 @@ import (
 )
 
 type Server struct {
-	providerAuth    config.ProviderAuthSnapshot
-	providerBinding config.ProviderBinding
-	profile         config.ProfileSelection
-	runtime         config.RuntimeLimits
-	toolPolicy      config.ToolPolicySettings
-	diagnostics     config.DiagnosticsSettings
-	mcpSettings     config.MCPSettings
-	agentClubConfig config.AgentClubSettings
-	agentClubStatus gatewayapi.AgentClubReadinessStatus
-	hookSettings    config.HookSettings
-	instructions    config.InstructionSettings
-	gatewayAddr     string
-	agent           *agent.Agent
-	registry        *tools.Registry
-	auth            credentials.Manager
-	mux             *http.ServeMux
-	authToken       string
-	httpSecurity    httpSecurityOptions
-	sessions        map[string]*Session
-	store           *sessionStore
-	storeHealth     gatewayapi.SessionStoreHealth
-	agentClub       *agentclub.Registry
-	mu              sync.Mutex
+	providerAuth         config.ProviderAuthSnapshot
+	providerBinding      config.ProviderBinding
+	profile              config.ProfileSelection
+	runtime              config.RuntimeLimits
+	toolPolicy           config.ToolPolicySettings
+	diagnostics          config.DiagnosticsSettings
+	mcpSettings          config.MCPSettings
+	agentClubConfig      config.AgentClubSettings
+	agentClubStatus      gatewayapi.AgentClubReadinessStatus
+	hookSettings         config.HookSettings
+	instructions         config.InstructionSettings
+	gatewayAddr          string
+	agent                *agent.Agent
+	registry             *tools.Registry
+	auth                 credentials.Manager
+	mux                  *http.ServeMux
+	authToken            string
+	allowedRunAccessMode string
+	runAccessPolicyErr   error
+	httpSecurity         httpSecurityOptions
+	sessions             map[string]*Session
+	store                *sessionStore
+	storeHealth          gatewayapi.SessionStoreHealth
+	agentClub            *agentclub.Registry
+	mu                   sync.Mutex
 }
 
 type ServerOptions struct {
 	AuthToken                                string
+	AllowedRunAccessMode                     string
 	SessionStoreDir                          string
 	RequireMutationAuth                      bool
 	DevAllowUnauthenticatedLoopbackMutations bool
@@ -170,25 +173,28 @@ func NewServerFromSettings(settings ServerSettings, prov provider.Provider, regi
 
 func NewServerWithOptionsFromSettings(settings ServerSettings, prov provider.Provider, registry *tools.Registry, opts ServerOptions) *Server {
 	settings = cloneServerSettings(settings)
+	allowedRunAccessMode, runAccessPolicyErr := ParseAllowedRunAccessMode(opts.AllowedRunAccessMode)
 	s := &Server{
-		providerAuth:    settings.ProviderAuth,
-		providerBinding: settings.ProviderBinding,
-		profile:         settings.Profile,
-		runtime:         settings.Runtime,
-		toolPolicy:      settings.ToolPolicy,
-		diagnostics:     settings.Diagnostics,
-		mcpSettings:     settings.MCP,
-		agentClubConfig: settings.AgentClub,
-		agentClubStatus: opts.AgentClubStatus,
-		hookSettings:    settings.Hooks,
-		instructions:    settings.Instructions,
-		gatewayAddr:     settings.GatewayAddr,
-		agent:           runtimehost.NewAgent(runtimeHostSettingsFromServerSettings(settings), prov, registry),
-		registry:        registry,
-		auth:            credentials.NewManagerFromAuthSettings(settings.Auth),
-		mux:             http.NewServeMux(),
-		sessions:        map[string]*Session{},
-		agentClub:       opts.AgentClubRegistry,
+		providerAuth:         settings.ProviderAuth,
+		providerBinding:      settings.ProviderBinding,
+		profile:              settings.Profile,
+		runtime:              settings.Runtime,
+		toolPolicy:           settings.ToolPolicy,
+		diagnostics:          settings.Diagnostics,
+		mcpSettings:          settings.MCP,
+		agentClubConfig:      settings.AgentClub,
+		agentClubStatus:      opts.AgentClubStatus,
+		hookSettings:         settings.Hooks,
+		instructions:         settings.Instructions,
+		gatewayAddr:          settings.GatewayAddr,
+		agent:                runtimehost.NewAgent(runtimeHostSettingsFromServerSettings(settings), prov, registry),
+		registry:             registry,
+		auth:                 credentials.NewManagerFromAuthSettings(settings.Auth),
+		mux:                  http.NewServeMux(),
+		allowedRunAccessMode: allowedRunAccessMode,
+		runAccessPolicyErr:   runAccessPolicyErr,
+		sessions:             map[string]*Session{},
+		agentClub:            opts.AgentClubRegistry,
 	}
 	if strings.TrimSpace(opts.SessionStoreDir) != "" {
 		s.store = newSessionStore(opts.SessionStoreDir)
@@ -575,6 +581,10 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "prompt or attachment required")
 		return
 	}
+	if err := s.validateRunAccessPolicy(req); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
 	if err := validateRunExecutionLimits(req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -619,6 +629,10 @@ func (s *Server) handleSessionRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if !runRequestHasInput(req) {
 		writeError(w, http.StatusBadRequest, "prompt or attachment required")
+		return
+	}
+	if err := s.validateRunAccessPolicy(req); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
 	if err := validateRunExecutionLimits(req); err != nil {
@@ -1313,6 +1327,9 @@ func normalizeSessionOwner(owner gatewayapi.SessionOwner) gatewayapi.SessionOwne
 }
 
 func (s *Server) runSettingsForRequest(ctx context.Context, req RunRequest) (runSettings, error) {
+	if err := s.validateRunAccessPolicy(req); err != nil {
+		return runSettings{}, err
+	}
 	executionContract, err := executionContractForRunRequest(req)
 	if err != nil {
 		return runSettings{}, err

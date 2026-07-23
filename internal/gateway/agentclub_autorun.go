@@ -109,6 +109,11 @@ func (s *Server) maybeDispatchAgentClubAutoRun(ctx context.Context, delivery age
 }
 
 func (s *Server) validateAgentClubRunPolicyRuntime(policy agentclub.RunPolicy) error {
+	if s != nil {
+		if err := s.validateRunAccessPolicy(RunRequest{AccessMode: policy.AccessMode}); err != nil {
+			return err
+		}
+	}
 	if policy.MaxToolRounds > 0 && s != nil && s.runtime.MaxToolRounds > 0 && policy.MaxToolRounds > s.runtime.MaxToolRounds {
 		return fmt.Errorf("run_policy max_tool_rounds exceeds configured runtime limit")
 	}

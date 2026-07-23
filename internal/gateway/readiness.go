@@ -14,8 +14,9 @@ const (
 )
 
 func (s *Server) readinessResponse() ReadinessResponse {
-	checks := make([]ReadinessCheck, 0, 4)
+	checks := make([]ReadinessCheck, 0, 6)
 	checks = append(checks, s.providerReadinessCheck())
+	checks = append(checks, s.runAccessPolicyReadinessCheck())
 
 	toolsStatus, toolCheck := s.toolCatalogReadiness()
 	checks = append(checks, toolCheck)
@@ -34,17 +35,40 @@ func (s *Server) readinessResponse() ReadinessResponse {
 	}
 
 	resp := ReadinessResponse{
-		OK:           readinessChecksOK(checks),
-		Provider:     s.providerAuth.Provider,
-		Model:        s.providerAuth.Model,
-		GatewayAddr:  s.gatewayAddr,
-		Checks:       checks,
-		Tools:        toolsStatus,
-		MCP:          mcpStatus,
-		AgentClub:    agentClubStatus,
-		SessionStore: sessionStore,
+		OK:                   readinessChecksOK(checks),
+		Provider:             s.providerAuth.Provider,
+		Model:                s.providerAuth.Model,
+		GatewayAddr:          s.gatewayAddr,
+		AllowedRunAccessMode: s.publicAllowedRunAccessMode(),
+		Checks:               checks,
+		Tools:                toolsStatus,
+		MCP:                  mcpStatus,
+		AgentClub:            agentClubStatus,
+		SessionStore:         sessionStore,
 	}
 	return resp
+}
+
+func (s *Server) runAccessPolicyReadinessCheck() ReadinessCheck {
+	if s != nil && s.runAccessPolicyErr != nil {
+		return ReadinessCheck{
+			Name:   "run_access_policy",
+			Status: readinessFail,
+			Detail: "invalid configuration",
+		}
+	}
+	if s == nil || s.allowedRunAccessMode == "" {
+		return ReadinessCheck{
+			Name:   "run_access_policy",
+			Status: readinessOK,
+			Detail: "unrestricted",
+		}
+	}
+	return ReadinessCheck{
+		Name:   "run_access_policy",
+		Status: readinessOK,
+		Detail: "allowed_access_mode=" + s.allowedRunAccessMode,
+	}
 }
 
 func (s *Server) agentClubReadiness() (gatewayapi.AgentClubReadinessStatus, ReadinessCheck) {

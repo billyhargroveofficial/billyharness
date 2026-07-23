@@ -175,6 +175,17 @@ execution contract. See
 [Gateway and sessions](gateway-and-sessions.md#versioned-bounded-runs) for the
 wire contract.
 
+For a gateway dedicated to untrusted one-shot research work, the operator can
+set
+`BILLYHARNESS_GATEWAY_ALLOWED_RUN_ACCESS_MODE=bounded-isolated-plan-v1`.
+This is a deployment admission ceiling in addition to bearer authentication:
+ordinary, unbounded, `bounded-automation-v1`, compatibility
+`isolated-plan-v1`, session, and agent-club auto-runs are rejected before any
+provider or tool call. The CLI accepts only the exact bounded isolated value or
+an unset value; an invalid programmatic option makes readiness fail and run
+admission fail closed. `/health` and `/ready` expose the allowed mode so a
+deployer can verify the live public policy without reading service secrets.
+
 ## External Ingress Boundary
 
 External ingress is gateway admission, not execution. There is no public

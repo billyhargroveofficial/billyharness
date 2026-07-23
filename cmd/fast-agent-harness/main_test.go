@@ -289,6 +289,14 @@ func TestServiceCommandHelpersUseEnvFallbacksAndAliases(t *testing.T) {
 	}
 }
 
+func TestServeRejectsInvalidGatewayAllowedRunAccessModeBeforeListen(t *testing.T) {
+	t.Setenv(gateway.GatewayAllowedRunAccessModeEnv, gatewayapi.AccessModeBoundedAutomationV1)
+	err := serve([]string{"-mock", "-addr", "127.0.0.1:0", "-dev-allow-unauthenticated-loopback-mutations"})
+	if err == nil || !strings.Contains(err.Error(), gateway.GatewayAllowedRunAccessModeEnv) {
+		t.Fatalf("serve error = %v", err)
+	}
+}
+
 func TestConfigInspectJSONDoesNotLeakDotenvSecrets(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", home)

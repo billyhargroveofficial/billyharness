@@ -234,6 +234,31 @@ routes by default. For loopback-only development there is a
 `-dev-allow-unauthenticated-loopback-mutations` flag, but that flag is not a
 production setting.
 
+For a production sidecar that must expose only the isolated one-shot contract,
+set the following service environment value:
+
+```sh
+BILLYHARNESS_GATEWAY_ALLOWED_RUN_ACCESS_MODE=bounded-isolated-plan-v1
+```
+
+The equivalent explicit flag is
+`-allowed-run-access-mode bounded-isolated-plan-v1`. Do not substitute
+`bounded-automation-v1`, `isolated-plan-v1`, `plan`, or another value: gateway
+startup rejects unsupported non-empty values. After restart, verify the live
+policy without printing the bearer token:
+
+```sh
+curl -fsS http://127.0.0.1:8765/health
+curl -fsS http://127.0.0.1:8765/ready
+```
+
+Both responses must include
+`"allowed_run_access_mode":"bounded-isolated-plan-v1"`, and the readiness
+`run_access_policy` check must be `ok`. A bearer-authenticated ordinary or
+`bounded-automation-v1` request must return `403`; a fully valid
+`bounded-isolated-plan-v1` request remains eligible. The restriction disables
+session runs and agent-club auto-runs on this dedicated gateway by design.
+
 ## Manual Gateway Pattern
 
 `README.md` contains this detached local gateway pattern:

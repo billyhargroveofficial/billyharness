@@ -287,6 +287,7 @@ func serve(args []string) error {
 	model := fs.String("model", "", "model override")
 	addr := fs.String("addr", "", "listen address")
 	authToken := fs.String("auth-token", "", "gateway bearer token for protected /v1 routes; defaults to BILLYHARNESS_GATEWAY_AUTH_TOKEN")
+	allowedRunAccessModeRaw := fs.String("allowed-run-access-mode", os.Getenv(gateway.GatewayAllowedRunAccessModeEnv), "allow only this gateway run access_mode; supported restricted value: bounded-isolated-plan-v1")
 	devAllowLoopbackMutationNoAuth := fs.Bool("dev-allow-unauthenticated-loopback-mutations", false, "development only: allow loopback mutating routes without a bearer token")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -310,6 +311,10 @@ func serve(args []string) error {
 		*authToken = gatewayapi.AuthTokenFromEnv()
 	}
 	*authToken = strings.TrimSpace(*authToken)
+	allowedRunAccessMode, err := gateway.ParseAllowedRunAccessMode(*allowedRunAccessModeRaw)
+	if err != nil {
+		return err
+	}
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", *addr, err)
@@ -332,6 +337,7 @@ func serve(args []string) error {
 	}
 	server := gateway.NewServerWithOptionsFromSettings(gateway.ServerSettingsFromConfig(cfg), provider.Mock{}, registry, gateway.ServerOptions{
 		AuthToken:                                *authToken,
+		AllowedRunAccessMode:                     allowedRunAccessMode,
 		SessionStoreDir:                          gateway.DefaultSessionStoreDir(),
 		RequireMutationAuth:                      true,
 		DevAllowUnauthenticatedLoopbackMutations: *devAllowLoopbackMutationNoAuth,
@@ -344,6 +350,9 @@ func serve(args []string) error {
 		status += "; bearer auth required for protected /v1 routes"
 	} else if *devAllowLoopbackMutationNoAuth {
 		status += "; unauthenticated loopback mutations enabled for development"
+	}
+	if allowedRunAccessMode != "" {
+		status += "; allowed_run_access_mode=" + allowedRunAccessMode
 	}
 	fmt.Fprintln(os.Stderr, status)
 	if err := server.Serve(ctx, listener); errors.Is(err, context.Canceled) {
