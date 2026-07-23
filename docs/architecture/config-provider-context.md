@@ -172,6 +172,9 @@ high/max becomes `xhigh`. Qwen uses `max_completion_tokens` so the configured
 limit covers reasoning plus final output. It sends
 `parallel_tool_calls=true` when tools are present and
 `MaxParallelTools > 1`.
+Agent snapshots and `model.call_started`/`model.call_finished` provenance use
+the same effective values (`enabled/low`, `enabled/medium`, or
+`enabled/xhigh`) rather than the pre-normalization shared setting.
 
 Qwen requires historical assistant `reasoning_content` to be replayed
 verbatim when thinking is preserved. The agent therefore retains it in memory

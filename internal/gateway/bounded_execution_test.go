@@ -235,6 +235,45 @@ func TestBoundedIsolatedCapabilitiesFailClosedAndDecodeStrictly(t *testing.T) {
 	}
 }
 
+func TestRunRequestBodyLimitAppliesOnlyToConstrainedRequests(t *testing.T) {
+	cfg := config.BuiltIn()
+	cfg.Provider = "mock"
+	cfg.Model = "mock"
+	server := NewServer(cfg, provider.Mock{}, tools.NewRegistry(cfg))
+	sessionID := createGatewaySessionForTest(t, server)
+	padding := strings.Repeat("x", int(maxRunRequestBodyBytes))
+	ordinaryBody := `{"padding":"` + padding + `"}`
+
+	for _, path := range []string{
+		"/v1/run",
+		"/v1/sessions/" + sessionID + "/run",
+	} {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(
+				rec,
+				httptest.NewRequest(http.MethodPost, path, strings.NewReader(ordinaryBody)),
+			)
+			if rec.Code != http.StatusBadRequest ||
+				!strings.Contains(rec.Body.String(), "prompt or attachment required") {
+				t.Fatalf("ordinary request status = %d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	boundedBody := `{"prompt":"` + padding + `","access_mode":"` +
+		gatewayapi.AccessModeBoundedAutomationV1 + `","max_tool_calls":12}`
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(
+		rec,
+		httptest.NewRequest(http.MethodPost, "/v1/run", strings.NewReader(boundedBody)),
+	)
+	if rec.Code != http.StatusRequestEntityTooLarge ||
+		!strings.Contains(rec.Body.String(), errRunRequestBodyTooLarge.Error()) {
+		t.Fatalf("bounded request status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestBoundedIsolatedCapabilitiesAreOneShotOnly(t *testing.T) {
 	maxCalls := 4
 	err := validateSessionRunCapabilityScopeWithPresence(RunRequest{

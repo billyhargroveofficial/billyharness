@@ -24,12 +24,9 @@ type runRequestDecodeInfo struct {
 }
 
 func decodeRunRequest(body io.Reader) (RunRequest, runRequestDecodeInfo, error) {
-	raw, err := io.ReadAll(io.LimitReader(body, maxRunRequestBodyBytes+1))
+	raw, err := io.ReadAll(body)
 	if err != nil {
 		return RunRequest{}, runRequestDecodeInfo{}, err
-	}
-	if int64(len(raw)) > maxRunRequestBodyBytes {
-		return RunRequest{}, runRequestDecodeInfo{}, fmt.Errorf("%w: maximum is %d bytes", errRunRequestBodyTooLarge, maxRunRequestBodyBytes)
 	}
 	var req RunRequest
 	if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&req); err != nil {
@@ -42,6 +39,9 @@ func decodeRunRequest(body io.Reader) (RunRequest, runRequestDecodeInfo, error) 
 	constrained := isConstrainedRunAccessMode(req.AccessMode) || info.capabilityFieldsPresent
 	if !constrained {
 		return req, info, nil
+	}
+	if int64(len(raw)) > maxRunRequestBodyBytes {
+		return RunRequest{}, runRequestDecodeInfo{}, fmt.Errorf("%w: maximum is %d bytes", errRunRequestBodyTooLarge, maxRunRequestBodyBytes)
 	}
 	if info.nonCanonicalField != "" {
 		return RunRequest{}, runRequestDecodeInfo{}, fmt.Errorf(

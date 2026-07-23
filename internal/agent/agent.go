@@ -16,6 +16,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	runtimehooks "github.com/billyhargroveofficial/billyharness/internal/hooks"
 	"github.com/billyhargroveofficial/billyharness/internal/mcpclient"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
 	"github.com/billyhargroveofficial/billyharness/internal/runstate"
@@ -76,6 +77,7 @@ func New(cfg config.Config, provider provider.Provider, registry *tools.Registry
 }
 
 func NewFromSettings(settings Settings, provider provider.Provider, registry *tools.Registry) *Agent {
+	settings.ProviderBinding = providerBindingForAgent(settings.ProviderBinding)
 	if settings.ContextMode == protocol.ContextModeIsolated {
 		settings.Runtime.ContextCompactStrategy = "deterministic"
 		settings.Runtime.ContextCompactSummaryProvider = ""
@@ -114,6 +116,15 @@ func NewFromSettings(settings Settings, provider provider.Provider, registry *to
 		askUser:           settings.AskUser,
 		executionContract: executionContract,
 	}
+}
+
+func providerBindingForAgent(binding config.ProviderBinding) config.ProviderBinding {
+	if modelinfo.ProviderForModel(binding.Model.Model, binding.Provider.Provider) != modelinfo.ProviderQwen {
+		return binding
+	}
+	binding.Model.Thinking = "enabled"
+	binding.Model.ReasoningEffort = modelinfo.NormalizeQwenReasoningEffort(binding.Model.ReasoningEffort)
+	return binding
 }
 
 func (a *Agent) snapshotInput() runstate.SnapshotInput {

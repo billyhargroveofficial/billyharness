@@ -159,11 +159,12 @@ provider/model accounting; isolated events additionally carry
 `capability_scope=bounded-isolated-plan-v1`, effective `access_mode=plan`,
 `context_mode=isolated`, and hashes/counts for both allowlists.
 
-The isolated request decoder is fail-closed: the JSON object is capped at
-1 MiB and rejects unknown fields, duplicate or case-variant canonical fields,
-and trailing JSON. It rejects profile, attachment, provider, model, thinking,
-and reasoning overrides. The only eligible tools are `time_now`, `web_fetch`,
-`web_extract`, and `web_crawl`, with at least one web tool required. Ambient
+The constrained bounded request decoder is fail-closed: its JSON object is
+capped at 1 MiB and rejects unknown fields, duplicate or case-variant
+canonical fields, and trailing JSON. It rejects profile, attachment, provider,
+model, thinking, and reasoning overrides. The only eligible tools are
+`time_now`, `web_fetch`, `web_extract`, and `web_crawl`, with at least one web
+tool required. Ambient
 profile/project/memory/MCP/hook/helper/cache state is removed. The historical
 wire name `allowed_url_prefixes` is retained, but each entry is an exact
 canonical HTTPS origin/path allowlist; query parameters on the fetched URL are

@@ -149,6 +149,39 @@ func TestMaxToolCallsAllowsExactLimit(t *testing.T) {
 	}
 }
 
+func TestQwenModelCallProvenanceUsesWireEffectiveReasoning(t *testing.T) {
+	for _, rawEffort := range []string{"high", "max"} {
+		t.Run(rawEffort, func(t *testing.T) {
+			cfg := config.BuiltIn()
+			cfg.Provider = "qwen"
+			cfg.Model = "qwen3.8-max-preview"
+			cfg.Thinking = "disabled"
+			cfg.ReasoningEffort = rawEffort
+			a := NewFromSettings(SettingsFromConfig(cfg), &captureProvider{}, tools.NewRegistry(cfg))
+
+			var events []protocol.Event
+			if _, err := a.RunMessages(context.Background(), []protocol.Message{
+				{Role: protocol.RoleUser, Content: "hello"},
+			}, func(event protocol.Event) {
+				events = append(events, event)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			for _, eventType := range []protocol.EventType{
+				protocol.EventModelCallStarted,
+				protocol.EventModelCallFinished,
+			} {
+				event, ok := firstModelCallEvent(events, eventType)
+				if !ok ||
+					event.Reasoning != "xhigh" ||
+					event.ReasoningMode != "enabled/xhigh" {
+					t.Fatalf("%s provenance = %#v ok=%v", eventType, event, ok)
+				}
+			}
+		})
+	}
+}
+
 func TestQwenRetainsReasoningAcrossToolRoundButScrubsReturnedTranscript(t *testing.T) {
 	cfg := config.BuiltIn()
 	cfg.Provider = "qwen"
