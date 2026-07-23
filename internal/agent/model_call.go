@@ -30,8 +30,25 @@ type modelCallStepResult struct {
 	Content      string
 	Reasoning    string
 	ToolCalls    []protocol.ToolCall
+	Finish       provider.Finish
+	FinishLegacy bool
 	PromptTokens int64
 	Err          error
+}
+
+// ModelFinishMismatchError reports a successful provider termination whose
+// declared finish kind contradicts the assembled response. It is distinct from
+// provider.FinishError, which classifies unsuccessful provider terminations.
+type ModelFinishMismatchError struct {
+	Finish        provider.Finish
+	ToolCallCount int
+}
+
+func (e *ModelFinishMismatchError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf("model finish %q contradicts %d parsed tool calls", e.Finish.Kind, e.ToolCallCount)
 }
 
 func (a *Agent) validateModelInputCapabilities(messages []protocol.Message) error {
@@ -64,7 +81,7 @@ func (a *Agent) runModelCallStep(ctx context.Context, hookRunner *runtimehooks.R
 		Type:   protocol.EventModelCallStarted,
 		TurnID: input.TurnID,
 		StepID: stepID,
-		Data:   modelCallEventData(modelCallBase, protocol.StepStatusStarted, -1, -1, provider.Usage{}, provider.RequestMetadata{}, ""),
+		Data:   modelCallEventData(modelCallBase, protocol.StepStatusStarted, -1, -1, provider.Usage{}, provider.RequestMetadata{}, provider.Finish{}, false, ""),
 	})
 	stream := a.collectModelCallStream(ctx, hookRunner, provider.Request{
 		RequestID: requestID,
@@ -75,6 +92,8 @@ func (a *Agent) runModelCallStep(ctx context.Context, hookRunner *runtimehooks.R
 	result := modelCallStepResult{
 		Content:      stream.Content,
 		Reasoning:    stream.Reasoning,
+		Finish:       stream.Finish,
+		FinishLegacy: stream.FinishLegacy,
 		PromptTokens: stream.PromptTokens,
 	}
 	if err := stream.Err; err != nil {
@@ -87,48 +106,40 @@ func (a *Agent) runModelCallStep(ctx context.Context, hookRunner *runtimehooks.R
 		a.emitModelCallStepFailed(input, stepID, modelCallBase, started, stream, stream.HookErr, emit)
 		return result
 	}
-	emit(protocol.Event{
-		Type:   protocol.EventModelCallFinished,
-		TurnID: input.TurnID,
-		StepID: stepID,
-		Data:   modelCallEventData(modelCallBase, protocol.StepStatusCompleted, durationMS(started), firstDeltaLatencyMS(started, stream.FirstDeltaAt), stream.Usage, stream.RequestMetadata, ""),
-	})
 	calls, err := stream.Accumulator.Finish()
 	if err != nil {
 		result.Err = err
-		emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
-			TurnID:     input.TurnID,
-			StepID:     stepID,
-			Round:      input.Round,
-			Kind:       protocol.StepKindModelCall,
-			Status:     protocol.StepStatusFailed,
-			Name:       a.modelID(),
-			DurationMS: durationMS(started),
-			Error:      err.Error(),
-		}})
+		a.emitModelCallStepFailed(input, stepID, modelCallBase, started, stream, err, emit)
 		return result
 	}
 	if err := validateExecutableToolCalls(calls); err != nil {
 		result.Err = err
-		emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
-			TurnID:     input.TurnID,
-			StepID:     stepID,
-			Round:      input.Round,
-			Kind:       protocol.StepKindModelCall,
-			Status:     protocol.StepStatusFailed,
-			Name:       a.modelID(),
-			DurationMS: durationMS(started),
-			Error:      err.Error(),
-		}})
+		a.emitModelCallStepFailed(input, stepID, modelCallBase, started, stream, err, emit)
+		return result
+	}
+	finish, legacy, err := resolveModelFinish(stream.Finish, stream.FinishSeen, len(calls), a.allowLegacyModelFinish())
+	stream.Finish = finish
+	stream.FinishLegacy = legacy
+	result.Finish = finish
+	result.FinishLegacy = legacy
+	if err != nil {
+		result.Err = err
+		a.emitModelCallStepFailed(input, stepID, modelCallBase, started, stream, err, emit)
 		return result
 	}
 	result.ToolCalls = calls
+	emit(protocol.Event{
+		Type:   protocol.EventModelCallFinished,
+		TurnID: input.TurnID,
+		StepID: stepID,
+		Data:   modelCallEventData(modelCallBase, protocol.StepStatusCompleted, durationMS(started), firstDeltaLatencyMS(started, stream.FirstDeltaAt), stream.Usage, stream.RequestMetadata, finish, legacy, ""),
+	})
 	modelMetadata := map[string]any{
 		"content_chars":   len(stream.Content),
 		"reasoning_chars": len(stream.Reasoning),
 		"tool_call_count": len(calls),
 	}
-	for key, value := range modelCallEventMetadata(modelCallEventData(modelCallBase, protocol.StepStatusCompleted, durationMS(started), firstDeltaLatencyMS(started, stream.FirstDeltaAt), stream.Usage, stream.RequestMetadata, "")) {
+	for key, value := range modelCallEventMetadata(modelCallEventData(modelCallBase, protocol.StepStatusCompleted, durationMS(started), firstDeltaLatencyMS(started, stream.FirstDeltaAt), stream.Usage, stream.RequestMetadata, finish, legacy, "")) {
 		modelMetadata[key] = value
 	}
 	if !stream.FirstDeltaAt.IsZero() {
@@ -162,12 +173,62 @@ func validateExecutableToolCalls(calls []protocol.ToolCall) error {
 	return nil
 }
 
+func (a *Agent) allowLegacyModelFinish() bool {
+	if a == nil {
+		return false
+	}
+	if modelinfo.NormalizeProvider(a.providerID()) == modelinfo.ProviderMock {
+		return true
+	}
+	// Package-local test doubles may opt into the narrow compatibility path.
+	// Real provider implementations cannot accidentally satisfy this marker.
+	_, ok := a.provider.(legacyModelFinishProvider)
+	return ok
+}
+
+type legacyModelFinishProvider interface {
+	allowLegacyModelFinish()
+}
+
+func resolveModelFinish(finish provider.Finish, seen bool, toolCallCount int, allowLegacy bool) (provider.Finish, bool, error) {
+	if !seen {
+		finish = provider.Finish{Kind: provider.FinishUnknown, RawReason: "stream_closed_without_done"}
+		return finish, false, provider.FinishErrorFor(finish)
+	}
+	finish = provider.NormalizeFinish(finish)
+	legacy := finish == (provider.Finish{})
+	if legacy {
+		if !allowLegacy {
+			finish = provider.Finish{Kind: provider.FinishUnknown, RawReason: "legacy_zero_not_allowed"}
+			return finish, false, provider.FinishErrorFor(finish)
+		}
+		if toolCallCount > 0 {
+			finish = provider.Finish{Kind: provider.FinishToolCalls, RawReason: "legacy_zero"}
+		} else {
+			finish = provider.FinishOrLegacyNatural(finish)
+		}
+	}
+	if err := provider.FinishErrorFor(finish); err != nil {
+		if normalized, ok := provider.FinishFromError(err); ok {
+			finish = normalized
+		}
+		return finish, legacy, err
+	}
+	if finish.Kind == provider.FinishNatural && toolCallCount > 0 {
+		return finish, legacy, &ModelFinishMismatchError{Finish: finish, ToolCallCount: toolCallCount}
+	}
+	if finish.Kind == provider.FinishToolCalls && toolCallCount == 0 {
+		return finish, legacy, &ModelFinishMismatchError{Finish: finish, ToolCallCount: toolCallCount}
+	}
+	return finish, legacy, nil
+}
+
 func (a *Agent) emitModelCallStepFailed(input modelCallStepInput, stepID string, base map[string]any, started time.Time, stream modelCallStreamResult, err error, emit func(protocol.Event)) {
 	emit(protocol.Event{
 		Type:   protocol.EventModelCallFinished,
 		TurnID: input.TurnID,
 		StepID: stepID,
-		Data:   modelCallEventData(base, protocol.StepStatusFailed, durationMS(started), firstDeltaLatencyMS(started, stream.FirstDeltaAt), stream.Usage, stream.RequestMetadata, err.Error()),
+		Data:   modelCallEventData(base, protocol.StepStatusFailed, durationMS(started), firstDeltaLatencyMS(started, stream.FirstDeltaAt), stream.Usage, stream.RequestMetadata, stream.Finish, stream.FinishLegacy, err.Error()),
 	})
 	emit(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
 		TurnID:     input.TurnID,
@@ -189,12 +250,17 @@ type modelCallStreamResult struct {
 	RequestMetadata provider.RequestMetadata
 	PromptTokens    int64
 	Accumulator     provider.ToolAccumulator
+	Finish          provider.Finish
+	FinishSeen      bool
+	FinishLegacy    bool
 	HookErr         error
 	Err             error
 }
 
 func (a *Agent) collectModelCallStream(ctx context.Context, hookRunner *runtimehooks.Runner, req provider.Request, turnID, stepID string, emit func(protocol.Event)) modelCallStreamResult {
-	events, errs := a.provider.Stream(ctx, req)
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
+	events, errs := a.provider.Stream(streamCtx, req)
 	var result modelCallStreamResult
 	deltas := newModelDeltaCoalescer(turnID, stepID, emit)
 	flushTimer := time.NewTimer(modelDeltaCoalesceMaxDelay)
@@ -214,7 +280,9 @@ func (a *Agent) collectModelCallStream(ctx context.Context, hookRunner *runtimeh
 		},
 		OnEvent: func(event provider.Event) error {
 			wasPending := deltas.Pending()
-			a.collectModelCallEvent(ctx, hookRunner, event, turnID, stepID, &result, deltas, emit)
+			if err := a.collectModelCallEvent(ctx, hookRunner, event, turnID, stepID, &result, deltas, emit); err != nil {
+				return err
+			}
 			switch {
 			case deltas.Pending() && !wasPending:
 				resetModelDeltaTimer(flushTimer)
@@ -233,9 +301,15 @@ func (a *Agent) collectModelCallStream(ctx context.Context, hookRunner *runtimeh
 	return result
 }
 
-func (a *Agent) collectModelCallEvent(ctx context.Context, hookRunner *runtimehooks.Runner, event provider.Event, turnID, stepID string, result *modelCallStreamResult, deltas *modelDeltaCoalescer, emit func(protocol.Event)) {
+func (a *Agent) collectModelCallEvent(ctx context.Context, hookRunner *runtimehooks.Runner, event provider.Event, turnID, stepID string, result *modelCallStreamResult, deltas *modelDeltaCoalescer, emit func(protocol.Event)) error {
 	if result == nil {
-		return
+		return nil
+	}
+	if result.FinishSeen {
+		if event.Kind == provider.EventDone {
+			return fmt.Errorf("provider stream emitted multiple done events")
+		}
+		return fmt.Errorf("provider stream emitted event kind %d after done", event.Kind)
 	}
 	switch event.Kind {
 	case provider.EventContent:
@@ -283,7 +357,10 @@ func (a *Agent) collectModelCallEvent(ctx context.Context, hookRunner *runtimeho
 		}
 	case provider.EventDone:
 		deltas.FlushBoundary()
+		result.Finish = provider.NormalizeFinish(event.Finish)
+		result.FinishSeen = true
 	}
+	return nil
 }
 
 type modelDeltaCoalescer struct {

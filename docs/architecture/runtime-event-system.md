@@ -115,8 +115,15 @@ Each model call is a `model_call` step:
 
 The model-call payload includes provider/model IDs, request metadata, retry
 metadata, token usage, latency fields, prompt inventory, prompt-cache break
-diagnostics, tool snapshot hash, MCP status hash, profile instruction hash, and
-access/permission mode metadata.
+diagnostics, tool snapshot hash, MCP status hash, profile instruction hash,
+access/permission mode metadata, and normalized finish metadata
+(`finish_kind`, bounded `finish_raw_reason`, and `finish_legacy`). A provider
+stream ending is not proof that the agent objective completed: only a natural
+finish without tool calls, or a tool-call finish with parsed calls, can advance
+the loop. Output/context/resource limits, pause, refusal, content filtering,
+unknown or missing termination, and contradictory tool-call state fail closed.
+The legacy empty finish is accepted only for the mock-provider compatibility
+path; real adapters must emit an explicit finish kind.
 
 Tool calls are requested before execution through
 [internal/agent/tool_attempt.go](../../internal/agent/tool_attempt.go):

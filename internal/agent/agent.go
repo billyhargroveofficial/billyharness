@@ -670,7 +670,8 @@ func (a *Agent) modelCallMetadata(requestID string, round, messageCount, toolCou
 	return metadata
 }
 
-func modelCallEventData(base map[string]any, status string, totalLatencyMS, firstDeltaMS int64, usage provider.Usage, meta provider.RequestMetadata, errText string) protocol.ModelCallEvent {
+func modelCallEventData(base map[string]any, status string, totalLatencyMS, firstDeltaMS int64, usage provider.Usage, meta provider.RequestMetadata, finish provider.Finish, finishLegacy bool, errText string) protocol.ModelCallEvent {
+	finish = provider.NormalizeFinish(finish)
 	data := protocol.ModelCallEvent{
 		RequestID:               metadataString(base, "request_id"),
 		Round:                   int(metadataInt64(base, "round")),
@@ -734,6 +735,9 @@ func modelCallEventData(base map[string]any, status string, totalLatencyMS, firs
 	if usage.ReasoningTokens > 0 {
 		data.ReasoningTokens = usage.ReasoningTokens
 	}
+	data.FinishKind = string(finish.Kind)
+	data.FinishRawReason = finish.RawReason
+	data.FinishLegacy = finishLegacy
 	if errText != "" {
 		data.Error = errText
 	}
@@ -783,6 +787,11 @@ func modelCallEventMetadata(data protocol.ModelCallEvent) map[string]any {
 	addInt64Metadata(metadata, "cache_hit_tokens", data.CacheHitTokens)
 	addInt64Metadata(metadata, "cache_miss_tokens", data.CacheMissTokens)
 	addInt64Metadata(metadata, "reasoning_tokens", data.ReasoningTokens)
+	addStringMetadata(metadata, "finish_kind", data.FinishKind)
+	addStringMetadata(metadata, "finish_raw_reason", data.FinishRawReason)
+	if data.FinishLegacy {
+		metadata["finish_legacy"] = true
+	}
 	addStringMetadata(metadata, "error", data.Error)
 	return metadata
 }

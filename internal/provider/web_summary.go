@@ -63,8 +63,12 @@ func (s WebSummarizer) SummarizeWeb(ctx context.Context, req webtools.SummaryReq
 	})
 	var content strings.Builder
 	var usage Usage
+	var finishGuard NaturalFinishGuard
 	if err := DrainStream(ctx, events, errs, StreamDrainOptions{
 		OnEvent: func(event Event) error {
+			if err := finishGuard.Observe(event); err != nil {
+				return fmt.Errorf("web summarizer finish: %w", err)
+			}
 			switch event.Kind {
 			case EventContent:
 				content.WriteString(event.Text)
@@ -75,6 +79,9 @@ func (s WebSummarizer) SummarizeWeb(ctx context.Context, req webtools.SummaryReq
 		},
 	}); err != nil {
 		return webtools.SummaryResult{}, err
+	}
+	if err := finishGuard.Complete(); err != nil {
+		return webtools.SummaryResult{}, fmt.Errorf("web summarizer finish: %w", err)
 	}
 	text := webtools.NormalizeSummaryOutput(content.String(), settings.MaxOutputTokens)
 	if text == "" {

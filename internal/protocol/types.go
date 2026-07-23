@@ -473,6 +473,9 @@ type ModelCallEvent struct {
 	CacheHitTokens          int64             `json:"cache_hit_tokens,omitempty"`
 	CacheMissTokens         int64             `json:"cache_miss_tokens,omitempty"`
 	ReasoningTokens         int64             `json:"reasoning_tokens,omitempty"`
+	FinishKind              string            `json:"finish_kind,omitempty"`
+	FinishRawReason         string            `json:"finish_raw_reason,omitempty"`
+	FinishLegacy            bool              `json:"finish_legacy,omitempty"`
 	Error                   string            `json:"error,omitempty"`
 }
 

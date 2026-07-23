@@ -64,6 +64,7 @@ type Event struct {
 	ArgsDelta string
 	Usage     Usage
 	Request   RequestMetadata
+	Finish    Finish
 }
 
 type Provider interface {
@@ -210,7 +211,7 @@ func (Mock) Stream(ctx context.Context, req Request) (<-chan Event, <-chan error
 		if err := sendEvent(ctx, events, Event{Kind: EventContent, Text: "mock: " + last}); err != nil {
 			return err
 		}
-		return sendEvent(ctx, events, Event{Kind: EventDone})
+		return sendEvent(ctx, events, Event{Kind: EventDone, Finish: Finish{Kind: FinishNatural, RawReason: "mock"}})
 	})
 	return events, errs
 }
@@ -397,6 +398,7 @@ func parseSSE(ctx context.Context, r io.Reader, idle time.Duration, events chan<
 	lines, errs := scanLines(ctx, r)
 	idleTimer, idleC := newStreamIdleTimer(idle)
 	defer stopStreamIdleTimer(idleTimer)
+	var terminal *Finish
 	for {
 		select {
 		case <-ctx.Done():
@@ -421,7 +423,13 @@ func parseSSE(ctx context.Context, r io.Reader, idle time.Duration, events chan<
 				continue
 			}
 			if data == "[DONE]" {
-				if err := sendEvent(ctx, events, Event{Kind: EventDone}); err != nil {
+				finish := Finish{Kind: FinishUnknown, RawReason: "[DONE]"}
+				if terminal == nil {
+					terminal = &finish
+				} else {
+					finish = *terminal
+				}
+				if err := sendEvent(ctx, events, Event{Kind: EventDone, Finish: finish}); err != nil {
 					return err
 				}
 				return nil
@@ -431,6 +439,19 @@ func parseSSE(ctx context.Context, r io.Reader, idle time.Duration, events chan<
 				return err
 			}
 			for _, event := range parsed {
+				if event.Kind == EventDone {
+					if terminal != nil {
+						if *terminal != event.Finish {
+							return fmt.Errorf("contradictory model finish reasons %q and %q", terminal.RawReason, event.Finish.RawReason)
+						}
+						return fmt.Errorf("multiple model finish reasons %q", event.Finish.RawReason)
+					}
+					finish := event.Finish
+					terminal = &finish
+					continue
+				} else if terminal != nil && event.Kind != EventUsage {
+					return fmt.Errorf("provider emitted %v after terminal finish reason %q", event.Kind, terminal.RawReason)
+				}
 				if err := sendEvent(ctx, events, event); err != nil {
 					return err
 				}
@@ -442,7 +463,8 @@ func parseSSE(ctx context.Context, r io.Reader, idle time.Duration, events chan<
 func parseChunk(data []byte) ([]Event, error) {
 	var raw struct {
 		Choices []struct {
-			Delta struct {
+			FinishReason *string `json:"finish_reason"`
+			Delta        struct {
 				Content          string `json:"content"`
 				ReasoningContent string `json:"reasoning_content"`
 				ToolCalls        []struct {
@@ -492,6 +514,19 @@ func parseChunk(data []byte) ([]Event, error) {
 	if len(raw.Choices) == 0 {
 		return events, nil
 	}
+	var finishReason *string
+	for i := range raw.Choices {
+		if raw.Choices[i].FinishReason == nil {
+			continue
+		}
+		if finishReason != nil {
+			return nil, errors.New("SSE chunk contains multiple model finish reasons")
+		}
+		if i != 0 {
+			return nil, fmt.Errorf("unsupported model finish reason for choice index %d", i)
+		}
+		finishReason = raw.Choices[i].FinishReason
+	}
 	delta := raw.Choices[0].Delta
 	if delta.Content != "" {
 		events = append(events, Event{Kind: EventContent, Text: delta.Content})
@@ -507,6 +542,10 @@ func parseChunk(data []byte) ([]Event, error) {
 			ToolName:  call.Function.Name,
 			ArgsDelta: call.Function.Arguments,
 		})
+	}
+	if finishReason != nil {
+		finish := normalizeChatFinishReason(*finishReason)
+		events = append(events, Event{Kind: EventDone, Finish: finish})
 	}
 	return events, nil
 }

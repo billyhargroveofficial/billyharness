@@ -719,7 +719,7 @@ func (p *captureProvider) Stream(ctx context.Context, req provider.Request) (<-c
 		}}
 		events <- provider.Event{Kind: provider.EventContent, Text: "done"}
 		events <- provider.Event{Kind: provider.EventUsage, Usage: provider.Usage{InputTokens: 12, OutputTokens: 3, CacheHitTokens: 7, CacheMissTokens: 5}}
-		events <- provider.Event{Kind: provider.EventDone}
+		events <- provider.Event{Kind: provider.EventDone, Finish: provider.Finish{Kind: provider.FinishNatural, RawReason: "mock"}}
 	}()
 	return events, errs
 }
@@ -732,6 +732,8 @@ type scriptedProvider struct {
 	lastTools []protocol.ToolSpec
 	requests  []provider.Request
 }
+
+func (*scriptedProvider) allowLegacyModelFinish() {}
 
 type staticContentProvider struct {
 	text  string
@@ -753,7 +755,7 @@ func (p staticContentProvider) Stream(ctx context.Context, _ provider.Request) (
 		if p.usage != (provider.Usage{}) {
 			events <- provider.Event{Kind: provider.EventUsage, Usage: p.usage}
 		}
-		events <- provider.Event{Kind: provider.EventDone}
+		events <- provider.Event{Kind: provider.EventDone, Finish: provider.Finish{Kind: provider.FinishNatural, RawReason: "mock"}}
 	}()
 	return events, errs
 }
@@ -797,6 +799,8 @@ func (p *scriptedProvider) Stream(ctx context.Context, req provider.Request) (<-
 type cancelAfterToolProvider struct {
 	calls int
 }
+
+func (*cancelAfterToolProvider) allowLegacyModelFinish() {}
 
 type cancelDuringModelProvider struct {
 	started chan struct{}

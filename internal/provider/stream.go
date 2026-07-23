@@ -35,15 +35,63 @@ type StreamDrainOptions struct {
 	OnFlush func() error
 }
 
+// DrainStream consumes a provider stream without letting a ready terminal
+// error overtake events that the provider published first.
 func DrainStream(ctx context.Context, events <-chan Event, errs <-chan error, opts StreamDrainOptions) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var terminalErr error
 	for events != nil || errs != nil {
 		var flushC <-chan time.Time
 		if opts.FlushC != nil {
 			flushC = opts.FlushC()
 		}
+
+		// Keep cancellation and flushes responsive even when a provider has a
+		// continuously ready event channel.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		select {
+		case <-flushC:
+			if opts.OnFlush != nil {
+				if err := opts.OnFlush(); err != nil {
+					return err
+				}
+			}
+			continue
+		default:
+		}
+
+		// Provider.Stream publishes and closes events before exposing a terminal
+		// error. Prefer every event that is already ready, and defer a terminal
+		// error selected in the blocking select below until one final ready-event
+		// pass. This avoids select's random choice dropping a terminal EventDone,
+		// while still returning promptly for a broken provider that leaves events
+		// open after reporting an error.
+		if events != nil {
+			select {
+			case event, ok := <-events:
+				if !ok {
+					events = nil
+					continue
+				}
+				if opts.OnEvent != nil {
+					if err := opts.OnEvent(event); err != nil {
+						return err
+					}
+				}
+				continue
+			default:
+			}
+		}
+		if terminalErr != nil {
+			return terminalErr
+		}
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -69,9 +117,13 @@ func DrainStream(ctx context.Context, events <-chan Event, errs <-chan error, op
 				continue
 			}
 			if err != nil {
-				return err
+				terminalErr = err
+				errs = nil
 			}
 		}
+	}
+	if terminalErr != nil {
+		return terminalErr
 	}
 	return nil
 }

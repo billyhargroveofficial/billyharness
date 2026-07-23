@@ -96,8 +96,49 @@ func TestCodexStreamSendsResponsesHeadersAndParsesEvents(t *testing.T) {
 		got[1].Kind != EventContent ||
 		got[1].Text != "ok" ||
 		got[2].Kind != EventUsage ||
-		got[3].Kind != EventDone {
+		got[3].Kind != EventDone ||
+		got[3].Finish.Kind != FinishNatural {
 		t.Fatalf("events = %#v", got)
+	}
+}
+
+func TestCodexStreamPreservesTypedTerminalFinishErrorAndRequestMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("openai-request-id", "codex-limit-1")
+		_, _ = w.Write([]byte(`data: {"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}` + "\n\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	c := &Codex{
+		BaseURL:           server.URL,
+		RequestTimeout:    time.Second,
+		StreamIdleTimeout: time.Second,
+		Auth:              &codexAuth{AccessToken: "secret-token"},
+		Client:            server.Client(),
+	}
+	events, errs := c.Stream(context.Background(), Request{
+		RequestID: "request-limit-1",
+		Model:     "gpt-5.5",
+		Messages:  []protocol.Message{{Role: protocol.RoleUser, Content: "continue"}},
+	})
+	var done []Event
+	for event := range events {
+		if event.Kind == EventDone {
+			done = append(done, event)
+		}
+	}
+	if len(done) != 1 || done[0].Finish.Kind != FinishOutputLimit {
+		t.Fatalf("done = %#v", done)
+	}
+	err := <-errs
+	finish, ok := FinishFromError(err)
+	if !ok || finish != done[0].Finish {
+		t.Fatalf("FinishFromError(%v) = %#v, %t; want %#v", err, finish, ok, done[0].Finish)
+	}
+	metadata, ok := RequestMetadataFromError(err)
+	if !ok || metadata.RequestID != "request-limit-1" || metadata.ProviderRequestID != "codex-limit-1" {
+		t.Fatalf("request metadata = %#v, %t", metadata, ok)
 	}
 }
 
@@ -620,7 +661,7 @@ func TestParseResponsesSSEEmitsTextReasoningToolUsageAndDone(t *testing.T) {
 	if events[5].Kind != EventUsage || events[5].Usage != wantUsage {
 		t.Fatalf("usage = %#v", events[5])
 	}
-	if events[6].Kind != EventDone {
+	if events[6].Kind != EventDone || events[6].Finish.Kind != FinishToolCalls {
 		t.Fatalf("done = %#v", events[6])
 	}
 }
@@ -756,6 +797,131 @@ func TestParseResponsesSSEReturnsIncompleteDetailsAndErrorEvent(t *testing.T) {
 	}
 }
 
+func TestParseResponsesSSENormalizesTerminalFinish(t *testing.T) {
+	tests := []struct {
+		name      string
+		sse       string
+		wantKind  FinishKind
+		wantRaw   string
+		wantError string
+	}{
+		{
+			name:     "natural completed",
+			sse:      `data: {"type":"response.completed","response":{"status":"completed"}}` + "\n\n",
+			wantKind: FinishNatural,
+			wantRaw:  "completed",
+		},
+		{
+			name:     "tool call completed",
+			sse:      `data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","call_id":"call_1","name":"fs_list","arguments":"{}"}]}}` + "\n\n",
+			wantKind: FinishToolCalls,
+			wantRaw:  "completed",
+		},
+		{
+			name:     "refusal completed",
+			sse:      `data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"refusal","refusal":"cannot help"}]}]}}` + "\n\n",
+			wantKind: FinishRefusal,
+			wantRaw:  "refusal",
+		},
+		{
+			name:      "output limit incomplete",
+			sse:       `data: {"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}` + "\n\n",
+			wantKind:  FinishOutputLimit,
+			wantRaw:   "max_output_tokens",
+			wantError: "Codex incomplete response: max_output_tokens",
+		},
+		{
+			name:      "content filter incomplete",
+			sse:       `data: {"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"content_filter"}}}` + "\n\n",
+			wantKind:  FinishContentFilter,
+			wantRaw:   "content_filter",
+			wantError: "Codex incomplete response: content_filter",
+		},
+		{
+			name:      "context limit failure",
+			sse:       `data: {"type":"response.failed","response":{"status":"failed","error":{"code":"context_length_exceeded","message":"too long"}}}` + "\n\n",
+			wantKind:  FinishContextLimit,
+			wantRaw:   "context_length_exceeded",
+			wantError: "Codex context_length_exceeded: too long",
+		},
+		{
+			name:      "resource limit failure",
+			sse:       `data: {"type":"response.failed","response":{"status":"failed","error":{"code":"rate_limit_exceeded","message":"slow down"}}}` + "\n\n",
+			wantKind:  FinishResourceLimit,
+			wantRaw:   "rate_limit_exceeded",
+			wantError: "Codex rate_limit_exceeded: slow down",
+		},
+		{
+			name:      "unknown failure",
+			sse:       `data: {"type":"response.failed","response":{"status":"failed","error":{"code":"invalid_prompt","message":"bad input"}}}` + "\n\n",
+			wantKind:  FinishUnknown,
+			wantRaw:   "invalid_prompt",
+			wantError: "Codex invalid_prompt: bad input",
+		},
+		{
+			name:      "contradictory terminal status",
+			sse:       `data: {"type":"response.completed","response":{"status":"incomplete","incomplete_details":{"reason":"content_filter"}}}` + "\n\n",
+			wantKind:  FinishUnknown,
+			wantRaw:   "incomplete",
+			wantError: `contradictory response status "incomplete"`,
+		},
+		{
+			name:      "completed with error details",
+			sse:       `data: {"type":"response.completed","response":{"status":"completed","error":{"code":"server_error","message":"late failure"}}}` + "\n\n",
+			wantKind:  FinishUnknown,
+			wantRaw:   "completed_with_failure_details",
+			wantError: "completed response contains failure details",
+		},
+		{
+			name:      "completed with incomplete details",
+			sse:       `data: {"type":"response.completed","response":{"status":"completed","incomplete_details":{"reason":"max_output_tokens"}}}` + "\n\n",
+			wantKind:  FinishUnknown,
+			wantRaw:   "completed_with_failure_details",
+			wantError: "completed response contains failure details",
+		},
+		{
+			name:      "cancelled",
+			sse:       `data: {"type":"response.cancelled","response":{"status":"cancelled"}}` + "\n\n",
+			wantKind:  FinishPause,
+			wantRaw:   "cancelled",
+			wantError: "response ended with status cancelled",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			events, err := parseTestResponsesSSEResult(tc.sse)
+			if tc.wantError == "" {
+				if err != nil {
+					t.Fatalf("err = %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("err = %v, want substring %q", err, tc.wantError)
+			}
+			var done []Event
+			for _, event := range events {
+				if event.Kind == EventDone {
+					done = append(done, event)
+				}
+			}
+			if len(done) != 1 {
+				t.Fatalf("done events = %#v; all events = %#v", done, events)
+			}
+			if done[0].Finish.Kind != tc.wantKind || done[0].Finish.RawReason != tc.wantRaw {
+				t.Fatalf("finish = %#v, want kind=%q raw=%q", done[0].Finish, tc.wantKind, tc.wantRaw)
+			}
+			if err := done[0].Finish.Validate(); err != nil {
+				t.Fatalf("finish validation: %v", err)
+			}
+			if tc.wantError != "" {
+				finish, ok := FinishFromError(err)
+				if !ok || finish != done[0].Finish {
+					t.Fatalf("FinishFromError(%v) = %#v, %t; want %#v", err, finish, ok, done[0].Finish)
+				}
+			}
+		})
+	}
+}
+
 func TestParseResponsesSSEHandlesMultilineDataAndCRLF(t *testing.T) {
 	sse := "data: {\"type\":\"response.output_text.delta\",\r\n" +
 		"data: \"delta\":\"hi\"}\r\n\r\n" +
@@ -797,16 +963,22 @@ func TestParseResponsesSSEReturnsWhenEventConsumerBlockedAndContextCancelled(t *
 
 func parseTestResponsesSSE(t *testing.T, sse string) []Event {
 	t.Helper()
-	events := make(chan Event, 32)
-	if err := parseResponsesSSE(context.Background(), strings.NewReader(sse), 0, events); err != nil {
+	out, err := parseTestResponsesSSEResult(sse)
+	if err != nil {
 		t.Fatal(err)
 	}
+	return out
+}
+
+func parseTestResponsesSSEResult(sse string) ([]Event, error) {
+	events := make(chan Event, 32)
+	err := parseResponsesSSE(context.Background(), strings.NewReader(sse), 0, events)
 	close(events)
 	var out []Event
 	for event := range events {
 		out = append(out, event)
 	}
-	return out
+	return out, err
 }
 
 func providerPNGBytes(t *testing.T, width, height int) []byte {

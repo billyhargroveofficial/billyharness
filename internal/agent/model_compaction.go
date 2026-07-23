@@ -55,8 +55,12 @@ func (a *Agent) applyModelCompactionSummary(ctx context.Context, messages []prot
 	})
 	var b strings.Builder
 	var usage provider.Usage
+	var finishGuard provider.NaturalFinishGuard
 	if err := provider.DrainStream(ctx, events, errs, provider.StreamDrainOptions{
 		OnEvent: func(event provider.Event) error {
+			if err := finishGuard.Observe(event); err != nil {
+				return fmt.Errorf("model compaction summary finish: %w", err)
+			}
 			switch event.Kind {
 			case provider.EventContent:
 				b.WriteString(event.Text)
@@ -67,6 +71,9 @@ func (a *Agent) applyModelCompactionSummary(ctx context.Context, messages []prot
 		},
 	}); err != nil {
 		return err
+	}
+	if err := finishGuard.Complete(); err != nil {
+		return fmt.Errorf("model compaction summary finish: %w", err)
 	}
 	text := compactModelSummaryText(b.String(), maxOutputTokens)
 	if text == "" {

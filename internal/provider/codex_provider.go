@@ -81,7 +81,10 @@ func (c *Codex) stream(ctx context.Context, req Request, events chan<- Event) er
 	if err := sendEvent(ctx, events, Event{Kind: EventRequestMetadata, Request: meta}); err != nil {
 		return err
 	}
-	return parseResponsesSSE(ctx, resp.Body, c.StreamIdleTimeout, events)
+	if err := parseResponsesSSE(ctx, resp.Body, c.StreamIdleTimeout, events); err != nil {
+		return withRequestMetadata(err, meta)
+	}
+	return nil
 }
 
 func (c *Codex) doResponsesWithRetry(ctx context.Context, body []byte, meta RequestMetadata) (*http.Response, context.CancelFunc, RequestMetadata, error) {
@@ -537,6 +540,8 @@ type responsesParser struct {
 	sawArgsDelta   map[string]bool
 	nextIndex      int
 	sawTextDelta   bool
+	sawToolCall    bool
+	sawRefusal     bool
 	completed      bool
 }
 
@@ -582,6 +587,7 @@ func (p *responsesParser) Handle(ctx context.Context, data []byte, events chan<-
 			}
 		}
 	case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
+		p.sawToolCall = true
 		callID := p.resolveCallID(raw.CallID, raw.ItemID)
 		index := p.toolIndex(callID)
 		p.sawArgsDelta[callID] = true
@@ -599,19 +605,21 @@ func (p *responsesParser) Handle(ctx context.Context, data []byte, events chan<-
 			return nil
 		}
 		return p.handleOutputItem(ctx, raw.Type, raw.Item, events)
-	case "response.completed":
+	case "response.refusal.delta", "response.refusal.done":
+		p.sawRefusal = true
+	case "response.completed", "response.failed", "response.incomplete", "response.cancelled":
 		usage := codexUsage(raw.Response)
 		if usage != (Usage{}) {
 			if err := sendEvent(ctx, events, Event{Kind: EventUsage, Usage: usage}); err != nil {
 				return err
 			}
 		}
-		if err := sendEvent(ctx, events, Event{Kind: EventDone}); err != nil {
+		finish, terminalErr := codexResponseFinish(raw.Response, raw.Type, p.sawToolCall, p.sawRefusal)
+		if err := sendEvent(ctx, events, Event{Kind: EventDone, Finish: finish}); err != nil {
 			return err
 		}
 		p.completed = true
-	case "response.failed", "response.incomplete":
-		return codexResponseError(raw.Response, raw.Type)
+		return terminalErr
 	case "error":
 		if raw.Error != nil {
 			return fmt.Errorf("Codex error %s: %s", raw.Error.Code, raw.Error.Message)
@@ -642,6 +650,7 @@ func (p *responsesParser) handleOutputItem(ctx context.Context, eventType string
 	}
 	switch item.Type {
 	case "function_call", "custom_tool_call":
+		p.sawToolCall = true
 		callID := firstNonEmpty(item.CallID, item.ID)
 		if item.ID != "" && callID != "" {
 			p.callIDByItemID[item.ID] = callID
@@ -665,9 +674,12 @@ func (p *responsesParser) handleOutputItem(ctx context.Context, eventType string
 			ArgsDelta: args,
 		})
 	case "message":
-		if eventType == "response.output_item.done" && !p.sawTextDelta && item.Role == "assistant" {
-			for _, content := range item.Content {
-				if content.Type == "output_text" && content.Text != "" {
+		for _, content := range item.Content {
+			switch content.Type {
+			case "refusal":
+				p.sawRefusal = true
+			case "output_text":
+				if eventType == "response.output_item.done" && !p.sawTextDelta && item.Role == "assistant" && content.Text != "" {
 					if err := sendEvent(ctx, events, Event{Kind: EventContent, Text: content.Text}); err != nil {
 						return err
 					}
@@ -732,6 +744,137 @@ func (p *responsesParser) aliasCallID(from, to string) {
 		p.sawArgsDelta[to] = true
 		delete(p.sawArgsDelta, from)
 	}
+}
+
+type codexTerminalResponse struct {
+	Status string `json:"status"`
+	Error  *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+	IncompleteDetails *struct {
+		Reason string `json:"reason"`
+	} `json:"incomplete_details"`
+	Output []struct {
+		Type    string `json:"type"`
+		Content []struct {
+			Type string `json:"type"`
+		} `json:"content"`
+	} `json:"output"`
+}
+
+// codexResponseFinish normalizes terminal Responses API state. The event type
+// and response.status are redundant in valid streams; disagreement is treated
+// as an explicit unknown finish so a corrupt or incompatible stream can never
+// masquerade as successful completion.
+func codexResponseFinish(data json.RawMessage, eventType string, sawToolCall, sawRefusal bool) (Finish, error) {
+	var response codexTerminalResponse
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &response); err != nil {
+			finish := Finish{Kind: FinishUnknown, RawReason: sanitizeFinishReason(eventType)}
+			return finish, codexFinishTerminalError(finish, fmt.Errorf("invalid Codex terminal response JSON: %w", err))
+		}
+	}
+	for _, output := range response.Output {
+		switch output.Type {
+		case "function_call", "custom_tool_call":
+			sawToolCall = true
+		case "message":
+			for _, content := range output.Content {
+				if content.Type == "refusal" {
+					sawRefusal = true
+				}
+			}
+		}
+	}
+
+	expectedStatus := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(eventType)), "response.")
+	status := codexFinishToken(response.Status)
+	if status != "" && status != expectedStatus {
+		rawReason := firstFinishReason(response.Status, eventType)
+		finish := Finish{Kind: FinishUnknown, RawReason: rawReason}
+		return finish, codexFinishTerminalError(finish, fmt.Errorf("Codex terminal event %s has contradictory response status %q", eventType, response.Status))
+	}
+	if status == "" {
+		status = expectedStatus
+	}
+	if sawToolCall && sawRefusal {
+		finish := Finish{Kind: FinishUnknown, RawReason: "tool_calls_and_refusal"}
+		return finish, codexFinishTerminalError(finish, errors.New("Codex response contains both tool calls and a refusal"))
+	}
+
+	switch status {
+	case "completed":
+		if response.Error != nil || response.IncompleteDetails != nil {
+			finish := Finish{Kind: FinishUnknown, RawReason: "completed_with_failure_details"}
+			return finish, codexFinishTerminalError(finish, errors.New("Codex completed response contains failure details"))
+		}
+		rawReason := firstFinishReason(response.Status, status)
+		switch {
+		case sawRefusal:
+			return Finish{Kind: FinishRefusal, RawReason: "refusal"}, nil
+		case sawToolCall:
+			return Finish{Kind: FinishToolCalls, RawReason: rawReason}, nil
+		default:
+			return Finish{Kind: FinishNatural, RawReason: rawReason}, nil
+		}
+	case "incomplete":
+		rawReason := ""
+		if response.IncompleteDetails != nil {
+			rawReason = response.IncompleteDetails.Reason
+		}
+		finish := normalizeChatFinishReason(rawReason)
+		if finish.RawReason == "" {
+			finish.RawReason = "incomplete"
+		}
+		return finish, codexFinishTerminalError(finish, codexResponseError(data, eventType))
+	case "failed":
+		finish := codexFailedFinish(response)
+		return finish, codexFinishTerminalError(finish, codexResponseError(data, eventType))
+	case "cancelled":
+		finish := Finish{Kind: FinishPause, RawReason: firstFinishReason(response.Status, status)}
+		return finish, codexFinishTerminalError(finish, fmt.Errorf("Codex response ended with status %s", status))
+	default:
+		finish := Finish{Kind: FinishUnknown, RawReason: firstFinishReason(response.Status, status, eventType)}
+		return finish, codexFinishTerminalError(finish, fmt.Errorf("Codex response ended with unsupported status %q", status))
+	}
+}
+
+func codexFinishTerminalError(finish Finish, detail error) error {
+	finishErr := FinishErrorFor(finish)
+	if finishErr == nil {
+		return detail
+	}
+	if detail == nil {
+		return finishErr
+	}
+	return errors.Join(finishErr, detail)
+}
+
+func codexFailedFinish(response codexTerminalResponse) Finish {
+	rawReason := "failed"
+	if response.Error != nil {
+		rawReason = firstFinishReason(response.Error.Code, rawReason)
+	}
+	switch codexFinishToken(rawReason) {
+	case "context_length_exceeded", "context_window_exceeded", "model_context_window_exceeded", "input_too_long":
+		return Finish{Kind: FinishContextLimit, RawReason: rawReason}
+	case "max_output_tokens", "max_tokens", "output_limit":
+		return Finish{Kind: FinishOutputLimit, RawReason: rawReason}
+	case "refusal", "refused":
+		return Finish{Kind: FinishRefusal, RawReason: rawReason}
+	case "content_filter", "content_policy_violation", "image_content_policy_violation", "bio_policy", "cyber_policy", "prohibited_content", "safety":
+		return Finish{Kind: FinishContentFilter, RawReason: rawReason}
+	case "server_error", "rate_limit", "rate_limit_exceeded", "insufficient_quota", "server_overloaded", "overloaded", "resource_exhausted", "vector_store_timeout":
+		return Finish{Kind: FinishResourceLimit, RawReason: rawReason}
+	default:
+		return Finish{Kind: FinishUnknown, RawReason: rawReason}
+	}
+}
+
+func codexFinishToken(value string) string {
+	value = strings.ToLower(sanitizeFinishReason(value))
+	return strings.NewReplacer("-", "_", " ", "_").Replace(value)
 }
 
 func codexUsage(data json.RawMessage) Usage {

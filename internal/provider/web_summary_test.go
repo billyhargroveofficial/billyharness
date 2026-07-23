@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -88,6 +89,31 @@ func TestWebSummarizerRejectsUnsupportedHelperCapabilityBeforeProvider(t *testin
 	}
 }
 
+func TestWebSummarizerRejectsQwenLikeOutputLimitFinish(t *testing.T) {
+	cfg := config.Default()
+	cfg.WebSummaryMode = "model"
+	cfg.WebSummaryProvider = "mock"
+	cfg.WebSummaryModel = "mock-summarizer"
+	summarizer := WebSummarizer{
+		Binding:    cfg.ProviderBinding(),
+		ToolPolicy: cfg.ToolPolicySettings(),
+		NewProvider: func(config.ProviderBinding) (Provider, error) {
+			return summaryEventsProvider{events: []Event{
+				{Kind: EventContent, Text: "QWEN_PARTIAL_MUST_NOT_ESCAPE"},
+				{Kind: EventUsage, Usage: Usage{OutputTokens: 8}},
+				{Kind: EventDone, Finish: Finish{Kind: FinishOutputLimit, RawReason: "length"}},
+			}}, nil
+		},
+	}
+	_, err := summarizer.SummarizeWeb(context.Background(), webtools.SummaryRequest{
+		Source: webtools.SummarySource{URL: "https://example.com", Text: "raw page"},
+	})
+	var finishErr *FinishError
+	if !errors.As(err, &finishErr) || finishErr.Finish.Kind != FinishOutputLimit || finishErr.Finish.RawReason != "length" {
+		t.Fatalf("err = %T %v, finish = %#v", err, err, finishErr)
+	}
+}
+
 func TestWebSummaryCostUsesSubscriptionAndCacheModes(t *testing.T) {
 	if got := webSummaryCostUSD("gpt-5.4-mini", 900, 40, 300, 600); got != 0 {
 		t.Fatalf("subscription helper cost = %.8f, want 0", got)
@@ -109,6 +135,28 @@ func TestWebSummaryCostUsesSubscriptionAndCacheModes(t *testing.T) {
 type summaryProvider struct {
 	content string
 	usage   Usage
+}
+
+type summaryEventsProvider struct {
+	events []Event
+}
+
+func (p summaryEventsProvider) Stream(ctx context.Context, _ Request) (<-chan Event, <-chan error) {
+	events := make(chan Event, len(p.events))
+	errs := make(chan error, 1)
+	go func() {
+		defer close(events)
+		defer close(errs)
+		for _, event := range p.events {
+			select {
+			case events <- event:
+			case <-ctx.Done():
+				errs <- ctx.Err()
+				return
+			}
+		}
+	}()
+	return events, errs
 }
 
 func (p summaryProvider) Stream(ctx context.Context, req Request) (<-chan Event, <-chan error) {
@@ -134,7 +182,7 @@ func (p summaryProvider) Stream(ctx context.Context, req Request) (<-chan Event,
 			return
 		}
 		select {
-		case events <- Event{Kind: EventDone}:
+		case events <- Event{Kind: EventDone, Finish: Finish{Kind: FinishNatural, RawReason: "mock"}}:
 		case <-ctx.Done():
 			errs <- ctx.Err()
 			return

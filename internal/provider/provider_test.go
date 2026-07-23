@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -381,6 +382,37 @@ func TestDrainStreamReturnsErrorAfterPartialEvents(t *testing.T) {
 	}
 }
 
+func TestDrainStreamDrainsReadyDoneBeforeTerminalError(t *testing.T) {
+	wantFinish := Finish{Kind: FinishOutputLimit, RawReason: "length"}
+	wantErr := &FinishError{Finish: wantFinish}
+
+	// Repeating makes this an adversarial regression for the former single
+	// select: when both channels were ready, it could randomly return the error
+	// before delivering EventDone.
+	for i := 0; i < 128; i++ {
+		events := make(chan Event, 1)
+		events <- Event{Kind: EventDone, Finish: wantFinish}
+		close(events)
+		errs := make(chan error, 1)
+		errs <- wantErr
+		close(errs)
+
+		var got []Event
+		err := DrainStream(context.Background(), events, errs, StreamDrainOptions{
+			OnEvent: func(event Event) error {
+				got = append(got, event)
+				return nil
+			},
+		})
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("iteration %d: err = %v, want %v", i, err, wantErr)
+		}
+		if len(got) != 1 || got[0].Kind != EventDone || got[0].Finish != wantFinish {
+			t.Fatalf("iteration %d: events = %#v, want ready done before terminal error", i, got)
+		}
+	}
+}
+
 func TestDrainStreamReturnsContextWhenEventsNeverClose(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -486,6 +518,108 @@ func TestParseChunkCountsPromptTokensAsMissWhenCacheFieldsMissing(t *testing.T) 
 	}
 }
 
+func TestParseChunkEmitsNormalizedFinish(t *testing.T) {
+	events, err := parseChunk([]byte(`{
+		"choices":[{"delta":{},"finish_reason":"length"}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Kind != EventDone {
+		t.Fatalf("events = %#v", events)
+	}
+	want := Finish{Kind: FinishOutputLimit, RawReason: "length"}
+	if events[0].Finish != want {
+		t.Fatalf("finish = %#v, want %#v", events[0].Finish, want)
+	}
+}
+
+func TestParseChunkRejectsMultipleChoiceFinishReasons(t *testing.T) {
+	_, err := parseChunk([]byte(`{
+		"choices":[
+			{"delta":{},"finish_reason":"stop"},
+			{"delta":{},"finish_reason":"length"}
+		]
+	}`))
+	if err == nil || !strings.Contains(err.Error(), "multiple model finish reasons") {
+		t.Fatalf("err = %v, want multiple finish error", err)
+	}
+}
+
+func TestParseChunkRejectsFinishForNonPrimaryChoice(t *testing.T) {
+	_, err := parseChunk([]byte(`{
+		"choices":[
+			{"delta":{"content":"primary"}},
+			{"delta":{},"finish_reason":"stop"}
+		]
+	}`))
+	if err == nil || !strings.Contains(err.Error(), "choice index 1") {
+		t.Fatalf("err = %v, want unsupported non-primary finish error", err)
+	}
+}
+
+func TestParseSSEEmitsOneDoneAfterUsage(t *testing.T) {
+	stream := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"answer"}}]}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		`data: {"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":1}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n\n")
+	events := make(chan Event, 8)
+	if err := parseSSE(context.Background(), strings.NewReader(stream), time.Minute, events); err != nil {
+		t.Fatal(err)
+	}
+	var got []Event
+	for len(events) > 0 {
+		got = append(got, <-events)
+	}
+	if len(got) != 3 || got[0].Kind != EventContent || got[1].Kind != EventUsage || got[2].Kind != EventDone {
+		t.Fatalf("events = %#v", got)
+	}
+	if got[2].Finish != (Finish{Kind: FinishNatural, RawReason: "stop"}) {
+		t.Fatalf("done finish = %#v", got[2].Finish)
+	}
+}
+
+func TestParseSSERejectsRepeatedAndContradictoryFinishReasons(t *testing.T) {
+	tests := []struct {
+		name   string
+		second string
+		want   string
+	}{
+		{name: "repeated", second: "stop", want: "multiple model finish reasons"},
+		{name: "contradictory", second: "length", want: "contradictory model finish reasons"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stream := strings.Join([]string{
+				`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+				fmt.Sprintf(`data: {"choices":[{"delta":{},"finish_reason":%q}]}`, test.second),
+				`data: [DONE]`,
+				"",
+			}, "\n\n")
+			err := parseSSE(context.Background(), strings.NewReader(stream), time.Minute, make(chan Event, 8))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("err = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestParseSSERejectsContentAfterFinishReason(t *testing.T) {
+	stream := strings.Join([]string{
+		`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		`data: {"choices":[{"delta":{"content":"too late"}}]}`,
+		`data: [DONE]`,
+		"",
+	}, "\n\n")
+	err := parseSSE(context.Background(), strings.NewReader(stream), time.Minute, make(chan Event, 8))
+	if err == nil || !strings.Contains(err.Error(), "after terminal finish reason") {
+		t.Fatalf("err = %v, want event-after-finish error", err)
+	}
+}
+
 func TestParseSSEReturnsWhenEventConsumerBlockedAndContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -524,6 +658,9 @@ func TestParseSSEReturnsImmediatelyAfterDone(t *testing.T) {
 	case event := <-events:
 		if event.Kind != EventDone {
 			t.Fatalf("event = %#v", event)
+		}
+		if event.Finish != (Finish{Kind: FinishUnknown, RawReason: "[DONE]"}) {
+			t.Fatalf("finish = %#v", event.Finish)
 		}
 	default:
 		t.Fatal("missing done event")
