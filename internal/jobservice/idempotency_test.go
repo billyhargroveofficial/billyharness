@@ -17,6 +17,7 @@ func TestManagerCreateIdempotentConcurrentDurationAdmissionsHaveOneWinner(t *tes
 	manager := newTestManager(t, store, &scriptedRunner{store: store})
 	base := testSpec(t, "job-idempotent-race")
 	base.CreateRequestHash = strings.Repeat("a", 64)
+	base.AdmittedAt = base.Deadline.Add(-2 * time.Hour)
 	base.NotBeforeComplete = base.Deadline.Add(-time.Hour)
 	base.CycleCadenceSeconds = 60
 
@@ -33,6 +34,7 @@ func TestManagerCreateIdempotentConcurrentDurationAdmissionsHaveOneWinner(t *tes
 			// instants and therefore compile to slightly different absolute floors.
 			candidate.Deadline = candidate.Deadline.Add(time.Duration(offset) * time.Millisecond)
 			candidate.NotBeforeComplete = candidate.NotBeforeComplete.Add(time.Duration(offset) * time.Millisecond)
+			candidate.AdmittedAt = candidate.AdmittedAt.Add(time.Duration(offset) * time.Millisecond)
 			view, err := manager.CreateIdempotent(context.Background(), candidate)
 			errorsByCaller <- err
 			views <- view
@@ -47,7 +49,7 @@ func TestManagerCreateIdempotentConcurrentDurationAdmissionsHaveOneWinner(t *tes
 		}
 	}
 	for view := range views {
-		if view.State.Spec.ID != base.ID || view.State.Spec.CreateRequestHash != base.CreateRequestHash {
+		if view.State.Spec.ID != base.ID || view.State.Spec.CreateRequestHash != base.CreateRequestHash || view.State.Spec.AdmittedAt.IsZero() {
 			t.Fatalf("CreateIdempotent() view = %#v", view)
 		}
 	}

@@ -402,6 +402,7 @@ func (s *FileStore) List(ctx context.Context) ([]JobSummary, error) {
 			Revision:       state.Revision,
 			Cycle:          state.Cycle,
 			Usage:          state.Usage,
+			AdmittedAt:     state.Spec.AdmittedAt,
 			Deadline:       state.Spec.Deadline,
 		})
 	}

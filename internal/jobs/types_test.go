@@ -55,6 +55,42 @@ func TestJobSpecStrictValidation(t *testing.T) {
 	}
 }
 
+func TestJobSpecAdmittedAtValidationAllowsLegacyZero(t *testing.T) {
+	t.Parallel()
+
+	legacy := validDomainSpec(t, 2)
+	if !legacy.AdmittedAt.IsZero() {
+		t.Fatalf("legacy admitted_at = %s, want zero", legacy.AdmittedAt)
+	}
+	if err := legacy.Validate(); err != nil {
+		t.Fatalf("legacy zero admitted_at: %v", err)
+	}
+
+	valid := legacy
+	valid.AdmittedAt = valid.Deadline.Add(-time.Hour)
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid admitted_at: %v", err)
+	}
+
+	nonUTC := valid
+	nonUTC.AdmittedAt = time.Date(2026, time.July, 24, 11, 0, 0, 0, time.FixedZone("admission", 3*60*60))
+	if err := nonUTC.Validate(); err == nil || !strings.Contains(err.Error(), "admitted_at must be UTC") {
+		t.Fatalf("non-UTC admitted_at error = %v", err)
+	}
+
+	atDeadline := valid
+	atDeadline.AdmittedAt = atDeadline.Deadline
+	if err := atDeadline.Validate(); err == nil || !strings.Contains(err.Error(), "admitted_at must be before deadline") {
+		t.Fatalf("late admitted_at error = %v", err)
+	}
+
+	afterDeadline := valid
+	afterDeadline.AdmittedAt = afterDeadline.Deadline.Add(time.Second)
+	if err := afterDeadline.Validate(); err == nil || !strings.Contains(err.Error(), "admitted_at must be before deadline") {
+		t.Fatalf("future admitted_at error = %v", err)
+	}
+}
+
 func TestPortableIdentifiersAllowDottedRoleAndStageIDs(t *testing.T) {
 	t.Parallel()
 

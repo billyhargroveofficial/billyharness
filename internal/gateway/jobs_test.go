@@ -54,8 +54,8 @@ func TestCompileJobSpecClampsAuthorityAndIsolatesWriter(t *testing.T) {
 	if err := jobstore.ValidatePortableID(spec.ID); err != nil || !strings.HasPrefix(spec.ID, "j-") {
 		t.Fatalf("generated id = %q err=%v, want portable j- prefix", spec.ID, err)
 	}
-	if spec.Route != request.Route || !spec.Deadline.Equal(now.Add(time.Hour)) {
-		t.Fatalf("route/deadline = %#v %s", spec.Route, spec.Deadline)
+	if spec.Route != request.Route || !spec.AdmittedAt.Equal(now) || spec.AdmittedAt.Location() != time.UTC || !spec.Deadline.Equal(now.Add(time.Hour)) {
+		t.Fatalf("route/admitted_at/deadline = %#v %s %s", spec.Route, spec.AdmittedAt, spec.Deadline)
 	}
 	if got := spec.Authority; !equalAuthority(got, jobs.Authority{
 		Mode:         jobs.AuthorityModeAllowList,
@@ -160,6 +160,9 @@ func TestCompileJobSpecPersistsAbsoluteRuntimeFloorAndCadence(t *testing.T) {
 	if !spec.NotBeforeComplete.Equal(now.UTC().Add(30*time.Minute)) || spec.NotBeforeComplete.Location() != time.UTC {
 		t.Fatalf("not_before_complete = %s", spec.NotBeforeComplete)
 	}
+	if !spec.AdmittedAt.Equal(now.UTC()) || spec.AdmittedAt.Location() != time.UTC {
+		t.Fatalf("admitted_at = %s, want UTC %s", spec.AdmittedAt, now.UTC())
+	}
 	if spec.CycleCadenceSeconds != 5*60 || !spec.Deadline.Equal(now.UTC().Add(time.Hour)) {
 		t.Fatalf("schedule = floor:%s cadence:%d deadline:%s", spec.NotBeforeComplete, spec.CycleCadenceSeconds, spec.Deadline)
 	}
@@ -183,6 +186,9 @@ func TestCompileJobSpecPreservesClientIDAndStableCreateHashAcrossAdmissionTimes(
 	}
 	if first.Deadline.Equal(second.Deadline) {
 		t.Fatalf("relative admission deadlines unexpectedly equal: %s", first.Deadline)
+	}
+	if first.AdmittedAt.Equal(second.AdmittedAt) || !first.AdmittedAt.Equal(first.Deadline.Add(-time.Hour)) || !second.AdmittedAt.Equal(second.Deadline.Add(-time.Hour)) {
+		t.Fatalf("admission times/deadlines = %s/%s and %s/%s", first.AdmittedAt, first.Deadline, second.AdmittedAt, second.Deadline)
 	}
 }
 
@@ -268,8 +274,12 @@ func TestJobRoutesCreateListGetAndActions(t *testing.T) {
 		t.Fatalf("create status = %d body=%s", createdRecorder.Code, createdRecorder.Body.String())
 	}
 	created := decodeJobResponse(t, createdRecorder)
-	if created.Active || created.State.Status != jobs.JobStatusQueued || created.State.Spec.Route != request.Route {
+	if created.Active || created.State.Status != jobs.JobStatusQueued || created.State.Spec.Route != request.Route || created.State.Spec.AdmittedAt.IsZero() {
 		t.Fatalf("created = %#v", created)
+	}
+	admittedAt := created.State.Spec.AdmittedAt
+	if admittedAt.Location() != time.UTC || !admittedAt.Before(created.State.Spec.Deadline) {
+		t.Fatalf("created admitted_at/deadline = %s/%s", admittedAt, created.State.Spec.Deadline)
 	}
 	jobID := created.State.Spec.ID
 	if controller.startCalls != 0 {
@@ -284,12 +294,13 @@ func TestJobRoutesCreateListGetAndActions(t *testing.T) {
 	if err := json.Unmarshal(listedRecorder.Body.Bytes(), &listed); err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Jobs) != 1 || listed.Jobs[0].ID != jobID {
+	if len(listed.Jobs) != 1 || listed.Jobs[0].ID != jobID || !listed.Jobs[0].AdmittedAt.Equal(admittedAt) {
 		t.Fatalf("listed = %#v", listed)
 	}
 
 	getRecorder := serveJobRequest(server, http.MethodGet, "/v1/jobs/"+jobID, nil, "")
-	if getRecorder.Code != http.StatusOK || decodeJobResponse(t, getRecorder).State.Spec.ID != jobID {
+	shown := decodeJobResponse(t, getRecorder)
+	if getRecorder.Code != http.StatusOK || shown.State.Spec.ID != jobID || !shown.State.Spec.AdmittedAt.Equal(admittedAt) {
 		t.Fatalf("get status=%d body=%s", getRecorder.Code, getRecorder.Body.String())
 	}
 
@@ -700,7 +711,18 @@ func (f *fakeJobController) List(_ context.Context) ([]jobservice.Summary, error
 	}
 	out := make([]jobservice.Summary, 0, len(f.views))
 	for id, view := range f.views {
-		out = append(out, jobservice.Summary{Job: jobstore.JobSummary{ID: id, Status: view.State.Status}})
+		out = append(out, jobservice.Summary{Job: jobstore.JobSummary{
+			ID:             id,
+			Goal:           view.State.Spec.Goal,
+			Preset:         view.State.Spec.Preset,
+			Status:         view.State.Status,
+			TerminalReason: view.State.TerminalReason,
+			Revision:       view.State.Revision,
+			Cycle:          view.State.Cycle,
+			Usage:          view.State.Usage,
+			AdmittedAt:     view.State.Spec.AdmittedAt,
+			Deadline:       view.State.Spec.Deadline,
+		}})
 	}
 	return out, nil
 }

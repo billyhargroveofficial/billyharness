@@ -51,6 +51,47 @@ func TestReplayEmptyLogStartsQueuedFromSpecHash(t *testing.T) {
 	}
 }
 
+func TestReplayAcceptsLegacySpecWithoutAdmittedAt(t *testing.T) {
+	t.Parallel()
+
+	legacy, _ := replayTestFixture(t)
+	if !legacy.Spec.AdmittedAt.IsZero() {
+		t.Fatalf("fixture admitted_at = %s, want legacy zero", legacy.Spec.AdmittedAt)
+	}
+	encoded, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(`"admitted_at"`)) {
+		t.Fatalf("legacy envelope unexpectedly contains admitted_at: %s", encoded)
+	}
+
+	var decoded SpecEnvelope
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.SpecHash != legacy.SpecHash {
+		t.Fatalf("decoded legacy hash = %q, want unchanged %q", decoded.SpecHash, legacy.SpecHash)
+	}
+	if err := decoded.Validate(); err != nil {
+		t.Fatalf("validate legacy envelope/hash: %v", err)
+	}
+	recomputed, err := ComputeSpecHash(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recomputed != legacy.SpecHash {
+		t.Fatalf("recomputed legacy hash = %q, want unchanged %q", recomputed, legacy.SpecHash)
+	}
+	result, err := Replay(decoded, bytes.NewReader(nil), DefaultMaxRecordBytes)
+	if err != nil {
+		t.Fatalf("Replay legacy envelope: %v", err)
+	}
+	if !result.State.Spec.AdmittedAt.IsZero() || result.State.Status != jobs.JobStatusQueued {
+		t.Fatalf("legacy replay state = %#v", result.State)
+	}
+}
+
 func TestParseAndReplayReportOnlyUnterminatedTailAsRecoverable(t *testing.T) {
 	spec, records := replayTestFixture(t)
 	first := marshalEventRecords(t, records[0])

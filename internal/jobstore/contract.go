@@ -77,7 +77,10 @@ type JobSummary struct {
 	Revision       uint64              `json:"revision"`
 	Cycle          uint64              `json:"cycle"`
 	Usage          jobs.Usage          `json:"usage"`
-	Deadline       time.Time           `json:"deadline"`
+	// AdmittedAt is copied from the immutable spec. It may be zero for a legacy
+	// spec or a quarantined entry whose immutable spec could not be trusted.
+	AdmittedAt time.Time `json:"admitted_at,omitzero"`
+	Deadline   time.Time `json:"deadline"`
 	// Quarantine is set when this job failed closed during independent list
 	// validation. A quarantined entry is never admitted for execution, but it
 	// remains visible to operators so one damaged job cannot either hide itself

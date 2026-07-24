@@ -121,6 +121,12 @@ or external dependency. It has no automatic wake and lasts until explicit
 resume or the hard deadline. Autonomous rechecking, research, critique, coding,
 and testing must use `continue`.
 
+New immutable specs also persist `admitted_at`, captured from the same UTC
+clock sample used to resolve the deadline and earliest-success schedule. It is
+the canonical origin for elapsed wall time in operator clients and survives
+gateway/TUI restarts. A zero value remains valid only for legacy specs and is
+rendered as unavailable rather than inferred from a local observation.
+
 For example, this prevents successful completion during the first five
 wall-clock hours and applies a six-hour hard cap. Omitting `-cadence` lets the
 CLI derive and send the explicit provider-neutral cadence. The configured

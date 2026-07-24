@@ -246,6 +246,11 @@ type JobSpec struct {
 	// MinCycles is a quality-floor, not a wall-clock promise. Zero preserves
 	// legacy/default behavior and means one complete workflow cycle.
 	MinCycles uint64 `json:"min_cycles,omitempty"`
+	// AdmittedAt is the canonical UTC instant at which the gateway admitted
+	// this immutable job spec. It is persisted from the same clock sample used
+	// to resolve relative schedule fields. Zero remains accepted for replay of
+	// specs created before admission time became durable metadata.
+	AdmittedAt time.Time `json:"admitted_at,omitzero"`
 	// NotBeforeComplete is an optional absolute UTC earliest-success gate.
 	// Successful completion is rejected before it; queueing, pauses, and daemon
 	// downtime still advance this wall clock, so it is not a compute guarantee.
@@ -284,6 +289,14 @@ func (s JobSpec) Validate() error {
 	}
 	if s.Deadline.Location() != time.UTC {
 		return fmt.Errorf("deadline must be UTC")
+	}
+	if !s.AdmittedAt.IsZero() {
+		if s.AdmittedAt.Location() != time.UTC {
+			return fmt.Errorf("admitted_at must be UTC")
+		}
+		if !s.AdmittedAt.Before(s.Deadline) {
+			return fmt.Errorf("admitted_at must be before deadline")
+		}
 	}
 	if s.CycleCadenceSeconds > uint64((1<<63-1)/int64(time.Second)) {
 		return fmt.Errorf("cycle_cadence_seconds is too large")

@@ -63,6 +63,7 @@ func TestFileStoreCreateLoadAndListStableOrder(t *testing.T) {
 			got.Preset != created.Spec.Preset ||
 			got.Status != jobs.JobStatusQueued ||
 			got.Revision != 0 ||
+			got.AdmittedAt != created.Spec.AdmittedAt ||
 			got.Deadline != created.Spec.Deadline {
 			t.Fatalf("summary %d = %#v, want queued summary for %q", index, got, wantID)
 		}
@@ -828,12 +829,13 @@ func fileStoreTestSpec(t *testing.T, jobID string) jobs.JobSpec {
 		t.Fatalf("CompilePreset(): %v", err)
 	}
 	return jobs.JobSpec{
-		ID:       jobID,
-		Goal:     "Produce and verify a durable provider-neutral result.",
-		Preset:   workflow.Name,
-		Workers:  workflow.Workers,
-		Deadline: fileStoreTestTime().Add(24 * time.Hour),
-		Budget:   jobs.Budget{MaxCycles: 8, MaxAttempts: 32, MaxModelCalls: 128, MaxTokens: 1_000_000},
+		ID:         jobID,
+		Goal:       "Produce and verify a durable provider-neutral result.",
+		Preset:     workflow.Name,
+		Workers:    workflow.Workers,
+		AdmittedAt: fileStoreTestTime(),
+		Deadline:   fileStoreTestTime().Add(24 * time.Hour),
+		Budget:     jobs.Budget{MaxCycles: 8, MaxAttempts: 32, MaxModelCalls: 128, MaxTokens: 1_000_000},
 		Route: jobs.ExecutionRoute{
 			ProviderID: "qwen",
 			ModelID:    "qwen3.8-max-preview",

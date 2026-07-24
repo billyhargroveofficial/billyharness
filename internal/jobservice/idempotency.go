@@ -32,9 +32,10 @@ func (e *CreateConflictError) Is(target error) bool {
 
 // CreateIdempotent creates a job whose client ID and canonical create hash are
 // already embedded in spec. Unlike Create, it reconciles a duplicate/lost ACK
-// by loading the durable winner. Only the server-derived deadline may differ:
-// duration/min_runtime fields are resolved at admission time on every HTTP
-// attempt, while CreateRequestHash binds the original relative request itself.
+// by loading the durable winner. Server-derived schedule timestamps and the
+// admission timestamp may differ: relative fields are resolved at admission
+// time on every HTTP attempt, while CreateRequestHash binds the original
+// request itself.
 func (m *Manager) CreateIdempotent(ctx context.Context, spec jobs.JobSpec) (View, error) {
 	if err := m.requireOpen(); err != nil {
 		return View{}, err
@@ -74,6 +75,7 @@ func equivalentIdempotentCreate(existing, requested jobs.JobSpec) bool {
 	// exact values, so normalizing here cannot merge distinct requests.
 	requested.Deadline = existing.Deadline
 	requested.NotBeforeComplete = existing.NotBeforeComplete
+	requested.AdmittedAt = existing.AdmittedAt
 	existingEnvelope, err := jobstore.NewSpecEnvelope(existing)
 	if err != nil {
 		return false

@@ -1301,7 +1301,7 @@ func (s *memoryStore) List(ctx context.Context) ([]jobstore.JobSummary, error) {
 		out = append(out, jobstore.JobSummary{
 			ID: state.Spec.ID, Goal: state.Spec.Goal, Preset: state.Spec.Preset, Status: state.Status,
 			TerminalReason: state.TerminalReason, Revision: state.Revision, Cycle: state.Cycle,
-			Usage: state.Usage, Deadline: state.Spec.Deadline,
+			Usage: state.Usage, AdmittedAt: state.Spec.AdmittedAt, Deadline: state.Spec.Deadline,
 		})
 	}
 	out = append(out, s.quarantined...)

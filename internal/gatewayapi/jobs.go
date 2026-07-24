@@ -343,9 +343,12 @@ type JobSummaryResponse struct {
 	Revision       uint64              `json:"revision"`
 	Cycle          uint64              `json:"cycle"`
 	Usage          jobs.Usage          `json:"usage"`
-	Deadline       time.Time           `json:"deadline"`
-	Active         bool                `json:"active"`
-	LastError      string              `json:"last_error,omitempty"`
+	// AdmittedAt is the immutable UTC gateway admission time. It may be zero
+	// for a legacy spec or a quarantined entry whose spec could not be trusted.
+	AdmittedAt time.Time `json:"admitted_at,omitzero"`
+	Deadline   time.Time `json:"deadline"`
+	Active     bool      `json:"active"`
+	LastError  string    `json:"last_error,omitempty"`
 }
 
 type JobListResponse struct {
