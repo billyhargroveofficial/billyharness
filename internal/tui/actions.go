@@ -407,7 +407,7 @@ func actionRegistry() []actionSpec {
 				if strings.TrimSpace(m.gatewayURL) == "" {
 					m.addInfoBlock("DURABLE JOBS", strings.Join([]string{
 						"Durable jobs run in the gateway, not inside a local TUI chat.",
-						"Export BILLYHARNESS_GATEWAY_AUTH_TOKEN in both terminals.",
+						"On first normal macOS/Linux launch the gateway creates $BILLYHARNESS_HOME/auth/gateway.token; local Billyharness clients load it automatically.",
 						"Terminal 1: cd to a directory that covers every requested file root, then run ./bin/fast-agent-harness gateway -job-concurrency 4 -addr 127.0.0.1:8765",
 						"Terminal 2: ./bin/fast-agent-harness tui -gateway http://127.0.0.1:8765, then run /jobs.",
 					}, "\n"))

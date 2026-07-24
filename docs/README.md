@@ -68,7 +68,7 @@ binary's registry fingerprints with generated `source-hash` footers.
 
 - `adr/`: append-only architecture decision records. Use this for durable
   choices and rationale, not for active proposals or TODO checklists. ADR 0004
-  and 0005 were never assigned; the next new ADR is 0009.
+  and 0005 were never assigned; the next new ADR is 0010.
 - [ADR 0001](adr/0001-jsonl-event-log-source-of-truth.md): JSONL event logs are
   the durable source of truth for persisted event streams.
 - [ADR 0002](adr/0002-gateway-owns-session-authority.md): the gateway owns
@@ -83,6 +83,9 @@ binary's registry fingerprints with generated `source-hash` footers.
   bypass.
 - [ADR 0008](adr/0008-gateway-state-reads-require-bearer-when-token-configured.md):
   gateway `/v1/` state reads require bearer auth when a token is configured.
+- [ADR 0009](adr/0009-manage-loopback-gateway-token-in-dedicated-home-file.md):
+  loopback gateway processes share a private managed token without forwarding
+  it to remote URLs.
 
 ## Known Documentation Gaps
 

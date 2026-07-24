@@ -1055,7 +1055,6 @@ func doctorProbeGatewayEndpoint(ctx context.Context, baseURL string, path string
 	if err != nil {
 		return "fail", err.Error(), false
 	}
-	gatewayapi.SetAuthHeaderFromEnv(req)
 	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
 		return "fail", baseURL + path + ": " + err.Error(), false

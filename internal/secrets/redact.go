@@ -26,6 +26,7 @@ var patterns = []redactPattern{
 	{regexp.MustCompile(`\b\d{6,12}:[A-Za-z0-9_-]{20,}\b`), `[redacted]`},
 	{regexp.MustCompile(`\bsk-sp-[A-Za-z0-9._-]{12,}\b`), `[redacted]`},
 	{regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{12,}\b`), `[redacted]`},
+	{regexp.MustCompile(`\bbgh_[A-Fa-f0-9]{64}\b`), `[redacted]`},
 	{regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{20,}\b`), `[redacted]`},
 	{regexp.MustCompile(`\bgh[opsu]_[A-Za-z0-9_]{20,}\b`), `[redacted]`},
 	{regexp.MustCompile(`\by0__[A-Za-z0-9_-]{20,}\b`), `[redacted]`},

@@ -66,27 +66,48 @@ $env:BILLYHARNESS_HOME = "$HOME\billyharness"
 .\dev.ps1 -Mock
 ```
 
+Managed token persistence with UID, POSIX-mode, link, and process-lock checks
+is currently enabled on macOS and Linux. On Windows, use an explicit
+`BILLYHARNESS_GATEWAY_AUTH_TOKEN` in each gateway client process or the
+documented loopback development bypass; the harness fails closed instead of
+claiming POSIX-style file guarantees.
+
 Running `bin/fast-agent-harness` with no subcommand starts the gateway. The gateway uses the model and
 reasoning mode saved in `$BILLYHARNESS_HOME/settings.json` (`~/billyharness/settings.json` by default),
 unless command-line flags or env vars override them. The TUI auto-discovers a local gateway from the same
 config, so `-gateway` is only needed for a non-default remote gateway.
 
 By default the gateway listens on `127.0.0.1:8765`. Mutating `/v1` routes
-require a bearer token even on loopback. Set one for normal use; the explicit
+require a bearer token even on loopback. On the first normal macOS/Linux
+launch, if no explicit token exists, the gateway generates a cryptographically
+random token and stores it in the dedicated
+`$BILLYHARNESS_HOME/auth/gateway.token` file (`auth` mode `0700`, file mode
+`0600` on macOS/Linux). Billyharness gateway clients load that same file for
+loopback requests, so separate local terminals do not need matching `export`
+commands. `-auth-token` and `BILLYHARNESS_GATEWAY_AUTH_TOKEN` remain explicit
+server/operator overrides; an override known only to the gateway process is not
+automatically shared with another terminal. The
 `-dev-allow-unauthenticated-loopback-mutations` flag is only for disposable
-local development. A token is mandatory when binding a non-loopback address
-such as `0.0.0.0:8765`:
+loopback development. First-time automatic provisioning is loopback-only. A
+non-loopback deployment must already have the dedicated token or an explicit
+environment override and must put bearer traffic behind HTTPS or an SSH tunnel.
 
 ```bash
-export BILLYHARNESS_GATEWAY_AUTH_TOKEN='change-me'
-./bin/fast-agent-harness gateway -addr 0.0.0.0:8765
-curl -H "Authorization: Bearer $BILLYHARNESS_GATEWAY_AUTH_TOKEN" http://127.0.0.1:8765/v1/auth/status
+./bin/fast-agent-harness gateway -addr 127.0.0.1:8765
+
+# A second Billyharness process reads the generated token automatically.
+./bin/fast-agent-harness tui -gateway http://127.0.0.1:8765
 ```
 
 `/health` remains unauthenticated for cheap liveness. `/ready` returns bounded
 readiness details for effective config, tool/MCP status, and session-store startup
-health. The `run`, `chat`, `telegram`, and `jobs` gateway clients read
-`BILLYHARNESS_GATEWAY_AUTH_TOKEN` automatically when calling a protected gateway.
+health. The `run`, `chat`, `telegram`, and `jobs` gateway clients resolve the
+shared token from the process environment or dedicated token file automatically
+when calling a protected loopback gateway. The old home dotenv keys remain
+migration fallbacks but project dotenv files cannot choose gateway transport
+auth. Managed local-file credentials are never forwarded to a non-loopback URL;
+remote clients must use an explicit process token. Non-Billyharness HTTP clients
+must still attach the bearer explicitly.
 
 ## Durable multi-agent jobs
 
@@ -114,7 +135,6 @@ read/write root must still be inside the server authority.
 
 ```bash
 BH=/absolute/path/to/bin/fast-agent-harness
-export BILLYHARNESS_GATEWAY_AUTH_TOKEN='change-me'
 
 # Terminal 1: with default config, this becomes the workspace boundary.
 cd /absolute/path/to/workspace
@@ -177,10 +197,10 @@ Qwen Token Plan Individual; its published terms permit interactive
 programming/agent-tool use but prohibit automated scripts, application
 backends, and non-interactive batch processing. Use a metered/custom endpoint
 with suitable terms for unattended 6–24 hour jobs. The example below assumes
-such an endpoint and an explicit gateway bearer token.
+such an endpoint; the gateway and jobs client share their generated token file
+automatically.
 
 ```bash
-export BILLYHARNESS_GATEWAY_AUTH_TOKEN='change-me'
 ./bin/fast-agent-harness gateway -job-concurrency 2
 
 ./bin/fast-agent-harness jobs create \
@@ -265,6 +285,16 @@ Use `BILLYHARNESS_HOME=/path/to/dir` to move that state elsewhere.
 
 ## Credentials
 
+The gateway bearer is a local transport credential, separate from model
+provider credentials. Normal macOS/Linux loopback startup without an explicit
+override or development bypass creates
+`$BILLYHARNESS_HOME/auth/gateway.token` automatically; Billyharness clients
+using the same home read it for loopback requests without shell exports.
+Billyharness deliberately does not forward that managed local token to a remote
+gateway; set `BILLYHARNESS_GATEWAY_AUTH_TOKEN` in the remote client process
+instead. Do not put the raw gateway token in `config.toml` or pass it in argv
+unless an external deployment system explicitly manages that override.
+
 The TUI credential menu is available through `/auth`. It has two setup actions:
 
 - `/auth deepseek` prompts for a DeepSeek API key and stores it in the effective
@@ -309,20 +339,31 @@ When exposed through Telegram, `/auth` is owner-only and secret-bearing
 The same actions are exposed through the gateway API:
 
 ```bash
+gateway_token="${BILLYHARNESS_GATEWAY_AUTH_TOKEN:-}"
+if [ -z "$gateway_token" ]; then
+  gateway_token="$(tr -d '\r\n' < "${BILLYHARNESS_HOME:-$HOME/billyharness}/auth/gateway.token")"
+fi
+
 curl -X POST http://127.0.0.1:8765/v1/auth/deepseek \
+  -H "Authorization: Bearer $gateway_token" \
   -H 'Content-Type: application/json' \
   -d '{"api_key":"sk-..."}'
 
 codex login
 curl -X POST http://127.0.0.1:8765/v1/auth/codex/import \
+  -H "Authorization: Bearer $gateway_token" \
   -H 'Content-Type: application/json' \
   -d '{}'
 
-curl http://127.0.0.1:8765/v1/auth/status
+curl -H "Authorization: Bearer $gateway_token" \
+  http://127.0.0.1:8765/v1/auth/status
+unset gateway_token
 ```
 
 Auth status responses show only metadata such as configured/missing, path, mode, account id, and expiry.
 They do not return API keys, access tokens, or refresh tokens.
+Prefer Billyharness clients for normal use; raw `curl` necessarily receives an
+explicit header and may expose it briefly in local process inspection.
 
 ## MCP
 

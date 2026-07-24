@@ -1,10 +1,11 @@
 # Production Services
 
-Last verified: 2026-07-05. Command shapes here were checked against
+Live-host facts last verified: 2026-07-05. Command shapes updated locally:
+2026-07-24, checked against
 `README.md`, `go run ./cmd/fast-agent-harness help`,
-`go run ./cmd/fast-agent-harness doctor -h`, `internal/gatewaybase`, and the
-current service and doctor command sources. Live production service facts were
-checked over SSH; re-check them live before changing production.
+`go run ./cmd/fast-agent-harness doctor -h`, `internal/gatewayauth`,
+`internal/gatewayapi`, and the current service and doctor command sources.
+Re-check live production state before changing it.
 
 This runbook records production operation steps. It does not define
 architecture and it does not include systemd unit contents.
@@ -216,8 +217,8 @@ that mechanism instead of forcing a source checkout pattern.
 ## Gateway Auth And Binding
 
 The default gateway address is `127.0.0.1:8765`. If binding to a non-loopback
-address, configure bearer auth first. The README shows the protected-gateway
-shape:
+address, configure bearer auth first. An explicit process-managed deployment
+has this shape:
 
 ```sh
 export BILLYHARNESS_GATEWAY_AUTH_TOKEN='change-me'
@@ -242,9 +243,11 @@ production setting.
 setsid ./bin/fast-agent-harness > gateway.log 2>&1 < /dev/null &
 ```
 
-Because current gateway startup requires auth unless the development bypass is
-explicitly enabled, verify that `BILLYHARNESS_GATEWAY_AUTH_TOKEN` or
-`-auth-token` is configured before using that pattern on production.
+Normal loopback startup provisions
+`$BILLYHARNESS_HOME/auth/gateway.token` before opening the listener, so the
+detached process and local Billyharness clients can share auth without an
+environment export. For a non-loopback bind, preprovision the dedicated token
+or configure an explicit process token before using this pattern.
 
 ## Telegram Service
 
@@ -282,7 +285,9 @@ Relevant flags checked from the command source include `-token`, `-bot-api-base`
    then confirm the gateway URL and allowlist settings.
 4. If MCP or tool discovery looks wrong, inspect
    `$BILLYHARNESS_HOME/mcp.config.toml` on the host without sharing secrets,
-   then use `curl http://127.0.0.1:8765/v1/mcp` for sanitized gateway status.
+   then use the authenticated `/v1/mcp` pattern in
+   [Doctor and diagnostics](doctor-and-diagnostics.md) for sanitized gateway
+   status.
 5. If session replay, errors, or usage are the issue, rebuild the session index
    with `./bin/fast-agent-harness sessions index rebuild`, then use the session
    diagnostics commands from [Doctor and diagnostics](doctor-and-diagnostics.md).

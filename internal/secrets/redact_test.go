@@ -22,6 +22,7 @@ func TestRedactExactEnvironmentAndPatterns(t *testing.T) {
 		"telegram 123456789:AABBCCDDEEFF00112233445566778899",
 		"sk-testsecret123456789",
 		"sk-sp-test.segment-with-dots_123456789",
+		"bgh_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		"github_pat_123456789012345678901234567890",
 		"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
 	}, "\n")
@@ -43,6 +44,7 @@ func TestRedactExactEnvironmentAndPatterns(t *testing.T) {
 		"123456789:AABB",
 		"sk-testsecret",
 		"sk-sp-test.segment",
+		"bgh_0123456789abcdef",
 		"github_pat_",
 		"data:image",
 		"iVBORw0KGgo",

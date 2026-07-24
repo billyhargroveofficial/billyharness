@@ -372,7 +372,9 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (*htt
 		if owner, ok := SessionOwnerFromContext(ctx); ok {
 			setSessionOwnerHeaders(req, owner)
 		}
-		gatewayapi.SetAuthHeaderFromEnv(req)
+		if err := gatewayapi.SetAuthHeaderFromDefault(req); err != nil {
+			return nil, fmt.Errorf("resolve gateway bearer token: %w", err)
+		}
 		return req, nil
 	})
 }

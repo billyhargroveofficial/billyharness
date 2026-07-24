@@ -67,7 +67,9 @@ func gatewayCreateSession(ctx context.Context, baseURL, profile string) (string,
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
-		gatewayapi.SetAuthHeaderFromEnv(req)
+		if err := gatewayapi.SetAuthHeaderFromDefault(req); err != nil {
+			return nil, fmt.Errorf("resolve gateway bearer token: %w", err)
+		}
 		return req, nil
 	})
 	if err != nil {
@@ -99,7 +101,9 @@ func gatewayRun(ctx context.Context, baseURL, path string, runReq gateway.RunReq
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
-		gatewayapi.SetAuthHeaderFromEnv(req)
+		if err := gatewayapi.SetAuthHeaderFromDefault(req); err != nil {
+			return nil, fmt.Errorf("resolve gateway bearer token: %w", err)
+		}
 		return req, nil
 	})
 	if err != nil {

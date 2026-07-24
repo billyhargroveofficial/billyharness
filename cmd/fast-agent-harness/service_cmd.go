@@ -288,7 +288,7 @@ func serve(args []string) (returnErr error) {
 	addr := fs.String("addr", "", "listen address")
 	jobStoreDir := fs.String("job-store", defaultDurableJobStoreDir(), "durable multi-agent job store directory")
 	jobConcurrency := fs.Int("job-concurrency", defaultDurableJobMaxConcurrency, "maximum simultaneous durable-job agent invocations across all jobs")
-	authToken := fs.String("auth-token", "", "gateway bearer token for protected /v1 routes; defaults to BILLYHARNESS_GATEWAY_AUTH_TOKEN")
+	authToken := fs.String("auth-token", "", "server-only bearer override; otherwise use process env or the managed loopback token in $BILLYHARNESS_HOME/auth/gateway.token")
 	devAllowLoopbackMutationNoAuth := fs.Bool("dev-allow-unauthenticated-loopback-mutations", false, "development only: allow loopback mutating routes without a bearer token")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -308,19 +308,19 @@ func serve(args []string) (returnErr error) {
 	if *addr == "" {
 		*addr = cfg.GatewayAddr
 	}
-	if strings.TrimSpace(*authToken) == "" {
-		*authToken = gatewayapi.AuthTokenFromEnv()
+	// Provision before binding so a client cannot build its first protected
+	// request in the gap between a visible listener and token publication.
+	authRequired := gateway.RequiresAuthForAddr(*addr)
+	serveAuth, err := resolveGatewayServeAuth(*authToken, authRequired, *devAllowLoopbackMutationNoAuth)
+	if err != nil {
+		return err
 	}
-	*authToken = strings.TrimSpace(*authToken)
+	*authToken = serveAuth.Token
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", *addr, err)
 	}
 	defer listener.Close()
-	authRequired := gateway.RequiresAuthForAddr(listener.Addr().String())
-	if *authToken == "" && (authRequired || !*devAllowLoopbackMutationNoAuth) {
-		return fmt.Errorf("gateway auth token required for mutating routes on listen address %q; set %s or pass -dev-allow-unauthenticated-loopback-mutations for loopback-only development", *addr, gatewayapi.GatewayAuthTokenEnv)
-	}
 	ctx, stop := processContext()
 	defer stop()
 	registry, err := newToolRegistry(ctx, cfg)
@@ -358,6 +358,9 @@ func serve(args []string) (returnErr error) {
 		"; job concurrency=" + strconv.Itoa(jobStack.maxConcurrentInvocations)
 	if *authToken != "" {
 		status += "; bearer auth required for protected /v1 routes"
+		if serveAuth.GeneratedPath != "" {
+			status += "; generated shared token in " + serveAuth.GeneratedPath
+		}
 	} else if *devAllowLoopbackMutationNoAuth {
 		status += "; unauthenticated loopback mutations enabled for development"
 	}

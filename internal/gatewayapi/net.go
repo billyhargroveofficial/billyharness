@@ -3,21 +3,23 @@ package gatewayapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/gatewayauth"
 	"github.com/billyhargroveofficial/billyharness/internal/serviceops"
 )
 
 const (
-	GatewayAuthTokenEnv       = "BILLYHARNESS_GATEWAY_AUTH_TOKEN"
-	LegacyGatewayAuthTokenEnv = "FAST_AGENT_GATEWAY_AUTH_TOKEN"
+	GatewayAuthTokenEnv       = gatewayauth.PrimaryEnv
+	LegacyGatewayAuthTokenEnv = gatewayauth.LegacyEnv
 )
 
 type UnavailableError struct {
@@ -71,14 +73,19 @@ func NormalizeBaseURL(value string) string {
 }
 
 func AuthTokenFromEnv() string {
-	for _, key := range []string{GatewayAuthTokenEnv, LegacyGatewayAuthTokenEnv} {
-		if value, ok := config.LookupEnvOrDotenv(key); ok {
-			if token := strings.TrimSpace(value); token != "" {
-				return token
-			}
-		}
+	token, _ := ResolveAuthToken()
+	return token
+}
+
+// ResolveAuthToken resolves the shared gateway transport credential. The old
+// AuthTokenFromEnv name remains for compatibility, but resolution also includes
+// the dedicated Billyharness home token file and bounded migration fallbacks.
+func ResolveAuthToken() (string, error) {
+	result, err := gatewayauth.Resolve()
+	if err != nil {
+		return "", err
 	}
-	return ""
+	return strings.TrimSpace(result.Value), nil
 }
 
 func SetAuthHeader(req *http.Request, token string) {
@@ -86,11 +93,66 @@ func SetAuthHeader(req *http.Request, token string) {
 	if req == nil || token == "" || req.Header.Get("Authorization") != "" {
 		return
 	}
+	if req.Header == nil {
+		req.Header = make(http.Header)
+	}
 	req.Header.Set("Authorization", "Bearer "+token)
 }
 
 func SetAuthHeaderFromEnv(req *http.Request) {
-	SetAuthHeader(req, AuthTokenFromEnv())
+	_ = SetAuthHeaderFromDefault(req)
+}
+
+// SetAuthHeaderFromDefault attaches the shared gateway token without forwarding
+// a local managed credential to an arbitrary remote host. Loopback requests may
+// use the dedicated store and its bounded home-dotenv migration fallbacks;
+// non-loopback requests only accept explicit process environment credentials.
+func SetAuthHeaderFromDefault(req *http.Request) error {
+	if req == nil || req.Header.Get("Authorization") != "" {
+		return nil
+	}
+
+	var (
+		token string
+		err   error
+	)
+	if requestURLIsLoopback(req) {
+		token, err = ResolveAuthToken()
+	} else {
+		token, err = resolveProcessAuthToken()
+	}
+	if err != nil {
+		return err
+	}
+	SetAuthHeader(req, token)
+	return nil
+}
+
+func resolveProcessAuthToken() (string, error) {
+	for _, name := range []string{GatewayAuthTokenEnv, LegacyGatewayAuthTokenEnv} {
+		raw := strings.TrimSpace(os.Getenv(name))
+		if raw == "" {
+			continue
+		}
+		token, err := gatewayauth.ValidateToken(raw)
+		if err != nil {
+			return "", fmt.Errorf("invalid gateway bearer token from %s: %w", name, err)
+		}
+		return token, nil
+	}
+	return "", nil
+}
+
+func requestURLIsLoopback(req *http.Request) bool {
+	if req == nil || req.URL == nil {
+		return false
+	}
+	host := strings.TrimSuffix(strings.TrimSpace(req.URL.Hostname()), ".")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func UnavailableHint(baseURL string) string {

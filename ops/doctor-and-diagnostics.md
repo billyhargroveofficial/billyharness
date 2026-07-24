@@ -151,21 +151,28 @@ curl http://127.0.0.1:8765/ready
 Read-only diagnostics that are useful after the gateway is reachable:
 
 ```sh
-curl http://127.0.0.1:8765/v1/config
-curl http://127.0.0.1:8765/v1/mcp
-curl http://127.0.0.1:8765/v1/tools
-curl 'http://127.0.0.1:8765/v1/processes?include_exited=true&limit=20'
+gateway_token="${BILLYHARNESS_GATEWAY_AUTH_TOKEN:-}"
+if [ -z "$gateway_token" ]; then
+  gateway_token="$(tr -d '\r\n' < "${BILLYHARNESS_HOME:-$HOME/billyharness}/auth/gateway.token")"
+fi
+curl -H "Authorization: Bearer $gateway_token" http://127.0.0.1:8765/v1/config
+curl -H "Authorization: Bearer $gateway_token" http://127.0.0.1:8765/v1/mcp
+curl -H "Authorization: Bearer $gateway_token" http://127.0.0.1:8765/v1/tools
+curl -H "Authorization: Bearer $gateway_token" \
+  'http://127.0.0.1:8765/v1/processes?include_exited=true&limit=20'
 ```
 
 When the gateway is protected by a bearer token, include the header for
 non-loopback clients and for any protected route:
 
 ```sh
-curl -H "Authorization: Bearer $BILLYHARNESS_GATEWAY_AUTH_TOKEN" http://127.0.0.1:8765/v1/auth/status
+curl -H "Authorization: Bearer $gateway_token" http://127.0.0.1:8765/v1/auth/status
+unset gateway_token
 ```
 
 Do not echo the token. If a command transcript must be shared, replace the
-header value with `Bearer REDACTED`.
+header value with `Bearer REDACTED`. Prefer Billyharness clients when possible;
+raw `curl` may expose the explicit header briefly in local process inspection.
 
 ## Session Diagnostics
 

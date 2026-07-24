@@ -19,7 +19,7 @@ Use monotonically increasing four-digit numbers:
 Never reuse a number.
 
 0004 and 0005 were never assigned; the sequence resumes at 0006 by design. The
-next new ADR is 0009.
+next new ADR is 0010.
 
 ## Records
 
@@ -38,6 +38,9 @@ next new ADR is 0009.
 - [ADR 0008](0008-gateway-state-reads-require-bearer-when-token-configured.md):
   accepted; state-bearing gateway `/v1/` reads require bearer auth when a
   gateway token is configured.
+- [ADR 0009](0009-manage-loopback-gateway-token-in-dedicated-home-file.md):
+  accepted; normal loopback startup and local clients share a private managed
+  gateway token without exposing it to remote URLs.
 
 ## Template
 

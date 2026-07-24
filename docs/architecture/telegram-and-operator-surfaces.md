@@ -129,7 +129,8 @@ token in the chat. Auth status output is formatted from redacted credential
 status values.
 
 Gateway transport auth is separate from the Telegram allowlist. The shared
-gateway client attaches a bearer token from `BILLYHARNESS_GATEWAY_AUTH_TOKEN`
+gateway client attaches a bearer token from the loopback managed token store or
+an explicit `BILLYHARNESS_GATEWAY_AUTH_TOKEN`
 or legacy `FAST_AGENT_GATEWAY_AUTH_TOKEN` when present
 ([gatewayapi/net.go](../../internal/gatewayapi/net.go)). The gateway
 security middleware requires authenticated mutating `/v1/` routes unless the

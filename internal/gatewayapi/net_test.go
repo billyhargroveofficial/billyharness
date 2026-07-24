@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -35,6 +37,7 @@ func TestNormalizeBaseURL(t *testing.T) {
 }
 
 func TestAuthHeaderUsesPrimaryThenLegacyEnv(t *testing.T) {
+	isolateGatewayAuth(t)
 	t.Setenv(GatewayAuthTokenEnv, " primary-token ")
 	t.Setenv(LegacyGatewayAuthTokenEnv, "legacy-token")
 	if got := AuthTokenFromEnv(); got != "primary-token" {
@@ -53,9 +56,10 @@ func TestAuthHeaderUsesPrimaryThenLegacyEnv(t *testing.T) {
 }
 
 func TestSetAuthHeaderFromEnv(t *testing.T) {
+	isolateGatewayAuth(t)
 	t.Setenv(GatewayAuthTokenEnv, "test-token")
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/mcp", nil)
+	req := httptest.NewRequest(http.MethodGet, "https://gateway.example/v1/mcp", nil)
 	SetAuthHeaderFromEnv(req)
 
 	if got := req.Header.Get("Authorization"); got != "Bearer test-token" {
@@ -64,10 +68,152 @@ func TestSetAuthHeaderFromEnv(t *testing.T) {
 }
 
 func TestAuthTokenFromEnvFallsBackToLegacy(t *testing.T) {
+	isolateGatewayAuth(t)
 	t.Setenv(GatewayAuthTokenEnv, " ")
 	t.Setenv(LegacyGatewayAuthTokenEnv, " legacy-token ")
 	if got := AuthTokenFromEnv(); got != "legacy-token" {
 		t.Fatalf("AuthTokenFromEnv legacy = %q", got)
+	}
+}
+
+func TestAuthTokenFromEnvLoadsSharedBillyharnessDotenv(t *testing.T) {
+	home := isolateGatewayAuth(t)
+	if err := os.WriteFile(filepath.Join(home, ".env"), []byte(GatewayAuthTokenEnv+"=shared-dotenv-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := AuthTokenFromEnv(); got != "shared-dotenv-token" {
+		t.Fatalf("AuthTokenFromEnv did not load the shared Billyharness dotenv token")
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://localhost:8765/v1/jobs", nil)
+	SetAuthHeaderFromEnv(req)
+	if got := req.Header.Get("Authorization"); got != "Bearer shared-dotenv-token" {
+		t.Fatalf("Authorization header did not use the shared Billyharness dotenv token")
+	}
+}
+
+func TestSetAuthHeaderFromDefaultUsesDedicatedTokenForLoopbackURLs(t *testing.T) {
+	home := isolateGatewayAuth(t)
+	writeDedicatedGatewayToken(t, home, "local-dedicated-token")
+
+	for _, rawURL := range []string{
+		"http://localhost:8765/v1/jobs",
+		"http://127.42.8.9:8765/v1/jobs",
+		"http://[::1]:8765/v1/jobs",
+	} {
+		t.Run(rawURL, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, rawURL, nil)
+			if err := SetAuthHeaderFromDefault(req); err != nil {
+				t.Fatalf("SetAuthHeaderFromDefault: %v", err)
+			}
+			if got := req.Header.Get("Authorization"); got != "Bearer local-dedicated-token" {
+				t.Fatalf("Authorization = %q", got)
+			}
+		})
+	}
+}
+
+func TestSetAuthHeaderFromDefaultDoesNotUseDedicatedTokenForRemoteURL(t *testing.T) {
+	home := isolateGatewayAuth(t)
+	writeDedicatedGatewayToken(t, home, "local-only-token")
+
+	req := httptest.NewRequest(http.MethodGet, "https://gateway.example/v1/jobs", nil)
+	if err := SetAuthHeaderFromDefault(req); err != nil {
+		t.Fatalf("SetAuthHeaderFromDefault: %v", err)
+	}
+	if got := req.Header.Get("Authorization"); got != "" {
+		t.Fatalf("remote Authorization = %q, want empty", got)
+	}
+}
+
+func TestSetAuthHeaderFromDefaultUsesPrimaryProcessEnvForRemoteURL(t *testing.T) {
+	isolateGatewayAuth(t)
+	t.Setenv(GatewayAuthTokenEnv, " remote-explicit-token ")
+
+	req := httptest.NewRequest(http.MethodGet, "https://gateway.example/v1/jobs", nil)
+	if err := SetAuthHeaderFromDefault(req); err != nil {
+		t.Fatalf("SetAuthHeaderFromDefault: %v", err)
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer remote-explicit-token" {
+		t.Fatalf("Authorization = %q", got)
+	}
+}
+
+func TestSetAuthHeaderFromDefaultUsesLegacyProcessEnvForRemoteURL(t *testing.T) {
+	isolateGatewayAuth(t)
+	t.Setenv(LegacyGatewayAuthTokenEnv, " remote-legacy-token ")
+
+	req := httptest.NewRequest(http.MethodGet, "https://gateway.example/v1/jobs", nil)
+	if err := SetAuthHeaderFromDefault(req); err != nil {
+		t.Fatalf("SetAuthHeaderFromDefault: %v", err)
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer remote-legacy-token" {
+		t.Fatalf("Authorization = %q", got)
+	}
+}
+
+func TestSetAuthHeaderFromDefaultPreservesExistingHeaderWithoutResolvingStore(t *testing.T) {
+	home := isolateGatewayAuth(t)
+	writeDedicatedGatewayToken(t, home, "secret\ncorrupt")
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8765/v1/jobs", nil)
+	req.Header.Set("Authorization", "Basic caller-owned")
+	if err := SetAuthHeaderFromDefault(req); err != nil {
+		t.Fatalf("pre-set Authorization should bypass token resolution: %v", err)
+	}
+	if got := req.Header.Get("Authorization"); got != "Basic caller-owned" {
+		t.Fatalf("Authorization = %q", got)
+	}
+}
+
+func TestSetAuthHeaderFromDefaultRejectsInvalidProcessEnvWithoutLeakingIt(t *testing.T) {
+	isolateGatewayAuth(t)
+	const secretPrefix = "do-not-leak-this-secret"
+	t.Setenv(GatewayAuthTokenEnv, secretPrefix+"\ncorrupt")
+
+	req := httptest.NewRequest(http.MethodGet, "https://gateway.example/v1/jobs", nil)
+	err := SetAuthHeaderFromDefault(req)
+	if err == nil {
+		t.Fatal("expected invalid process token error")
+	}
+	if strings.Contains(err.Error(), secretPrefix) {
+		t.Fatalf("error leaked token material: %v", err)
+	}
+	if !strings.Contains(err.Error(), GatewayAuthTokenEnv) {
+		t.Fatalf("error does not identify the invalid source: %v", err)
+	}
+	if got := req.Header.Get("Authorization"); got != "" {
+		t.Fatalf("Authorization = %q, want empty", got)
+	}
+}
+
+func TestSetAuthHeaderFromDefaultIgnoresProjectAndExplicitDotenvFiles(t *testing.T) {
+	isolateGatewayAuth(t)
+	project := t.TempDir()
+	projectDotenv := filepath.Join(project, ".env")
+	explicitDotenv := filepath.Join(t.TempDir(), "gateway.env")
+	for path, token := range map[string]string{
+		projectDotenv:  "project-token",
+		explicitDotenv: "explicit-file-token",
+	} {
+		if err := os.WriteFile(path, []byte(GatewayAuthTokenEnv+"="+token+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("FAST_AGENT_ENV_FILE", explicitDotenv)
+	t.Chdir(project)
+
+	for _, rawURL := range []string{
+		"http://127.0.0.1:8765/v1/jobs",
+		"https://gateway.example/v1/jobs",
+	} {
+		req := httptest.NewRequest(http.MethodGet, rawURL, nil)
+		if err := SetAuthHeaderFromDefault(req); err != nil {
+			t.Fatalf("SetAuthHeaderFromDefault(%s): %v", rawURL, err)
+		}
+		if got := req.Header.Get("Authorization"); got != "" {
+			t.Fatalf("Authorization for %s = %q, want empty", rawURL, got)
+		}
 	}
 }
 
@@ -128,5 +274,27 @@ func TestDoWithReadyRetryWrapsConnectionRefused(t *testing.T) {
 	if !strings.Contains(err.Error(), "./bin/fast-agent-harness gateway") ||
 		!strings.Contains(err.Error(), "systemctl restart billyharness-gateway.service") {
 		t.Fatalf("error does not include recovery commands: %v", err)
+	}
+}
+
+func isolateGatewayAuth(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", home)
+	t.Setenv("FAST_AGENT_ENV_FILE", "")
+	t.Setenv("BILLYHARNESS_DOTENV_HOME_ONLY", "1")
+	t.Setenv(GatewayAuthTokenEnv, "")
+	t.Setenv(LegacyGatewayAuthTokenEnv, "")
+	return home
+}
+
+func writeDedicatedGatewayToken(t *testing.T, home, token string) {
+	t.Helper()
+	authDir := filepath.Join(home, "auth")
+	if err := os.Mkdir(authDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(authDir, "gateway.token"), []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

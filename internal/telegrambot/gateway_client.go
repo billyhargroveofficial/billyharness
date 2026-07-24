@@ -113,7 +113,9 @@ func (c *GatewayClient) MCPStatus(ctx context.Context) (string, error) {
 		if err != nil {
 			return nil, err
 		}
-		gatewayapi.SetAuthHeaderFromEnv(req)
+		if err := gatewayapi.SetAuthHeaderFromDefault(req); err != nil {
+			return nil, fmt.Errorf("resolve gateway bearer token: %w", err)
+		}
 		return req, nil
 	})
 	if err != nil {
@@ -137,7 +139,9 @@ func (c *GatewayClient) ConfigStatus(ctx context.Context) (string, error) {
 		if err != nil {
 			return nil, err
 		}
-		gatewayapi.SetAuthHeaderFromEnv(req)
+		if err := gatewayapi.SetAuthHeaderFromDefault(req); err != nil {
+			return nil, fmt.Errorf("resolve gateway bearer token: %w", err)
+		}
 		return req, nil
 	})
 	if err != nil {

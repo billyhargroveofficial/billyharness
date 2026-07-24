@@ -60,7 +60,18 @@ The major boundaries are:
   treats browser-originated loopback mutation as a security-relevant path.
 - Bearer auth: `BILLYHARNESS_GATEWAY_AUTH_TOKEN` and legacy
   `FAST_AGENT_GATEWAY_AUTH_TOKEN` are gateway transport credentials, not
-  provider credentials.
+  provider credentials. Normal gateway startup honors the primary process-env
+  override, otherwise resolves or creates
+  `$BILLYHARNESS_HOME/auth/gateway.token` under `0700/0600` permissions on
+  first loopback startup; local Billyharness clients resolve the same file
+  automatically for loopback URLs. Managed file/home-dotenv credentials are
+  never attached to a non-loopback client URL; remote clients require an
+  explicit process token. First-time non-loopback startup remains fail-closed
+  and must use preprovisioned auth plus HTTPS or an SSH tunnel. Home-dotenv
+  values are migration-only fallbacks, and project dotenv files are excluded
+  from this transport credential boundary. Managed-file persistence currently
+  fails closed outside Darwin/Linux, where equivalent owner/mode/link and
+  cross-process publication guarantees are not implemented.
 - Session owner scope: owner headers are gateway-enforced scoping claims inside
   the HTTP security boundary. They are not cryptographic identity.
 - Telegram: Telegram is a scoped gateway client with its own allowlist and
@@ -110,21 +121,28 @@ Current behavior:
 
 The CLI `serve` path in
 [cmd/fast-agent-harness/service_cmd.go](../../cmd/fast-agent-harness/service_cmd.go)
-is part of the current worktree hardening. It prebinds the listener, requires a
-gateway auth token for mutating routes unless the operator explicitly passes
+resolves or provisions a dedicated shared gateway token before binding a
+loopback listener unless the operator explicitly passes
 `-dev-allow-unauthenticated-loopback-mutations`, and treats non-loopback or
-wildcard listen addresses as requiring auth. This decision is recorded in
+wildcard listen addresses as requiring preprovisioned auth. Explicit
+`-auth-token` and process-environment values override automatic provisioning.
+The managed-token decision is recorded in
+[ADR 0009](../adr/0009-manage-loopback-gateway-token-in-dedicated-home-file.md);
+the route trust boundary remains
 [ADR 0007](../adr/0007-local-gateway-mutating-routes-require-explicit-trust.md).
 Configured-token protection for state-bearing `/v1/` reads is recorded in
 [ADR 0008](../adr/0008-gateway-state-reads-require-bearer-when-token-configured.md).
 
 Bearer token handling is shared through
-[internal/gatewaybase/gatewaybase.go](../../internal/gatewaybase/gatewaybase.go)
-and surfaced through [internal/gateway/url.go](../../internal/gateway/url.go).
-Clients attach `Authorization: Bearer <token>` from
-`BILLYHARNESS_GATEWAY_AUTH_TOKEN` first, then
-`FAST_AGENT_GATEWAY_AUTH_TOKEN`. The current worktree bearer comparison uses
-constant-time comparison in `bearerTokenMatches`.
+[internal/gatewayauth/store.go](../../internal/gatewayauth/store.go) and
+[internal/gatewayapi/net.go](../../internal/gatewayapi/net.go), while server
+enforcement lives in
+[internal/gateway/http_security.go](../../internal/gateway/http_security.go).
+Clients attach `Authorization: Bearer <token>` from the primary process-env
+override or dedicated home token file, with old home-dotenv/legacy keys as
+migration fallbacks. Dedicated/home-dotenv sources are loopback-only; explicit
+primary or legacy process tokens may be used for a remote URL. The server bearer
+comparison uses constant-time comparison in `bearerTokenMatches`.
 
 Runtime override trust also sits at this boundary. In the current worktree,
 `runOverrideSettingsForRequest` drops provider/model/thinking/reasoning

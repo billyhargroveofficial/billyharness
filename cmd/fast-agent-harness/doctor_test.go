@@ -468,7 +468,9 @@ func TestDoctorProductionServiceChecksIncludeUnitAndJournalSignals(t *testing.T)
 }
 
 func TestDoctorGatewayStatusesProbeHealthAndReadiness(t *testing.T) {
+	var authorizationHeaders []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizationHeaders = append(authorizationHeaders, r.Header.Get("Authorization"))
 		switch r.URL.Path {
 		case "/health":
 			_, _ = w.Write([]byte(`{"ok":true,"provider":"mock","model":"mock"}`))
@@ -480,10 +482,16 @@ func TestDoctorGatewayStatusesProbeHealthAndReadiness(t *testing.T) {
 	}))
 	defer server.Close()
 	t.Setenv("FAST_AGENT_GATEWAY_URL", server.URL)
+	t.Setenv("BILLYHARNESS_GATEWAY_AUTH_TOKEN", "doctor-must-not-send-this-token")
 
 	checks := doctorGatewayStatuses(context.Background(), config.Default(), doctorOptions{CheckGateway: true, Timeout: time.Second})
 	assertDoctorCheckInList(t, checks, "gateway /health", "ok")
 	assertDoctorCheckInList(t, checks, "gateway /ready", "ok")
+	for index, header := range authorizationHeaders {
+		if header != "" {
+			t.Fatalf("public doctor probe %d sent Authorization", index)
+		}
+	}
 }
 
 func assertDoctorCheck(t *testing.T, report doctorReport, name, status string) {

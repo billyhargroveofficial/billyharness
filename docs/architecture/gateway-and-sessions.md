@@ -357,8 +357,13 @@ the gateway server or client packages.
 CLI helpers, and future client surfaces. It:
 
 - normalizes base URLs through `gatewayapi`;
-- injects bearer auth from `BILLYHARNESS_GATEWAY_AUTH_TOKEN` or legacy
-  `FAST_AGENT_GATEWAY_AUTH_TOKEN`;
+- injects bearer auth from the process environment or the dedicated
+  `$BILLYHARNESS_HOME/auth/gateway.token` file; the normal gateway startup path
+  provisions that file when no explicit override or migration fallback exists,
+  while old home-dotenv `BILLYHARNESS_GATEWAY_AUTH_TOKEN` and
+  `FAST_AGENT_GATEWAY_AUTH_TOKEN` values remain bounded compatibility inputs;
+  managed file/home-dotenv sources are scoped to loopback URLs, while remote
+  URLs accept only an explicit process credential;
 - retries once around readiness on connection refused;
 - exposes helpers for create/list/get/status/context/inspect/run/follow/replay/
   input/cancel/user-input/undo/redo. Most are typed; inspect currently returns
