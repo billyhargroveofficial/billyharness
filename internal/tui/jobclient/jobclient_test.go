@@ -1,9 +1,10 @@
-package jobruntime
+package jobclient
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -136,6 +137,118 @@ func TestCommandsReturnValidationAndGatewayErrorsAsMessages(t *testing.T) {
 	}
 }
 
+func TestPagedCommandsUseBoundedDefaultsAndExplicitLimits(t *testing.T) {
+	fake := &fakeGateway{}
+	client := WithGateway(fake)
+	ctx := context.Background()
+
+	attempts, ok := client.ListAttemptsCmd(ctx, " job-1 ", 5, 0)().(AttemptsResultMsg)
+	if !ok {
+		t.Fatal("ListAttemptsCmd() did not return AttemptsResultMsg")
+	}
+	if attempts.Err != nil || attempts.JobID != "job-1" || attempts.Offset != 5 || attempts.Limit != DefaultAttemptPageLimit ||
+		attempts.Page.JobID != "job-1" || attempts.Page.Offset != 5 || attempts.Page.Limit != DefaultAttemptPageLimit ||
+		len(attempts.Page.Attempts) != 1 || attempts.Page.Attempts[0].RoleID != "researcher" {
+		t.Fatalf("attempts message = %#v", attempts)
+	}
+
+	artifacts, ok := client.ListArtifactsCmd(ctx, " job-1 ", 7, 25)().(ArtifactsResultMsg)
+	if !ok {
+		t.Fatal("ListArtifactsCmd() did not return ArtifactsResultMsg")
+	}
+	if artifacts.Err != nil || artifacts.JobID != "job-1" || artifacts.Offset != 7 || artifacts.Limit != 25 ||
+		artifacts.Page.JobID != "job-1" || artifacts.Page.Offset != 7 || artifacts.Page.Limit != 25 ||
+		len(artifacts.Page.Artifacts) != 1 || artifacts.Page.Artifacts[0].ID != "artifact-1" {
+		t.Fatalf("artifacts message = %#v", artifacts)
+	}
+
+	wantCalls := []string{
+		fmt.Sprintf("attempts:job-1:%d:%d", 5, DefaultAttemptPageLimit),
+		"artifacts:job-1:7:25",
+	}
+	if got := fake.callNames(); !reflect.DeepEqual(got, wantCalls) {
+		t.Fatalf("gateway calls = %v, want %v", got, wantCalls)
+	}
+}
+
+func TestPagedCommandsRejectInvalidInputBeforeGateway(t *testing.T) {
+	tests := []struct {
+		name string
+		cmd  func(Client) any
+		want string
+	}{
+		{
+			name: "attempts empty job id",
+			cmd:  func(c Client) any { return c.ListAttemptsCmd(context.Background(), "  ", 0, 0)() },
+			want: "job id is required",
+		},
+		{
+			name: "attempts negative offset",
+			cmd:  func(c Client) any { return c.ListAttemptsCmd(context.Background(), "job-1", -1, 0)() },
+			want: "offset must be non-negative",
+		},
+		{
+			name: "attempts negative limit",
+			cmd:  func(c Client) any { return c.ListAttemptsCmd(context.Background(), "job-1", 0, -1)() },
+			want: "limit must be between 1 and 32",
+		},
+		{
+			name: "attempts oversized limit",
+			cmd: func(c Client) any {
+				return c.ListAttemptsCmd(context.Background(), "job-1", 0, MaxAttemptPageLimit+1)()
+			},
+			want: "limit must be between 1 and 32",
+		},
+		{
+			name: "artifacts negative offset",
+			cmd:  func(c Client) any { return c.ListArtifactsCmd(context.Background(), "job-1", -1, 0)() },
+			want: "offset must be non-negative",
+		},
+		{
+			name: "artifacts oversized limit",
+			cmd: func(c Client) any {
+				return c.ListArtifactsCmd(context.Background(), "job-1", 0, MaxArtifactPageLimit+1)()
+			},
+			want: "limit must be between 1 and 500",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &fakeGateway{}
+			message := test.cmd(WithGateway(fake))
+			var err error
+			switch typed := message.(type) {
+			case AttemptsResultMsg:
+				err = typed.Err
+			case ArtifactsResultMsg:
+				err = typed.Err
+			default:
+				t.Fatalf("message = %T", message)
+			}
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want containing %q", err, test.want)
+			}
+			if calls := fake.callNames(); len(calls) != 0 {
+				t.Fatalf("invalid command reached gateway: %v", calls)
+			}
+		})
+	}
+}
+
+func TestPagedCommandsPropagateGatewayErrorsWithRequestIdentity(t *testing.T) {
+	wantErr := errors.New("history unavailable")
+	fake := &fakeGateway{err: wantErr}
+
+	attempts := WithGateway(fake).ListAttemptsCmd(context.Background(), "job-a", 3, 4)().(AttemptsResultMsg)
+	if !errors.Is(attempts.Err, wantErr) || attempts.JobID != "job-a" || attempts.Offset != 3 || attempts.Limit != 4 {
+		t.Fatalf("attempts error message = %#v", attempts)
+	}
+	artifacts := WithGateway(fake).ListArtifactsCmd(context.Background(), "job-b", 6, 7)().(ArtifactsResultMsg)
+	if !errors.Is(artifacts.Err, wantErr) || artifacts.JobID != "job-b" || artifacts.Offset != 6 || artifacts.Limit != 7 {
+		t.Fatalf("artifacts error message = %#v", artifacts)
+	}
+}
+
 func TestNewUsesConcreteGatewayClient(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/v1/jobs" {
@@ -196,6 +309,36 @@ func (f *fakeGateway) ResumeJob(_ context.Context, jobID string) (gatewayapi.Job
 
 func (f *fakeGateway) CancelJob(_ context.Context, jobID string) (gatewayapi.JobResponse, error) {
 	return f.record("cancel", jobID)
+}
+
+func (f *fakeGateway) ListJobAttempts(_ context.Context, jobID string, offset, limit int) (gatewayapi.JobAttemptPage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, fmt.Sprintf("attempts:%s:%d:%d", jobID, offset, limit))
+	return gatewayapi.JobAttemptPage{
+		JobID:  jobID,
+		Offset: offset,
+		Limit:  limit,
+		Total:  1,
+		Attempts: []jobs.Attempt{{
+			ID: "attempt-1", RoleID: "researcher",
+		}},
+	}, f.err
+}
+
+func (f *fakeGateway) ListJobArtifacts(_ context.Context, jobID string, offset, limit int) (gatewayapi.JobArtifactPage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, fmt.Sprintf("artifacts:%s:%d:%d", jobID, offset, limit))
+	return gatewayapi.JobArtifactPage{
+		JobID:  jobID,
+		Offset: offset,
+		Limit:  limit,
+		Total:  1,
+		Artifacts: []jobs.ArtifactRef{{
+			ID: "artifact-1", URI: "artifact://job-1/artifact-1",
+		}},
+	}, f.err
 }
 
 func (f *fakeGateway) record(action, jobID string) (gatewayapi.JobResponse, error) {

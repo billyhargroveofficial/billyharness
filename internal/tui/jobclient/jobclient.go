@@ -1,4 +1,4 @@
-package jobruntime
+package jobclient
 
 import (
 	"context"
@@ -13,7 +13,6 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayclient"
-	"github.com/billyhargroveofficial/billyharness/internal/jobs"
 )
 
 // Action identifies the gateway operation which produced a JobResultMsg.
@@ -26,6 +25,19 @@ const (
 	ActionPause  Action = "pause"
 	ActionResume Action = "resume"
 	ActionCancel Action = "cancel"
+)
+
+const (
+	// DefaultAttemptPageLimit and MaxAttemptPageLimit mirror the bounded
+	// gateway attempt-history endpoint. Passing zero to ListAttemptsCmd selects
+	// the default; callers can request any explicit value up to the maximum.
+	DefaultAttemptPageLimit = 10
+	MaxAttemptPageLimit     = 32
+
+	// Artifact pages are larger because they contain bounded references rather
+	// than full attempt records.
+	DefaultArtifactPageLimit = 100
+	MaxArtifactPageLimit     = 500
 )
 
 // ListResultMsg is emitted by Client.ListCmd.
@@ -44,6 +56,26 @@ type JobResultMsg struct {
 	Err      error
 }
 
+// AttemptsResultMsg is emitted by Client.ListAttemptsCmd. Offset and Limit
+// record the normalized request even when the gateway call fails, allowing a
+// controller to match an asynchronous response to the visible page.
+type AttemptsResultMsg struct {
+	JobID  string
+	Offset int
+	Limit  int
+	Page   gatewayapi.JobAttemptPage
+	Err    error
+}
+
+// ArtifactsResultMsg is emitted by Client.ListArtifactsCmd.
+type ArtifactsResultMsg struct {
+	JobID  string
+	Offset int
+	Limit  int
+	Page   gatewayapi.JobArtifactPage
+	Err    error
+}
+
 // Gateway is the typed durable-jobs surface used by the TUI adapter. A
 // *gatewayclient.Client satisfies this interface.
 type Gateway interface {
@@ -54,6 +86,8 @@ type Gateway interface {
 	PauseJob(context.Context, string) (gatewayapi.JobResponse, error)
 	ResumeJob(context.Context, string) (gatewayapi.JobResponse, error)
 	CancelJob(context.Context, string) (gatewayapi.JobResponse, error)
+	ListJobAttempts(context.Context, string, int, int) (gatewayapi.JobAttemptPage, error)
+	ListJobArtifacts(context.Context, string, int, int) (gatewayapi.JobArtifactPage, error)
 }
 
 // Client converts synchronous gateway calls into Bubble Tea commands.
@@ -132,6 +166,55 @@ func (c Client) CancelCmd(ctx context.Context, jobID string) tea.Cmd {
 	return c.actionCmd(ctx, ActionCancel, jobID, c.cancelJob)
 }
 
+// ListAttemptsCmd asynchronously loads one bounded page of role attempts. A
+// zero limit selects DefaultAttemptPageLimit; negative offsets and limits
+// outside 1..MaxAttemptPageLimit are rejected without contacting the gateway.
+func (c Client) ListAttemptsCmd(ctx context.Context, jobID string, offset, limit int) tea.Cmd {
+	jobID = strings.TrimSpace(jobID)
+	limit, parameterErr := normalizePage(offset, limit, DefaultAttemptPageLimit, MaxAttemptPageLimit)
+	return func() tea.Msg {
+		message := AttemptsResultMsg{JobID: jobID, Offset: offset, Limit: limit}
+		if err := c.ready(ctx); err != nil {
+			message.Err = err
+			return message
+		}
+		if jobID == "" {
+			message.Err = fmt.Errorf("job id is required")
+			return message
+		}
+		if parameterErr != nil {
+			message.Err = parameterErr
+			return message
+		}
+		message.Page, message.Err = c.gateway.ListJobAttempts(ctx, jobID, offset, limit)
+		return message
+	}
+}
+
+// ListArtifactsCmd asynchronously loads one bounded page of artifact
+// references. A zero limit selects DefaultArtifactPageLimit.
+func (c Client) ListArtifactsCmd(ctx context.Context, jobID string, offset, limit int) tea.Cmd {
+	jobID = strings.TrimSpace(jobID)
+	limit, parameterErr := normalizePage(offset, limit, DefaultArtifactPageLimit, MaxArtifactPageLimit)
+	return func() tea.Msg {
+		message := ArtifactsResultMsg{JobID: jobID, Offset: offset, Limit: limit}
+		if err := c.ready(ctx); err != nil {
+			message.Err = err
+			return message
+		}
+		if jobID == "" {
+			message.Err = fmt.Errorf("job id is required")
+			return message
+		}
+		if parameterErr != nil {
+			message.Err = parameterErr
+			return message
+		}
+		message.Page, message.Err = c.gateway.ListJobArtifacts(ctx, jobID, offset, limit)
+		return message
+	}
+}
+
 type jobCall func(context.Context, string) (gatewayapi.JobResponse, error)
 
 func (c Client) actionCmd(ctx context.Context, action Action, jobID string, call jobCall) tea.Cmd {
@@ -181,19 +264,29 @@ func (c Client) cancelJob(ctx context.Context, jobID string) (gatewayapi.JobResp
 	return c.gateway.CancelJob(ctx, jobID)
 }
 
+func normalizePage(offset, limit, defaultLimit, maxLimit int) (int, error) {
+	if offset < 0 {
+		return limit, fmt.Errorf("page offset must be non-negative")
+	}
+	if limit == 0 {
+		return defaultLimit, nil
+	}
+	if limit < 0 || limit > maxLimit {
+		return limit, fmt.Errorf("page limit must be between 1 and %d", maxLimit)
+	}
+	return limit, nil
+}
+
 func cloneCreateRequest(request gatewayapi.CreateJobRequest) gatewayapi.CreateJobRequest {
 	if request.Deadline != nil {
 		deadline := *request.Deadline
 		request.Deadline = &deadline
 	}
-	request.Authority = jobs.Authority{
-		Mode:         request.Authority.Mode,
-		Tools:        append([]string(nil), request.Authority.Tools...),
-		ReadRoots:    append([]string(nil), request.Authority.ReadRoots...),
-		WriteRoots:   append([]string(nil), request.Authority.WriteRoots...),
-		NetworkHosts: append([]string(nil), request.Authority.NetworkHosts...),
-		Providers:    append([]string(nil), request.Authority.Providers...),
-	}
+	request.Authority.Tools = append([]string(nil), request.Authority.Tools...)
+	request.Authority.ReadRoots = append([]string(nil), request.Authority.ReadRoots...)
+	request.Authority.WriteRoots = append([]string(nil), request.Authority.WriteRoots...)
+	request.Authority.NetworkHosts = append([]string(nil), request.Authority.NetworkHosts...)
+	request.Authority.Providers = append([]string(nil), request.Authority.Providers...)
 	return request
 }
 
