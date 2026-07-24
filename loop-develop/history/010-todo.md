@@ -98,8 +98,8 @@ authority, budget, deadline, or IDs are rejected.
       it as unattended subscription authorization.
 - [x] Correct README auth, provider-terms, workspace, platform, and architecture
       wording identified by hostile release review.
-- [ ] Run final focused, race, stress, full, build, docsgen, and diff checks.
-- [ ] Create scoped commits, push `codex/multi-agent-jobs`, append completion
+- [x] Run final focused, race, stress, full, build, docsgen, and diff checks.
+- [x] Create scoped commits, push `codex/multi-agent-jobs`, append completion
       evidence, and move this TODO to `loop-develop/history`.
 
 ## Verification
@@ -158,8 +158,8 @@ test.
 - `TestJobsCLILoopbackGatewayScheduledWaitSurvivesStackRestart` exercises an
   actual FileStore and loopback gateway: cycle one persists `WAITING`,
   `NextWakeAt`, revision, and factual usage; a new stack reopens the same root,
-  recovers the timer, and cycle two finishes `COMPLETED/success` with a reducer
-  final result.
+  recovers the timer, and cycle two finishes `COMPLETED/success` with six
+  attempts, six model calls, six completed batches, and a reducer final result.
 - A short actively monitored Qwen compatibility smoke completed successfully:
   job `j-2611469df10c60c330c0073e72b031ea`, provider `qwen`, model
   `qwen3.8-max-preview`, thinking enabled, reasoning low, `review` preset, one
@@ -168,8 +168,19 @@ test.
   supervisor and ended `COMPLETED/success`.
 - That Qwen smoke proves adapter/control-flow compatibility only. It does not
   authorize unattended use of Token Plan Individual.
-- Final verification and commit/push evidence will be appended after the clean
-  release gate.
+- Final focused package tests passed once; the race-detector package suite
+  passed once; `jobruntime` and `jobservice` passed 20 stress repetitions; and
+  the basic plus scheduled-restart loopback E2E passed three race-detector
+  repetitions.
+- `go build ./cmd/fast-agent-harness`, `go vet ./...`, `go mod tidy -diff`,
+  architecture/docsgen checks, generated-doc checks, and `git diff --check`
+  all passed.
+- A detached, clean worktree whose directory basename was exactly
+  `billyharness` passed `go test -count=1 ./...`, including the full TUI suite;
+  this removes the dirty-worktree suffix artifact seen during development.
+- Scoped implementation commit `a038fce` was pushed successfully to remote
+  branch `codex/multi-agent-jobs` after the clean release gate. This archived
+  record is the final documentation-only follow-up.
 
 ## Copy-ready Codex goal prompt
 
