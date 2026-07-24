@@ -24,6 +24,7 @@ This reference joins the shared action metadata, TUI action registry, Telegram c
 | diff.preview        | /diff [change_id]                                                      | -             | /diff             | session-scoped | preview latest turn diff before undo           |
 | gateway.reconnect   | -                                                                      | ctrl+g        | -                 | -              | reconnect gateway                              |
 | help.show           | /help                                                                  | -             | /start, /help     | public         | show commands and key bindings                 |
+| jobs.manage         | /jobs (aliases: /job)                                                  | -             | -                 | -              | open durable multi-agent jobs control center   |
 | mcp.prompt          | /mcp-prompt server/name                                                | -             | -                 | -              | show MCP prompt metadata                       |
 | mcp.show            | /mcp                                                                   | -             | /mcp              | operator-only  | show connected MCP servers                     |
 | memory.manage       | /memory list\|search\|read\|add\|replace\|remove                       | -             | /memory           | operator-only  | manage local memory entries                    |
@@ -86,9 +87,9 @@ This reference joins the shared action metadata, TUI action registry, Telegram c
 
 | Source           | How it enters the registry                                      | Docsgen behavior     |
 | ---------------- | --------------------------------------------------------------- | -------------------- |
-| built-in actions | clientux.ActionDefinitions() through commandregistry.Build()    | 33 generated entries |
+| built-in actions | clientux.ActionDefinitions() through commandregistry.Build()    | 34 generated entries |
 | prompt commands  | BuildOptions.PromptCommands from local Markdown prompt commands | runtime-only         |
 | profiles         | BuildOptions.Profiles from configured profile directories       | runtime-only         |
 | MCP prompts      | BuildOptions.MCPPrompts from connected MCP servers              | runtime-only         |
 
-<!-- source-hash: 5b4163edf366296068931b35e0736cb1f365cfa9be7df41ffada89b672b48360 -->
+<!-- source-hash: 4b1239bde68489983a852418b544bf2fb883dd793845f83c3fa4637a0c22b65b -->

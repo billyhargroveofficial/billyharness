@@ -113,6 +113,12 @@ lists and fetches canonical gateway state again. A stopped gateway resumes
 recoverable work from its durable store when restarted; a TUI session file is
 never used as a job checkpoint.
 
+`SessionOwner` metadata identifies the requesting frontend for diagnostics; it
+does not partition durable jobs. `/v1/jobs` is an operator-global collection,
+and possession of the gateway bearer token permits listing and controlling all
+jobs on that gateway. Deploy separate gateway/auth boundaries when operators
+must not share this control plane.
+
 `internal/tui/transcript_runtime.go` is where incoming events become UI state.
 `Model.applyEvent` ignores already-seen sequenced events, applies the
 `clientux/projector` accounting snapshot, uses
@@ -150,6 +156,15 @@ attempt/model-call/token budgets, and the explicit tool/read/write/network/
 provider authority envelope. Authority is fail-closed and the server computes
 the effective intersection; the TUI cannot grant ambient process permissions.
 
+Built-in provider choices come from the shared model catalog. The optional
+custom choice comes from the TUI process's one resolved OpenAI-compatible
+binding and is offered only with an explicit base URL and model; the gateway
+still validates it against the gateway process's exact configured binding.
+The jobs API currently has no route-capabilities endpoint, so a TUI connected
+to a differently configured remote gateway cannot discover that gateway's
+custom provider/model pair. The UI must not present local custom configuration
+as remotely discovered capability.
+
 Worker count describes the number of predeclared roles in eligible parallel
 workflow stages. It is not the number of provider calls guaranteed to run at
 once. The gateway's process-wide `-job-concurrency` semaphore defaults to `1`
@@ -162,7 +177,11 @@ wall-clock stop. `min_cycles` forces complete worker/reducer/supervisor passes
 before success and is the primary iteration-depth floor. `min_runtime` is only
 an admission-relative earliest-success wall-clock gate: queueing, operator
 pause, gateway downtime, and cadence waits count, so it never promises active
-compute. The durable scheduler, not UI polling, owns all three rules.
+compute. The immutable job spec also persists the gateway's UTC admission
+instant, allowing the projection to show canonical elapsed wall time after a
+TUI or gateway restart. Legacy specs with no timestamp remain valid and render
+elapsed as unavailable. The durable scheduler, not UI polling, owns all three
+rules.
 
 The control center requires gateway mode even though normal chat supports a
 local runtime. A local-only TUI must report that `/jobs` needs a reachable
@@ -171,6 +190,10 @@ the gateway from the intended workspace root before opening the TUI; that
 working directory is the default root unless explicit configuration replaces
 it. Server workspace roots are not exposed through the current jobs API, and
 wizard authority can only narrow—not discover or widen—the server boundary.
+The wizard consequently parses roots using the TUI host's path grammar. This is
+fail-closed for symlink/case mismatches, but a cross-OS TUI cannot author a path
+which is invalid locally but valid on the remote gateway; use a compatible-host
+CLI/API until gateway capabilities expose remote path semantics.
 
 Selecting the built-in Qwen Token Plan route requires an explicit unattended-
 use warning confirmation before create. This is an operator guard, not a terms

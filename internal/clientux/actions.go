@@ -249,6 +249,14 @@ var sharedActionDefinitions = []ActionDefinition{
 		TelegramSummary: "managed shell processes",
 	},
 	{
+		ID:           "jobs.manage",
+		Title:        "Durable Jobs",
+		Category:     "runtime",
+		Slash:        "/jobs",
+		SlashAliases: []string{"/job"},
+		Summary:      "open durable multi-agent jobs control center",
+	},
+	{
 		ID:              "reasoning.set",
 		Title:           "Set Reasoning",
 		Category:        "runtime",

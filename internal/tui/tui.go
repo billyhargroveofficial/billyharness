@@ -210,6 +210,8 @@ type Model struct {
 	codexRateLimitsFetchedAt   time.Time
 	codexRateLimitsRefreshing  bool
 	codexRateLimitsNextRefresh time.Time
+	jobs                       *jobsScreen
+	jobsScreenSequence         uint64
 }
 
 type streamEventMsg struct {
@@ -457,6 +459,11 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.jobs != nil {
+		if handled, cmd := m.updateJobs(msg); handled {
+			return m, cmd
+		}
+	}
 	var cmds []tea.Cmd
 	reflow := false
 	gotoBottom := false
@@ -790,6 +797,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() tea.View {
+	if m.jobs != nil {
+		return m.jobsView()
+	}
 	if m.width == 0 {
 		v := tea.NewView("starting...")
 		m.applyTerminalMode(&v)

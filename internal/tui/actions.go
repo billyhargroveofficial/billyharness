@@ -397,6 +397,27 @@ func actionRegistry() []actionSpec {
 			},
 		},
 		{
+			id:           "jobs.manage",
+			title:        "Durable Jobs",
+			category:     "runtime",
+			slash:        "/jobs",
+			slashAliases: []string{"/job"},
+			summary:      "open durable multi-agent jobs control center",
+			run: func(m *Model, _ string) (bool, tea.Cmd) {
+				if strings.TrimSpace(m.gatewayURL) == "" {
+					m.addInfoBlock("DURABLE JOBS", strings.Join([]string{
+						"Durable jobs run in the gateway, not inside a local TUI chat.",
+						"Export BILLYHARNESS_GATEWAY_AUTH_TOKEN in both terminals.",
+						"Terminal 1: cd to a directory that covers every requested file root, then run ./bin/fast-agent-harness gateway -job-concurrency 4 -addr 127.0.0.1:8765",
+						"Terminal 2: ./bin/fast-agent-harness tui -gateway http://127.0.0.1:8765, then run /jobs.",
+					}, "\n"))
+					m.status = "durable jobs require gateway mode"
+					return true, nil
+				}
+				return true, m.openJobs()
+			},
+		},
+		{
 			id:        "reasoning.set",
 			title:     "Set Reasoning",
 			category:  "runtime",

@@ -98,6 +98,11 @@ durable owner: closing the TUI, losing SSH, or reopening `/jobs` does not cancel
 a job. Stopping the gateway pauses execution until that same durable store is
 started again; it does not turn TUI state into a second scheduler.
 
+Jobs are gateway-wide operator resources, not chat- or profile-scoped records.
+Every client holding the gateway bearer token can list and control every job on
+that gateway; run separate gateways or credentials when operators need an
+isolation boundary.
+
 ### Full-screen TUI control center
 
 Start the gateway from the workspace whose files jobs may access, then connect
@@ -138,12 +143,22 @@ defaults to `1` and caps simultaneous durable-job provider invocations across
 all jobs, so set it deliberately when the provider plan and endpoint allow
 more concurrency.
 
+The wizard always offers the built-in DeepSeek, Qwen, Kimi, and Codex routes.
+It also offers the one custom OpenAI-compatible binding resolved by this TUI
+when that binding has an explicit base URL and model. The gateway still checks
+the exact route against its own configuration. A TUI connected to a remote
+gateway with a different custom binding cannot discover that binding through
+the current jobs API; use matching configuration or a built-in route.
+
 `duration` is a hard wall-clock cutoff, not a request to keep a model busy.
 `min_cycles` forces complete worker/reducer/supervisor review cycles and is the
 usual quality-depth control. `min_runtime` only delays successful completion by
 wall clock; queued, paused, offline, and cadence time count, so it is not a
 useful-compute guarantee. Attempts are loaded as a bounded recent tail in the
-detail view; full canonical history remains in the gateway store.
+detail view; full canonical history remains in the gateway store. New jobs
+persist their UTC admission time, so list/detail elapsed time survives TUI and
+gateway restarts; legacy jobs created before that field show elapsed as
+unavailable.
 
 Ordinary chat may run in local TUI mode, but `/jobs` requires a reachable
 gateway because a TUI process cannot durably own background execution. If the
@@ -193,7 +208,11 @@ Every `-read-root` and `-write-root` must also be contained by the gateway's
 configured `workspace_roots`; job flags can narrow server authority but cannot
 widen it. The process-wide `-job-concurrency` cap applies across all jobs.
 Current durable FileStore execution is supported on Darwin and Linux; other
-operating systems fail closed.
+operating systems fail closed. The current wizard validates roots using the TUI
+host's path grammar because the jobs API does not expose the gateway OS or its
+canonical roots. Cross-OS remote control (for example, a Windows TUI targeting
+a Linux gateway path) must use the CLI/API on a compatible host until a route
+and authority capabilities endpoint exists.
 
 The scheduler is provider-neutral, but route construction is deliberately
 explicit: one daemon can select the built-in DeepSeek, Qwen, Kimi, Codex, and
