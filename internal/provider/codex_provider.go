@@ -30,6 +30,7 @@ type Codex struct {
 	BaseURL           string
 	Model             string
 	ReasoningEffort   string
+	MaxTokens         int
 	RequestTimeout    time.Duration
 	StreamIdleTimeout time.Duration
 	Originator        string
@@ -82,7 +83,10 @@ func (c *Codex) stream(ctx context.Context, req Request, events chan<- Event) er
 		return err
 	}
 	if err := parseResponsesSSE(ctx, resp.Body, c.StreamIdleTimeout, events); err != nil {
-		return withRequestMetadata(err, meta)
+		if _, ok := FinishFromError(err); ok {
+			return withRequestMetadata(err, meta)
+		}
+		return withRequestMetadata(providerStreamError("openai-codex", req.Model, err), meta)
 	}
 	return nil
 }
@@ -269,6 +273,9 @@ func (c *Codex) body(req Request) ([]byte, error) {
 		"stream":              true,
 		"include":             []string{},
 		"prompt_cache_key":    "billyharness",
+	}
+	if c.MaxTokens > 0 {
+		payload["max_output_tokens"] = c.MaxTokens
 	}
 	if strings.TrimSpace(instructions) != "" {
 		payload["instructions"] = instructions

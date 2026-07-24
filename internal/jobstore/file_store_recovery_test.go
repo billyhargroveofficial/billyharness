@@ -552,6 +552,11 @@ func recoverySpec(t *testing.T, jobID string) jobs.JobSpec {
 		Budget: jobs.Budget{
 			MaxCycles: 8, MaxAttempts: 32, MaxModelCalls: 128, MaxTokens: 1_000_000,
 		},
+		Route: jobs.ExecutionRoute{
+			ProviderID: "qwen",
+			ModelID:    "qwen3.8-max-preview",
+		},
+		Workflow:  jobs.WorkflowControlFromWorkflow(workflow),
 		Authority: jobs.DenyAllAuthority(),
 		Roles:     workflow.Roles,
 		Stages:    workflow.Stages,

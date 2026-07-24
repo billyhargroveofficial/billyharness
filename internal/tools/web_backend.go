@@ -35,11 +35,25 @@ func (r *Registry) webSearchBackend() string {
 	return normalizeToolWebBackend(r.toolPolicy.WebSearchBackend)
 }
 
+func (r *Registry) webSearchBackendForContext(ctx context.Context) string {
+	if r == nil {
+		return webtools.BackendNative
+	}
+	return normalizeToolWebBackend(r.toolPolicyForContext(ctx).WebSearchBackend)
+}
+
 func (r *Registry) webExtractBackend() string {
 	if r == nil {
 		return webtools.BackendNative
 	}
 	return normalizeToolWebBackend(r.toolPolicy.WebExtractBackend)
+}
+
+func (r *Registry) webExtractBackendForContext(ctx context.Context) string {
+	if r == nil {
+		return webtools.BackendNative
+	}
+	return normalizeToolWebBackend(r.toolPolicyForContext(ctx).WebExtractBackend)
 }
 
 func normalizeToolWebBackend(value string) string {
@@ -126,7 +140,7 @@ func (r *Registry) nativeSearch(ctx context.Context, req webtools.SearchRequest)
 		parseLimit = 50
 	}
 	searchURL := duckDuckGoLiteSearchURL(query)
-	body, _, _, err := httpGetWithClient(ctx, r.nativeWebHTTPClient(), searchURL, maxWebBytes)
+	body, _, _, err := httpGetWithClient(ctx, r.nativeWebHTTPClientForContext(ctx), searchURL, maxWebBytes)
 	if err != nil {
 		return nativeSearchResponse{}, err
 	}

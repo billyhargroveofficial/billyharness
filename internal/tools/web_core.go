@@ -69,7 +69,9 @@ func (r *Registry) fetchCompactPageResult(ctx context.Context, toolName, rawURL 
 }
 
 func (r *Registry) applyModelSummaryToPage(ctx context.Context, compact *compactPage, page fetchedPage, opts webFetchOptions) {
-	if compact == nil || r == nil || config.NormalizeWebSummaryMode(r.toolPolicy.WebSummaryMode) != "model" {
+	if compact == nil || r == nil ||
+		r.runCapabilitiesForContext(ctx).Scope() != "" ||
+		config.NormalizeWebSummaryMode(r.toolPolicy.WebSummaryMode) != "model" {
 		return
 	}
 	if compact.OutputClass == "tiny_direct_answer" {
@@ -89,7 +91,9 @@ func (r *Registry) applyModelSummaryToPage(ctx context.Context, compact *compact
 }
 
 func (r *Registry) applyModelSummaryToCrawlPage(ctx context.Context, compact *compactCrawlPage, page crawlPage, opts webFetchOptions) {
-	if compact == nil || r == nil || config.NormalizeWebSummaryMode(r.toolPolicy.WebSummaryMode) != "model" {
+	if compact == nil || r == nil ||
+		r.runCapabilitiesForContext(ctx).Scope() != "" ||
+		config.NormalizeWebSummaryMode(r.toolPolicy.WebSummaryMode) != "model" {
 		return
 	}
 	if compact.OutputClass == "tiny_direct_answer" {

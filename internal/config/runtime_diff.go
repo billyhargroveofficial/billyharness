@@ -28,6 +28,7 @@ type RunOverrideSettings struct {
 }
 
 func RuntimeDiffSettingsFromConfig(cfg Config) RuntimeDiffSettings {
+	cfg.ApplyModelProviderDefaults()
 	return RuntimeDiffSettings{
 		Provider:    cfg.ProviderBinding(),
 		Profile:     cfg.ProfileSelection(),

@@ -44,6 +44,43 @@ func TestSpecEnvelopeHashBindsImmutableSpec(t *testing.T) {
 	}
 }
 
+func TestSchemaVersionOneIsRejectedExplicitly(t *testing.T) {
+	t.Parallel()
+
+	spec, err := NewSpecEnvelope(contractTestSpec(t))
+	if err != nil {
+		t.Fatalf("NewSpecEnvelope(): %v", err)
+	}
+	legacySpec := spec
+	legacySpec.SchemaVersion = 1
+	if err := legacySpec.Validate(); err == nil || !strings.Contains(err.Error(), "unsupported schema_version 1") {
+		t.Fatalf("legacy spec error = %v", err)
+	}
+
+	event, err := NewEventRecord(spec.JobID, 1, 0, 1, spec.SpecHash, jobs.Event{
+		ID: "event-1", Type: jobs.EventJobStarted, At: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("NewEventRecord(): %v", err)
+	}
+	legacyEvent := event
+	legacyEvent.SchemaVersion = 1
+	if err := legacyEvent.Validate(); err == nil || !strings.Contains(err.Error(), "unsupported schema_version 1") {
+		t.Fatalf("legacy event error = %v", err)
+	}
+
+	legacySnapshot := SnapshotEnvelope{
+		SchemaVersion: 1,
+		JobID:         spec.JobID,
+		Seq:           0,
+		LastHash:      spec.SpecHash,
+		State:         jobs.JobState{Spec: spec.Spec, Status: jobs.JobStatusQueued},
+	}
+	if err := legacySnapshot.Validate(); err == nil || !strings.Contains(err.Error(), "unsupported schema_version 1") {
+		t.Fatalf("legacy snapshot error = %v", err)
+	}
+}
+
 func TestEventRecordCanonicalHashAndRequiredFields(t *testing.T) {
 	t.Parallel()
 
@@ -171,6 +208,11 @@ func contractTestSpec(t *testing.T) jobs.JobSpec {
 		Budget: jobs.Budget{
 			MaxCycles: 8, MaxAttempts: 32, MaxModelCalls: 128, MaxTokens: 1_000_000,
 		},
+		Route: jobs.ExecutionRoute{
+			ProviderID: "qwen",
+			ModelID:    "qwen3.8-max-preview",
+		},
+		Workflow:  jobs.WorkflowControlFromWorkflow(workflow),
 		Authority: jobs.DenyAllAuthority(),
 		Roles:     workflow.Roles,
 		Stages:    workflow.Stages,

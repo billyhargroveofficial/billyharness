@@ -50,6 +50,9 @@ func TestCodexStreamSendsResponsesHeadersAndParsesEvents(t *testing.T) {
 		if payload["model"] != "gpt-5.5" || payload["stream"] != true || payload["store"] != false {
 			t.Fatalf("payload = %#v", payload)
 		}
+		if payload["max_output_tokens"] != float64(321) {
+			t.Fatalf("max_output_tokens = %#v", payload["max_output_tokens"])
+		}
 		if payload["prompt_cache_key"] != "billyharness" {
 			t.Fatalf("prompt_cache_key = %#v", payload["prompt_cache_key"])
 		}
@@ -58,7 +61,7 @@ func TestCodexStreamSendsResponsesHeadersAndParsesEvents(t *testing.T) {
 		_, _ = w.Write([]byte(strings.Join([]string{
 			`data: {"type":"response.output_text.delta","delta":"ok"}`,
 			``,
-			`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":1}}}`,
+			`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":3,"output_tokens_details":{"reasoning_tokens":2}}}}`,
 			``,
 		}, "\n")))
 	}))
@@ -66,6 +69,7 @@ func TestCodexStreamSendsResponsesHeadersAndParsesEvents(t *testing.T) {
 
 	c := &Codex{
 		BaseURL:           server.URL,
+		MaxTokens:         321,
 		RequestTimeout:    time.Second,
 		StreamIdleTimeout: time.Second,
 		Originator:        "billy-test",
@@ -96,6 +100,7 @@ func TestCodexStreamSendsResponsesHeadersAndParsesEvents(t *testing.T) {
 		got[1].Kind != EventContent ||
 		got[1].Text != "ok" ||
 		got[2].Kind != EventUsage ||
+		got[2].Usage != (Usage{InputTokens: 3, OutputTokens: 3, CacheMissTokens: 3, ReasoningTokens: 2}) ||
 		got[3].Kind != EventDone ||
 		got[3].Finish.Kind != FinishNatural {
 		t.Fatalf("events = %#v", got)
@@ -422,7 +427,7 @@ func TestCodexStreamMissingAuthReturnsError(t *testing.T) {
 }
 
 func TestCodexBodyBuildsResponsesRequest(t *testing.T) {
-	c := &Codex{ReasoningEffort: "high"}
+	c := &Codex{ReasoningEffort: "high", MaxTokens: 512}
 	body, err := c.body(Request{
 		Model: "gpt-5.5",
 		Messages: []protocol.Message{
@@ -459,6 +464,9 @@ func TestCodexBodyBuildsResponsesRequest(t *testing.T) {
 	}
 	if payload["stream"] != true || payload["store"] != false {
 		t.Fatalf("stream/store = %#v", payload)
+	}
+	if payload["max_output_tokens"] != float64(512) {
+		t.Fatalf("max_output_tokens = %#v", payload["max_output_tokens"])
 	}
 	if payload["tool_choice"] != "auto" {
 		t.Fatalf("tool_choice = %#v", payload["tool_choice"])

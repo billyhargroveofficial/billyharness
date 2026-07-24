@@ -15,12 +15,13 @@ import (
 	"time"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
+	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 )
 
 func TestDeepSeekBodyThinkingHigh(t *testing.T) {
 	temp := 0.7
-	d := &DeepSeek{Thinking: "enabled", ReasoningEffort: "high"}
+	d := &DeepSeek{Thinking: "enabled", ReasoningEffort: "high", MaxTokens: 123}
 	body, err := d.body(Request{
 		Model:       "deepseek-v4-flash",
 		Temperature: &temp,
@@ -53,6 +54,9 @@ func TestDeepSeekBodyThinkingHigh(t *testing.T) {
 	if payload["reasoning_effort"] != "high" {
 		t.Fatalf("reasoning_effort = %v", payload["reasoning_effort"])
 	}
+	if payload["max_tokens"] != float64(123) {
+		t.Fatalf("max_tokens = %v", payload["max_tokens"])
+	}
 	thinking, ok := payload["thinking"].(map[string]any)
 	if !ok || thinking["type"] != "enabled" {
 		t.Fatalf("thinking = %#v", payload["thinking"])
@@ -60,6 +64,94 @@ func TestDeepSeekBodyThinkingHigh(t *testing.T) {
 	tools, ok := payload["tools"].([]any)
 	if !ok || len(tools) != 1 {
 		t.Fatalf("tools = %#v", payload["tools"])
+	}
+}
+
+func TestMockStreamPreservesInteractiveAnswerAndReportsUsage(t *testing.T) {
+	events, errs := (Mock{}).Stream(t.Context(), Request{
+		Model:    "mock",
+		Messages: []protocol.Message{{Role: protocol.RoleUser, Content: "hello"}},
+	})
+	var got []Event
+	for event := range events {
+		got = append(got, event)
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0].Kind != EventContent || got[1].Kind != EventUsage || got[2].Kind != EventDone {
+		t.Fatalf("events = %#v", got)
+	}
+	if got[0].Text != "mock: hello" {
+		t.Fatalf("interactive answer = %q", got[0].Text)
+	}
+	if got[1].Usage.InputTokens <= 0 || got[1].Usage.OutputTokens <= 0 || got[1].Usage.CacheMissTokens != got[1].Usage.InputTokens {
+		t.Fatalf("usage = %#v", got[1].Usage)
+	}
+	if got[2].Finish != (Finish{Kind: FinishNatural, RawReason: "mock"}) {
+		t.Fatalf("finish = %#v", got[2].Finish)
+	}
+}
+
+func TestMockStreamReturnsStrictDurableSupervisorDecision(t *testing.T) {
+	prompt := mockJobPromptHeader +
+		mockJobContextOpen + `{"kind":"supervisor","cycle":1,"minimum_cycles":1,"role":{"id":"control.supervisor"}}` + mockJobContextClose + "\n\n" +
+		mockSupervisorJSONPrompt + `. For continue, next_objectives must contain exactly these role IDs: ["general.primary"].`
+	events, errs := (Mock{}).Stream(t.Context(), Request{
+		Model:    "mock",
+		Messages: []protocol.Message{{Role: protocol.RoleUser, Content: prompt}},
+	})
+	var answer string
+	var usage Usage
+	for event := range events {
+		switch event.Kind {
+		case EventContent:
+			answer += event.Text
+		case EventUsage:
+			usage = event.Usage
+		}
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	var proposal struct {
+		Kind   string `json:"kind"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(answer), &proposal); err != nil {
+		t.Fatalf("supervisor answer is not strict JSON: %v: %q", err, answer)
+	}
+	if proposal.Kind != "complete" || proposal.Reason == "" || usage.InputTokens <= 0 || usage.OutputTokens <= 0 {
+		t.Fatalf("proposal=%#v usage=%#v", proposal, usage)
+	}
+}
+
+func TestMockStreamContinuesWhenDurableCompletionIsForbidden(t *testing.T) {
+	prompt := mockJobPromptHeader +
+		mockJobContextOpen + `{"kind":"supervisor","cycle":1,"minimum_cycles":2,"role":{"id":"control.supervisor"}}` + mockJobContextClose + "\n\n" +
+		mockSupervisorJSONPrompt + `. For continue, next_objectives must contain exactly these role IDs: ["general.alternative","general.primary"].`
+	events, errs := (Mock{}).Stream(t.Context(), Request{
+		Model:    "mock",
+		Messages: []protocol.Message{{Role: protocol.RoleUser, Content: prompt}},
+	})
+	var answer string
+	for event := range events {
+		if event.Kind == EventContent {
+			answer += event.Text
+		}
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	var proposal struct {
+		Kind           string            `json:"kind"`
+		NextObjectives map[string]string `json:"next_objectives"`
+	}
+	if err := json.Unmarshal([]byte(answer), &proposal); err != nil {
+		t.Fatalf("continue answer is not strict JSON: %v: %q", err, answer)
+	}
+	if proposal.Kind != "continue" || len(proposal.NextObjectives) != 2 || proposal.NextObjectives["general.primary"] == "" {
+		t.Fatalf("proposal = %#v", proposal)
 	}
 }
 
@@ -95,6 +187,59 @@ func TestDeepSeekStreamRejectsImageInputBeforeHTTP(t *testing.T) {
 	}
 	if called.Load() != 0 {
 		t.Fatalf("DeepSeek HTTP server was called %d time(s)", called.Load())
+	}
+}
+
+func TestQwenStreamUsesCompletionLimitAndReportsReasoningUsage(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("x-request-id", "qwen-cap-request")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think\",\"content\":\"answer\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":6,\"completion_tokens_details\":{\"reasoning_tokens\":2}}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	qwen := &DeepSeek{
+		ProviderID:        modelinfo.ProviderQwen,
+		BaseURL:           server.URL,
+		APIKey:            "qwen-test-key",
+		Model:             "qwen3.8-max-preview",
+		Thinking:          "enabled",
+		ReasoningEffort:   "high",
+		MaxTokens:         90,
+		RequestTimeout:    time.Second,
+		StreamIdleTimeout: time.Second,
+		Client:            server.Client(),
+	}
+	events, errs := qwen.Stream(t.Context(), Request{
+		Model:    "qwen3.8-max-preview",
+		Messages: []protocol.Message{{Role: protocol.RoleUser, Content: "test"}},
+	})
+	var usage Usage
+	for event := range events {
+		if event.Kind == EventUsage {
+			usage = event.Usage
+		}
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	if requestBody["max_completion_tokens"] != float64(90) {
+		t.Fatalf("max_completion_tokens = %#v", requestBody["max_completion_tokens"])
+	}
+	if _, exists := requestBody["max_tokens"]; exists {
+		t.Fatalf("reasoning Qwen request sent max_tokens: %#v", requestBody)
+	}
+	if usage != (Usage{InputTokens: 11, OutputTokens: 6, CacheMissTokens: 11, ReasoningTokens: 2}) {
+		t.Fatalf("usage = %#v", usage)
 	}
 }
 
@@ -250,7 +395,7 @@ func TestNewFromBindingCodexIgnoresDeepSeekCredentials(t *testing.T) {
 			CodexBaseURL: "https://codex.example/backend",
 		},
 		Model: config.ModelSelection{
-			Model: "gpt-5.5",
+			Model: "gpt-5.5", MaxTokens: 777,
 		},
 		Auth: config.AuthSettings{
 			APIKeyEnv:       "MISSING_DEEPSEEK_KEY",
@@ -271,7 +416,7 @@ func TestNewFromBindingCodexIgnoresDeepSeekCredentials(t *testing.T) {
 	if !ok {
 		t.Fatalf("provider = %T, want *Codex", prov)
 	}
-	if codex.BaseURL != "https://codex.example/backend" || codex.Auth.AccessToken != "codex-env-token" {
+	if codex.BaseURL != "https://codex.example/backend" || codex.Auth.AccessToken != "codex-env-token" || codex.MaxTokens != 777 {
 		t.Fatalf("codex provider = %#v", codex)
 	}
 }

@@ -16,6 +16,9 @@ func TestJobSpecStrictValidation(t *testing.T) {
 		"missing goal": func(spec *JobSpec) {
 			spec.Goal = " "
 		},
+		"invalid create request hash": func(spec *JobSpec) {
+			spec.CreateRequestHash = "not-a-sha256"
+		},
 		"workers below cap": func(spec *JobSpec) {
 			spec.Workers = 0
 		},
@@ -152,6 +155,163 @@ func TestValidateBatchForSpecRejectsUnknownRoleAndAuthorityExpansion(t *testing.
 	}
 }
 
+func TestWriterMustBeIsolatedInPersistedStageAndRuntimeBatch(t *testing.T) {
+	t.Parallel()
+
+	spec := validDomainSpecForPreset(t, PresetCoding, 2)
+	writerStageIndex := -1
+	for index := range spec.Stages {
+		if spec.Stages[index].ID == "implement" {
+			writerStageIndex = index
+			break
+		}
+	}
+	if writerStageIndex < 0 {
+		t.Fatal("coding preset has no implement stage")
+	}
+
+	sharedStage := cloneJobSpec(spec)
+	sharedStage.Stages[writerStageIndex].RoleIDs = append(
+		sharedStage.Stages[writerStageIndex].RoleIDs,
+		sharedStage.Workflow.WorkerRoleIDs[0],
+	)
+	sharedStage.Stages[writerStageIndex].MaxWorkers = 2
+	if err := sharedStage.Validate(); err == nil || !strings.Contains(err.Error(), "isolate its writer") {
+		t.Fatalf("writer-sharing stage error = %v", err)
+	}
+
+	writerRoleID := spec.Stages[writerStageIndex].RoleIDs[0]
+	readerRoleID := ""
+	for _, candidate := range spec.Workflow.WorkerRoleIDs {
+		if candidate != writerRoleID {
+			readerRoleID = candidate
+			break
+		}
+	}
+	if readerRoleID == "" {
+		t.Fatal("coding preset has no non-writer role")
+	}
+	sharedBatch := WorkBatch{
+		ID: "batch-writer-shared", StageID: spec.Stages[writerStageIndex].ID, Cycle: 1, Barrier: BarrierAll,
+		Items: []WorkItem{
+			{ID: "work-reader", RoleID: readerRoleID, Objective: "Read.", Authority: DenyAllAuthority()},
+			{ID: "work-writer", RoleID: writerRoleID, Objective: "Write.", Authority: DenyAllAuthority()},
+		},
+	}
+	if err := ValidateBatchForSpec(spec, sharedBatch); err == nil {
+		t.Fatal("writer-sharing runtime batch validated")
+	}
+}
+
+func TestJobStateValidationRejectsTerminalRunningOrPendingStop(t *testing.T) {
+	t.Parallel()
+
+	spec := validDomainSpec(t, 1)
+	stageID := spec.Workflow.StageOrder[0]
+	var stage StageSpec
+	for _, candidate := range spec.Stages {
+		if candidate.ID == stageID {
+			stage = candidate
+			break
+		}
+	}
+	batch := WorkBatch{
+		ID: "batch-active", StageID: stage.ID, Cycle: 1, Barrier: BarrierAll,
+		Items: []WorkItem{{
+			ID: "work-active", RoleID: stage.RoleIDs[0], Objective: "Run.", Authority: DenyAllAuthority(),
+		}},
+	}
+	running := Attempt{
+		ID: "attempt-active", BatchID: batch.ID, WorkItemID: batch.Items[0].ID, RoleID: batch.Items[0].RoleID,
+		AttemptNo: 1, Cycle: 1, StageID: batch.StageID,
+		Reservation: AttemptReservation{ModelCalls: 1, Tokens: 100, MaxOutputTokens: 50},
+		Status:      AttemptStatusRunning,
+	}
+	draining := JobState{
+		Spec: spec, Status: JobStatusRunning, Cycle: 1, CurrentBatch: &batch,
+		Attempts: []Attempt{running}, PendingStop: TerminalReasonDeadline,
+	}
+	if err := draining.Validate(); err != nil {
+		t.Fatalf("valid nonterminal drain rejected: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*JobState)
+		want   string
+	}{
+		{
+			name: "terminal with running attempt",
+			mutate: func(state *JobState) {
+				state.Status = JobStatusFailed
+				state.TerminalReason = TerminalReasonDeadline
+				state.PendingStop = ""
+			},
+			want: "only a running job may have a current batch",
+		},
+		{
+			name: "terminal with pending stop",
+			mutate: func(state *JobState) {
+				state.Status = JobStatusFailed
+				state.TerminalReason = TerminalReasonDeadline
+				state.CurrentBatch = nil
+				state.Attempts = nil
+			},
+			want: "terminal job cannot retain pending stop",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := cloneJobState(draining)
+			test.mutate(&state)
+			if err := state.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Validate() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestAttemptDispatchProvenanceFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	base := Attempt{
+		ID: "attempt-1", BatchID: "batch-1", WorkItemID: "work-1", RoleID: "role-1",
+		AttemptNo: 1, Cycle: 1, StageID: "stage-1",
+		Reservation: AttemptReservation{ModelCalls: 2, Tokens: 100, MaxOutputTokens: 50},
+		Status:      AttemptStatusRunning,
+	}
+	if err := base.Validate(); err != nil {
+		t.Fatalf("valid undispatched running attempt: %v", err)
+	}
+
+	runningDispatched := base
+	runningDispatched.Dispatched = true
+	if err := runningDispatched.Validate(); err == nil || !strings.Contains(err.Error(), "running attempt") {
+		t.Fatalf("dispatched running error = %v", err)
+	}
+
+	undispatchedSuccess := base
+	undispatchedSuccess.Status = AttemptStatusSucceeded
+	if err := undispatchedSuccess.Validate(); err == nil || !strings.Contains(err.Error(), "must have crossed dispatch") {
+		t.Fatalf("undispatched success error = %v", err)
+	}
+
+	undispatchedUsage := base
+	undispatchedUsage.Status = AttemptStatusFailed
+	undispatchedUsage.Error = "failed before dispatch"
+	undispatchedUsage.Usage = Usage{ModelCalls: 1, InputTokens: 1}
+	if err := undispatchedUsage.Validate(); err == nil || !strings.Contains(err.Error(), "cannot report provider usage") {
+		t.Fatalf("undispatched usage error = %v", err)
+	}
+
+	ambiguous := base
+	ambiguous.Status = AttemptStatusAmbiguous
+	ambiguous.Error = "unknown writer outcome"
+	if err := ambiguous.Validate(); err == nil || !strings.Contains(err.Error(), "must have crossed dispatch") {
+		t.Fatalf("undispatched ambiguity error = %v", err)
+	}
+}
+
 func TestBudgetIsExhaustedAtHardCap(t *testing.T) {
 	t.Parallel()
 
@@ -169,7 +329,12 @@ func TestBudgetIsExhaustedAtHardCap(t *testing.T) {
 
 func validDomainSpec(t *testing.T, workers int) JobSpec {
 	t.Helper()
-	workflow, err := CompilePreset(PresetGeneral, workers)
+	return validDomainSpecForPreset(t, PresetGeneral, workers)
+}
+
+func validDomainSpecForPreset(t *testing.T, preset string, workers int) JobSpec {
+	t.Helper()
+	workflow, err := CompilePreset(preset, workers)
 	if err != nil {
 		t.Fatalf("CompilePreset(): %v", err)
 	}
@@ -180,6 +345,8 @@ func validDomainSpec(t *testing.T, workers int) JobSpec {
 		Workers:   workflow.Workers,
 		Deadline:  time.Date(2026, time.July, 24, 12, 0, 0, 0, time.UTC),
 		Budget:    Budget{MaxCycles: 8, MaxAttempts: 32, MaxModelCalls: 128, MaxTokens: 1_000_000},
+		Route:     ExecutionRoute{ProviderID: "qwen", ModelID: "qwen3.8-max-preview"},
+		Workflow:  WorkflowControlFromWorkflow(workflow),
 		Authority: DenyAllAuthority(),
 		Roles:     workflow.Roles,
 		Stages:    workflow.Stages,

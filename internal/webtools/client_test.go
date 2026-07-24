@@ -30,6 +30,23 @@ func TestClientRejectsPublicThenPrivateRebinding(t *testing.T) {
 	}
 }
 
+func TestClientRejectsPublicThenCGNATRebinding(t *testing.T) {
+	resolver := &scriptedResolver{answers: [][]net.IPAddr{
+		ipAddrs("93.184.216.34"),
+		ipAddrs("100.100.100.200"),
+	}}
+	dialer := &scriptedDialer{responses: []string{okResponse("should-not-run")}}
+	client := Client{Resolver: resolver, DialContext: dialer.DialContext, Timeout: time.Second}
+
+	_, err := client.Get(context.Background(), "http://example.test/", 1024)
+	if err == nil || !strings.Contains(err.Error(), "non-public IP") {
+		t.Fatalf("expected CGNAT rebinding error, got %v", err)
+	}
+	if got := dialer.CallCount(); got != 0 {
+		t.Fatalf("dial calls = %d, want 0", got)
+	}
+}
+
 func TestClientRejectsRedirectToPrivateIPBeforeSecondDial(t *testing.T) {
 	resolver := &scriptedResolver{answers: [][]net.IPAddr{
 		ipAddrs("93.184.216.34"),
@@ -50,6 +67,26 @@ func TestClientRejectsRedirectToPrivateIPBeforeSecondDial(t *testing.T) {
 	}
 }
 
+func TestClientRejectsRedirectToCGNATBeforeSecondDial(t *testing.T) {
+	resolver := &scriptedResolver{answers: [][]net.IPAddr{
+		ipAddrs("93.184.216.34"),
+		ipAddrs("93.184.216.34"),
+	}}
+	dialer := &scriptedDialer{responses: []string{
+		redirectResponse("http://100.100.100.200/latest/meta-data"),
+		okResponse("should-not-run"),
+	}}
+	client := Client{Resolver: resolver, DialContext: dialer.DialContext, Timeout: time.Second}
+
+	_, err := client.Get(context.Background(), "http://example.test/", 1024)
+	if err == nil || !strings.Contains(err.Error(), "non-public IP") {
+		t.Fatalf("expected redirect CGNAT rejection, got %v", err)
+	}
+	if got := dialer.CallCount(); got != 1 {
+		t.Fatalf("dial calls = %d, want only initial public request", got)
+	}
+}
+
 func TestClientRejectsLocalhostAndRFC1918Targets(t *testing.T) {
 	client := Client{DialContext: (&scriptedDialer{}).DialContext, Timeout: time.Second}
 	for _, rawURL := range []string{
@@ -59,6 +96,11 @@ func TestClientRejectsLocalhostAndRFC1918Targets(t *testing.T) {
 		"http://10.0.0.1/",
 		"http://172.16.0.1/",
 		"http://192.168.1.1/",
+		"http://100.100.100.200/",
+		"http://198.18.0.1/",
+		"http://240.0.0.1/",
+		"http://255.255.255.255/",
+		"http://[2001:db8::1]/",
 	} {
 		t.Run(rawURL, func(t *testing.T) {
 			_, err := client.Get(context.Background(), rawURL, 1024)
@@ -66,6 +108,77 @@ func TestClientRejectsLocalhostAndRFC1918Targets(t *testing.T) {
 				t.Fatal("expected private/local target rejection")
 			}
 		})
+	}
+}
+
+func TestClientRejectsDNSNamesResolvingToSpecialUseAddresses(t *testing.T) {
+	for _, rawIP := range []string{"100.100.100.200", "198.18.0.1", "240.0.0.1", "2001:db8::1"} {
+		t.Run(rawIP, func(t *testing.T) {
+			client := Client{
+				Resolver: ResolverFunc(func(_ context.Context, _ string) ([]net.IPAddr, error) {
+					return ipAddrs(rawIP), nil
+				}),
+				DialContext: (&scriptedDialer{}).DialContext,
+				Timeout:     time.Second,
+			}
+			if _, err := client.Get(context.Background(), "http://example.test/", 1024); err == nil ||
+				!strings.Contains(err.Error(), "non-public IP") {
+				t.Fatalf("special-use DNS result %s error = %v", rawIP, err)
+			}
+		})
+	}
+}
+
+func TestClientRejectsNonASCIIHostBeforeDNSOrDial(t *testing.T) {
+	resolverCalls := 0
+	dialer := &scriptedDialer{responses: []string{okResponse("should-not-run")}}
+	client := Client{
+		Resolver: ResolverFunc(func(_ context.Context, _ string) ([]net.IPAddr, error) {
+			resolverCalls++
+			return ipAddrs("93.184.216.34"), nil
+		}),
+		DialContext: dialer.DialContext,
+		Timeout:     time.Second,
+	}
+	if _, err := client.Get(t.Context(), "http://İ.example/api", 1024); err == nil ||
+		!strings.Contains(err.Error(), "non-ASCII URL hostnames") {
+		t.Fatalf("non-ASCII host error = %v", err)
+	}
+	if resolverCalls != 0 || dialer.CallCount() != 0 {
+		t.Fatalf("non-ASCII host reached resolver/dialer: resolver=%d dialer=%d", resolverCalls, dialer.CallCount())
+	}
+}
+
+func TestIsPublicIPRequiresGloballyRoutableAddress(t *testing.T) {
+	for _, rawIP := range []string{"93.184.216.34", "2606:4700:4700::1111"} {
+		if !IsPublicIP(net.ParseIP(rawIP)) {
+			t.Fatalf("globally routable address rejected: %s", rawIP)
+		}
+	}
+	for _, rawIP := range []string{
+		"0.0.0.0",
+		"10.0.0.1",
+		"100.64.0.1",
+		"100.100.100.200",
+		"127.0.0.1",
+		"169.254.169.254",
+		"192.0.2.1",
+		"198.18.0.1",
+		"198.51.100.1",
+		"203.0.113.1",
+		"224.0.0.1",
+		"240.0.0.1",
+		"255.255.255.255",
+		"::1",
+		"64:ff9b::1",
+		"2001:db8::1",
+		"fc00::1",
+		"fe80::1",
+		"ff00::1",
+	} {
+		if IsPublicIP(net.ParseIP(rawIP)) {
+			t.Fatalf("non-global address accepted: %s", rawIP)
+		}
 	}
 }
 
@@ -100,6 +213,208 @@ func TestClientFetchesNormalPublicHost(t *testing.T) {
 	calls := dialer.Calls()
 	if len(calls) != 1 || calls[0] != "93.184.216.34:80" {
 		t.Fatalf("dial calls = %#v", calls)
+	}
+}
+
+func TestAllowedHTTPSURLPrefixesMatchExactOriginAndPath(t *testing.T) {
+	resolver := ResolverFunc(func(_ context.Context, host string) ([]net.IPAddr, error) {
+		if host != "example.test" {
+			return nil, fmt.Errorf("unexpected host %q", host)
+		}
+		return ipAddrs("93.184.216.34"), nil
+	})
+	client := Client{
+		Resolver:           resolver,
+		AllowedURLPrefixes: []string{"https://example.test/api/v2/content"},
+	}
+	for _, rawURL := range []string{
+		"https://example.test/api/v2/content",
+		"https://example.test/api/v2/content?limit=10",
+		"https://example.test:443/api/v2/content?cursor=next",
+		"https://example.test:0443/api/v2/content?cursor=next",
+	} {
+		if _, err := client.ValidatePublicHTTPURL(context.Background(), rawURL); err != nil {
+			t.Fatalf("allowed URL %q rejected: %v", rawURL, err)
+		}
+	}
+	for _, rawURL := range []string{
+		"http://example.test/api/v2/content",
+		"https://other.example/api/v2/content",
+		"https://example.test/api/v2/content/items",
+		"https://example.test/api/v2/content-private",
+		"https://example.test/api/v2/other",
+		"https://example.test/api/v2/content/blocks/id/progress",
+		"https://example.test/api/v2/content/%69tem",
+		"https://example.test/api/v2/content/%2e%2e/private",
+		"https://example.test/api/v2/content/%252e%252e/private",
+		"https://example.test/api/v2/content/item%20name",
+		"https://İ.example/api/v2/content",
+		"https://[fe80::1%25eth0]/api/v2/content",
+		"https://example.test//api/v2/content",
+	} {
+		if _, err := client.ValidatePublicHTTPURL(context.Background(), rawURL); err == nil {
+			t.Fatalf("disallowed URL %q was accepted", rawURL)
+		}
+	}
+}
+
+func TestAllowedHTTPSURLPathPrefixesMatchOnlyOriginAndPathBoundary(t *testing.T) {
+	resolver := ResolverFunc(func(_ context.Context, host string) ([]net.IPAddr, error) {
+		if host != "example.test" {
+			return nil, fmt.Errorf("unexpected host %q", host)
+		}
+		return ipAddrs("93.184.216.34"), nil
+	})
+	client := Client{
+		Resolver:               resolver,
+		AllowedURLPathPrefixes: []string{"https://example.test/api"},
+		RequireHTTPS:           true,
+	}
+	for _, rawURL := range []string{
+		"https://example.test/api",
+		"https://example.test/api/items",
+		"https://example.test:443/api/items?cursor=next",
+	} {
+		if _, err := client.ValidatePublicHTTPURL(t.Context(), rawURL); err != nil {
+			t.Fatalf("allowed path-prefix URL %q rejected: %v", rawURL, err)
+		}
+	}
+	for _, rawURL := range []string{
+		"http://example.test/api",
+		"https://example.test/api-private",
+		"https://other.example/api/items",
+		"https://example.test/api/%2e%2e/private",
+	} {
+		if _, err := client.ValidatePublicHTTPURL(t.Context(), rawURL); err == nil {
+			t.Fatalf("disallowed path-prefix URL %q was accepted", rawURL)
+		}
+	}
+	redirectClient := client.publicHTTPClient()
+	start, err := http.NewRequest(http.MethodGet, "https://example.test/api/start", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inside, err := http.NewRequest(http.MethodGet, "https://example.test/api/next", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := redirectClient.CheckRedirect(inside, []*http.Request{start}); err != nil {
+		t.Fatalf("inside-prefix redirect rejected: %v", err)
+	}
+	outside, err := http.NewRequest(http.MethodGet, "https://evil.example/api/next", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := redirectClient.CheckRedirect(outside, []*http.Request{start}); err == nil ||
+		!strings.Contains(err.Error(), "outside allowed HTTPS path prefixes") {
+		t.Fatalf("outside-host redirect error = %v", err)
+	}
+}
+
+func TestRequireHTTPSWithoutPrefixesRejectsHTTP(t *testing.T) {
+	client := Client{
+		Resolver: ResolverFunc(func(_ context.Context, _ string) ([]net.IPAddr, error) {
+			return ipAddrs("93.184.216.34"), nil
+		}),
+		RequireHTTPS: true,
+	}
+	if _, err := client.ValidatePublicHTTPURL(t.Context(), "https://example.test/anything"); err != nil {
+		t.Fatalf("unrestricted HTTPS rejected: %v", err)
+	}
+	if _, err := client.ValidatePublicHTTPURL(t.Context(), "http://example.test/anything"); err == nil {
+		t.Fatal("RequireHTTPS accepted HTTP")
+	}
+}
+
+func TestAllowedContentBlocksPathDoesNotAuthorizeProgressDescendant(t *testing.T) {
+	client := Client{
+		Resolver: ResolverFunc(func(_ context.Context, _ string) ([]net.IPAddr, error) {
+			return ipAddrs("93.184.216.34"), nil
+		}),
+		AllowedURLPrefixes: []string{"https://nareshka.example/api/v2/content/blocks"},
+	}
+	if _, err := client.ValidatePublicHTTPURL(t.Context(), "https://nareshka.example/api/v2/content/blocks?limit=10"); err != nil {
+		t.Fatalf("exact blocks path rejected: %v", err)
+	}
+	if _, err := client.ValidatePublicHTTPURL(t.Context(), "https://nareshka.example/api/v2/content/blocks/id/progress"); err == nil {
+		t.Fatal("blocks path authorized an unlisted progress descendant")
+	}
+}
+
+func TestAllowedHTTPSURLPrefixesRejectRedirectOutsideScope(t *testing.T) {
+	client := Client{
+		Resolver: ResolverFunc(func(_ context.Context, _ string) ([]net.IPAddr, error) {
+			return ipAddrs("93.184.216.34"), nil
+		}),
+		AllowedURLPrefixes: []string{"https://example.test/api"},
+	}
+	httpClient := client.publicHTTPClient()
+	allowed, err := http.NewRequest(http.MethodGet, "https://example.test/api", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inside, err := http.NewRequest(http.MethodGet, "https://example.test/api?cursor=next", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := httpClient.CheckRedirect(inside, []*http.Request{allowed}); err != nil {
+		t.Fatalf("same exact-path redirect rejected: %v", err)
+	}
+	outside, err := http.NewRequest(http.MethodGet, "https://example.test/admin", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := httpClient.CheckRedirect(outside, []*http.Request{allowed}); err == nil ||
+		!strings.Contains(err.Error(), "outside allowed_url_prefixes") {
+		t.Fatalf("outside redirect error = %v", err)
+	}
+	for _, test := range []struct {
+		rawURL string
+		want   string
+	}{
+		{rawURL: "https://example.test/api/%69tem", want: "unescaped canonical path"},
+		{rawURL: "https://example.test/api/%252e%252e/private", want: "unescaped canonical path"},
+		{rawURL: "https://example.test/api/%252fprivate", want: "unescaped canonical path"},
+		{rawURL: "https://İ.example/api", want: "non-ASCII URL hostnames"},
+		{rawURL: "https://example.test//api", want: "empty path segments"},
+	} {
+		escaped, err := http.NewRequest(http.MethodGet, test.rawURL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := httpClient.CheckRedirect(escaped, []*http.Request{allowed}); err == nil ||
+			!strings.Contains(err.Error(), test.want) {
+			t.Fatalf("redirect %q error = %v, want %q", test.rawURL, err, test.want)
+		}
+	}
+}
+
+func TestNormalizeAllowedHTTPSURLPrefixesIsStrictAndDeterministic(t *testing.T) {
+	got, err := NormalizeAllowedHTTPSURLPrefixes([]string{
+		"https://b.example:0443/api/",
+		"https://a.example/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, ",") != "https://a.example/,https://b.example/api" {
+		t.Fatalf("normalized prefixes = %#v", got)
+	}
+	for _, values := range [][]string{
+		{" https://example.com/api"},
+		{"http://example.com/api"},
+		{"https://user@example.com/api"},
+		{"https://example.com/api?tenant=1"},
+		{"https://example.com/%61pi"},
+		{"https://İ.example/api"},
+		{"https://[fe80::1%25eth0]/api"},
+		{"https://example.com//api"},
+		{"https://example.com/api//child"},
+		{"https://example.com/api", "https://example.com/api/"},
+	} {
+		if _, err := NormalizeAllowedHTTPSURLPrefixes(values); err == nil {
+			t.Fatalf("invalid prefixes accepted: %#v", values)
+		}
 	}
 }
 

@@ -71,8 +71,11 @@ reasoning mode saved in `$BILLYHARNESS_HOME/settings.json` (`~/billyharness/sett
 unless command-line flags or env vars override them. The TUI auto-discovers a local gateway from the same
 config, so `-gateway` is only needed for a non-default remote gateway.
 
-By default the gateway listens on `127.0.0.1:8765`. If you bind it to a non-loopback address such as
-`0.0.0.0:8765`, set a bearer token first:
+By default the gateway listens on `127.0.0.1:8765`. Mutating `/v1` routes
+require a bearer token even on loopback. Set one for normal use; the explicit
+`-dev-allow-unauthenticated-loopback-mutations` flag is only for disposable
+local development. A token is mandatory when binding a non-loopback address
+such as `0.0.0.0:8765`:
 
 ```bash
 export BILLYHARNESS_GATEWAY_AUTH_TOKEN='change-me'
@@ -82,8 +85,74 @@ curl -H "Authorization: Bearer $BILLYHARNESS_GATEWAY_AUTH_TOKEN" http://127.0.0.
 
 `/health` remains unauthenticated for cheap liveness. `/ready` returns bounded
 readiness details for effective config, tool/MCP status, and session-store startup
-health. The `run`, `chat`, and `telegram` gateway clients read
+health. The `run`, `chat`, `telegram`, and `jobs` gateway clients read
 `BILLYHARNESS_GATEWAY_AUTH_TOKEN` automatically when calling a protected gateway.
+
+## Durable multi-agent jobs
+
+The gateway can run persisted jobs with one to four isolated workers, a
+barrier/reducer, and a supervisor which either completes, blocks, waits for a
+real external dependency, or schedules another bounded cycle. Model-requested
+`wait` is distinct from the operator `pause` command. Start the gateway with a
+process-wide provider-call limit, then create a job against the provider/model
+in resolved config:
+
+Long unattended execution is allowed only on endpoints and plans whose terms
+permit automation. In particular, the built-in `qwen` route currently targets
+Qwen Token Plan Individual; its published terms permit interactive
+programming/agent-tool use but prohibit automated scripts, application
+backends, and non-interactive batch processing. Use a metered/custom endpoint
+with suitable terms for unattended 6–24 hour jobs. The example below assumes
+such an endpoint and an explicit gateway bearer token.
+
+```bash
+export BILLYHARNESS_GATEWAY_AUTH_TOKEN='change-me'
+./bin/fast-agent-harness gateway -job-concurrency 2
+
+./bin/fast-agent-harness jobs create \
+  -preset research \
+  -workers 4 \
+  -duration 6h \
+  -min-runtime 5h \
+  -max-cycles 8 \
+  -max-model-calls 128 \
+  -max-tokens 1000000 \
+  -tool fs_list \
+  -tool fs_grep \
+  -tool fs_read_file \
+  -read-root /absolute/path/to/notes \
+  'Repeatedly audit the supplied notes, update the forecast, seek disconfirming evidence, and report calibrated uncertainty.'
+
+./bin/fast-agent-harness jobs list
+./bin/fast-agent-harness jobs show JOB_ID
+./bin/fast-agent-harness jobs pause JOB_ID
+./bin/fast-agent-harness jobs resume JOB_ID
+./bin/fast-agent-harness jobs cancel JOB_ID
+```
+
+Every `-read-root` and `-write-root` must also be contained by the gateway's
+configured `workspace_roots`; job flags can narrow server authority but cannot
+widen it. The process-wide `-job-concurrency` cap applies across all jobs.
+Current durable FileStore execution is supported on Darwin and Linux; other
+operating systems fail closed.
+
+The scheduler is provider-neutral, but route construction is deliberately
+explicit: one daemon can select the built-in DeepSeek, Qwen, Kimi, Codex, and
+Mock routes plus the daemon's one configured custom OpenAI-compatible binding.
+An arbitrary provider name is not an endpoint registry entry, and no route
+inherits another provider's URL or credential. Additional independent custom
+endpoints require explicit provider-profile registry support.
+
+`-duration` is a hard maximum, not a promise to consume that time.
+`-min-runtime` is an admission-relative wall-clock earliest-success gate, not
+a guarantee of useful compute: queued, paused, and gateway-offline time count.
+When `-cadence` is omitted, the CLI derives the smallest interval that lets the
+`-max-cycles` schedule span that gate. Durable timers and checkpoints survive
+gateway restarts. Available presets are `general`, `research`, `coding`,
+`debug`, `review`, `planning`,
+`writing`, and `compare`. Authority is fail-closed: a job gets only the tools,
+roots, network hosts, and provider explicitly granted at creation.
+See the [durable jobs architecture and guarantees](docs/architecture/durable-multi-agent-jobs.md).
 
 For SSH terminals with broken alt-screen or key handling:
 
@@ -100,7 +169,7 @@ Slash commands autocomplete in the composer with `Tab`, `Up`, and `Down`.
 /auth deepseek|codex
 /auth status
 /theme light|dark
-/model flash|pro|gpt|spark|<model-id>
+/model flash|pro|qwen|kimi|gpt|spark|<model-id>
 /reasoning low|medium|high|xhigh|max|off
 /toolview auto|expanded|collapsed|hidden
 /thinkview expanded|collapsed|hidden
@@ -127,6 +196,33 @@ The TUI credential menu is available through `/auth`. It has two setup actions:
   On Windows, the import source is `%CODEX_HOME%\auth.json` when `CODEX_HOME`
   is set, otherwise `%USERPROFILE%\.codex\auth.json`; the default destination
   is `%USERPROFILE%\billyharness\auth\codex.json`.
+
+Qwen Cloud Token Plan and Kimi Code credentials use their own environment
+variables (process environment or the effective Billyharness dotenv file):
+
+```bash
+export QWEN_TOKEN_PLAN_API_KEY='sk-sp-...'
+export KIMI_API_KEY='sk-kimi-...'
+```
+
+The model selects the official endpoint automatically:
+
+```bash
+FAST_AGENT_MODEL=qwen3.8-max-preview ./bin/fast-agent-harness
+FAST_AGENT_MODEL=k3 ./bin/fast-agent-harness
+```
+
+Aliases `/model qwen` (also `/model qn`) and `/model kimi` select
+`qwen3.8-max-preview` and `k3`.
+Kimi also exposes `kimi-for-coding` and `kimi-for-coding-highspeed`. The Qwen
+Token Plan key is distinct from Qwen pay-as-you-go and Coding Plan keys.
+K3 uses its advertised maximum 1,048,576-token context in the model catalog;
+Moderato plans are limited to 262,144, so set
+`FAST_AGENT_CONTEXT_WINDOW_TOKENS=262144` on that tier.
+
+Official references: [Qwen Token Plan quick start](https://docs.qwencloud.com/token-plan/personal/token-plan-personal-quickstart),
+[Qwen OpenAI Chat API](https://docs.qwencloud.com/api-reference/chat/openai-chat),
+and [Kimi Code models](https://www.kimi.com/code/docs/en/kimi-code/models.html).
 
 When exposed through Telegram, `/auth` is owner-only and secret-bearing
 `/auth deepseek ...` is accepted only in a private owner chat.

@@ -6,7 +6,7 @@ injection, skills discovery, and context accounting. It describes current
 behavior as implemented in code; it is not an active work checklist.
 
 Status note: this document was reviewed against the dirty current worktree on
-2026-07-03. Claims describe this checkout, not necessarily a clean release
+2026-07-22. Claims describe this checkout, not necessarily a clean release
 commit.
 
 ## Package Responsibilities
@@ -19,9 +19,9 @@ commit.
   metadata.
 - `internal/credentials` owns credential lookup, persistence, and auth status
   formatting. `internal/codexauth` is pure JWT/auth-payload parsing.
-- `internal/provider` builds DeepSeek, Codex, and mock providers from
-  `config.ProviderBinding`; it validates capability policy before loading
-  provider credentials.
+- `internal/provider` builds DeepSeek, Qwen Cloud Token Plan, Kimi Code, Codex,
+  and mock providers from `config.ProviderBinding`; it validates capability
+  policy before loading provider credentials.
 - `internal/instructions`, `internal/projectcontext`, and `internal/memory`
   render bounded prompt fragments from local files and project metadata.
 - `internal/skills` discovers, views, and imports local `SKILL.md` bundles. It
@@ -61,7 +61,9 @@ file replaces the normal home-plus-CWD search unless
 Billyharness home dotenv is considered. Process environment still wins over
 dotenv. Credential persistence uses the same effective dotenv target for
 DeepSeek API-key saves: `FAST_AGENT_ENV_FILE` when set and allowed, otherwise
-`$BILLYHARNESS_HOME/.env`. A read-only, directory, or otherwise unwritable
+`$BILLYHARNESS_HOME/.env`. Qwen and Kimi API keys use the same read path through
+`QWEN_TOKEN_PLAN_API_KEY` and `KIMI_API_KEY`; they are not persisted by a
+provider-specific gateway route. A read-only, directory, or otherwise unwritable
 active dotenv path fails closed instead of writing a different fallback file.
 
 Project config is not fully trusted for auth endpoints and credential paths.
@@ -136,16 +138,24 @@ required for non-mock providers, and parallel tool calls required when
 `MaxParallelTools > 1`. This validation happens before credential lookup, so
 unsupported model/provider/capability combinations fail without probing secrets.
 
-DeepSeek uses the OpenAI-compatible chat completions transport in
-`internal/provider/provider.go`. Its API key is resolved by
-`credentials.Manager.ResolveDeepSeekAPIKey` from the configured env var through
-the shared environment/dotenv lookup, then the configured credential JSON file.
-The shared lookup honors `FAST_AGENT_ENV_FILE` and
-`BILLYHARNESS_DOTENV_HOME_ONLY` as described above. The request includes
-streaming, optional tools, `max_tokens`, and DeepSeek thinking/reasoning fields
-when configured. Provider errors redact secrets and classify transport, auth,
-rate limit, bad request, context overflow, server, stream closed, and unknown
-failures.
+DeepSeek, Qwen Cloud Token Plan, and Kimi Code share the OpenAI-compatible chat
+completions transport in `internal/provider/provider.go`. API keys are resolved
+by `credentials.Manager.ResolveProviderAPIKey` from the provider-specific env
+var through the shared environment/dotenv lookup, then the configured credential
+JSON file. The shared lookup honors `FAST_AGENT_ENV_FILE` and
+`BILLYHARNESS_DOTENV_HOME_ONLY` as described above. Qwen uses the Token Plan
+endpoint and model `qwen3.8-max-preview`; its request preserves assistant
+`reasoning_content` and maps harness reasoning levels to Qwen's supported wire
+values. Kimi uses the Kimi Code endpoint, the real `billyharness/0.1.0` client
+identity, and the `k3`, `kimi-for-coding`, or
+`kimi-for-coding-highspeed` model IDs. Kimi K3 reasoning levels are normalized
+to `low`, `high`, or `max`, and sampling temperature is omitted on the managed
+Kimi Code transport. The catalog records K3's advertised 1,048,576-token
+maximum; operators on a 262,144-token Kimi tier must use an explicit context
+window override.
+
+Provider errors redact secrets and classify transport, auth, rate limit, bad
+request, context overflow, server, stream closed, and unknown failures.
 
 Codex/OpenAI subscription models use the Responses transport in
 `internal/provider/codex_provider.go`. Auth is loaded by `loadCodexAuth` from
@@ -167,13 +177,14 @@ tools are present. Reasoning is included only when the configured reasoning
 effort is not off.
 
 Auth status is separate from provider construction. `credentials.Status` reports
-DeepSeek and Codex configured/missing state, redacted credentials, account ID,
-expiry, refresh status, active runtime provider/model, and cost mode. It is used
-by gateway/TUI auth and diagnostics surfaces.
+DeepSeek, Qwen, Kimi, and Codex configured/missing state, redacted credentials,
+account ID, expiry, refresh status, active runtime provider/model, and cost mode.
+It is used by gateway/TUI auth and diagnostics surfaces.
 
 ## Model Catalog And Capabilities
 
 `internal/modelinfo` is a local catalog. It knows DeepSeek V4 flash/pro,
+Qwen `qwen3.8-max-preview`, Kimi Code `k3` and K2.7 model IDs,
 Codex/OpenAI subscription model families such as `gpt-5.5`, `gpt-5.4-mini`,
 and `gpt-5.3-codex-spark`, plus mock models. Unknown `gpt-`, `o1`, `o3`, and
 `o4` model IDs are treated as Codex-family with inferred Codex defaults.
@@ -193,7 +204,8 @@ runtime is DeepSeek `deepseek-v4-flash` with a model-derived 1,000,000-token
 context window and a 60 percent compaction threshold. Codex/GPT subscription
 models default compaction to 90 percent of their selected context window unless
 `context_compact_tokens` is explicitly overridden. Codex-family models route to
-`openai-codex`; DeepSeek-family models route to `deepseek`. If an explicit
+`openai-codex`; DeepSeek-family models route to `deepseek`, Qwen-family models
+route to `qwen`, and Kimi-family models route to `kimi`. If an explicit
 provider conflicts with a known model family, the model wins and the resolver
 records a warning. When `DisableSpark` is true and the selected shorthand alias
 is `spark`, the model is replaced with `gpt-5.4-mini`.

@@ -30,7 +30,7 @@ func fetchPage(ctx context.Context, rawURL string, maxBytes int) (fetchedPage, e
 }
 
 func (r *Registry) fetchPage(ctx context.Context, rawURL string, maxBytes int) (fetchedPage, error) {
-	return fetchPageWithClient(ctx, r.nativeWebHTTPClient(), rawURL, maxBytes)
+	return fetchPageWithClient(ctx, r.nativeWebHTTPClientForContext(ctx), rawURL, maxBytes)
 }
 
 func fetchPageWithClient(ctx context.Context, client webtools.Client, rawURL string, maxBytes int) (fetchedPage, error) {
@@ -83,8 +83,8 @@ func validatePublicHTTPURL(ctx context.Context, rawURL string) (*url.URL, error)
 }
 
 func (r *Registry) validatePublicHTTPURL(ctx context.Context, rawURL string) (*url.URL, error) {
-	client := r.nativeWebHTTPClient()
-	return webtools.ValidatePublicHTTPURL(ctx, rawURL, client.Resolver)
+	client := r.nativeWebHTTPClientForContext(ctx)
+	return client.ValidatePublicHTTPURL(ctx, rawURL)
 }
 
 func (r *Registry) nativeWebHTTPClient() webtools.Client {
@@ -92,6 +92,22 @@ func (r *Registry) nativeWebHTTPClient() webtools.Client {
 		return *r.nativeWebClient
 	}
 	return webtools.DefaultClient()
+}
+
+func (r *Registry) nativeWebHTTPClientForContext(ctx context.Context) webtools.Client {
+	client := r.nativeWebHTTPClient()
+	capabilities := r.runCapabilitiesForContext(ctx)
+	if capabilities.Scope() != "" {
+		client.AllowedURLPrefixes = nil
+		client.AllowedURLPathPrefixes = nil
+		client.RequireHTTPS = false
+	}
+	if capabilities.HasURLRestrictions() {
+		client.AllowedURLPrefixes = capabilities.AllowedURLPrefixes()
+		client.AllowedURLPathPrefixes = capabilities.AllowedURLPathPrefixes()
+	}
+	client.RequireHTTPS = capabilities.RequiresHTTPS()
+	return client
 }
 
 func boundedBytes(n int) int {

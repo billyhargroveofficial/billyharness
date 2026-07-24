@@ -9,6 +9,9 @@ func TestNormalizeAlias(t *testing.T) {
 	tests := map[string]string{
 		"flash":       "deepseek-v4-flash",
 		"v4 pro":      "deepseek-v4-pro",
+		"qwen":        "qwen3.8-max-preview",
+		"qn max":      "qwen3.8-max-preview",
+		"kimi":        "k3",
 		"gpt":         "gpt-5.5",
 		"gpt mini":    "gpt-5.4-mini",
 		"codex spark": "gpt-5.3-codex-spark",
@@ -27,8 +30,17 @@ func TestProviderForModelFollowsKnownFamilies(t *testing.T) {
 	if got := ProviderForModel("deepseek-v4-flash", "openai-codex"); got != ProviderDeepSeek {
 		t.Fatalf("provider = %q", got)
 	}
+	if got := ProviderForModel("qwen3.8-max-preview", "deepseek"); got != ProviderQwen {
+		t.Fatalf("qwen provider = %q", got)
+	}
+	if got := ProviderForModel("k3", "qwen"); got != ProviderKimi {
+		t.Fatalf("kimi provider = %q", got)
+	}
 	if got := ProviderForModel("custom-model", "mock"); got != ProviderMock {
 		t.Fatalf("provider = %q", got)
+	}
+	if got := ProviderForModel("gpt-5.5", "mock"); got != ProviderMock {
+		t.Fatalf("explicit mock provider = %q", got)
 	}
 }
 
@@ -55,6 +67,14 @@ func TestLookupIncludesBillingHints(t *testing.T) {
 	gpt := Lookup("gpt-5.5")
 	if gpt.Provider != ProviderOpenAICodex || !gpt.Subscription || gpt.Pricing.OutputPer1M != 0 {
 		t.Fatalf("gpt = %#v", gpt)
+	}
+	qwen := Lookup("qwen3.8-max-preview")
+	if qwen.Provider != ProviderQwen || !qwen.Subscription || qwen.ContextWindowTokens != 983_616 || qwen.MaxOutputTokens != 131_072 {
+		t.Fatalf("qwen = %#v", qwen)
+	}
+	kimi := Lookup("k3")
+	if kimi.Provider != ProviderKimi || !kimi.Subscription || kimi.ContextWindowTokens != 1_048_576 || kimi.MaxOutputTokens != 131_072 {
+		t.Fatalf("kimi = %#v", kimi)
 	}
 }
 
@@ -190,6 +210,14 @@ func TestProviderCatalogIncludesCoreAndCustomProviders(t *testing.T) {
 	codex := Provider("codex")
 	if codex.ID != ProviderOpenAICodex || !codex.Subscription || codex.Auth != "codex-oauth" {
 		t.Fatalf("codex provider = %#v", codex)
+	}
+	qwen := Provider("qwen")
+	if qwen.BaseURL != "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1" || qwen.APIKeyEnv != "QWEN_TOKEN_PLAN_API_KEY" || !qwen.Subscription {
+		t.Fatalf("qwen provider = %#v", qwen)
+	}
+	kimi := Provider("kimi")
+	if kimi.BaseURL != "https://api.kimi.com/coding/v1" || kimi.APIKeyEnv != "KIMI_API_KEY" || !kimi.Subscription {
+		t.Fatalf("kimi provider = %#v", kimi)
 	}
 	custom := Provider("my-openai-compatible")
 	if !custom.Custom || !custom.OpenAICompatible || custom.Transport != "openai-compatible-chat-completions" {

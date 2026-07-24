@@ -59,6 +59,28 @@ func TestManagerResolveDeepSeekAPIKeyUsesConfiguredEnvName(t *testing.T) {
 	}
 }
 
+func TestManagerResolvesQwenAndKimiKeysWithoutExposingThem(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	t.Setenv("QWEN_TOKEN_PLAN_API_KEY", "sk-sp-test-qwen")
+	t.Setenv("KIMI_API_KEY", "sk-kimi-test")
+
+	qwenManager := NewManagerFromAuthSettings(config.AuthSettings{APIKeyEnv: "QWEN_TOKEN_PLAN_API_KEY"})
+	qwen, err := qwenManager.ResolveProviderAPIKey("qwen")
+	if err != nil || qwen.Value != "sk-sp-test-qwen" {
+		t.Fatalf("qwen secret = %#v err=%v", qwen, err)
+	}
+	kimiManager := NewManagerFromAuthSettings(config.AuthSettings{APIKeyEnv: "KIMI_API_KEY"})
+	kimi, err := kimiManager.ResolveProviderAPIKey("kimi")
+	if err != nil || kimi.Value != "sk-kimi-test" {
+		t.Fatalf("kimi secret = %#v err=%v", kimi, err)
+	}
+	status := CurrentStatusForRuntime(config.AuthSettings{APIKeyEnv: "QWEN_TOKEN_PLAN_API_KEY"}, "qwen", "qwen3.8-max-preview")
+	formatted := FormatStatusText(status)
+	if !status.Qwen.Configured || status.DeepSeek.Configured || status.CostMode != "subscription" || strings.Contains(formatted, qwen.Value) || !strings.Contains(formatted, "qwen: configured") {
+		t.Fatalf("qwen status = %#v\n%s", status, formatted)
+	}
+}
+
 func TestAuthStatusClassifiesAndRedactsCredentials(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BILLYHARNESS_HOME", root)

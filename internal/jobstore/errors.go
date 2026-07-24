@@ -76,6 +76,7 @@ const (
 	CorruptionCompletedTail      CorruptionKind = "completed_tail"
 	CorruptionSnapshotMismatch   CorruptionKind = "snapshot_mismatch"
 	CorruptionArtifactMismatch   CorruptionKind = "artifact_mismatch"
+	CorruptionUnreadable         CorruptionKind = "unreadable"
 )
 
 type CorruptionMetadata struct {

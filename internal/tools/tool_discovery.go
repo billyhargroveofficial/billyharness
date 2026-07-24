@@ -35,9 +35,10 @@ func (r *Registry) addToolSearch() {
 				in.Limit = 20
 			}
 			r.refreshMCPTools(ctx)
-			results := r.searchTools(in.Query, in.Server, in.Namespace, in.Risk, in.Limit, in.IncludeSchema, in.MaxSchemaTokens)
+			capabilities := r.runCapabilitiesForContext(ctx)
+			results := r.searchToolsWithCapabilities(in.Query, in.Server, in.Namespace, in.Risk, in.Limit, in.IncludeSchema, in.MaxSchemaTokens, capabilities)
 			catalog := r.mcpCatalogSnapshot()
-			modelVisible := r.modelVisibleToolCatalogSnapshot()
+			modelVisible := r.modelVisibleToolCatalogSnapshotWithCapabilities(capabilities)
 			out, _ := json.MarshalIndent(map[string]any{
 				"tools":               results.Items,
 				"truncated":           results.Truncated,
@@ -53,10 +54,14 @@ func (r *Registry) addToolSearch() {
 }
 
 func (r *Registry) searchTools(query, server, namespace, risk string, limit int, includeSchema bool, maxSchemaTokens int) discovery.Results {
+	return r.searchToolsWithCapabilities(query, server, namespace, risk, limit, includeSchema, maxSchemaTokens, r.runCapabilities)
+}
+
+func (r *Registry) searchToolsWithCapabilities(query, server, namespace, risk string, limit int, includeSchema bool, maxSchemaTokens int, capabilities RunCapabilities) discovery.Results {
 	if limit <= 0 {
 		limit = 20
 	}
-	return discovery.Search(r.discoveryCandidates(true, true), discovery.Query{
+	return discovery.Search(r.discoveryCandidatesWithCapabilities(true, true, capabilities), discovery.Query{
 		Query:           query,
 		Server:          server,
 		Namespace:       namespace,
@@ -68,6 +73,10 @@ func (r *Registry) searchTools(query, server, namespace, risk string, limit int,
 }
 
 func (r *Registry) discoveryCandidates(includeNative, includeMCP bool) []discovery.Candidate {
+	return r.discoveryCandidatesWithCapabilities(includeNative, includeMCP, r.runCapabilities)
+}
+
+func (r *Registry) discoveryCandidatesWithCapabilities(includeNative, includeMCP bool, capabilities RunCapabilities) []discovery.Candidate {
 	var candidates []discovery.Candidate
 	nativeNames := make([]string, 0, len(r.tools))
 	if includeNative {
@@ -76,6 +85,9 @@ func (r *Registry) discoveryCandidates(includeNative, includeMCP bool) []discove
 		}
 		sort.Strings(nativeNames)
 		for _, name := range nativeNames {
+			if !capabilities.AllowsTool(name) {
+				continue
+			}
 			tool := r.tools[name]
 			candidates = append(candidates, discovery.Candidate{
 				Spec:      tool.Spec,
@@ -89,6 +101,9 @@ func (r *Registry) discoveryCandidates(includeNative, includeMCP bool) []discove
 	mcpTools := r.mcpToolsSnapshot()
 	mcpNames := make([]string, 0, len(mcpTools))
 	if includeMCP {
+		if !capabilities.AllowsTool("mcp_call") {
+			return candidates
+		}
 		for name := range mcpTools {
 			mcpNames = append(mcpNames, name)
 		}

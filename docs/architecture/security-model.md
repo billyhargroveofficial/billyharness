@@ -325,8 +325,9 @@ metadata, but prompt invocation is not current behavior.
 
 Secret handling is layered:
 
-- `internal/credentials` resolves and persists DeepSeek API keys and Codex auth
-  payloads. Status values report `credential=redacted` instead of raw tokens.
+- `internal/credentials` resolves DeepSeek, Qwen, and Kimi API keys, persists
+  supported credential flows, and resolves Codex auth payloads. Status values
+  report `credential=redacted` instead of raw tokens.
 - `internal/config.Resolve` tracks redacted config keys, and status surfaces
   use `SanitizedValues` and `SanitizedConfig`.
 - Gateway JSON and NDJSON responses pass through `marshalRedactedJSON` in
@@ -361,13 +362,24 @@ fetching:
 
 - only `http` and `https` schemes are allowed;
 - empty hosts are rejected;
-- `localhost`, `*.localhost`, loopback, private, link-local, multicast, and
-  unspecified IPs are rejected;
+- non-ASCII hostnames and IPv6 zone identifiers are rejected;
+- `localhost`, `*.localhost`, and non-global/special-use IPs are rejected,
+  including private, loopback, link-local, CGNAT, benchmarking, documentation,
+  multicast, and reserved ranges;
 - hostnames are resolved before the request;
 - redirects are revalidated before following;
 - dialing re-resolves and rechecks public addresses, which blocks public-to-
   private DNS rebinding before the second connection;
 - non-2xx responses return bounded body text.
+
+Durable jobs use a separate `durable-job-v1` policy: exact host grants are
+projected to HTTPS origin/path prefixes, path descendants stay on the same
+origin, and every redirect is rechecked. `web_search` is available only under
+an explicit unrestricted `*` network grant.
+The registry repeats the URL decision before cache or handler execution, and
+tool visibility/calls are independently constrained by the run's canonical
+tool allowlist. Durable runs do not use the shared web cache, model compaction
+helpers, or model web summaries.
 
 `web_fetch`, `web_extract`, and `web_crawl` store full extracted text in
 tool-output refs and return compact inline digests by default. Inline raw text

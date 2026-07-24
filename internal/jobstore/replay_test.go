@@ -21,8 +21,8 @@ func TestReplayReconstructsCanonicalStateAndChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
-	if result.State.Status != jobs.JobStatusCompleted ||
-		result.State.TerminalReason != jobs.TerminalReasonSuccess ||
+	if result.State.Status != jobs.JobStatusPaused ||
+		result.State.TerminalReason != "" ||
 		result.State.Revision != 2 {
 		t.Fatalf("replayed state = %#v", result.State)
 	}
@@ -346,12 +346,17 @@ func replayTestFixture(t *testing.T) (SpecEnvelope, []EventRecord) {
 		t.Fatal(err)
 	}
 	spec, err := NewSpecEnvelope(jobs.JobSpec{
-		ID:        "job-replay-test",
-		Goal:      "Replay a bounded durable job deterministically.",
-		Preset:    jobs.PresetGeneral,
-		Workers:   1,
-		Deadline:  now.Add(24 * time.Hour),
-		Budget:    jobs.Budget{MaxCycles: 4, MaxAttempts: 4, MaxModelCalls: 8, MaxTokens: 10_000},
+		ID:       "job-replay-test",
+		Goal:     "Replay a bounded durable job deterministically.",
+		Preset:   jobs.PresetGeneral,
+		Workers:  1,
+		Deadline: now.Add(24 * time.Hour),
+		Budget:   jobs.Budget{MaxCycles: 4, MaxAttempts: 4, MaxModelCalls: 8, MaxTokens: 10_000},
+		Route: jobs.ExecutionRoute{
+			ProviderID: "qwen",
+			ModelID:    "qwen3.8-max-preview",
+		},
+		Workflow:  jobs.WorkflowControlFromWorkflow(workflow),
 		Authority: jobs.DenyAllAuthority(),
 		Roles:     workflow.Roles,
 		Stages:    workflow.Stages,
@@ -364,14 +369,7 @@ func replayTestFixture(t *testing.T) (SpecEnvelope, []EventRecord) {
 	previousHash := spec.SpecHash
 	events := []jobs.Event{
 		{ID: "event-start", Type: jobs.EventJobStarted, At: now},
-		{
-			ID:   "event-complete",
-			Type: jobs.EventDecisionMade,
-			At:   now.Add(time.Minute),
-			Decision: &jobs.Decision{
-				Kind: jobs.DecisionComplete, Reason: "completion rubric satisfied",
-			},
-		},
+		{ID: "event-pause", Type: jobs.EventJobPaused, At: now.Add(time.Minute)},
 	}
 	records := make([]EventRecord, 0, len(events))
 	for index, event := range events {

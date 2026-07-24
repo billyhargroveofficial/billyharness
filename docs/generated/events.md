@@ -26,45 +26,45 @@ This reference documents the event envelope, event-type vocabulary, and lifecycl
 
 ## Event Types
 
-| Type                      | Required IDs                                  | Payload                  | Description                                               |
-| ------------------------- | --------------------------------------------- | ------------------------ | --------------------------------------------------------- |
-| run.started               | run_id                                        | map[string]any           | Run lifecycle begins                                      |
-| turn.started              | run_id, turn_id                               | TurnEvent                | Conversation turn begins                                  |
-| turn.completed            | run_id, turn_id                               | TurnEvent                | Conversation turn reaches a terminal status               |
-| turn.change_recorded      | run_id, turn_id                               | TurnChangeEvent          | Filesystem changes were recorded for a turn               |
-| turn.change_reverted      | run_id, turn_id                               | TurnChangeEvent          | Recorded turn changes were reverted or restored           |
-| step.started              | run_id, turn_id, step_id                      | StepEvent                | Runtime step begins                                       |
-| step.completed            | run_id, turn_id, step_id                      | StepEvent                | Runtime step completes                                    |
-| model.call_started        | run_id, turn_id, step_id                      | ModelCallEvent           | Provider model call begins                                |
-| model.call_finished       | run_id, turn_id, step_id                      | ModelCallEvent           | Provider model call finishes                              |
-| assistant.reasoning_delta | run_id, turn_id, step_id                      | string                   | Assistant reasoning stream delta                          |
-| assistant.content_delta   | run_id, turn_id, step_id                      | string                   | Assistant content stream delta                            |
-| tool.call_requested       | run_id, call_id                               | ToolCall                 | Model requested a tool call                               |
-| tool.permission_requested | run_id, call_id                               | ToolPermissionEvent      | Tool policy requested an approval decision                |
-| tool.permission_decided   | run_id, call_id                               | ToolPermissionEvent      | Tool approval decision was recorded                       |
-| tool.audit                | run_id, call_id                               | map[string]any           | Tool policy/audit metadata was emitted                    |
-| tool.call_progress        | run_id, call_id                               | ToolProgressEvent        | Tool call emitted progress metadata                       |
-| tool.call_started         | run_id, call_id, attempt_id                   | string                   | Tool call attempt begins                                  |
-| tool.call_finished        | run_id, call_id, attempt_id                   | ToolResult               | Tool call attempt completed successfully                  |
-| tool.call_failed          | run_id, call_id, attempt_id                   | ToolResult               | Tool call attempt failed                                  |
-| tool.call_aborted         | run_id, call_id, attempt_id                   | ToolResult               | Tool call attempt was aborted                             |
-| tool.output_ref_created   | run_id, call_id, attempt_id                   | ToolOutputRefEvent       | Large tool output was stored behind an output ref         |
-| context.threshold         | run_id                                        | ContextThresholdEvent    | Context budget threshold was crossed                      |
-| context.compacted         | run_id                                        | map[string]any           | Context compaction completed                              |
-| hook.started              | run_id                                        | HookEvent                | Hook execution begins                                     |
-| hook.finished             | run_id                                        | HookEvent                | Hook execution finished                                   |
-| hook.failed               | run_id                                        | HookEvent                | Hook execution failed                                     |
-| run.completed             | run_id                                        | -                        | Run completed successfully                                |
-| run.failed                | run_id                                        | string                   | Run failed                                                |
-| provider.usage            | run_id, turn_id, step_id                      | map[string]any           | Provider token usage snapshot was updated                 |
-| provider.helper_usage     | run_id                                        | ProviderHelperUsageEvent | Helper model/API usage was recorded                       |
-| session.status            | -                                             | gatewayapi.SessionStatus | Gateway emitted a session status snapshot                 |
-| gateway.stream_gap        | -                                             | GatewayStreamGapEvent    | Gateway live stream dropped events and replay is required |
-| stream.still_running      | -                                             | StreamStillRunningEvent  | Long-running stream heartbeat                             |
-| session.imported          | -                                             | SessionImportedEvent     | External transcript import completed                      |
-| user_input.requested      | run_id, turn_id, step_id, call_id, attempt_id | UserInputRequestEvent    | Tool requested user input                                 |
-| user_input.answered       | run_id, turn_id, step_id, call_id, attempt_id | UserInputAnswerEvent     | User input request was answered                           |
-| user_input.rejected       | run_id, turn_id, step_id, call_id, attempt_id | UserInputRejectEvent     | User input request was rejected                           |
+| Type                      | Required IDs                                  | Payload                  | Description                                                              |
+| ------------------------- | --------------------------------------------- | ------------------------ | ------------------------------------------------------------------------ |
+| run.started               | run_id                                        | map[string]any           | Run lifecycle begins                                                     |
+| turn.started              | run_id, turn_id                               | TurnEvent                | Conversation turn begins                                                 |
+| turn.completed            | run_id, turn_id                               | TurnEvent                | Conversation turn reaches a terminal status                              |
+| turn.change_recorded      | run_id, turn_id                               | TurnChangeEvent          | Filesystem changes were recorded for a turn                              |
+| turn.change_reverted      | run_id, turn_id                               | TurnChangeEvent          | Recorded turn changes were reverted or restored                          |
+| step.started              | run_id, turn_id, step_id                      | StepEvent                | Runtime step begins                                                      |
+| step.completed            | run_id, turn_id, step_id                      | StepEvent                | Runtime step completes                                                   |
+| model.call_started        | run_id, turn_id, step_id                      | ModelCallEvent           | Provider model call begins; isolated runs include capability attestation |
+| model.call_finished       | run_id, turn_id, step_id                      | ModelCallEvent           | Provider model call finishes                                             |
+| assistant.reasoning_delta | run_id, turn_id, step_id                      | string                   | Assistant reasoning stream delta                                         |
+| assistant.content_delta   | run_id, turn_id, step_id                      | string                   | Assistant content stream delta                                           |
+| tool.call_requested       | run_id, call_id                               | ToolCall                 | Model requested a tool call                                              |
+| tool.permission_requested | run_id, call_id                               | ToolPermissionEvent      | Tool policy requested an approval decision                               |
+| tool.permission_decided   | run_id, call_id                               | ToolPermissionEvent      | Tool approval decision was recorded                                      |
+| tool.audit                | run_id, call_id                               | map[string]any           | Tool policy/audit metadata was emitted                                   |
+| tool.call_progress        | run_id, call_id                               | ToolProgressEvent        | Tool call emitted progress metadata                                      |
+| tool.call_started         | run_id, call_id, attempt_id                   | string                   | Tool call attempt begins                                                 |
+| tool.call_finished        | run_id, call_id, attempt_id                   | ToolResult               | Tool call attempt completed successfully                                 |
+| tool.call_failed          | run_id, call_id, attempt_id                   | ToolResult               | Tool call attempt failed                                                 |
+| tool.call_aborted         | run_id, call_id, attempt_id                   | ToolResult               | Tool call attempt was aborted                                            |
+| tool.output_ref_created   | run_id, call_id, attempt_id                   | ToolOutputRefEvent       | Large tool output was stored behind an output ref                        |
+| context.threshold         | run_id                                        | ContextThresholdEvent    | Context budget threshold was crossed                                     |
+| context.compacted         | run_id                                        | map[string]any           | Context compaction completed                                             |
+| hook.started              | run_id                                        | HookEvent                | Hook execution begins                                                    |
+| hook.finished             | run_id                                        | HookEvent                | Hook execution finished                                                  |
+| hook.failed               | run_id                                        | HookEvent                | Hook execution failed                                                    |
+| run.completed             | run_id                                        | -                        | Run completed successfully                                               |
+| run.failed                | run_id                                        | string                   | Run failed                                                               |
+| provider.usage            | run_id, turn_id, step_id                      | map[string]any           | Provider token usage snapshot was updated                                |
+| provider.helper_usage     | run_id                                        | ProviderHelperUsageEvent | Helper model/API usage was recorded                                      |
+| session.status            | -                                             | gatewayapi.SessionStatus | Gateway emitted a session status snapshot                                |
+| gateway.stream_gap        | -                                             | GatewayStreamGapEvent    | Gateway live stream dropped events and replay is required                |
+| stream.still_running      | -                                             | StreamStillRunningEvent  | Long-running stream heartbeat                                            |
+| session.imported          | -                                             | SessionImportedEvent     | External transcript import completed                                     |
+| user_input.requested      | run_id, turn_id, step_id, call_id, attempt_id | UserInputRequestEvent    | Tool requested user input                                                |
+| user_input.answered       | run_id, turn_id, step_id, call_id, attempt_id | UserInputAnswerEvent     | User input request was answered                                          |
+| user_input.rejected       | run_id, turn_id, step_id, call_id, attempt_id | UserInputRejectEvent     | User input request was rejected                                          |
 
 ## Lifecycle Rules
 
@@ -99,4 +99,4 @@ stateDiagram-v2
 | mcp      | MCP server or client integration             |
 | bench    | Benchmark and replay tooling                 |
 
-<!-- source-hash: e5ef174e210ac67a66969f115ab0eedb76ff439929012ebd995db93bf3f2ac0f -->
+<!-- source-hash: 6776d4e7a0c283814153dfb8e365377569caea8ff2fdf122a50da25ebd73f5ac -->

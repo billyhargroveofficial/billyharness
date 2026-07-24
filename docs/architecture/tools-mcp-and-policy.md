@@ -54,6 +54,22 @@ Current order is:
 4. Validate arguments against the tool schema in `internal/tools/schema.go`.
 5. Invoke the handler.
 
+An optional immutable `RunCapabilities` value further reduces a single run.
+When present, `Registry.Specs`, lazy discovery, the policy decision, and
+`Registry.Call` independently enforce the canonical `allowed_tools` set.
+Handlers also receive the run capabilities through call context so cloned tool
+snapshots cannot recover the parent registry's broader surface. Isolated
+snapshots neither refresh nor copy the MCP catalog. A zero capability value
+preserves the legacy registry behavior.
+
+`durable-job-v1` adds separate filesystem read and write roots. The registry
+overrides any caller-supplied workspace policy at each handler call: local-read
+risks receive only read roots and local-write risks receive only write roots.
+Its web policy uses explicit HTTPS origin/path prefixes and rechecks redirects;
+an unrestricted public-HTTPS grant must be the sole `*` entry. The constructor
+accepts only the small structured durable-tool set and rejects shell/execute,
+secret, external/MCP, network-write, memory, skill, helper, and cache tools.
+
 The native schema validator is intentionally small and strict. It checks the
 subset used by local tool specs: object properties, required fields,
 `additionalProperties:false`, arrays, enums, min/max item counts, and primitive
@@ -214,13 +230,30 @@ safety is delegated to `internal/webtools.Client`.
 Current public-host safety:
 
 - Only `http` and `https` URLs are allowed.
-- `localhost`, `*.localhost`, private IPs, loopback, link-local, multicast, and
-  unspecified targets are rejected.
+- Non-ASCII hostnames, IPv6 zone identifiers, `localhost`, `*.localhost`, and
+  non-global/special-use IP ranges are rejected, including private, loopback,
+  link-local, CGNAT, benchmarking, documentation, multicast, and reserved
+  ranges.
 - Hosts are resolved before request validation.
 - Redirect targets are validated.
 - Dialing re-checks resolved addresses, which blocks public-to-private DNS
   rebinding before the second connection.
 - Non-2xx responses fail with bounded body text.
+
+An isolated run may additionally carry canonical `allowed_url_prefixes`. The
+wire name is retained for the versioned contract, but each entry authorizes
+only its exact HTTPS origin and canonical path; request query parameters do not
+affect matching, and descendants require their own entries. Entries reject
+userinfo, queries, fragments, encoded path forms, dot segments, empty path
+segments, and non-canonical escaped paths.
+The initial target and every redirect must also use an unescaped canonical path
+and are checked against both this allowlist and the normal
+public-host/DNS-rebinding boundary.
+`Registry.Call` performs the same check before cache lookup or handler
+execution. URL-restricted `web_extract` uses the native transport because a
+provider extraction backend cannot attest its redirect chain. URL-restricted
+runs disable shared web-cache reads and writes so content fetched under a wider
+scope cannot cross the capability boundary.
 
 `web_fetch`, `web_extract`, and `web_crawl` fetch public textual pages and
 return compact JSON digests. They save the full extracted text to an output ref

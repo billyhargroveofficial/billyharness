@@ -33,7 +33,7 @@ func (a *Agent) Run(ctx context.Context, prompt string, emit func(protocol.Event
 }
 
 func (a *Agent) RunWithPromptOptions(ctx context.Context, prompt string, opts PromptSubmitOptions, emit func(protocol.Event)) error {
-	messages := InitialMessagesFromSettings(a.instructions)
+	messages := a.InitialMessages()
 	messages = append(messages, protocol.Message{Role: protocol.RoleUser, Content: prompt})
 	_, err := a.RunMessagesWithPromptOptions(ctx, messages, opts, emit)
 	return err
@@ -59,6 +59,12 @@ func (a *Agent) RunMessagesWithPromptOptions(ctx context.Context, messages []pro
 	emit, stopLiveness = a.withStreamLiveness(emit)
 	defer stopLiveness()
 	emitAgentRunStarted(run, emit)
+	if a != nil && a.contextMode == protocol.ContextModeIsolated {
+		if err := validateIsolatedInitialMessages(messages, a.isolatedBootstrapPrompt()); err != nil {
+			emitAgentRunFailed(err, emit)
+			return messages, err
+		}
+	}
 	hookRunner := runtimehooks.New(a.hookSettings)
 	if err := hookRunner.Run(ctx, "session_start", map[string]any{
 		"submission_id": run.SubmissionID,
@@ -272,7 +278,10 @@ func (a *Agent) snapshotToolSet(ctx context.Context) tools.ToolSet {
 	if a == nil || a.tools == nil {
 		return tools.ToolSet{}
 	}
-	return a.tools.SnapshotWithToolPolicy(ctx, a.toolPolicy)
+	if a.contextMode == protocol.ContextModeIsolated && a.runCapabilities.Scope() == "" {
+		return tools.ToolSet{}
+	}
+	return a.tools.SnapshotWithToolPolicyAndCapabilities(ctx, a.toolPolicy, a.runCapabilities)
 }
 
 func (a *Agent) executeToolCalls(ctx context.Context, hookRunner *runtimehooks.Runner, toolSet tools.ToolSet, runID, turnID string, round int, calls []protocol.ToolCall, emit func(protocol.Event)) []toolExecutionResult {

@@ -57,6 +57,9 @@ binary's registry fingerprints with generated `source-hash` footers.
 - [Tools, MCP, webtools, and rendering boundaries](architecture/tools-mcp-and-policy.md):
   native tool registry, tool policy, lazy MCP, public web access, output refs,
   and client rendering boundaries.
+- [Durable multi-agent jobs](architecture/durable-multi-agent-jobs.md): job
+  state, workflow traversal, provider-neutral invocation, budgets, dispatch,
+  cancellation, and crash-recovery guarantees.
 - [Telegram and operator surfaces](architecture/telegram-and-operator-surfaces.md):
   Telegram adapter role, gateway-client boundary, owner scope, admission,
   rendering, attachments, commands, and operator/security constraints.

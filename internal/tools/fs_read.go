@@ -57,6 +57,9 @@ func (r *Registry) safeReadPath(ctx context.Context, input string) (string, erro
 	if err == nil {
 		return path, nil
 	}
+	if r.runCapabilitiesForContext(ctx).Scope() == protocol.CapabilityScopeDurableJobV1 {
+		return "", err
+	}
 	if outputPath, ok, outputErr := safeToolOutputReadPath(input); ok {
 		return outputPath, outputErr
 	}

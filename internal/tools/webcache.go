@@ -49,6 +49,9 @@ func (r *Registry) webCacheKey(ctx context.Context, toolName, rawURL string, opt
 	if r == nil || !r.toolPolicy.WebCacheEnabled || r.toolPolicy.WebCacheTTL <= 0 || r.toolPolicy.WebCacheMaxBytes <= 0 {
 		return "", false
 	}
+	if r.runCapabilitiesForContext(ctx).Scope() != "" {
+		return "", false
+	}
 	u, err := r.validatePublicHTTPURL(ctx, rawURL)
 	if err != nil {
 		return "", false

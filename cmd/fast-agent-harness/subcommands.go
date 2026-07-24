@@ -26,6 +26,7 @@ var subcommandRuns = map[string]func([]string) error{
 		return configCommand(args, os.Stdout)
 	},
 	"bench": benchCmd,
+	"jobs":  jobsCmd,
 	"sessions": func(args []string) error {
 		return sessionsCmd(args)
 	},

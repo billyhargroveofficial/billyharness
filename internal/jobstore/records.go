@@ -10,7 +10,11 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/jobs"
 )
 
-const SchemaVersion = 1
+// SchemaVersion 2 introduces immutable execution routes/workflow cursors and
+// the two-phase attempt lifecycle. Version 1 cannot be resumed safely because
+// it did not persist a provider route or pre-dispatch reservations; readers
+// reject it explicitly rather than silently selecting current configuration.
+const SchemaVersion = 2
 
 type SpecEnvelope struct {
 	SchemaVersion int          `json:"schema_version"`

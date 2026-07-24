@@ -38,6 +38,53 @@ func TestConfigProjectionsNormalizeModelRoutingAndSparkDisablement(t *testing.T)
 	}
 }
 
+func TestProviderBindingUsesOfficialSubscriptionEndpoints(t *testing.T) {
+	tests := []struct {
+		model         string
+		provider      string
+		baseURL       string
+		apiKeyEnv     string
+		contextWindow int64
+	}{
+		{"qwen3.8-max-preview", "qwen", "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1", "QWEN_TOKEN_PLAN_API_KEY", 983_616},
+		{"k3", "kimi", "https://api.kimi.com/coding/v1", "KIMI_API_KEY", 1_048_576},
+	}
+	for _, tc := range tests {
+		cfg := builtInConfig()
+		cfg.Model = tc.model
+		binding := cfg.ProviderBinding()
+		if binding.Provider.Provider != tc.provider || binding.Provider.BaseURL != tc.baseURL || binding.Auth.APIKeyEnv != tc.apiKeyEnv || binding.Limits.ContextWindowTokens != tc.contextWindow {
+			t.Fatalf("binding for %s = %#v", tc.model, binding)
+		}
+	}
+}
+
+func TestRuntimeModelSwitchRebindsOfficialProviderTransport(t *testing.T) {
+	cfg := builtInConfig()
+	cfg.Model = "qwen3.8-max-preview"
+	settings := RuntimeDiffSettingsFromConfig(cfg)
+
+	settings, err := RuntimeDiffSettingsWithRunOverrides(settings, RunOverrideSettings{Model: "k3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Provider.Provider.Provider != "kimi" ||
+		settings.Provider.Provider.BaseURL != "https://api.kimi.com/coding/v1" ||
+		settings.Provider.Auth.APIKeyEnv != "KIMI_API_KEY" {
+		t.Fatalf("kimi runtime binding = %#v", settings.Provider)
+	}
+
+	settings, err = RuntimeDiffSettingsWithRunOverrides(settings, RunOverrideSettings{Model: "deepseek-v4-flash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Provider.Provider.Provider != "deepseek" ||
+		settings.Provider.Provider.BaseURL != "https://api.deepseek.com" ||
+		settings.Provider.Auth.APIKeyEnv != "DEEPSEEK_API_KEY" {
+		t.Fatalf("deepseek runtime binding = %#v", settings.Provider)
+	}
+}
+
 func TestAccessModeNormalizesAndProjects(t *testing.T) {
 	if NormalizeAccessMode("") != AccessModeBuild ||
 		NormalizeAccessMode("SAFE") != AccessModeGuarded ||

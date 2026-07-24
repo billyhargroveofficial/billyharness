@@ -36,10 +36,34 @@ type FileStore struct {
 	options   Options
 	owner     *ownershipLock
 	artifacts *artifactStore
-	closed    bool
+	cache     map[string]*cachedJob
+	// fullReplayCount is test-observable only. It makes the performance
+	// invariant deterministic without timing-sensitive benchmarks.
+	fullReplayCount uint64
+	closed          bool
 }
 
 var _ Store = (*FileStore)(nil)
+
+// CoordinationKey identifies this canonical filesystem namespace. FileStore's
+// exclusive ownership lock guarantees that the canonical root is a unique
+// durable backend identity for its lifetime.
+func (s *FileStore) CoordinationKey() string {
+	if s == nil || s.root == "" {
+		return ""
+	}
+	return "file:" + s.root
+}
+
+// ProtectedRoots returns a fresh copy of the canonical store root. The root is
+// immutable for the lifetime of FileStore and remains available after Close so
+// authority construction cannot accidentally become less restrictive.
+func (s *FileStore) ProtectedRoots() []string {
+	if s == nil || s.root == "" {
+		return nil
+	}
+	return []string{s.root}
+}
 
 // NewFileStore opens root for exclusive use until Close. The root is created
 // with private permissions when it does not exist.
@@ -62,6 +86,7 @@ func NewFileStore(root string, options Options) (*FileStore, error) {
 	store := &FileStore{
 		root:    owner.root,
 		options: resolved,
+		cache:   make(map[string]*cachedJob),
 		owner:   owner,
 	}
 	store.artifacts = newArtifactStore(store.root, resolved.MaxArtifactBytes)
@@ -80,6 +105,7 @@ func (s *FileStore) Close() error {
 		return nil
 	}
 	s.closed = true
+	clear(s.cache)
 	if s.owner == nil {
 		return nil
 	}
@@ -205,13 +231,24 @@ func (s *FileStore) Append(
 	if err != nil {
 		return jobs.JobState{}, err
 	}
+	jobDir, err := s.jobPath(jobID)
+	if err != nil {
+		return jobs.JobState{}, err
+	}
+	eventsPath := filepath.Join(jobDir, eventsFileName)
 
-	// A caller may not know whether the commit response was delivered. An
-	// exact retry of the final persisted event is therefore successful, but a
-	// reused ID with different content always conflicts.
-	if loaded.replay.LastRecord != nil && loaded.replay.LastRecord.Event.ID == event.ID {
-		last := loaded.replay.LastRecord
-		if canonicalJSONEqual(last.Event, event) && expectedRevision == last.ExpectedRevision {
+	// A caller may not know whether the commit response was delivered, and a
+	// later event may have committed before that caller reconciles. An exact
+	// retry of any persisted event is therefore successful at its original
+	// expected revision. Reusing an ID with different content or revision always
+	// conflicts.
+	if persisted, ok := loaded.eventsByID[event.ID]; ok {
+		matches, matchErr := persisted.matches(eventsPath, expectedRevision, event, s.options.MaxRecordBytes)
+		if matchErr != nil {
+			delete(s.cache, jobID)
+			return jobs.JobState{}, corruptionAt(jobID, eventsPath, CorruptionMalformedJSON, matchErr)
+		}
+		if matches {
 			return cloneStateForStore(loaded.state), nil
 		}
 		return jobs.JobState{}, &ConflictError{
@@ -227,16 +264,6 @@ func (s *FileStore) Append(
 			ActualRevision:   loaded.state.Revision,
 		}
 	}
-	for _, existing := range loaded.replay.Records {
-		if existing.Event.ID == event.ID {
-			return jobs.JobState{}, &ConflictError{
-				JobID:            jobID,
-				ExpectedRevision: expectedRevision,
-				ActualRevision:   loaded.state.Revision,
-			}
-		}
-	}
-
 	next, err := jobs.Reduce(loaded.state, event)
 	if err != nil {
 		return jobs.JobState{}, err
@@ -246,22 +273,21 @@ func (s *FileStore) Append(
 	}
 	record, err := NewEventRecord(
 		jobID,
-		loaded.replay.Seq+1,
+		loaded.seq+1,
 		expectedRevision,
 		next.Revision,
-		loaded.replay.LastHash,
+		loaded.lastHash,
 		event,
 	)
 	if err != nil {
 		return jobs.JobState{}, fmt.Errorf("build event record: %w", err)
 	}
-	jobDir, err := s.jobPath(jobID)
-	if err != nil {
-		return jobs.JobState{}, err
-	}
-	eventsPath := filepath.Join(jobDir, eventsFileName)
+	previousEventLogBytes := loaded.eventLogBytes
 	eventLogBytes, err := appendCanonicalEvent(eventsPath, record, s.options.MaxRecordBytes)
 	if err != nil {
+		// The write may have reached disk before an error was observed. Force a
+		// canonical replay on reconciliation instead of trusting stale memory.
+		delete(s.cache, jobID)
 		return jobs.JobState{}, err
 	}
 
@@ -275,9 +301,28 @@ func (s *FileStore) Append(
 	// Snapshot is a disposable cache. Once the canonical JSONL record is
 	// fsynced the append succeeded; a failed refresh must not turn success into
 	// an ambiguous retry or make a large but valid job unloadable.
+	snapshotCurrent := false
 	if eventLogBytes <= maxSnapshotBytes/2 {
-		_ = writeJSONAtomic(filepath.Join(jobDir, snapshotFileName), snapshot, maxSnapshotBytes)
+		snapshotCurrent = writeJSONAtomic(filepath.Join(jobDir, snapshotFileName), snapshot, maxSnapshotBytes) == nil
 	}
+	loaded.state = next
+	loaded.seq = record.Seq
+	loaded.lastHash = record.Hash
+	loaded.eventLogBytes = eventLogBytes
+	if eventLogBytes > previousEventLogBytes &&
+		eventLogBytes-previousEventLogBytes <= int64(s.options.MaxRecordBytes)+1 {
+		loaded.eventsByID[event.ID] = persistedEvent{
+			ExpectedRevision: expectedRevision,
+			Offset:           previousEventLogBytes,
+			ByteCount:        eventLogBytes - previousEventLogBytes,
+		}
+	} else {
+		// The canonical append is committed, but its post-write size could not
+		// be established. Do not retain an incomplete idempotence index.
+		delete(s.cache, jobID)
+		return cloneStateForStore(next), nil
+	}
+	s.updateCacheAfterAppendLocked(jobID, jobDir, loaded, snapshotCurrent)
 	return cloneStateForStore(next), nil
 }
 
@@ -323,21 +368,29 @@ func (s *FileStore) List(ctx context.Context) ([]JobSummary, error) {
 			continue
 		}
 		if err := ValidatePortableID(name); err != nil {
-			return nil, NewCorruptionError(CorruptionMetadata{
+			summaries = append(summaries, quarantinedJobSummary(name, NewCorruptionError(CorruptionMetadata{
 				Path: filepath.Join(s.root, name),
 				Kind: CorruptionIdentityMismatch,
-			}, fmt.Errorf("invalid job directory name: %w", err))
+			}, fmt.Errorf("invalid job directory name: %w", err))))
+			continue
 		}
 		if !entry.IsDir() {
-			return nil, NewCorruptionError(CorruptionMetadata{
+			summaries = append(summaries, quarantinedJobSummary(name, NewCorruptionError(CorruptionMetadata{
 				JobID: name,
 				Path:  filepath.Join(s.root, name),
 				Kind:  CorruptionIdentityMismatch,
-			}, errors.New("job entry is not a directory"))
+			}, errors.New("job entry is not a directory"))))
+			continue
 		}
 		loaded, err := s.loadLocked(ctx, name)
 		if err != nil {
-			return nil, err
+			if contextError(ctx) != nil {
+				return nil, contextError(ctx)
+			}
+			// ReadDir succeeded, so this failure is scoped to one job entry.
+			// Quarantine it and continue; root-level failures above still abort.
+			summaries = append(summaries, quarantinedJobSummary(name, err))
+			continue
 		}
 		state := loaded.state
 		summaries = append(summaries, JobSummary{
@@ -388,9 +441,68 @@ func (s *FileStore) OpenArtifact(
 }
 
 type loadedJob struct {
-	spec   SpecEnvelope
-	state  jobs.JobState
-	replay ReplayResult
+	state         jobs.JobState
+	seq           uint64
+	lastHash      string
+	eventsByID    map[string]persistedEvent
+	eventLogBytes int64
+}
+
+type persistedEvent struct {
+	ExpectedRevision uint64
+	Offset           int64
+	ByteCount        int64
+}
+
+func (p persistedEvent) matches(
+	eventsPath string,
+	expectedRevision uint64,
+	event jobs.Event,
+	maxRecordBytes int,
+) (bool, error) {
+	if expectedRevision != p.ExpectedRevision {
+		return false, nil
+	}
+	if p.Offset < 0 || p.ByteCount <= 1 || p.ByteCount > int64(maxRecordBytes)+1 {
+		return false, errors.New("cached event location is invalid")
+	}
+	file, err := openRegularRead(eventsPath)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	if _, err := file.Seek(p.Offset, io.SeekStart); err != nil {
+		return false, fmt.Errorf("seek cached event record: %w", err)
+	}
+	body := make([]byte, p.ByteCount)
+	if _, err := io.ReadFull(file, body); err != nil {
+		return false, fmt.Errorf("read cached event record: %w", err)
+	}
+	if body[len(body)-1] != '\n' {
+		return false, errors.New("cached event record is not newline-terminated")
+	}
+	record, _, err := decodeCanonicalEventRecord(body[:len(body)-1])
+	if err != nil {
+		return false, err
+	}
+	if err := record.Validate(); err != nil {
+		return false, fmt.Errorf("validate cached event record: %w", err)
+	}
+	return record.ExpectedRevision == expectedRevision && canonicalJSONEqual(record.Event, event), nil
+}
+
+type durableFileVersion struct {
+	info    os.FileInfo
+	size    int64
+	modTime int64
+}
+
+type cachedJob struct {
+	loaded          loadedJob
+	specVersion     durableFileVersion
+	eventsVersion   durableFileVersion
+	snapshotVersion durableFileVersion
+	snapshotCurrent bool
 }
 
 func (s *FileStore) loadLocked(ctx context.Context, jobID string) (loadedJob, error) {
@@ -401,6 +513,14 @@ func (s *FileStore) loadLocked(ctx context.Context, jobID string) (loadedJob, er
 	if err != nil {
 		return loadedJob{}, err
 	}
+	if cached, ok := s.cachedJobLocked(jobID, jobDir); ok {
+		return cached, nil
+	}
+	return s.replayJobLocked(jobID, jobDir)
+}
+
+func (s *FileStore) replayJobLocked(jobID, jobDir string) (loadedJob, error) {
+	s.fullReplayCount++
 	specPath := filepath.Join(jobDir, specFileName)
 	var spec SpecEnvelope
 	if err := readStrictJSONFile(specPath, int64(s.options.MaxRecordBytes), &spec); err != nil {
@@ -452,8 +572,16 @@ func (s *FileStore) loadLocked(ctx context.Context, jobID string) (loadedJob, er
 	if err := events.Close(); err != nil {
 		return loadedJob{}, fmt.Errorf("close job events: %w", err)
 	}
+	if replay.Tail == nil {
+		// The prior Stat preceded possible tail truncation.
+		eventsInfo, err = statRegularFile(eventsPath)
+		if err != nil {
+			return loadedJob{}, corruptionAt(jobID, eventsPath, CorruptionMalformedJSON, err)
+		}
+	}
 
 	eventLogBytes := eventsInfo.Size()
+	snapshotCurrent := false
 	if replay.Tail == nil && eventLogBytes <= maxSnapshotBytes/2 {
 		wantSnapshot := SnapshotEnvelope{
 			SchemaVersion: SchemaVersion,
@@ -469,14 +597,163 @@ func (s *FileStore) loadLocked(ctx context.Context, jobID string) (loadedJob, er
 		if !validSnapshot {
 			// Event replay is canonical. Snapshot repair is deliberately best effort
 			// so cache damage or a read-only cache file cannot make a valid job unreadable.
-			_ = writeJSONAtomic(snapshotPath, wantSnapshot, maxSnapshotBytes)
+			snapshotCurrent = writeJSONAtomic(snapshotPath, wantSnapshot, maxSnapshotBytes) == nil
+		} else {
+			snapshotCurrent = true
 		}
 	}
-	return loadedJob{
-		spec:   spec,
-		state:  replay.State,
-		replay: replay,
-	}, nil
+	eventsByID := make(map[string]persistedEvent, len(replay.Records))
+	var eventOffset int64
+	for _, record := range replay.Records {
+		canonical, marshalErr := json.Marshal(record)
+		if marshalErr != nil {
+			return loadedJob{}, fmt.Errorf("index canonical event record: %w", marshalErr)
+		}
+		byteCount := int64(len(canonical) + 1)
+		eventsByID[record.Event.ID] = persistedEvent{
+			ExpectedRevision: record.ExpectedRevision,
+			Offset:           eventOffset,
+			ByteCount:        byteCount,
+		}
+		eventOffset += byteCount
+	}
+	if eventOffset != eventLogBytes {
+		return loadedJob{}, corruptionAt(jobID, eventsPath, CorruptionSequenceGap, fmt.Errorf(
+			"indexed event bytes %d do not match canonical log size %d", eventOffset, eventLogBytes,
+		))
+	}
+	loaded := loadedJob{
+		state:         replay.State,
+		seq:           replay.Seq,
+		lastHash:      replay.LastHash,
+		eventsByID:    eventsByID,
+		eventLogBytes: eventLogBytes,
+	}
+	s.cacheLoadedJobLocked(jobID, jobDir, loaded, snapshotCurrent)
+	return loaded, nil
+}
+
+// cachedJobLocked returns only state anchored to the same immutable spec file
+// and append-only event-log version that was fully replayed. The exclusive
+// root ownership lock is the writer-fencing primitive; file versions make
+// accidental/out-of-band replacement fail back to canonical replay.
+func (s *FileStore) cachedJobLocked(jobID, jobDir string) (loadedJob, bool) {
+	cached := s.cache[jobID]
+	if cached == nil {
+		return loadedJob{}, false
+	}
+	specVersion, err := regularFileVersion(filepath.Join(jobDir, specFileName))
+	if err != nil || !sameDurableFileVersion(cached.specVersion, specVersion) {
+		delete(s.cache, jobID)
+		return loadedJob{}, false
+	}
+	eventsVersion, err := regularFileVersion(filepath.Join(jobDir, eventsFileName))
+	if err != nil || !sameDurableFileVersion(cached.eventsVersion, eventsVersion) {
+		delete(s.cache, jobID)
+		return loadedJob{}, false
+	}
+
+	if cached.loaded.eventLogBytes <= maxSnapshotBytes/2 {
+		snapshotPath := filepath.Join(jobDir, snapshotFileName)
+		current, snapshotErr := regularFileVersion(snapshotPath)
+		if !cached.snapshotCurrent || snapshotErr != nil ||
+			!sameDurableFileVersion(cached.snapshotVersion, current) {
+			want := SnapshotEnvelope{
+				SchemaVersion: SchemaVersion,
+				JobID:         jobID,
+				Seq:           cached.loaded.seq,
+				LastHash:      cached.loaded.lastHash,
+				State:         cached.loaded.state,
+			}
+			if writeJSONAtomic(snapshotPath, want, maxSnapshotBytes) == nil {
+				if current, snapshotErr = regularFileVersion(snapshotPath); snapshotErr == nil {
+					cached.snapshotVersion = current
+					cached.snapshotCurrent = true
+				}
+			} else {
+				cached.snapshotCurrent = false
+			}
+		}
+	}
+	return cached.loaded, true
+}
+
+func (s *FileStore) cacheLoadedJobLocked(jobID, jobDir string, loaded loadedJob, snapshotCurrent bool) {
+	if s.cache == nil {
+		s.cache = make(map[string]*cachedJob)
+	}
+	specVersion, specErr := regularFileVersion(filepath.Join(jobDir, specFileName))
+	eventsVersion, eventsErr := regularFileVersion(filepath.Join(jobDir, eventsFileName))
+	if specErr != nil || eventsErr != nil || eventsVersion.size != loaded.eventLogBytes {
+		delete(s.cache, jobID)
+		return
+	}
+	cached := &cachedJob{
+		loaded:          loaded,
+		specVersion:     specVersion,
+		eventsVersion:   eventsVersion,
+		snapshotCurrent: snapshotCurrent,
+	}
+	if snapshotCurrent {
+		if version, err := regularFileVersion(filepath.Join(jobDir, snapshotFileName)); err == nil {
+			cached.snapshotVersion = version
+		} else {
+			cached.snapshotCurrent = false
+		}
+	}
+	s.cache[jobID] = cached
+}
+
+func (s *FileStore) updateCacheAfterAppendLocked(
+	jobID, jobDir string,
+	loaded loadedJob,
+	snapshotCurrent bool,
+) {
+	// Cache refresh is post-commit optimization only. Any failure invalidates
+	// memory and leaves reconciliation to the canonical log on the next call.
+	s.cacheLoadedJobLocked(jobID, jobDir, loaded, snapshotCurrent)
+}
+
+func regularFileVersion(path string) (durableFileVersion, error) {
+	file, err := openRegularRead(path)
+	if err != nil {
+		return durableFileVersion{}, err
+	}
+	info, statErr := file.Stat()
+	closeErr := file.Close()
+	if statErr != nil {
+		return durableFileVersion{}, statErr
+	}
+	if closeErr != nil {
+		return durableFileVersion{}, closeErr
+	}
+	return durableFileVersion{info: info, size: info.Size(), modTime: info.ModTime().UnixNano()}, nil
+}
+
+func statRegularFile(path string) (os.FileInfo, error) {
+	version, err := regularFileVersion(path)
+	if err != nil {
+		return nil, err
+	}
+	return version.info, nil
+}
+
+func sameDurableFileVersion(left, right durableFileVersion) bool {
+	return left.info != nil && right.info != nil &&
+		os.SameFile(left.info, right.info) &&
+		left.size == right.size && left.modTime == right.modTime
+}
+
+func quarantinedJobSummary(jobID string, err error) JobSummary {
+	report := QuarantineReport{Kind: CorruptionUnreadable}
+	var corruption *CorruptionError
+	if errors.As(err, &corruption) {
+		report.Kind = corruption.Kind
+		report.Line = corruption.Line
+		report.Seq = corruption.Seq
+		report.Offset = corruption.Offset
+	}
+	return JobSummary{ID: jobID, Quarantine: &report}
 }
 
 func (s *FileStore) ensureOpenLocked() error {
@@ -687,6 +964,8 @@ func cloneStateForStore(state jobs.JobState) jobs.JobState {
 	// JSON round-tripping would be needlessly expensive on every call. All
 	// mutable slices/pointers in the current domain are cloned explicitly.
 	out := state
+	out.Spec.Workflow.StageOrder = slices.Clone(state.Spec.Workflow.StageOrder)
+	out.Spec.Workflow.WorkerRoleIDs = slices.Clone(state.Spec.Workflow.WorkerRoleIDs)
 	out.Spec.Roles = slices.Clone(state.Spec.Roles)
 	for index := range out.Spec.Roles {
 		out.Spec.Roles[index].Authority = cloneAuthorityForStore(state.Spec.Roles[index].Authority)
@@ -703,18 +982,25 @@ func cloneStateForStore(state jobs.JobState) jobs.JobState {
 	out.Attempts = slices.Clone(state.Attempts)
 	for index := range out.Attempts {
 		out.Attempts[index].Artifacts = slices.Clone(state.Attempts[index].Artifacts)
+		out.Attempts[index].Decision = cloneDecisionForStore(state.Attempts[index].Decision)
 	}
+	out.CompletedBatches = slices.Clone(state.CompletedBatches)
 	out.Artifacts = slices.Clone(state.Artifacts)
-	if state.LastDecision != nil {
-		decision := *state.LastDecision
-		if state.LastDecision.NextBatch != nil {
-			batch := cloneBatchForStore(*state.LastDecision.NextBatch)
-			decision.NextBatch = &batch
-		}
-		out.LastDecision = &decision
-	}
+	out.LastDecision = cloneDecisionForStore(state.LastDecision)
 	out.StagnationFingerprints = slices.Clone(state.StagnationFingerprints)
 	return out
+}
+
+func cloneDecisionForStore(decision *jobs.Decision) *jobs.Decision {
+	if decision == nil {
+		return nil
+	}
+	out := *decision
+	if decision.NextBatch != nil {
+		batch := cloneBatchForStore(*decision.NextBatch)
+		out.NextBatch = &batch
+	}
+	return &out
 }
 
 func cloneBatchForStore(batch jobs.WorkBatch) jobs.WorkBatch {

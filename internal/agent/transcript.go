@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
@@ -34,6 +35,16 @@ func InitialMessagesFromSettings(settings config.InstructionSettings) []protocol
 	return messages
 }
 
+func (a *Agent) InitialMessages() []protocol.Message {
+	if a != nil && a.contextMode == protocol.ContextModeIsolated {
+		return []protocol.Message{{Role: protocol.RoleSystem, Content: a.isolatedBootstrapPrompt()}}
+	}
+	if a == nil {
+		return InitialMessagesFromSettings(config.InstructionSettings{})
+	}
+	return InitialMessagesFromSettings(a.instructions)
+}
+
 func ReconcileProjectContextMessages(settings config.InstructionSettings, messages []protocol.Message) ([]protocol.Message, bool) {
 	return projectcontext.ReconcileMessages(settings, messages)
 }
@@ -63,7 +74,7 @@ func appendToolResultMessages(messages []protocol.Message, results []toolExecuti
 }
 
 func (a *Agent) withMCPInstructions(messages []protocol.Message) []protocol.Message {
-	if a == nil || a.tools == nil {
+	if a == nil || a.tools == nil || a.contextMode == protocol.ContextModeIsolated {
 		return messages
 	}
 	instructions := a.tools.Instructions()
@@ -102,6 +113,55 @@ func systemPrompt() string {
 		"If the user mentions Parilka, парилка, парилке, or asks what is happening there, treat it as the Telegram Parilka chat. Use mcp_list_tools with server \"telegram-parilka\" and then mcp_call. Do not search the filesystem or run shell commands for Parilka chat context.",
 		"Native web_fetch, web_extract, and web_crawl return compact digests plus output_ref files for full extracted text. Prefer the digest/extract fields. Large shell, filesystem, diagnostics, and MCP tool outputs may also return bounded previews with output_ref files. Read output_ref only when exact quotes, exact source text, logs, or deeper evidence are necessary. Do not request include_text/full_text unless the user explicitly needs exact source text.",
 	}, "\n")
+}
+
+func isolatedSystemPrompt() string {
+	return strings.Join([]string{
+		"You are a bounded research agent. Follow the user's request using only the tools exposed for this run.",
+		"Treat the run's tool and network limits as immutable. Never reveal secrets or attempt to expand your access.",
+		"Return concise, evidence-based Markdown. Distinguish sourced facts from inference, and do not claim an action succeeded unless its result confirms success.",
+	}, "\n")
+}
+
+func durableJobSystemPrompt() string {
+	return strings.Join([]string{
+		"You are a bounded research and coding agent. Follow the user's request using only the tools exposed for this run.",
+		"Treat the run's tool, filesystem, and network limits as immutable. Never reveal secrets or attempt to expand your access.",
+		"Return concise, evidence-based Markdown. Distinguish sourced facts from inference, and do not claim an action or file change succeeded unless its tool result confirms success.",
+	}, "\n")
+}
+
+func (a *Agent) isolatedBootstrapPrompt() string {
+	if a != nil && a.runCapabilities.Scope() == protocol.CapabilityScopeDurableJobV1 {
+		return durableJobSystemPrompt()
+	}
+	return isolatedSystemPrompt()
+}
+
+func validateIsolatedInitialMessages(messages []protocol.Message, expectedSystemPrompt string) error {
+	if len(messages) != 2 {
+		return fmt.Errorf("isolated run requires exactly the bounded system prompt and one submitted user prompt")
+	}
+	system := messages[0]
+	if system.Role != protocol.RoleSystem ||
+		system.Content != expectedSystemPrompt ||
+		len(system.Parts) > 0 ||
+		system.Name != "" ||
+		system.ToolCallID != "" ||
+		system.ReasoningContent != "" ||
+		len(system.ToolCalls) > 0 {
+		return fmt.Errorf("isolated run system prompt does not match the bounded bootstrap")
+	}
+	user := messages[1]
+	if user.Role != protocol.RoleUser ||
+		len(user.Parts) > 0 ||
+		user.Name != "" ||
+		user.ToolCallID != "" ||
+		user.ReasoningContent != "" ||
+		len(user.ToolCalls) > 0 {
+		return fmt.Errorf("isolated run accepts one text-only submitted user prompt")
+	}
+	return nil
 }
 
 func optionalReasoning(store bool, reasoning string) string {

@@ -23,6 +23,8 @@ var (
 	ErrNoSessionStore      = errors.New("gateway session history unavailable")
 )
 
+const maxJSONResponseBodyBytes int64 = 16 << 20
+
 type Client struct {
 	BaseURL string
 	Client  *http.Client
@@ -333,7 +335,18 @@ func (c *Client) JSON(ctx context.Context, method, path string, body any, out an
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return decodeJSONResponse(resp.Body, out)
+}
+
+func decodeJSONResponse(reader io.Reader, out any) error {
+	body, err := io.ReadAll(io.LimitReader(reader, maxJSONResponseBodyBytes+1))
+	if err != nil {
+		return err
+	}
+	if int64(len(body)) > maxJSONResponseBodyBytes {
+		return fmt.Errorf("gateway JSON response exceeds %d bytes", maxJSONResponseBodyBytes)
+	}
+	return json.Unmarshal(body, out)
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body []byte) (*http.Response, error) {

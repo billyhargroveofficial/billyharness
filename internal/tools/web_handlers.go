@@ -66,7 +66,7 @@ func (r *Registry) addWebExtract() {
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
 			}
-			if backend := r.webExtractBackend(); backend != webtools.BackendNative {
+			if backend := r.webExtractBackendForContext(ctx); backend != webtools.BackendNative && r.runCapabilitiesForContext(ctx).Scope() == "" {
 				return r.fetchProviderExtractPageResult(ctx, backend, in.URL, webFetchOptions{
 					Query:       in.Query,
 					MaxBytes:    in.MaxBytes,
@@ -107,6 +107,9 @@ func (r *Registry) addWebSearch() {
 			if err := json.Unmarshal(args, &in); err != nil {
 				return Result{}, err
 			}
+			if r.runCapabilitiesForContext(ctx).HasURLRestrictions() {
+				return Result{}, fmt.Errorf("web_search is disabled when allowed_url_prefixes is set; use an explicitly allowlisted fetch URL")
+			}
 			if strings.TrimSpace(in.Query) == "" {
 				return Result{}, fmt.Errorf("query required")
 			}
@@ -120,7 +123,7 @@ func (r *Registry) addWebSearch() {
 				IncludeDomains: in.IncludeDomains,
 				ExcludeDomains: in.ExcludeDomains,
 			}
-			if backend := r.webSearchBackend(); backend != webtools.BackendNative {
+			if backend := r.webSearchBackendForContext(ctx); backend != webtools.BackendNative {
 				results, key, err := r.webBackendSearch(ctx, backend, searchReq)
 				if err != nil {
 					if !shouldFallbackFromWebBackendSearch(err) {

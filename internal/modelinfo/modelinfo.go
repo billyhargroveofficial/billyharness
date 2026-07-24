@@ -7,6 +7,8 @@ import (
 
 const (
 	ProviderDeepSeek    = "deepseek"
+	ProviderQwen        = "qwen"
+	ProviderKimi        = "kimi"
 	ProviderOpenAICodex = "openai-codex"
 	ProviderMock        = "mock"
 )
@@ -50,6 +52,8 @@ type ProviderInfo struct {
 	Name             string   `json:"name"`
 	Transport        string   `json:"transport"`
 	Auth             string   `json:"auth"`
+	BaseURL          string   `json:"base_url,omitempty"`
+	APIKeyEnv        string   `json:"api_key_env,omitempty"`
 	OpenAICompatible bool     `json:"openai_compatible"`
 	Subscription     bool     `json:"subscription"`
 	Custom           bool     `json:"custom"`
@@ -81,6 +85,12 @@ func Lookup(model string) Info {
 		info := deepSeekInfo(model)
 		info.Pricing = Pricing{CacheHitPer1M: 0.003625, CacheMissPer1M: 0.435, InputPer1M: 0.435, OutputPer1M: 0.87}
 		return info
+	case "qwen3.8-max-preview":
+		return qwenInfo(model)
+	case "k3":
+		return kimiInfo(model, 1_048_576, []string{"off", "low", "medium", "high", "xhigh", "max"})
+	case "kimi-for-coding", "kimi-for-coding-highspeed":
+		return kimiInfo(model, 262_144, []string{"off", "low", "medium", "high", "xhigh", "max"})
 	case "gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex-spark":
 		return codexInfo(model, true)
 	case "mock", "mock-summarizer", "mock-summary":
@@ -91,6 +101,16 @@ func Lookup(model string) Info {
 		}
 		if IsDeepSeekModel(model) {
 			info := deepSeekInfo(model)
+			info.Known = false
+			return info
+		}
+		if IsQwenModel(model) {
+			info := qwenInfo(model)
+			info.Known = false
+			return info
+		}
+		if IsKimiModel(model) {
+			info := kimiInfo(model, 262_144, []string{"off", "low", "medium", "high", "xhigh", "max"})
 			info.Known = false
 			return info
 		}
@@ -123,6 +143,50 @@ func deepSeekInfo(model string) Info {
 		DefaultSummaryModel:   "deepseek-v4-flash",
 		HelperModels:          HelperModels{WebSummary: "deepseek-v4-flash", Memory: "deepseek-v4-flash"},
 		CostMode:              "metered",
+	}
+}
+
+func qwenInfo(model string) Info {
+	return Info{
+		Model:                 model,
+		Provider:              ProviderQwen,
+		Subscription:          true,
+		Known:                 true,
+		InputModalities:       []string{"text"},
+		ContextWindowTokens:   983_616,
+		MaxOutputTokens:       131_072,
+		ReasoningModes:        []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"},
+		Reasoning:             true,
+		ToolCalls:             true,
+		ParallelToolCalls:     true,
+		Streaming:             true,
+		TokenAccountingFields: []string{"input_tokens", "output_tokens", "reasoning_tokens"},
+		CacheAccountingFields: []string{"cache_hit_tokens", "cache_miss_tokens"},
+		DefaultSummaryModel:   model,
+		HelperModels:          HelperModels{WebSummary: model, Memory: model},
+		CostMode:              "subscription",
+	}
+}
+
+func kimiInfo(model string, contextWindow int64, reasoningModes []string) Info {
+	return Info{
+		Model:                 model,
+		Provider:              ProviderKimi,
+		Subscription:          true,
+		Known:                 true,
+		InputModalities:       []string{"text"},
+		ContextWindowTokens:   contextWindow,
+		MaxOutputTokens:       131_072,
+		ReasoningModes:        reasoningModes,
+		Reasoning:             true,
+		ToolCalls:             true,
+		ParallelToolCalls:     true,
+		Streaming:             true,
+		TokenAccountingFields: []string{"input_tokens", "output_tokens", "reasoning_tokens"},
+		CacheAccountingFields: []string{"cache_hit_tokens", "cache_miss_tokens"},
+		DefaultSummaryModel:   "kimi-for-coding",
+		HelperModels:          HelperModels{WebSummary: "kimi-for-coding", Memory: "kimi-for-coding"},
+		CostMode:              "subscription",
 	}
 }
 
@@ -195,8 +259,34 @@ func Provider(id string) ProviderInfo {
 			Name:             "DeepSeek",
 			Transport:        "openai-compatible-chat-completions",
 			Auth:             "api-key",
+			BaseURL:          "https://api.deepseek.com",
+			APIKeyEnv:        "DEEPSEEK_API_KEY",
 			OpenAICompatible: true,
 			Models:           []string{"deepseek-v4-flash", "deepseek-v4-pro"},
+		}
+	case ProviderQwen:
+		return ProviderInfo{
+			ID:               ProviderQwen,
+			Name:             "Qwen Cloud Token Plan",
+			Transport:        "openai-compatible-chat-completions",
+			Auth:             "api-key",
+			BaseURL:          "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+			APIKeyEnv:        "QWEN_TOKEN_PLAN_API_KEY",
+			OpenAICompatible: true,
+			Subscription:     true,
+			Models:           []string{"qwen3.8-max-preview"},
+		}
+	case ProviderKimi:
+		return ProviderInfo{
+			ID:               ProviderKimi,
+			Name:             "Kimi Code",
+			Transport:        "openai-compatible-chat-completions",
+			Auth:             "api-key",
+			BaseURL:          "https://api.kimi.com/coding/v1",
+			APIKeyEnv:        "KIMI_API_KEY",
+			OpenAICompatible: true,
+			Subscription:     true,
+			Models:           []string{"k3", "kimi-for-coding", "kimi-for-coding-highspeed"},
 		}
 	case ProviderOpenAICodex:
 		return ProviderInfo{
@@ -229,6 +319,8 @@ func Provider(id string) ProviderInfo {
 func Providers() []ProviderInfo {
 	return []ProviderInfo{
 		Provider(ProviderDeepSeek),
+		Provider(ProviderQwen),
+		Provider(ProviderKimi),
 		Provider(ProviderOpenAICodex),
 		Provider("custom"),
 	}
@@ -332,6 +424,14 @@ func NormalizeAlias(value string) string {
 		return "deepseek-v4-flash"
 	case "pro", "v4 pro", "v4-pro", "deepseek pro", "deepseek-v4-pro":
 		return "deepseek-v4-pro"
+	case "qwen", "qwen max", "qwen 3.8 max", "qwen3.8 max", "qwen3.8-max", "qn", "qn max", "qn 3.8 max", "qwen3.8-max-preview":
+		return "qwen3.8-max-preview"
+	case "kimi", "kimi k3", "kimi-k3", "k3":
+		return "k3"
+	case "kimi 2.7", "kimi k2.7", "k2.7", "kimi-for-coding":
+		return "kimi-for-coding"
+	case "kimi highspeed", "kimi high speed", "kimi-for-coding-highspeed":
+		return "kimi-for-coding-highspeed"
 	case "gpt", "codex", "chatgpt", "gpt max", "gpt-5.5":
 		return "gpt-5.5"
 	case "gpt fast", "gpt mini", "gpt-5.4-mini":
@@ -346,15 +446,11 @@ func NormalizeAlias(value string) string {
 func ProviderForModel(model, currentProvider string) string {
 	info := Lookup(model)
 	provider := NormalizeProvider(currentProvider)
-	switch info.Provider {
-	case ProviderOpenAICodex:
-		if provider == "" || provider == ProviderDeepSeek {
-			return ProviderOpenAICodex
-		}
-	case ProviderDeepSeek:
-		if provider == "" || provider == ProviderOpenAICodex {
-			return ProviderDeepSeek
-		}
+	if provider == ProviderMock {
+		return ProviderMock
+	}
+	if info.Provider != "" && (provider == "" || (provider != info.Provider && !Provider(provider).Custom)) {
+		return info.Provider
 	}
 	if provider != "" {
 		return provider
@@ -368,6 +464,10 @@ func NormalizeProvider(provider string) string {
 		return ProviderOpenAICodex
 	case "deepseek":
 		return ProviderDeepSeek
+	case "qwen", "qwen-cloud", "qwencloud", "qn":
+		return ProviderQwen
+	case "kimi", "kimi-code", "kimi-for-coding":
+		return ProviderKimi
 	case "mock":
 		return ProviderMock
 	default:
@@ -400,4 +500,13 @@ func IsSparkAlias(model string) bool {
 
 func IsDeepSeekModel(model string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "deepseek-")
+}
+
+func IsQwenModel(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "qwen")
+}
+
+func IsKimiModel(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	return model == "k3" || strings.HasPrefix(model, "kimi-")
 }

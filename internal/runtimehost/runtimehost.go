@@ -178,6 +178,18 @@ func WithAskUser(handler agent.AskUserHandler) AgentOption {
 	}
 }
 
+func WithRunCapabilities(capabilities tools.RunCapabilities) AgentOption {
+	return func(settings *agent.Settings) {
+		settings.RunCapabilities = capabilities.Clone()
+	}
+}
+
+func WithContextMode(mode string) AgentOption {
+	return func(settings *agent.Settings) {
+		settings.ContextMode = mode
+	}
+}
+
 func NewRegistry(ctx context.Context, settings Settings) (*tools.Registry, error) {
 	return tools.NewRegistryWithMCPFromSettings(ctx, settings.RegistrySettings(), registryOptions(settings)...)
 }

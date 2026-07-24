@@ -1,7 +1,7 @@
 # billyharness
 
 > Fast solo-owner Go agent harness with gateway, TUI, Telegram adapter, JSONL
-> replay, compact native tools, lazy MCP, and Codex/DeepSeek provider paths.
+> replay, compact native tools, lazy MCP, and Codex/DeepSeek/Qwen/Kimi provider paths.
 > Read AGENTS.md first. `docs/` is architecture-only; active implementation
 > state lives in `loop-develop/current-todo`.
 

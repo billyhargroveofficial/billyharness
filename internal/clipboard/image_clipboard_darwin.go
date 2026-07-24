@@ -4,7 +4,6 @@ package clipboard
 
 import (
 	"bytes"
-	"encoding/base64"
 	"fmt"
 	"image"
 	"image/png"

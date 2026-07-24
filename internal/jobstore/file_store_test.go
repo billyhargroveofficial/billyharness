@@ -69,6 +69,46 @@ func TestFileStoreCreateLoadAndListStableOrder(t *testing.T) {
 	}
 }
 
+func TestCloneStateForStoreDeepCopiesMutableDomainState(t *testing.T) {
+	t.Parallel()
+
+	spec := fileStoreTestSpec(t, "job-clone-state")
+	batch := jobs.WorkBatch{
+		ID: "batch-next", Cycle: 2, StageID: spec.Workflow.StageOrder[0], Barrier: jobs.BarrierAll,
+		Items: []jobs.WorkItem{{
+			ID: "work-next", RoleID: spec.Workflow.WorkerRoleIDs[0], Objective: "continue",
+			Authority: jobs.Authority{Mode: jobs.AuthorityModeAllowList, Tools: []string{"fs_read_file"}, Providers: []string{"qwen"}},
+		}},
+	}
+	decision := &jobs.Decision{Kind: jobs.DecisionContinue, Reason: "continue", Fingerprint: "fingerprint", NextBatch: &batch}
+	state := jobs.JobState{
+		Spec:             spec,
+		Status:           jobs.JobStatusRunning,
+		CompletedBatches: []jobs.CompletedBatch{{ID: "batch-done", StageID: spec.Workflow.StageOrder[0], Cycle: 1}},
+		Attempts: []jobs.Attempt{{
+			ID: "attempt-one", BatchID: "batch-done", WorkItemID: "work-one", RoleID: spec.Workflow.WorkerRoleIDs[0],
+			AttemptNo: 1, Cycle: 1, StageID: spec.Workflow.StageOrder[0], Status: jobs.AttemptStatusSucceeded,
+			Decision: decision,
+		}},
+		LastDecision: decision,
+	}
+	cloned := cloneStateForStore(state)
+
+	cloned.Spec.Workflow.StageOrder[0] = "mutated-stage"
+	cloned.Spec.Workflow.WorkerRoleIDs[0] = "mutated-role"
+	cloned.CompletedBatches[0].ID = "mutated-batch"
+	cloned.Attempts[0].Decision.NextBatch.Items[0].Authority.Tools[0] = "mutated-tool"
+	cloned.LastDecision.NextBatch.Items[0].Objective = "mutated-objective"
+
+	if state.Spec.Workflow.StageOrder[0] == "mutated-stage" ||
+		state.Spec.Workflow.WorkerRoleIDs[0] == "mutated-role" ||
+		state.CompletedBatches[0].ID == "mutated-batch" ||
+		state.Attempts[0].Decision.NextBatch.Items[0].Authority.Tools[0] == "mutated-tool" ||
+		state.LastDecision.NextBatch.Items[0].Objective == "mutated-objective" {
+		t.Fatalf("clone mutation escaped into source state: %#v", state)
+	}
+}
+
 func TestFileStoreCreateRejectsDuplicateAndPreservesOriginal(t *testing.T) {
 	t.Parallel()
 
@@ -174,6 +214,226 @@ func TestFileStoreAppendCASAndExactLastEventRetry(t *testing.T) {
 		})
 	}
 	assertEventLogLineCount(t, root, spec.ID, 1)
+}
+
+func TestFileStoreAppendExactEarlierEventRetryAfterLaterEvent(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "jobs")
+	spec := fileStoreTestSpec(t, "job-earlier-retry")
+	started := jobs.Event{
+		ID:   "event-start",
+		Type: jobs.EventJobStarted,
+		At:   fileStoreTestTime(),
+	}
+	paused := jobs.Event{
+		ID:   "event-pause",
+		Type: jobs.EventJobPaused,
+		At:   fileStoreTestTime().Add(time.Minute),
+	}
+
+	first := openFileStoreForTest(t, root, Options{})
+	if _, err := first.Create(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Append(context.Background(), spec.ID, 0, started); err != nil {
+		t.Fatal(err)
+	}
+	want, err := first.Append(context.Background(), spec.ID, 1, paused)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeFileStoreForTest(t, first)
+
+	second := openFileStoreForTest(t, root, Options{})
+	defer closeFileStoreForTest(t, second)
+	got, err := second.Append(context.Background(), spec.ID, 0, started)
+	if err != nil {
+		t.Fatalf("exact earlier event retry: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("exact earlier retry state = %#v, want current state %#v", got, want)
+	}
+	assertEventLogLineCount(t, root, spec.ID, 2)
+
+	cancelled, err := second.Append(context.Background(), spec.ID, want.Revision, jobs.Event{
+		ID: "event-cancel", Type: jobs.EventJobCancelled, At: fileStoreTestTime().Add(2 * time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = second.Append(context.Background(), spec.ID, 0, started)
+	if err != nil {
+		t.Fatalf("exact earlier event retry after terminal event: %v", err)
+	}
+	if !reflect.DeepEqual(got, cancelled) {
+		t.Fatalf("exact earlier retry after terminal = %#v, want %#v", got, cancelled)
+	}
+	assertEventLogLineCount(t, root, spec.ID, 3)
+
+	for _, test := range []struct {
+		name             string
+		expectedRevision uint64
+		event            jobs.Event
+	}{
+		{
+			name:             "same payload wrong original revision",
+			expectedRevision: 1,
+			event:            started,
+		},
+		{
+			name:             "same ID different payload original revision",
+			expectedRevision: 0,
+			event: jobs.Event{
+				ID: "event-start", Type: jobs.EventJobStarted, At: started.At.Add(time.Nanosecond),
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := second.Append(context.Background(), spec.ID, test.expectedRevision, test.event)
+			if !errors.Is(err, ErrConflict) {
+				t.Fatalf("Append() error = %v, want ErrConflict", err)
+			}
+			var conflict *ConflictError
+			if !errors.As(err, &conflict) ||
+				conflict.ExpectedRevision != test.expectedRevision ||
+				conflict.ActualRevision != cancelled.Revision {
+				t.Fatalf("conflict = %#v, err = %v", conflict, err)
+			}
+		})
+	}
+	assertEventLogLineCount(t, root, spec.ID, 3)
+}
+
+func TestFileStoreVerifiedCacheAvoidsReplayPerAppendAndExactRetry(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "jobs")
+	store := openFileStoreForTest(t, root, Options{})
+	defer closeFileStoreForTest(t, store)
+	spec := fileStoreTestSpec(t, "job-cache")
+	if _, err := store.Create(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	started := jobs.Event{ID: "event-start", Type: jobs.EventJobStarted, At: fileStoreTestTime()}
+	running, err := store.Append(context.Background(), spec.ID, 0, started)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.fullReplayCount != 1 {
+		t.Fatalf("full replay count after cache warmup = %d, want 1", store.fullReplayCount)
+	}
+
+	for index := 0; index < 64; index++ {
+		got, err := store.Append(context.Background(), spec.ID, 0, started)
+		if err != nil {
+			t.Fatalf("exact retry %d: %v", index, err)
+		}
+		if !reflect.DeepEqual(got, running) {
+			t.Fatalf("exact retry %d state differs", index)
+		}
+		if _, err := store.Load(context.Background(), spec.ID); err != nil {
+			t.Fatalf("cached Load %d: %v", index, err)
+		}
+	}
+	paused, err := store.Append(context.Background(), spec.ID, running.Revision, jobs.Event{
+		ID: "event-pause", Type: jobs.EventJobPaused, At: fileStoreTestTime().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Append(context.Background(), spec.ID, 0, started)
+	if err != nil {
+		t.Fatalf("exact earlier retry: %v", err)
+	}
+	if !reflect.DeepEqual(got, paused) {
+		t.Fatalf("exact earlier retry = %#v, want current state %#v", got, paused)
+	}
+	if store.fullReplayCount != 1 {
+		t.Fatalf("full replay count after cached operations = %d, want 1", store.fullReplayCount)
+	}
+	assertEventLogLineCount(t, root, spec.ID, 2)
+}
+
+func TestFileStoreVerifiedCacheInvalidatesOnCanonicalLogChange(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "jobs")
+	store := openFileStoreForTest(t, root, Options{})
+	defer closeFileStoreForTest(t, store)
+	spec := fileStoreTestSpec(t, "job-cache-invalidated")
+	if _, err := store.Create(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	started := jobs.Event{ID: "event-start", Type: jobs.EventJobStarted, At: fileStoreTestTime()}
+	if _, err := store.Append(context.Background(), spec.ID, 0, started); err != nil {
+		t.Fatal(err)
+	}
+	if store.fullReplayCount != 1 {
+		t.Fatalf("warmup replay count = %d, want 1", store.fullReplayCount)
+	}
+	appendRecoveryBytes(t, filepath.Join(root, spec.ID, eventsFileName), []byte("{]\n"))
+
+	_, err := store.Append(context.Background(), spec.ID, 0, started)
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("Append after out-of-band log change error = %v, want ErrCorrupt", err)
+	}
+	if store.fullReplayCount != 2 {
+		t.Fatalf("replay count after cache invalidation = %d, want 2", store.fullReplayCount)
+	}
+}
+
+func TestFileStoreListQuarantinesCorruptJobWithoutHidingHealthyJobs(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "jobs")
+	store := openFileStoreForTest(t, root, Options{})
+	defer closeFileStoreForTest(t, store)
+	for _, id := range []string{"healthy-job", "corrupt-job"} {
+		if _, err := store.Create(context.Background(), fileStoreTestSpec(t, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	corruptEvents := filepath.Join(root, "corrupt-job", eventsFileName)
+	if err := os.WriteFile(corruptEvents, []byte("{]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	summaries, err := store.List(context.Background())
+	if err != nil {
+		t.Fatalf("List with one corrupt job: %v", err)
+	}
+	if len(summaries) != 2 {
+		t.Fatalf("List returned %d entries, want healthy plus quarantine: %#v", len(summaries), summaries)
+	}
+	if summaries[0].ID != "corrupt-job" || summaries[0].Quarantine == nil ||
+		summaries[0].Quarantine.Kind != CorruptionMalformedJSON {
+		t.Fatalf("corrupt summary = %#v", summaries[0])
+	}
+	if summaries[0].Status != "" || summaries[0].Quarantine.String() == "" {
+		t.Fatalf("quarantine was not fail-closed/reportable: %#v", summaries[0])
+	}
+	if summaries[1].ID != "healthy-job" || summaries[1].Quarantine != nil ||
+		summaries[1].Status != jobs.JobStatusQueued {
+		t.Fatalf("healthy summary = %#v", summaries[1])
+	}
+	if _, err := store.Load(context.Background(), "corrupt-job"); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("direct Load of quarantined job error = %v, want ErrCorrupt", err)
+	}
+
+	// Quarantine is a fail-closed observation rather than a destructive move;
+	// an operator can repair the canonical log and the next scan re-admits it.
+	if err := os.WriteFile(corruptEvents, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	summaries, err = store.List(context.Background())
+	if err != nil {
+		t.Fatalf("List after repair: %v", err)
+	}
+	if summaries[0].ID != "corrupt-job" || summaries[0].Quarantine != nil ||
+		summaries[0].Status != jobs.JobStatusQueued {
+		t.Fatalf("repaired summary = %#v", summaries[0])
+	}
 }
 
 func TestFileStoreAppendPersistsAcrossReopen(t *testing.T) {
@@ -568,12 +828,17 @@ func fileStoreTestSpec(t *testing.T, jobID string) jobs.JobSpec {
 		t.Fatalf("CompilePreset(): %v", err)
 	}
 	return jobs.JobSpec{
-		ID:        jobID,
-		Goal:      "Produce and verify a durable provider-neutral result.",
-		Preset:    workflow.Name,
-		Workers:   workflow.Workers,
-		Deadline:  fileStoreTestTime().Add(24 * time.Hour),
-		Budget:    jobs.Budget{MaxCycles: 8, MaxAttempts: 32, MaxModelCalls: 128, MaxTokens: 1_000_000},
+		ID:       jobID,
+		Goal:     "Produce and verify a durable provider-neutral result.",
+		Preset:   workflow.Name,
+		Workers:  workflow.Workers,
+		Deadline: fileStoreTestTime().Add(24 * time.Hour),
+		Budget:   jobs.Budget{MaxCycles: 8, MaxAttempts: 32, MaxModelCalls: 128, MaxTokens: 1_000_000},
+		Route: jobs.ExecutionRoute{
+			ProviderID: "qwen",
+			ModelID:    "qwen3.8-max-preview",
+		},
+		Workflow:  jobs.WorkflowControlFromWorkflow(workflow),
 		Authority: jobs.DenyAllAuthority(),
 		Roles:     workflow.Roles,
 		Stages:    workflow.Stages,

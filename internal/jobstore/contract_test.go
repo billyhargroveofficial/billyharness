@@ -2,9 +2,57 @@ package jobstore
 
 import (
 	"errors"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
+
+func TestStoreProtectedRootsContractIsCanonicalImmutableAndAvailableAfterClose(t *testing.T) {
+	t.Parallel()
+
+	requestedRoot := filepath.Join(t.TempDir(), "jobs")
+	store, err := NewFileStore(requestedRoot, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contract Store = store
+
+	absolute, err := filepath.Abs(requestedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = filepath.Clean(want)
+
+	first := contract.ProtectedRoots()
+	if !reflect.DeepEqual(first, []string{want}) {
+		t.Fatalf("ProtectedRoots() = %v, want [%q]", first, want)
+	}
+	first[0] = filepath.Join(want, "mutated")
+	if got := contract.ProtectedRoots(); !reflect.DeepEqual(got, []string{want}) {
+		t.Fatalf("caller mutated protected roots: %v", got)
+	}
+	if err := contract.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := contract.ProtectedRoots(); !reflect.DeepEqual(got, []string{want}) {
+		t.Fatalf("ProtectedRoots() after Close = %v, want [%q]", got, want)
+	}
+	if got := contract.CoordinationKey(); got != "file:"+want {
+		t.Fatalf("CoordinationKey() after Close = %q, want %q", got, "file:"+want)
+	}
+
+	var nilStore *FileStore
+	if got := nilStore.ProtectedRoots(); got != nil {
+		t.Fatalf("nil FileStore ProtectedRoots() = %v, want nil", got)
+	}
+	if got := nilStore.CoordinationKey(); got != "" {
+		t.Fatalf("nil FileStore CoordinationKey() = %q, want empty", got)
+	}
+}
 
 func TestOptionsResolveDefaultsAndRejectsNegativeLimits(t *testing.T) {
 	t.Parallel()

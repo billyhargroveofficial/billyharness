@@ -23,6 +23,7 @@ import (
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
 	"github.com/billyhargroveofficial/billyharness/internal/eventlog"
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
+	"github.com/billyhargroveofficial/billyharness/internal/jobs"
 	"github.com/billyhargroveofficial/billyharness/internal/modelinfo"
 	"github.com/billyhargroveofficial/billyharness/internal/protocol"
 	"github.com/billyhargroveofficial/billyharness/internal/provider"
@@ -50,6 +51,8 @@ type Server struct {
 	sessions        map[string]*Session
 	store           *sessionStore
 	storeHealth     gatewayapi.SessionStoreHealth
+	jobController   JobController
+	jobAuthority    jobs.Authority
 	mu              sync.Mutex
 }
 
@@ -58,6 +61,13 @@ type ServerOptions struct {
 	SessionStoreDir                          string
 	RequireMutationAuth                      bool
 	DevAllowUnauthenticatedLoopbackMutations bool
+	// JobController enables the durable /v1/jobs API. A *jobservice.Manager
+	// satisfies this narrow interface directly.
+	JobController JobController
+	// JobAuthority is the server-side upper bound for every admitted job. The
+	// gateway intersects requests with this envelope and never widens it.
+	// Invalid or zero authority fails closed as deny_all.
+	JobAuthority jobs.Authority
 }
 
 type ServerSettings struct {
@@ -175,6 +185,8 @@ func NewServerWithOptionsFromSettings(settings ServerSettings, prov provider.Pro
 		auth:            credentials.NewManagerFromAuthSettings(settings.Auth),
 		mux:             http.NewServeMux(),
 		sessions:        map[string]*Session{},
+		jobController:   opts.JobController,
+		jobAuthority:    cloneValidJobAuthority(opts.JobAuthority),
 	}
 	if strings.TrimSpace(opts.SessionStoreDir) != "" {
 		s.store = newSessionStore(opts.SessionStoreDir)

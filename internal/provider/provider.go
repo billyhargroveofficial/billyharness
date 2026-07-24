@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/billyhargroveofficial/billyharness/internal/config"
 	"github.com/billyhargroveofficial/billyharness/internal/credentials"
@@ -128,6 +129,10 @@ func RequestMetadataFromError(err error) (RequestMetadata, bool) {
 }
 
 func NewFromBinding(binding config.ProviderBinding) (Provider, error) {
+	return newSingleFromBinding(binding)
+}
+
+func newSingleFromBinding(binding config.ProviderBinding) (Provider, error) {
 	providerID := modelinfo.ProviderForModel(binding.Model.Model, binding.Provider.Provider)
 	if err := modelinfo.ValidateCapabilityPolicy(modelinfo.CapabilityPolicyRequest{
 		Provider:           providerID,
@@ -161,6 +166,7 @@ func NewFromBinding(binding config.ProviderBinding) (Provider, error) {
 			BaseURL:           strings.TrimRight(binding.Provider.CodexBaseURL, "/"),
 			Model:             binding.Model.Model,
 			ReasoningEffort:   binding.Model.ReasoningEffort,
+			MaxTokens:         binding.Model.MaxTokens,
 			RequestTimeout:    binding.Limits.RequestTimeout,
 			StreamIdleTimeout: binding.Limits.StreamIdleTimeout,
 			Originator:        originator,
@@ -173,11 +179,12 @@ func NewFromBinding(binding config.ProviderBinding) (Provider, error) {
 			Client:            client,
 		}, nil
 	}
-	apiKey, err := credentials.NewManagerFromAuthSettings(binding.Auth).ResolveDeepSeekAPIKey()
+	apiKey, err := credentials.NewManagerFromAuthSettings(binding.Auth).ResolveProviderAPIKey(providerID)
 	if err != nil {
 		return nil, err
 	}
 	return &DeepSeek{
+		ProviderID:        providerID,
 		BaseURL:           strings.TrimRight(binding.Provider.BaseURL, "/"),
 		APIKey:            apiKey.Value,
 		Model:             binding.Model.Model,
@@ -187,6 +194,7 @@ func NewFromBinding(binding config.ProviderBinding) (Provider, error) {
 		RequestTimeout:    binding.Limits.RequestTimeout,
 		StreamIdleTimeout: binding.Limits.StreamIdleTimeout,
 		MaxRetries:        binding.Limits.ProviderMaxRetries,
+		UserAgent:         "billyharness/0.1.0",
 		Client:            &http.Client{Timeout: 0},
 	}, nil
 }
@@ -198,7 +206,7 @@ func isCodexBinding(binding config.ProviderBinding) bool {
 type Mock struct{}
 
 func (Mock) Stream(ctx context.Context, req Request) (<-chan Event, <-chan error) {
-	events := make(chan Event, 2)
+	events := make(chan Event, 3)
 	errs := make(chan error, 1)
 	go runProviderStream(events, errs, func() error {
 		last := ""
@@ -208,7 +216,11 @@ func (Mock) Stream(ctx context.Context, req Request) (<-chan Event, <-chan error
 				break
 			}
 		}
-		if err := sendEvent(ctx, events, Event{Kind: EventContent, Text: "mock: " + last}); err != nil {
+		answer := mockAnswer(last)
+		if err := sendEvent(ctx, events, Event{Kind: EventContent, Text: answer}); err != nil {
+			return err
+		}
+		if err := sendEvent(ctx, events, Event{Kind: EventUsage, Usage: mockUsage(req, answer)}); err != nil {
 			return err
 		}
 		return sendEvent(ctx, events, Event{Kind: EventDone, Finish: Finish{Kind: FinishNatural, RawReason: "mock"}})
@@ -216,7 +228,132 @@ func (Mock) Stream(ctx context.Context, req Request) (<-chan Event, <-chan error
 	return events, errs
 }
 
+const (
+	mockJobPromptHeader       = "You are executing one bounded workflow invocation.\n"
+	mockJobContextOpen        = "<invocation_context_json>\n"
+	mockJobContextClose       = "\n</invocation_context_json>"
+	mockSupervisorJSONPrompt  = "Return exactly one raw JSON object (no Markdown fence and no surrounding text)"
+	mockContinueRoleIDsPrefix = "For continue, next_objectives must contain exactly these role IDs: "
+)
+
+type mockJobContext struct {
+	Kind          string    `json:"kind"`
+	Cycle         uint64    `json:"cycle"`
+	MinimumCycles uint64    `json:"minimum_cycles"`
+	ObservedAt    time.Time `json:"observed_at"`
+	NotBefore     time.Time `json:"not_before_complete"`
+	Role          struct {
+		ID string `json:"id"`
+	} `json:"role"`
+}
+
+// mockAnswer keeps the ordinary interactive mock contract ("mock: <prompt>")
+// while giving the durable scheduler a deterministic bounded peer. Durable
+// prompts are recognized from their structured invocation envelope, not from
+// job IDs or other runtime-generated values.
+func mockAnswer(prompt string) string {
+	jobContext, ok := parseMockJobContext(prompt)
+	if !ok {
+		return "mock: " + prompt
+	}
+	if jobContext.Kind != "supervisor" || !strings.Contains(prompt, mockSupervisorJSONPrompt) {
+		roleID := strings.TrimSpace(jobContext.Role.ID)
+		if roleID == "" {
+			roleID = "bounded-role"
+		}
+		return "Mock durable-job result for `" + roleID + "`: bounded invocation completed."
+	}
+	completionForbidden := jobContext.Cycle < jobContext.MinimumCycles ||
+		(!jobContext.NotBefore.IsZero() && jobContext.ObservedAt.Before(jobContext.NotBefore))
+	if completionForbidden {
+		roleIDs, rolesOK := parseMockContinueRoleIDs(prompt)
+		if rolesOK && len(roleIDs) > 0 {
+			next := make(map[string]string, len(roleIDs))
+			for _, roleID := range roleIDs {
+				next[roleID] = "Continue the bounded mock workflow and improve the prior result."
+			}
+			body, err := json.Marshal(struct {
+				Kind           string            `json:"kind"`
+				Reason         string            `json:"reason"`
+				NextObjectives map[string]string `json:"next_objectives"`
+			}{
+				Kind:           "continue",
+				Reason:         "The configured earliest-success gate requires another bounded cycle.",
+				NextObjectives: next,
+			})
+			if err == nil {
+				return string(body)
+			}
+		}
+		return `{"kind":"blocked","reason":"Mock could not recover the required continuation role set."}`
+	}
+	return `{"kind":"complete","reason":"The deterministic mock workflow completed its bounded review."}`
+}
+
+func parseMockJobContext(prompt string) (mockJobContext, bool) {
+	if !strings.HasPrefix(prompt, mockJobPromptHeader) {
+		return mockJobContext{}, false
+	}
+	start := strings.Index(prompt, mockJobContextOpen)
+	if start < 0 {
+		return mockJobContext{}, false
+	}
+	start += len(mockJobContextOpen)
+	endOffset := strings.Index(prompt[start:], mockJobContextClose)
+	if endOffset < 0 {
+		return mockJobContext{}, false
+	}
+	var context mockJobContext
+	if err := json.Unmarshal([]byte(prompt[start:start+endOffset]), &context); err != nil || strings.TrimSpace(context.Kind) == "" {
+		return mockJobContext{}, false
+	}
+	return context, true
+}
+
+func parseMockContinueRoleIDs(prompt string) ([]string, bool) {
+	start := strings.Index(prompt, mockContinueRoleIDsPrefix)
+	if start < 0 {
+		return nil, false
+	}
+	start += len(mockContinueRoleIDsPrefix)
+	decoder := json.NewDecoder(strings.NewReader(prompt[start:]))
+	var roleIDs []string
+	if err := decoder.Decode(&roleIDs); err != nil {
+		return nil, false
+	}
+	for _, roleID := range roleIDs {
+		if strings.TrimSpace(roleID) == "" {
+			return nil, false
+		}
+	}
+	return roleIDs, true
+}
+
+func mockUsage(req Request, answer string) Usage {
+	inputTokens := int64(0)
+	for _, message := range req.Messages {
+		inputTokens += mockTokenCount(message.Content)
+	}
+	if inputTokens == 0 {
+		inputTokens = 1
+	}
+	return Usage{
+		InputTokens:     inputTokens,
+		OutputTokens:    mockTokenCount(answer),
+		CacheMissTokens: inputTokens,
+	}
+}
+
+func mockTokenCount(text string) int64 {
+	count := int64((utf8.RuneCountInString(text) + 3) / 4)
+	if count < 1 {
+		return 1
+	}
+	return count
+}
+
 type DeepSeek struct {
+	ProviderID        string
 	BaseURL           string
 	APIKey            string
 	Model             string
@@ -226,7 +363,15 @@ type DeepSeek struct {
 	RequestTimeout    time.Duration
 	StreamIdleTimeout time.Duration
 	MaxRetries        int
+	UserAgent         string
 	Client            *http.Client
+}
+
+func (d *DeepSeek) providerID() string {
+	if providerID := modelinfo.NormalizeProvider(d.ProviderID); providerID != "" {
+		return providerID
+	}
+	return modelinfo.ProviderDeepSeek
 }
 
 func (d *DeepSeek) Stream(ctx context.Context, req Request) (<-chan Event, <-chan error) {
@@ -247,7 +392,7 @@ func (d *DeepSeek) stream(ctx context.Context, req Request, events chan<- Event)
 	var respCancel context.CancelFunc
 	baseMeta := RequestMetadata{
 		RequestID:  req.RequestID,
-		ProviderID: modelinfo.ProviderDeepSeek,
+		ProviderID: d.providerID(),
 		ModelID:    req.Model,
 	}
 	meta := baseMeta
@@ -265,6 +410,9 @@ func (d *DeepSeek) stream(ctx context.Context, req Request, events chan<- Event)
 		}
 		attemptReq.Header.Set("Content-Type", "application/json")
 		attemptReq.Header.Set("Authorization", "Bearer "+d.APIKey)
+		if d.UserAgent != "" {
+			attemptReq.Header.Set("User-Agent", d.UserAgent)
+		}
 		attemptResp, err := d.Client.Do(attemptReq)
 		if finishSetup() {
 			if attemptResp != nil {
@@ -277,11 +425,11 @@ func (d *DeepSeek) stream(ctx context.Context, req Request, events chan<- Event)
 		if err != nil {
 			cancelReq()
 			meta = attemptMeta
-			return providerTransportError("deepseek", err)
+			return providerTransportError(d.providerID(), err)
 		}
 		if attemptResp.StatusCode < 200 || attemptResp.StatusCode >= 300 {
 			limited, _ := io.ReadAll(io.LimitReader(attemptResp.Body, 4096))
-			providerErr := providerHTTPError("deepseek", attemptResp.StatusCode, attemptResp.Header, secrets.Redact(string(limited), d.APIKey))
+			providerErr := providerHTTPError(d.providerID(), attemptResp.StatusCode, attemptResp.Header, secrets.Redact(string(limited), d.APIKey))
 			_ = attemptResp.Body.Close()
 			cancelReq()
 			attemptMeta.ProviderRequestID = providerErr.RequestID
@@ -306,21 +454,25 @@ func (d *DeepSeek) stream(ctx context.Context, req Request, events chan<- Event)
 	if err := sendEvent(ctx, events, Event{Kind: EventRequestMetadata, Request: meta}); err != nil {
 		return err
 	}
-	return parseSSE(ctx, resp.Body, d.StreamIdleTimeout, events)
+	if err := parseSSE(ctx, resp.Body, d.StreamIdleTimeout, events); err != nil {
+		return withRequestMetadata(providerStreamError(d.providerID(), req.Model, err), meta)
+	}
+	return nil
 }
 
 func (d *DeepSeek) body(req Request) ([]byte, error) {
+	providerID := d.providerID()
 	if count := protocol.MessageAttachmentCount(req.Messages); count > 0 {
 		model := firstNonEmpty(req.Model, d.Model)
 		err := modelinfo.ValidateCapabilityPolicy(modelinfo.CapabilityPolicyRequest{
-			Provider:           modelinfo.ProviderDeepSeek,
+			Provider:           providerID,
 			Model:              model,
 			RequireVisionInput: true,
 		})
 		if err != nil {
 			return nil, err
 		}
-		return nil, fmt.Errorf("unsupported model %q on provider %q: image input is required for %d attachment(s)", model, modelinfo.ProviderDeepSeek, count)
+		return nil, fmt.Errorf("unsupported model %q on provider %q: image input is required for %d attachment(s)", model, providerID, count)
 	}
 	messages := make([]map[string]any, 0, len(req.Messages))
 	for _, msg := range req.Messages {
@@ -331,12 +483,12 @@ func (d *DeepSeek) body(req Request) ([]byte, error) {
 		} else {
 			item["content"] = msg.Content
 		}
+		if msg.Role == protocol.RoleAssistant && msg.ReasoningContent != "" {
+			item["reasoning_content"] = msg.ReasoningContent
+		}
 		if msg.Role == protocol.RoleAssistant && len(msg.ToolCalls) > 0 {
 			if msg.Content == "" {
 				item["content"] = nil
-			}
-			if msg.ReasoningContent != "" {
-				item["reasoning_content"] = msg.ReasoningContent
 			}
 			toolCalls := make([]map[string]any, 0, len(msg.ToolCalls))
 			for _, call := range msg.ToolCalls {
@@ -359,6 +511,9 @@ func (d *DeepSeek) body(req Request) ([]byte, error) {
 		if err := json.Unmarshal(tool.Parameters, &params); err != nil {
 			return nil, fmt.Errorf("invalid tool schema for %s: %w", tool.Name, err)
 		}
+		if providerID == modelinfo.ProviderKimi {
+			params = normalizeKimiToolSchema(params)
+		}
 		tools = append(tools, map[string]any{
 			"type": "function",
 			"function": map[string]any{
@@ -378,18 +533,126 @@ func (d *DeepSeek) body(req Request) ([]byte, error) {
 		payload["tools"] = tools
 		payload["tool_choice"] = "auto"
 	}
-	if d.MaxTokens > 0 {
-		payload["max_tokens"] = d.MaxTokens
-	}
-	if d.Thinking != "" {
-		payload["thinking"] = map[string]any{"type": d.Thinking}
-		if d.Thinking == "enabled" && d.ReasoningEffort != "" {
-			payload["reasoning_effort"] = d.ReasoningEffort
+	switch providerID {
+	case modelinfo.ProviderQwen:
+		enabled := thinkingEnabled(d.Thinking)
+		payload["enable_thinking"] = enabled
+		payload["preserve_thinking"] = true
+		if enabled {
+			if d.MaxTokens > 0 {
+				payload["max_completion_tokens"] = d.MaxTokens
+			}
+			if effort := qwenReasoningEffort(d.ReasoningEffort); effort != "" {
+				payload["reasoning_effort"] = effort
+			}
+		} else {
+			if d.MaxTokens > 0 {
+				payload["max_tokens"] = d.MaxTokens
+			}
+			if req.Temperature != nil {
+				payload["temperature"] = *req.Temperature
+			}
 		}
-	} else if req.Temperature != nil {
-		payload["temperature"] = *req.Temperature
+	case modelinfo.ProviderKimi:
+		if d.MaxTokens > 0 {
+			payload["max_tokens"] = d.MaxTokens
+		}
+		if firstNonEmpty(req.Model, d.Model) == "k3" {
+			if effort := kimiReasoningEffort(d.Thinking, d.ReasoningEffort); effort != "" {
+				payload["reasoning_effort"] = effort
+			}
+		}
+	case modelinfo.ProviderDeepSeek:
+		if d.MaxTokens > 0 {
+			payload["max_tokens"] = d.MaxTokens
+		}
+		if d.Thinking != "" {
+			payload["thinking"] = map[string]any{"type": d.Thinking}
+			if d.Thinking == "enabled" && d.ReasoningEffort != "" {
+				payload["reasoning_effort"] = d.ReasoningEffort
+			}
+		} else if req.Temperature != nil {
+			payload["temperature"] = *req.Temperature
+		}
+	default:
+		if d.MaxTokens > 0 {
+			payload["max_tokens"] = d.MaxTokens
+		}
+		if d.Thinking != "" {
+			payload["thinking"] = map[string]any{"type": d.Thinking}
+			if d.Thinking == "enabled" && d.ReasoningEffort != "" {
+				payload["reasoning_effort"] = d.ReasoningEffort
+			}
+		} else if req.Temperature != nil {
+			payload["temperature"] = *req.Temperature
+		}
 	}
 	return json.Marshal(payload)
+}
+
+// normalizeKimiToolSchema adapts otherwise valid JSON Schema to Kimi's
+// moonshot schema flavor. Kimi requires function parameters to keep a root
+// object type but rejects a schema node that combines "type" with "anyOf".
+// Relax that provider-facing disjunction; Billyharness still validates tool
+// arguments against the original schema before executing the tool.
+func normalizeKimiToolSchema(value any) any {
+	switch node := value.(type) {
+	case []any:
+		for i := range node {
+			node[i] = normalizeKimiToolSchema(node[i])
+		}
+		return node
+	case map[string]any:
+		if _, hasType := node["type"]; hasType {
+			delete(node, "anyOf")
+		}
+		for key, child := range node {
+			node[key] = normalizeKimiToolSchema(child)
+		}
+		return node
+	default:
+		return value
+	}
+}
+
+func thinkingEnabled(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "enabled", "on", "true", "1", "yes", "":
+		return true
+	default:
+		return false
+	}
+}
+
+func qwenReasoningEffort(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "off", "none", "disabled":
+		return ""
+	case "minimal":
+		return "low"
+	case "high", "xhigh", "max":
+		return "xhigh"
+	case "low", "medium":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func kimiReasoningEffort(thinking, value string) string {
+	if !thinkingEnabled(thinking) {
+		return "none"
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "low", "minimum", "light":
+		return "low"
+	case "max", "xhigh", "ultra":
+		return "max"
+	case "", "medium", "high":
+		return "high"
+	default:
+		return ""
+	}
 }
 
 func parseSSE(ctx context.Context, r io.Reader, idle time.Duration, events chan<- Event) error {

@@ -8,17 +8,22 @@ import "time"
 type EventType string
 
 const (
-	EventJobStarted       EventType = "job_started"
-	EventBatchStarted     EventType = "batch_started"
-	EventAttemptRecorded  EventType = "attempt_recorded"
-	EventBatchCompleted   EventType = "batch_completed"
-	EventUsageRecorded    EventType = "usage_recorded"
-	EventDecisionMade     EventType = "decision_made"
-	EventJobPaused        EventType = "job_paused"
-	EventJobResumed       EventType = "job_resumed"
-	EventJobCancelled     EventType = "job_cancelled"
-	EventJobFailed        EventType = "job_failed"
-	EventDeadlineExceeded EventType = "deadline_exceeded"
+	EventJobStarted      EventType = "job_started"
+	EventBatchStarted    EventType = "batch_started"
+	EventAttemptStarted  EventType = "attempt_started"
+	EventAttemptFinished EventType = "attempt_finished"
+	// EventAttemptRecorded is retained only for replay compatibility with the
+	// pre-two-phase schema. New runtimes must use started/finished.
+	EventAttemptRecorded       EventType = "attempt_recorded"
+	EventBatchCompleted        EventType = "batch_completed"
+	EventUsageRecorded         EventType = "usage_recorded"
+	EventDecisionMade          EventType = "decision_made"
+	EventJobPaused             EventType = "job_paused"
+	EventJobResumed            EventType = "job_resumed"
+	EventCancellationRequested EventType = "cancellation_requested"
+	EventJobCancelled          EventType = "job_cancelled"
+	EventJobFailed             EventType = "job_failed"
+	EventDeadlineExceeded      EventType = "deadline_exceeded"
 )
 
 // Event is the explicit input contract for Reduce. Payload fields are typed

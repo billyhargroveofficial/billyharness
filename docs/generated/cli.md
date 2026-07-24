@@ -17,6 +17,7 @@ This reference documents the top-level command table. Run `fast-agent-harness <c
 | mcp             | -          | run the local MCP server adapter                          |
 | config          | -          | inspect resolved configuration                            |
 | bench           | -          | run benchmark and Terminal-Bench helpers                  |
+| jobs            | job        | create and control durable multi-agent jobs               |
 | sessions        | session    | list, inspect, search, export, import, and index sessions |
 | attachments     | attachment | garbage-collect attachment store data                     |
 | inspect-session | -          | inspect one stored session                                |
@@ -63,4 +64,4 @@ Doctor check names come from the descriptor table that `doctor` ranges over at r
 | gateway /health                               | local, production       | Probe the local gateway health endpoint unless -gateway=false disables it.                                                 |
 | gateway /ready                                | local, production       | Probe the local gateway readiness endpoint unless -gateway=false disables it.                                              |
 
-<!-- source-hash: 83ab024746f1583301f14bb7657c40df33195ca414551a69e82f20b79c399148 -->
+<!-- source-hash: fbc596b43ddb39d414152288b8bdc6e61ca3882710d6ae091c48de483ebd0218 -->

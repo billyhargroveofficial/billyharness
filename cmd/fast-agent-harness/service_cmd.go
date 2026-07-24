@@ -281,11 +281,13 @@ func modelAliasForTelegram(value string) string {
 	return modelinfo.NormalizeAlias(value)
 }
 
-func serve(args []string) error {
+func serve(args []string) (returnErr error) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	mock := fs.Bool("mock", false, "use mock provider")
 	model := fs.String("model", "", "model override")
 	addr := fs.String("addr", "", "listen address")
+	jobStoreDir := fs.String("job-store", defaultDurableJobStoreDir(), "durable multi-agent job store directory")
+	jobConcurrency := fs.Int("job-concurrency", defaultDurableJobMaxConcurrency, "maximum simultaneous durable-job agent invocations across all jobs")
 	authToken := fs.String("auth-token", "", "gateway bearer token for protected /v1 routes; defaults to BILLYHARNESS_GATEWAY_AUTH_TOKEN")
 	devAllowLoopbackMutationNoAuth := fs.Bool("dev-allow-unauthenticated-loopback-mutations", false, "development only: allow loopback mutating routes without a bearer token")
 	if err := fs.Parse(args); err != nil {
@@ -325,15 +327,35 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer registry.Close()
+	var jobStack *durableJobStack
+	defer func() {
+		if jobStack == nil {
+			registry.Close()
+			return
+		}
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), durableJobShutdownTimeout)
+		defer cancelShutdown()
+		stopped, shutdownErr := jobStack.shutdown(shutdownCtx)
+		returnErr = errors.Join(returnErr, shutdownErr)
+		if stopped {
+			registry.Close()
+		}
+	}()
+	jobStack, err = newDurableJobStack(ctx, cfg, *jobStoreDir, registry, withDurableJobMaxConcurrency(*jobConcurrency))
+	if err != nil {
+		return err
+	}
 	server := gateway.NewServerWithOptionsFromSettings(gateway.ServerSettingsFromConfig(cfg), provider.Mock{}, registry, gateway.ServerOptions{
 		AuthToken:                                *authToken,
 		SessionStoreDir:                          gateway.DefaultSessionStoreDir(),
 		RequireMutationAuth:                      true,
 		DevAllowUnauthenticatedLoopbackMutations: *devAllowLoopbackMutationNoAuth,
+		JobController:                            jobStack.manager,
+		JobAuthority:                             jobStack.authority,
 	})
 	listenURL := normalizeGatewayURL(listener.Addr().String())
-	status := "fast-agent-harness gateway listening on " + listenURL
+	status := "fast-agent-harness gateway listening on " + listenURL + "; durable jobs=" + jobStack.store.ProtectedRoots()[0] +
+		"; job concurrency=" + strconv.Itoa(jobStack.maxConcurrentInvocations)
 	if *authToken != "" {
 		status += "; bearer auth required for protected /v1 routes"
 	} else if *devAllowLoopbackMutationNoAuth {

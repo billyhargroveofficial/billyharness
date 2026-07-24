@@ -19,9 +19,21 @@ const (
 // Store is the persistence boundary for a durable job. Implementations own
 // compare-and-append, replay, artifact verification, and process ownership.
 type Store interface {
+	// CoordinationKey returns an opaque, stable identity for the underlying
+	// persistence namespace. Independent stores must return different keys;
+	// decorators over the same store must preserve the same key. The runtime
+	// uses it only for in-process job ownership and never persists or exposes it.
+	CoordinationKey() string
+	// ProtectedRoots returns canonical filesystem roots owned by the store.
+	// Callers must treat them as denied authority boundaries. Implementations
+	// return fresh slices so callers cannot mutate store-owned state.
+	ProtectedRoots() []string
 	Create(context.Context, jobs.JobSpec) (jobs.JobState, error)
 	Append(context.Context, string, uint64, jobs.Event) (jobs.JobState, error)
 	Load(context.Context, string) (jobs.JobState, error)
+	// List validates jobs independently. Implementations report a per-job
+	// failure through JobSummary.Quarantine and reserve the returned error for
+	// failures which prevent listing the store as a whole.
 	List(context.Context) ([]JobSummary, error)
 	PutArtifact(context.Context, string, string, string, string, io.Reader) (jobs.ArtifactRef, error)
 	OpenArtifact(context.Context, string, string) (io.ReadCloser, jobs.ArtifactRef, error)
@@ -66,6 +78,35 @@ type JobSummary struct {
 	Cycle          uint64              `json:"cycle"`
 	Usage          jobs.Usage          `json:"usage"`
 	Deadline       time.Time           `json:"deadline"`
+	// Quarantine is set when this job failed closed during independent list
+	// validation. A quarantined entry is never admitted for execution, but it
+	// remains visible to operators so one damaged job cannot either hide itself
+	// or make healthy jobs unavailable.
+	Quarantine *QuarantineReport `json:"quarantine,omitempty"`
+}
+
+// QuarantineReport is deliberately bounded and path-free: it carries enough
+// structured information to locate a corrupt record without exposing the
+// server's filesystem layout or echoing potentially hostile file contents.
+type QuarantineReport struct {
+	Kind   CorruptionKind `json:"kind"`
+	Line   int            `json:"line,omitempty"`
+	Seq    uint64         `json:"seq,omitempty"`
+	Offset int64          `json:"offset,omitempty"`
+}
+
+func (q QuarantineReport) String() string {
+	detail := fmt.Sprintf("quarantined: corruption kind=%s", q.Kind)
+	if q.Line > 0 {
+		detail += fmt.Sprintf(" line=%d", q.Line)
+	}
+	if q.Seq > 0 {
+		detail += fmt.Sprintf(" seq=%d", q.Seq)
+	}
+	if q.Offset > 0 {
+		detail += fmt.Sprintf(" offset=%d", q.Offset)
+	}
+	return detail
 }
 
 // ValidatePortableID rejects values which could affect storage paths. Its

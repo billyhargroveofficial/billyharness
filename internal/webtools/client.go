@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -31,11 +32,14 @@ func (f ResolverFunc) LookupIPAddr(ctx context.Context, host string) ([]net.IPAd
 type DialContextFunc func(context.Context, string, string) (net.Conn, error)
 
 type Client struct {
-	Resolver     Resolver
-	DialContext  DialContextFunc
-	Timeout      time.Duration
-	MaxRedirects int
-	UserAgent    string
+	Resolver               Resolver
+	DialContext            DialContextFunc
+	Timeout                time.Duration
+	MaxRedirects           int
+	UserAgent              string
+	AllowedURLPrefixes     []string
+	AllowedURLPathPrefixes []string
+	RequireHTTPS           bool
 }
 
 type Response struct {
@@ -50,7 +54,7 @@ func DefaultClient() Client {
 }
 
 func (c Client) Get(ctx context.Context, rawURL string, maxBytes int) (Response, error) {
-	u, err := c.validatePublicHTTPURL(ctx, rawURL)
+	u, err := c.ValidatePublicHTTPURL(ctx, rawURL)
 	if err != nil {
 		return Response{}, err
 	}
@@ -100,17 +104,17 @@ func (c Client) publicHTTPClient() *http.Client {
 			if len(via) >= c.maxRedirects() {
 				return fmt.Errorf("too many redirects")
 			}
-			_, err := c.validatePublicHTTPURL(req.Context(), req.URL.String())
+			_, err := c.ValidatePublicHTTPURL(req.Context(), req.URL.String())
 			return err
 		},
 	}
 }
 
 func ValidatePublicHTTPURL(ctx context.Context, rawURL string, resolver Resolver) (*url.URL, error) {
-	return Client{Resolver: resolver}.validatePublicHTTPURL(ctx, rawURL)
+	return Client{Resolver: resolver}.ValidatePublicHTTPURL(ctx, rawURL)
 }
 
-func (c Client) validatePublicHTTPURL(ctx context.Context, rawURL string) (*url.URL, error) {
+func (c Client) ValidatePublicHTTPURL(ctx context.Context, rawURL string) (*url.URL, error) {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
 		return nil, err
@@ -118,9 +122,17 @@ func (c Client) validatePublicHTTPURL(ctx context.Context, rawURL string) (*url.
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, fmt.Errorf("only http and https URLs are allowed")
 	}
-	host := u.Hostname()
-	if host == "" {
-		return nil, fmt.Errorf("URL host required")
+	host, err := canonicalASCIIHost(u.Hostname())
+	if err != nil {
+		return nil, err
+	}
+	if err := validateAllowedHTTPSURL(u, c.AllowedURLPrefixes); err != nil {
+		return nil, err
+	}
+	if c.RequireHTTPS || len(c.AllowedURLPathPrefixes) > 0 {
+		if err := ValidateURLAgainstAllowedHTTPSPathPrefixes(u.String(), c.AllowedURLPathPrefixes); err != nil {
+			return nil, err
+		}
 	}
 	if err := c.validatePublicHost(ctx, host); err != nil {
 		return nil, err
@@ -237,8 +249,51 @@ func normalizeHost(host string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 }
 
+var nonGlobalPublicWebPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("224.0.0.0/4"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001::/23"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("3fff::/20"),
+	netip.MustParsePrefix("5f00::/16"),
+	netip.MustParsePrefix("fc00::/7"),
+	netip.MustParsePrefix("fe80::/10"),
+	netip.MustParsePrefix("fec0::/10"),
+	netip.MustParsePrefix("ff00::/8"),
+}
+
 func IsPublicIP(ip net.IP) bool {
-	return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast())
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	addr = addr.Unmap()
+	if !addr.IsGlobalUnicast() {
+		return false
+	}
+	for _, prefix := range nonGlobalPublicWebPrefixes {
+		if prefix.Contains(addr) {
+			return false
+		}
+	}
+	return true
 }
 
 func truncate(s string, n int) string {

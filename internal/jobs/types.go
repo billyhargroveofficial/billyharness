@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	MinWorkers = 1
-	MaxWorkers = 4
+	MinWorkers         = 1
+	MaxWorkers         = 4
+	MaxControlAttempts = 3
 )
 
 type JobStatus string
@@ -107,6 +108,123 @@ type Usage struct {
 	OutputTokens uint64 `json:"output_tokens"`
 }
 
+// ExecutionRoute is the immutable, credential-free provider selection for a
+// durable job. A resumed job must use the same route; endpoints and secrets
+// are resolved by the provider adapter at invocation time.
+type ExecutionRoute struct {
+	ProviderID      string `json:"provider_id"`
+	ModelID         string `json:"model_id"`
+	Thinking        string `json:"thinking,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+}
+
+func (r ExecutionRoute) Validate() error {
+	for _, field := range []struct {
+		label    string
+		value    string
+		required bool
+	}{
+		{label: "provider_id", value: r.ProviderID, required: true},
+		{label: "model_id", value: r.ModelID, required: true},
+		{label: "thinking", value: r.Thinking},
+		{label: "reasoning_effort", value: r.ReasoningEffort},
+	} {
+		if field.required && field.value == "" {
+			return fmt.Errorf("%s is required", field.label)
+		}
+		if field.value != strings.TrimSpace(field.value) || len(field.value) > 128 || strings.ContainsAny(field.value, "\x00\r\n") {
+			return fmt.Errorf("%s must be trimmed, single-line, and at most 128 bytes", field.label)
+		}
+	}
+	return nil
+}
+
+const WorkflowControlVersion = 1
+
+// WorkflowControl persists the execution-relevant parts of a compiled preset.
+// StageOrder is authoritative for the durable cursor; declaration order is not.
+type WorkflowControl struct {
+	Version          int      `json:"version"`
+	StageOrder       []string `json:"stage_order"`
+	WorkerRoleIDs    []string `json:"worker_role_ids"`
+	SupervisorRoleID string   `json:"supervisor_role_id"`
+	ReducerRoleID    string   `json:"reducer_role_id"`
+}
+
+func WorkflowControlFromWorkflow(workflow WorkflowSpec) WorkflowControl {
+	return WorkflowControl{
+		Version:          WorkflowControlVersion,
+		StageOrder:       append([]string(nil), workflow.StageOrder...),
+		WorkerRoleIDs:    append([]string(nil), workflow.WorkerRoleIDs...),
+		SupervisorRoleID: workflow.SupervisorRoleID,
+		ReducerRoleID:    workflow.ReducerRoleID,
+	}
+}
+
+func (w WorkflowControl) Validate(roles []RoleSpec, stages []StageSpec) error {
+	if w.Version != WorkflowControlVersion {
+		return fmt.Errorf("workflow control version must be %d", WorkflowControlVersion)
+	}
+	roleByID := make(map[string]RoleSpec, len(roles))
+	for _, role := range roles {
+		roleByID[role.ID] = role
+	}
+	if w.SupervisorRoleID == "" || w.ReducerRoleID == "" || w.SupervisorRoleID == w.ReducerRoleID {
+		return fmt.Errorf("workflow control requires distinct reducer and supervisor roles")
+	}
+	for _, roleID := range []string{w.ReducerRoleID, w.SupervisorRoleID} {
+		role, ok := roleByID[roleID]
+		if !ok {
+			return fmt.Errorf("workflow control references unknown role %q", roleID)
+		}
+		if role.Writer {
+			return fmt.Errorf("workflow control role %q cannot be a writer", roleID)
+		}
+	}
+	workerSeen := make(map[string]struct{}, len(w.WorkerRoleIDs))
+	for _, roleID := range w.WorkerRoleIDs {
+		if _, ok := roleByID[roleID]; !ok {
+			return fmt.Errorf("workflow control references unknown worker role %q", roleID)
+		}
+		if roleID == w.ReducerRoleID || roleID == w.SupervisorRoleID {
+			return fmt.Errorf("control role %q cannot be a worker role", roleID)
+		}
+		if _, duplicate := workerSeen[roleID]; duplicate {
+			return fmt.Errorf("workflow control repeats worker role %q", roleID)
+		}
+		workerSeen[roleID] = struct{}{}
+	}
+	if len(workerSeen) == 0 {
+		return fmt.Errorf("workflow control requires worker roles")
+	}
+	stageByID := make(map[string]StageSpec, len(stages))
+	for _, stage := range stages {
+		stageByID[stage.ID] = stage
+	}
+	if len(w.StageOrder) != len(stages) || len(w.StageOrder) < 3 {
+		return fmt.Errorf("workflow stage order must reference all stages and include work, reduce, and supervise")
+	}
+	stageSeen := make(map[string]struct{}, len(w.StageOrder))
+	for _, stageID := range w.StageOrder {
+		if _, ok := stageByID[stageID]; !ok {
+			return fmt.Errorf("workflow control references unknown stage %q", stageID)
+		}
+		if _, duplicate := stageSeen[stageID]; duplicate {
+			return fmt.Errorf("workflow control repeats stage %q", stageID)
+		}
+		stageSeen[stageID] = struct{}{}
+	}
+	reducer := stageByID[w.StageOrder[len(w.StageOrder)-2]]
+	supervisor := stageByID[w.StageOrder[len(w.StageOrder)-1]]
+	if len(reducer.RoleIDs) != 1 || reducer.RoleIDs[0] != w.ReducerRoleID {
+		return fmt.Errorf("penultimate stage must isolate reducer role %q", w.ReducerRoleID)
+	}
+	if len(supervisor.RoleIDs) != 1 || supervisor.RoleIDs[0] != w.SupervisorRoleID {
+		return fmt.Errorf("final stage must isolate supervisor role %q", w.SupervisorRoleID)
+	}
+	return nil
+}
+
 func (u Usage) Validate() error { return nil }
 
 func (u Usage) TotalTokens() uint64 {
@@ -117,20 +235,40 @@ func (u Usage) TotalTokens() uint64 {
 }
 
 type JobSpec struct {
-	ID        string      `json:"id"`
-	Goal      string      `json:"goal"`
-	Preset    string      `json:"preset"`
-	Workers   int         `json:"workers"`
-	Deadline  time.Time   `json:"deadline"`
-	Budget    Budget      `json:"budget"`
-	Authority Authority   `json:"authority"`
-	Roles     []RoleSpec  `json:"roles"`
-	Stages    []StageSpec `json:"stages"`
+	ID      string `json:"id"`
+	Goal    string `json:"goal"`
+	Preset  string `json:"preset"`
+	Workers int    `json:"workers"`
+	// CreateRequestHash binds an idempotent public create request to this
+	// immutable spec. It is empty for strict/internal creates and a canonical
+	// lowercase SHA-256 digest for client-ID based creates.
+	CreateRequestHash string `json:"create_request_hash,omitempty"`
+	// MinCycles is a quality-floor, not a wall-clock promise. Zero preserves
+	// legacy/default behavior and means one complete workflow cycle.
+	MinCycles uint64 `json:"min_cycles,omitempty"`
+	// NotBeforeComplete is an optional absolute UTC earliest-success gate.
+	// Successful completion is rejected before it; queueing, pauses, and daemon
+	// downtime still advance this wall clock, so it is not a compute guarantee.
+	// Deadline remains the independent hard wall-clock cap.
+	NotBeforeComplete time.Time `json:"not_before_complete,omitzero"`
+	// CycleCadenceSeconds is the durable minimum delay between a continue
+	// decision and admission of the next cycle. Zero disables pacing.
+	CycleCadenceSeconds uint64          `json:"cycle_cadence_seconds,omitempty"`
+	Deadline            time.Time       `json:"deadline"`
+	Budget              Budget          `json:"budget"`
+	Route               ExecutionRoute  `json:"route"`
+	Workflow            WorkflowControl `json:"workflow"`
+	Authority           Authority       `json:"authority"`
+	Roles               []RoleSpec      `json:"roles"`
+	Stages              []StageSpec     `json:"stages"`
 }
 
 func (s JobSpec) Validate() error {
 	if err := validateID("job id", s.ID); err != nil {
 		return err
+	}
+	if s.CreateRequestHash != "" && !validLowerSHA256(s.CreateRequestHash) {
+		return fmt.Errorf("create_request_hash must be a lowercase SHA-256 digest")
 	}
 	if strings.TrimSpace(s.Goal) == "" {
 		return fmt.Errorf("goal is required")
@@ -144,8 +282,37 @@ func (s JobSpec) Validate() error {
 	if s.Deadline.IsZero() {
 		return fmt.Errorf("deadline is required")
 	}
+	if s.Deadline.Location() != time.UTC {
+		return fmt.Errorf("deadline must be UTC")
+	}
+	if s.CycleCadenceSeconds > uint64((1<<63-1)/int64(time.Second)) {
+		return fmt.Errorf("cycle_cadence_seconds is too large")
+	}
+	if s.CycleCadenceSeconds > 0 && s.Budget.MaxCycles < 2 {
+		return fmt.Errorf("cycle_cadence_seconds requires max_cycles of at least 2")
+	}
+	if !s.NotBeforeComplete.IsZero() {
+		if s.NotBeforeComplete.Location() != time.UTC {
+			return fmt.Errorf("not_before_complete must be UTC")
+		}
+		if !s.NotBeforeComplete.Before(s.Deadline) {
+			return fmt.Errorf("not_before_complete must be before deadline")
+		}
+		if s.Deadline.Sub(s.NotBeforeComplete) < time.Second {
+			return fmt.Errorf("not_before_complete must leave at least one second before deadline")
+		}
+		if s.CycleCadenceSeconds == 0 {
+			return fmt.Errorf("cycle_cadence_seconds must be greater than zero when not_before_complete is set")
+		}
+	}
 	if err := s.Budget.Validate(); err != nil {
 		return fmt.Errorf("budget: %w", err)
+	}
+	if s.EffectiveMinCycles() > s.Budget.MaxCycles {
+		return fmt.Errorf("min_cycles %d exceeds budget max_cycles %d", s.EffectiveMinCycles(), s.Budget.MaxCycles)
+	}
+	if err := s.Route.Validate(); err != nil {
+		return fmt.Errorf("route: %w", err)
 	}
 	if err := s.Authority.Validate(); err != nil {
 		return fmt.Errorf("authority: %w", err)
@@ -182,30 +349,93 @@ func (s JobSpec) Validate() error {
 			return fmt.Errorf("duplicate stage %q", stage.ID)
 		}
 		stageIDs[stage.ID] = struct{}{}
+		stageWriters := 0
 		for _, roleID := range stage.RoleIDs {
 			if _, exists := roleIDs[roleID]; !exists {
 				return fmt.Errorf("stage %q references unknown role %q", stage.ID, roleID)
 			}
+			for _, role := range s.Roles {
+				if role.ID == roleID && role.Writer {
+					stageWriters++
+				}
+			}
 		}
+		if stageWriters > 0 && len(stage.RoleIDs) != 1 {
+			return fmt.Errorf("stage %q must isolate its writer", stage.ID)
+		}
+	}
+	if err := s.Workflow.Validate(s.Roles, s.Stages); err != nil {
+		return fmt.Errorf("workflow: %w", err)
+	}
+	return nil
+}
+
+func validLowerSHA256(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func (s JobSpec) EffectiveMinCycles() uint64 {
+	if s.MinCycles == 0 {
+		return 1
+	}
+	return s.MinCycles
+}
+
+type CompletedBatch struct {
+	ID          string `json:"id"`
+	StageID     string `json:"stage_id"`
+	Cycle       uint64 `json:"cycle"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+}
+
+func (b CompletedBatch) Validate() error {
+	if err := validateID("completed batch id", b.ID); err != nil {
+		return err
+	}
+	if err := validateID("completed stage id", b.StageID); err != nil {
+		return err
+	}
+	if b.Cycle == 0 {
+		return fmt.Errorf("completed batch cycle must be greater than zero")
 	}
 	return nil
 }
 
 type JobState struct {
-	Spec                   JobSpec        `json:"spec"`
-	Status                 JobStatus      `json:"status"`
-	TerminalReason         TerminalReason `json:"terminal_reason,omitempty"`
-	Revision               uint64         `json:"revision"`
-	Cycle                  uint64         `json:"cycle"`
-	Usage                  Usage          `json:"usage"`
-	CurrentBatch           *WorkBatch     `json:"current_batch,omitempty"`
-	Attempts               []Attempt      `json:"attempts,omitempty"`
-	Artifacts              []ArtifactRef  `json:"artifacts,omitempty"`
-	LastDecision           *Decision      `json:"last_decision,omitempty"`
+	Spec             JobSpec          `json:"spec"`
+	Status           JobStatus        `json:"status"`
+	TerminalReason   TerminalReason   `json:"terminal_reason,omitempty"`
+	Revision         uint64           `json:"revision"`
+	Cycle            uint64           `json:"cycle"`
+	NextStageIndex   int              `json:"next_stage_index"`
+	Usage            Usage            `json:"usage"`
+	CurrentBatch     *WorkBatch       `json:"current_batch,omitempty"`
+	Attempts         []Attempt        `json:"attempts,omitempty"`
+	CompletedBatches []CompletedBatch `json:"completed_batches,omitempty"`
+	Artifacts        []ArtifactRef    `json:"artifacts,omitempty"`
+	LastDecision     *Decision        `json:"last_decision,omitempty"`
+	// FinalResult is the canonical deliverable produced by the last successful
+	// reducer when the supervisor accepts the job as complete. Attempt history
+	// remains audit data; callers should not have to reverse-engineer it to find
+	// the answer they asked the job to produce.
+	FinalResult            string         `json:"final_result,omitempty"`
 	StagnationFingerprints []string       `json:"stagnation_fingerprints,omitempty"`
 	CancelRequested        bool           `json:"cancel_requested,omitempty"`
+	PendingStop            TerminalReason `json:"pending_stop,omitempty"`
 	WaitingReason          string         `json:"waiting_reason,omitempty"`
-	LastEventID            string         `json:"last_event_id,omitempty"`
+	// NextWakeAt identifies a scheduler-owned cadence wait. A model-requested
+	// wait leaves it zero and requires explicit Resume, while the service still
+	// watches the hard deadline. Operator pause may preserve a scheduled wake.
+	NextWakeAt  time.Time `json:"next_wake_at,omitzero"`
+	LastEventID string    `json:"last_event_id,omitempty"`
 }
 
 func (s JobState) Validate() error {
@@ -221,6 +451,81 @@ func (s JobState) Validate() error {
 		}
 	} else if s.TerminalReason != "" {
 		return fmt.Errorf("non-terminal status cannot have terminal reason %q", s.TerminalReason)
+	}
+	if s.PendingStop != "" {
+		switch s.PendingStop {
+		case TerminalReasonOperatorCancellation, TerminalReasonDeadline, TerminalReasonBudget, TerminalReasonUnrecoverable:
+		default:
+			return fmt.Errorf("invalid pending stop reason %q", s.PendingStop)
+		}
+		if s.Status.IsTerminal() {
+			return fmt.Errorf("terminal job cannot retain pending stop %q", s.PendingStop)
+		}
+	}
+	if !s.NextWakeAt.IsZero() {
+		if s.NextWakeAt.Location() != time.UTC {
+			return fmt.Errorf("next_wake_at must be UTC")
+		}
+		if s.Status != JobStatusWaiting && s.Status != JobStatusPaused {
+			return fmt.Errorf("next_wake_at is only valid for waiting or paused jobs")
+		}
+		if s.NextWakeAt.After(s.Spec.Deadline) {
+			return fmt.Errorf("next_wake_at cannot exceed deadline")
+		}
+	}
+	if s.NextStageIndex < 0 || s.NextStageIndex > len(s.Spec.Workflow.StageOrder) {
+		return fmt.Errorf("next stage index %d is outside workflow", s.NextStageIndex)
+	}
+	for index, batch := range s.CompletedBatches {
+		if err := batch.Validate(); err != nil {
+			return fmt.Errorf("completed batch %d: %w", index, err)
+		}
+	}
+	if s.CurrentBatch != nil {
+		if err := s.CurrentBatch.Validate(); err != nil {
+			return fmt.Errorf("current batch: %w", err)
+		}
+		if s.Status != JobStatusRunning {
+			return fmt.Errorf("only a running job may have a current batch")
+		}
+	}
+	attemptIDs := make(map[string]struct{}, len(s.Attempts))
+	running := 0
+	for index, attempt := range s.Attempts {
+		if err := attempt.Validate(); err != nil {
+			return fmt.Errorf("attempt %d: %w", index, err)
+		}
+		if _, duplicate := attemptIDs[attempt.ID]; duplicate {
+			return fmt.Errorf("duplicate attempt ID %q", attempt.ID)
+		}
+		attemptIDs[attempt.ID] = struct{}{}
+		if attempt.Status == AttemptStatusRunning {
+			running++
+			if s.CurrentBatch == nil || attempt.BatchID != s.CurrentBatch.ID {
+				return fmt.Errorf("running attempt %q is outside the current batch", attempt.ID)
+			}
+		}
+	}
+	if s.Status.IsTerminal() && running != 0 {
+		return fmt.Errorf("terminal job cannot retain running attempts")
+	}
+	artifactIDs := make(map[string]struct{}, len(s.Artifacts))
+	for index, artifact := range s.Artifacts {
+		if err := artifact.Validate(); err != nil {
+			return fmt.Errorf("artifact %d: %w", index, err)
+		}
+		if _, duplicate := artifactIDs[artifact.ID]; duplicate {
+			return fmt.Errorf("duplicate artifact ID %q", artifact.ID)
+		}
+		artifactIDs[artifact.ID] = struct{}{}
+	}
+	if s.LastDecision != nil {
+		if err := s.LastDecision.Validate(); err != nil {
+			return fmt.Errorf("last decision: %w", err)
+		}
+	}
+	if s.FinalResult != "" && (s.Status != JobStatusCompleted || s.TerminalReason != TerminalReasonSuccess) {
+		return fmt.Errorf("final_result is only valid for a successfully completed job")
 	}
 	return s.Usage.Validate()
 }
@@ -355,12 +660,15 @@ const (
 	AttemptStatusSucceeded AttemptStatus = "succeeded"
 	AttemptStatusFailed    AttemptStatus = "failed"
 	AttemptStatusCancelled AttemptStatus = "cancelled"
+	AttemptStatusAbandoned AttemptStatus = "abandoned"
+	AttemptStatusAmbiguous AttemptStatus = "ambiguous"
 )
 
 func (s AttemptStatus) Valid() bool {
 	switch s {
 	case AttemptStatusQueued, AttemptStatusRunning, AttemptStatusSucceeded,
-		AttemptStatusFailed, AttemptStatusCancelled:
+		AttemptStatusFailed, AttemptStatusCancelled, AttemptStatusAbandoned,
+		AttemptStatusAmbiguous:
 		return true
 	default:
 		return false
@@ -368,16 +676,45 @@ func (s AttemptStatus) Valid() bool {
 }
 
 type Attempt struct {
-	ID          string        `json:"id"`
-	BatchID     string        `json:"batch_id"`
-	WorkItemID  string        `json:"work_item_id"`
-	RoleID      string        `json:"role_id"`
+	ID          string             `json:"id"`
+	BatchID     string             `json:"batch_id"`
+	WorkItemID  string             `json:"work_item_id"`
+	RoleID      string             `json:"role_id"`
+	AttemptNo   uint64             `json:"attempt_no"`
+	Cycle       uint64             `json:"cycle"`
+	StageID     string             `json:"stage_id"`
+	Reservation AttemptReservation `json:"reservation"`
+	// Dispatched distinguishes a terminal outcome observed after the external
+	// invoker was admitted from a finish that the live runtime proved never
+	// crossed the dispatch boundary. A persisted running attempt is always
+	// false; crash recovery treats its dispatch state as unknown and therefore
+	// finishes it conservatively as dispatched.
+	Dispatched  bool          `json:"dispatched"`
 	Status      AttemptStatus `json:"status"`
 	Result      string        `json:"result,omitempty"`
 	Fingerprint string        `json:"fingerprint,omitempty"`
 	Artifacts   []ArtifactRef `json:"artifacts,omitempty"`
 	Usage       Usage         `json:"usage"`
 	Error       string        `json:"error,omitempty"`
+	Decision    *Decision     `json:"decision,omitempty"`
+}
+
+// AttemptReservation is persisted before dispatch so parallel attempts cannot
+// each spend the same remaining model/token budget.
+type AttemptReservation struct {
+	ModelCalls      uint64 `json:"model_calls"`
+	Tokens          uint64 `json:"tokens"`
+	MaxOutputTokens uint64 `json:"max_output_tokens"`
+}
+
+func (r AttemptReservation) Validate() error {
+	if r.ModelCalls == 0 || r.Tokens == 0 || r.MaxOutputTokens == 0 {
+		return fmt.Errorf("attempt reservation limits must be positive")
+	}
+	if r.MaxOutputTokens > r.Tokens {
+		return fmt.Errorf("attempt max output tokens cannot exceed reserved tokens")
+	}
+	return nil
 }
 
 func (a Attempt) Validate() error {
@@ -396,6 +733,54 @@ func (a Attempt) Validate() error {
 	}
 	if !a.Status.Valid() {
 		return fmt.Errorf("attempt %q has invalid status %q", a.ID, a.Status)
+	}
+	if a.AttemptNo == 0 || a.Cycle == 0 {
+		return fmt.Errorf("attempt %q requires positive attempt_no and cycle", a.ID)
+	}
+	if err := validateID("stage id", a.StageID); err != nil {
+		return err
+	}
+	if err := a.Reservation.Validate(); err != nil {
+		return fmt.Errorf("attempt %q reservation: %w", a.ID, err)
+	}
+	if a.Usage.Cycles != 0 || a.Usage.Attempts != 0 {
+		return fmt.Errorf("attempt %q usage cannot record cycles or attempts", a.ID)
+	}
+	if a.Status == AttemptStatusRunning {
+		if a.Dispatched || a.Result != "" || a.Fingerprint != "" || len(a.Artifacts) != 0 || a.Error != "" || a.Decision != nil || a.Usage != (Usage{}) {
+			return fmt.Errorf("running attempt %q cannot contain terminal output", a.ID)
+		}
+	} else if a.Status == AttemptStatusQueued {
+		return fmt.Errorf("attempt %q cannot be persisted as queued", a.ID)
+	}
+	if !a.Dispatched && a.Usage != (Usage{}) {
+		return fmt.Errorf("undispatched attempt %q cannot report provider usage", a.ID)
+	}
+	if a.Status == AttemptStatusSucceeded && !a.Dispatched {
+		return fmt.Errorf("successful attempt %q must have crossed dispatch", a.ID)
+	}
+	if a.Status == AttemptStatusAmbiguous && !a.Dispatched {
+		return fmt.Errorf("ambiguous attempt %q must have crossed dispatch", a.ID)
+	}
+	if a.Decision != nil {
+		if a.Status != AttemptStatusSucceeded {
+			return fmt.Errorf("only a successful attempt may carry a decision")
+		}
+		if err := a.Decision.Validate(); err != nil {
+			return fmt.Errorf("attempt decision: %w", err)
+		}
+	}
+	if a.Usage.ModelCalls > a.Reservation.ModelCalls || a.Usage.TotalTokens() > a.Reservation.Tokens {
+		return fmt.Errorf("attempt %q usage exceeds its reservation", a.ID)
+	}
+	maxOutput := ^uint64(0)
+	if a.Usage.ModelCalls == 0 {
+		maxOutput = 0
+	} else if a.Reservation.MaxOutputTokens <= ^uint64(0)/a.Usage.ModelCalls {
+		maxOutput = a.Reservation.MaxOutputTokens * a.Usage.ModelCalls
+	}
+	if a.Usage.OutputTokens > maxOutput {
+		return fmt.Errorf("attempt %q output usage exceeds its per-call reservation", a.ID)
 	}
 	for i, artifact := range a.Artifacts {
 		if err := artifact.Validate(); err != nil {
@@ -541,6 +926,9 @@ func ValidateBatchForSpec(spec JobSpec, batch WorkBatch) error {
 	}
 	if writers > 1 {
 		return fmt.Errorf("batch %q contains concurrent writers", batch.ID)
+	}
+	if writers == 1 && len(batch.Items) != 1 {
+		return fmt.Errorf("batch %q must isolate its writer", batch.ID)
 	}
 	return nil
 }

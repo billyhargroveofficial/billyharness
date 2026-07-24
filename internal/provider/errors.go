@@ -76,7 +76,9 @@ func (e *ProviderError) Retryable() bool {
 		return false
 	}
 	switch e.Kind {
-	case ErrorTransport, ErrorRateLimit, ErrorServer, ErrorStreamClosed:
+	case ErrorRateLimit:
+		return true
+	case ErrorTransport, ErrorServer, ErrorStreamClosed:
 		return true
 	default:
 		return false
@@ -105,11 +107,22 @@ func providerTransportError(provider string, err error) error {
 	return &ProviderError{Provider: provider, Kind: ErrorTransport, Err: err}
 }
 
+func providerStreamError(provider, model string, err error) error {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return &ProviderError{Provider: provider, ModelID: model, Kind: ErrorStreamClosed, Err: err}
+}
+
 func classifyProviderStatus(status int, body string) ErrorKind {
 	lower := strings.ToLower(body)
 	if strings.Contains(lower, "context_length") ||
 		strings.Contains(lower, "context length") ||
-		strings.Contains(lower, "maximum context") {
+		strings.Contains(lower, "maximum context") ||
+		strings.Contains(lower, "context window") ||
+		strings.Contains(lower, "token limit") ||
+		strings.Contains(lower, "input length") ||
+		(strings.Contains(lower, "message size") && strings.Contains(lower, "exceeds limit")) {
 		return ErrorContextOverflow
 	}
 	switch status {

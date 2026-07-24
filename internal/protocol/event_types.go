@@ -31,7 +31,7 @@ var eventTypeSpecs = [...]EventTypeSpec{
 	{Type: EventTurnChangeReverted, RequiredIDs: []string{"run_id", "turn_id"}, Payload: "TurnChangeEvent", Doc: "Recorded turn changes were reverted or restored"},
 	{Type: EventStepStarted, RequiredIDs: []string{"run_id", "turn_id", "step_id"}, Payload: "StepEvent", Doc: "Runtime step begins"},
 	{Type: EventStepCompleted, RequiredIDs: []string{"run_id", "turn_id", "step_id"}, Payload: "StepEvent", Doc: "Runtime step completes"},
-	{Type: EventModelCallStarted, RequiredIDs: []string{"run_id", "turn_id", "step_id"}, Payload: "ModelCallEvent", Doc: "Provider model call begins"},
+	{Type: EventModelCallStarted, RequiredIDs: []string{"run_id", "turn_id", "step_id"}, Payload: "ModelCallEvent", Doc: "Provider model call begins; isolated runs include capability attestation"},
 	{Type: EventModelCallFinished, RequiredIDs: []string{"run_id", "turn_id", "step_id"}, Payload: "ModelCallEvent", Doc: "Provider model call finishes"},
 	{Type: EventAssistantReasoning, RequiredIDs: []string{"run_id", "turn_id", "step_id"}, Payload: "string", Doc: "Assistant reasoning stream delta"},
 	{Type: EventAssistantDelta, RequiredIDs: []string{"run_id", "turn_id", "step_id"}, Payload: "string", Doc: "Assistant content stream delta"},

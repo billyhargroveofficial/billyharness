@@ -108,6 +108,7 @@ var cliCommandDocs = []CLICommandDoc{
 	{Name: "mcp", Summary: "run the local MCP server adapter"},
 	{Name: "config", Summary: "inspect resolved configuration"},
 	{Name: "bench", Summary: "run benchmark and Terminal-Bench helpers"},
+	{Name: "jobs", Aliases: []string{"job"}, Summary: "create and control durable multi-agent jobs"},
 	{Name: "sessions", Aliases: []string{"session"}, Summary: "list, inspect, search, export, import, and index sessions"},
 	{Name: "attachments", Aliases: []string{"attachment"}, Summary: "garbage-collect attachment store data"},
 	{Name: "inspect-session", Summary: "inspect one stored session"},
