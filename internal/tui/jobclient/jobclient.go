@@ -126,10 +126,7 @@ func (c Client) ListCmd(ctx context.Context) tea.Cmd {
 // therefore be executed again without accidentally creating a second job,
 // while gatewayclient can safely retry a lost acknowledgement.
 func (c Client) CreateCmd(ctx context.Context, request gatewayapi.CreateJobRequest) tea.Cmd {
-	request = cloneCreateRequest(request)
-	if strings.TrimSpace(request.JobID) == "" {
-		request.JobID = newClientJobID()
-	}
+	request = PrepareCreateRequest(request)
 	return func() tea.Msg {
 		message := JobResultMsg{Action: ActionCreate, JobID: request.JobID}
 		if err := c.ready(ctx); err != nil {
@@ -139,6 +136,19 @@ func (c Client) CreateCmd(ctx context.Context, request gatewayapi.CreateJobReque
 		message.Response, message.Err = c.gateway.CreateJob(ctx, request)
 		return message
 	}
+}
+
+// PrepareCreateRequest returns a defensive request snapshot with a stable
+// client-generated ID when JobID is empty. A controller can store the prepared
+// value before the first POST and reuse it for an exact idempotent retry.
+// Existing IDs are preserved verbatim; gateway validation remains responsible
+// for rejecting a malformed non-empty ID.
+func PrepareCreateRequest(request gatewayapi.CreateJobRequest) gatewayapi.CreateJobRequest {
+	request = cloneCreateRequest(request)
+	if request.JobID == "" {
+		request.JobID = newClientJobID()
+	}
+	return request
 }
 
 // ShowCmd asynchronously fetches the canonical durable state for one job.

@@ -15,6 +15,7 @@ import (
 
 	"github.com/billyhargroveofficial/billyharness/internal/gatewayapi"
 	"github.com/billyhargroveofficial/billyharness/internal/jobs"
+	"github.com/billyhargroveofficial/billyharness/internal/jobstore"
 )
 
 func TestCommandsDispatchAsynchronouslyAndReturnTypedMessages(t *testing.T) {
@@ -115,6 +116,68 @@ func TestCreateCmdGeneratesStableIDAndCapturesDeepSnapshot(t *testing.T) {
 			!reflect.DeepEqual(got.Authority.Providers, []string{"qwen"}) {
 			t.Fatalf("captured request changed with caller input: %#v", got)
 		}
+	}
+}
+
+func TestPrepareCreateRequestPreservesExplicitID(t *testing.T) {
+	request := gatewayapi.CreateJobRequest{JobID: "j-explicit-client-id"}
+	prepared := PrepareCreateRequest(request)
+	if prepared.JobID != request.JobID {
+		t.Fatalf("prepared job id = %q, want %q", prepared.JobID, request.JobID)
+	}
+}
+
+func TestPrepareCreateRequestGeneratesPortableStableID(t *testing.T) {
+	prepared := PrepareCreateRequest(gatewayapi.CreateJobRequest{})
+	if err := jobstore.ValidatePortableID(prepared.JobID); err != nil {
+		t.Fatalf("generated job id %q is not portable: %v", prepared.JobID, err)
+	}
+	if !strings.HasPrefix(prepared.JobID, "j-") {
+		t.Fatalf("generated job id = %q, want j-*", prepared.JobID)
+	}
+
+	reprepared := PrepareCreateRequest(prepared)
+	if reprepared.JobID != prepared.JobID {
+		t.Fatalf("repeated preparation changed job id from %q to %q", prepared.JobID, reprepared.JobID)
+	}
+}
+
+func TestPrepareCreateRequestDefensivelyClonesMutableFields(t *testing.T) {
+	deadline := time.Now().UTC().Add(time.Hour)
+	request := gatewayapi.CreateJobRequest{
+		JobID:    "j-clone-request",
+		Deadline: &deadline,
+		Authority: jobs.Authority{
+			Mode:         jobs.AuthorityModeAllowList,
+			Tools:        []string{"fs_read_file"},
+			ReadRoots:    []string{"/read"},
+			WriteRoots:   []string{"/write"},
+			NetworkHosts: []string{"example.com"},
+			Providers:    []string{"qwen"},
+		},
+	}
+	prepared := PrepareCreateRequest(request)
+
+	request.Deadline = nil
+	request.Authority.Tools[0] = "shell"
+	request.Authority.ReadRoots[0] = "/other-read"
+	request.Authority.WriteRoots[0] = "/other-write"
+	request.Authority.NetworkHosts[0] = "other.invalid"
+	request.Authority.Providers[0] = "other"
+
+	if prepared.Deadline == nil || !prepared.Deadline.Equal(deadline) ||
+		!reflect.DeepEqual(prepared.Authority.Tools, []string{"fs_read_file"}) ||
+		!reflect.DeepEqual(prepared.Authority.ReadRoots, []string{"/read"}) ||
+		!reflect.DeepEqual(prepared.Authority.WriteRoots, []string{"/write"}) ||
+		!reflect.DeepEqual(prepared.Authority.NetworkHosts, []string{"example.com"}) ||
+		!reflect.DeepEqual(prepared.Authority.Providers, []string{"qwen"}) {
+		t.Fatalf("prepared request aliases caller-owned fields: %#v", prepared)
+	}
+
+	reprepared := PrepareCreateRequest(prepared)
+	prepared.Authority.Tools[0] = "mutated-after-repeat"
+	if !reflect.DeepEqual(reprepared.Authority.Tools, []string{"fs_read_file"}) {
+		t.Fatalf("repeated preparation did not clone authority: %#v", reprepared.Authority)
 	}
 }
 
