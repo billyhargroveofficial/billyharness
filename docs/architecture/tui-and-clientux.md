@@ -27,6 +27,14 @@ local runtime. It imports `internal/agent`, `internal/provider`, and
 state, transcript blocks, rendering, selection, and slash command handling out
 of this adapter.
 
+`internal/tui/jobclient` is the separate durable-job control-plane adapter. It
+wraps `internal/gatewayclient` calls in asynchronous Bubble Tea commands and
+returns typed create/list/show/action/attempt/artifact messages. It imports only
+`internal/gatewayapi` and `internal/gatewayclient`; it does not import the pure
+job domain, gateway server, scheduler, store, service, provider, tools, or TUI
+model. Request construction and view state stay in `internal/tui`, while the
+gateway remains the only owner of execution and durable state.
+
 `internal/clientux` owns shared client-facing metadata and context projection
 helpers. `internal/clientux/actions.go` defines frontend-neutral action
 metadata; runtime handlers stay in concrete clients such as
@@ -87,12 +95,88 @@ after detected stream gaps, and fetches final messages from the gateway session.
 The TUI talks to gateway transport/client packages, not the gateway server
 internals.
 
+Durable-job control is a parallel control-plane flow rather than a protocol
+event stream:
+
+```text
+TUI /jobs dashboard, detail, or wizard
+  -> internal/tui/jobclient Bubble Tea command
+  -> internal/gatewayclient typed /v1/jobs request
+  -> gateway-owned jobservice/runtime/store
+  -> typed Bubble Tea result message
+  -> TUI projection
+```
+
+No provider invocation or workflow loop lives in the TUI process. Closing the
+control center or the whole TUI therefore does not cancel a job. Reopening it
+lists and fetches canonical gateway state again. A stopped gateway resumes
+recoverable work from its durable store when restarted; a TUI session file is
+never used as a job checkpoint.
+
 `internal/tui/transcript_runtime.go` is where incoming events become UI state.
 `Model.applyEvent` ignores already-seen sequenced events, applies the
 `clientux/projector` accounting snapshot, uses
 `projector.EventPresentationPolicy` to decide whether an event should affect
 the transcript, updates status/failure-summary state, and leaves rendering for
 the later reflow step.
+
+## Durable Jobs Control Center
+
+`/jobs` opens a full-screen control center with three related surfaces:
+
+- The dashboard lists canonical gateway job summaries and keeps selection by
+  job ID rather than by a volatile list index.
+- The detail view fetches one job, displays lifecycle/terminal state, cycles,
+  model/token/attempt budgets, active stage, final result, artifacts, and a
+  bounded latest-attempt tail so worker/reducer/supervisor role progress is
+  visible without placing unbounded history in one response.
+- The creation wizard builds one typed `gatewayapi.CreateJobRequest`, reviews
+  it, and submits it through `jobclient.CreateCmd`. The client allocates a
+  stable job ID before POST so a lost acknowledgement can be retried without
+  creating a second durable job.
+
+The keyboard flow is dashboard selection (`Up`/`Down`, then `Enter`) into
+detail, `Esc` back, and `n` from the dashboard into the wizard. Detail actions
+are state-gated: pause, resume, cancellation, and refresh are offered only when
+their transition is meaningful. Cancellation requires explicit confirmation.
+Job work remains background gateway work and must not set the ordinary chat
+composer's `busy` flag.
+
+The wizard exposes all eight immutable workflow presets: `general`,
+`research`, `coding`, `debug`, `review`, `planning`, `writing`, and `compare`.
+It also captures provider/model/reasoning, one to four worker roles, hard
+duration, minimum and maximum cycles, optional minimum runtime/cadence,
+attempt/model-call/token budgets, and the explicit tool/read/write/network/
+provider authority envelope. Authority is fail-closed and the server computes
+the effective intersection; the TUI cannot grant ambient process permissions.
+
+Worker count describes the number of predeclared roles in eligible parallel
+workflow stages. It is not the number of provider calls guaranteed to run at
+once. The gateway's process-wide `-job-concurrency` semaphore defaults to `1`
+and caps durable provider invocations across every job. A four-worker preset
+therefore executes serially under the default unless the operator deliberately
+raises the gateway cap and the provider permits it.
+
+Timing controls have deliberately different meanings. `duration` is the hard
+wall-clock stop. `min_cycles` forces complete worker/reducer/supervisor passes
+before success and is the primary iteration-depth floor. `min_runtime` is only
+an admission-relative earliest-success wall-clock gate: queueing, operator
+pause, gateway downtime, and cadence waits count, so it never promises active
+compute. The durable scheduler, not UI polling, owns all three rules.
+
+The control center requires gateway mode even though normal chat supports a
+local runtime. A local-only TUI must report that `/jobs` needs a reachable
+gateway rather than starting an in-process scheduler. Operators should start
+the gateway from the intended workspace root before opening the TUI; that
+working directory is the default root unless explicit configuration replaces
+it. Server workspace roots are not exposed through the current jobs API, and
+wizard authority can only narrow—not discover or widen—the server boundary.
+
+Selecting the built-in Qwen Token Plan route requires an explicit unattended-
+use warning confirmation before create. This is an operator guard, not a terms
+override: confirmation does not make automated scripts, backends, or
+non-interactive batch execution permissible. An unattended job must use a
+configured endpoint and plan whose terms actually permit automation.
 
 ## Projection Versus Rendering
 

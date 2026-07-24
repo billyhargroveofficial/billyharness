@@ -93,9 +93,68 @@ health. The `run`, `chat`, `telegram`, and `jobs` gateway clients read
 The gateway can run persisted jobs with one to four isolated workers, a
 barrier/reducer, and a supervisor which either completes, blocks, waits for a
 real external dependency, or schedules another bounded cycle. Model-requested
-`wait` is distinct from the operator `pause` command. Start the gateway with a
-process-wide provider-call limit, then create a job against the provider/model
-in resolved config:
+`wait` is distinct from the operator `pause` command. The gateway is the sole
+durable owner: closing the TUI, losing SSH, or reopening `/jobs` does not cancel
+a job. Stopping the gateway pauses execution until that same durable store is
+started again; it does not turn TUI state into a second scheduler.
+
+### Full-screen TUI control center
+
+Start the gateway from the workspace whose files jobs may access, then connect
+the TUI to it. With default configuration the gateway process's working
+directory becomes its workspace root; an explicit config may narrow or replace
+that value. The current jobs API does not expose configured workspace roots to
+clients, so the creation wizard cannot discover or widen them. A requested
+read/write root must still be inside the server authority.
+
+```bash
+BH=/absolute/path/to/bin/fast-agent-harness
+export BILLYHARNESS_GATEWAY_AUTH_TOKEN='change-me'
+
+# Terminal 1: with default config, this becomes the workspace boundary.
+cd /absolute/path/to/workspace
+"$BH" gateway -addr 127.0.0.1:8765 -job-concurrency 4
+
+# Terminal 2:
+"$BH" tui -gateway http://127.0.0.1:8765
+```
+
+Inside the TUI, type `/jobs` and press `Enter`. The keyboard-first path is:
+
+1. The dashboard lists durable jobs; use `Up`/`Down` and `Enter` to open one.
+2. The detail view shows canonical status, progress, budgets, the latest role
+   attempts, artifacts, and the final result when available. Use the displayed
+   state-valid controls to pause, resume, cancel, or refresh; `Esc` returns.
+3. From the dashboard press `n` to open the creation wizard. It collects the
+   goal, preset, provider/model, one to four workers, timing, minimum/maximum
+   cycles, attempts/model-call/token budgets, and explicit tool, filesystem,
+   network, and provider authority before creating the job.
+
+The eight built-in presets are `general`, `research`, `coding`, `debug`,
+`review`, `planning`, `writing`, and `compare`. “Four workers” means four
+predeclared workflow roles may be dispatched in a parallel stage; it does not
+override the gateway-wide provider semaphore. `gateway -job-concurrency`
+defaults to `1` and caps simultaneous durable-job provider invocations across
+all jobs, so set it deliberately when the provider plan and endpoint allow
+more concurrency.
+
+`duration` is a hard wall-clock cutoff, not a request to keep a model busy.
+`min_cycles` forces complete worker/reducer/supervisor review cycles and is the
+usual quality-depth control. `min_runtime` only delays successful completion by
+wall clock; queued, paused, offline, and cadence time count, so it is not a
+useful-compute guarantee. Attempts are loaded as a bounded recent tail in the
+detail view; full canonical history remains in the gateway store.
+
+Ordinary chat may run in local TUI mode, but `/jobs` requires a reachable
+gateway because a TUI process cannot durably own background execution. If the
+selected route is the built-in Qwen Token Plan route, the wizard requires an
+explicit unattended-use warning confirmation. Confirmation records operator
+intent; it does not change the provider terms. Use an endpoint/plan which
+actually permits automation.
+
+The CLI remains available for scripting. Start the gateway with a process-wide
+provider-call limit, then create a job against the provider/model in resolved
+config:
 
 Long unattended execution is allowed only on endpoints and plans whose terms
 permit automation. In particular, the built-in `qwen` route currently targets
@@ -174,6 +233,7 @@ Slash commands autocomplete in the composer with `Tab`, `Up`, and `Down`.
 /toolview auto|expanded|collapsed|hidden
 /thinkview expanded|collapsed|hidden
 /context
+/jobs
 /new
 /resume [session-id-prefix]
 /fork [session-id-prefix]
