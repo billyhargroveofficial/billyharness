@@ -141,14 +141,11 @@ func EnsureDefaultMCPConfigFile() (string, error) {
 const defaultMCPConfig = `# billyharness MCP config.
 # Native web_search, web_fetch, web_extract, and web_crawl are built in; keep them out of MCP.
 # Secrets can live in $BILLYHARNESS_HOME/.env and be referenced via env_vars.
-
-[mcp_servers.telegram]
-command = "telegram-mcp-hermes"
-startup_timeout_sec = 30.0
-tool_timeout_sec = 300.0
+# Billyharness currently supports stdio MCP servers. HTTP-only entries from
+# the shared harness config are intentionally not copied here.
 
 [mcp_servers.telegram-parilka]
-command = "/root/telegram-parilka-mcp/bin/telegram-parilka-mcp"
+command = "/home/billy/repos/parilka-unified/bin/telegram-parilka-mcp"
 startup_timeout_sec = 30.0
 tool_timeout_sec = 300.0
 
@@ -163,6 +160,25 @@ tool_timeout_sec = 300.0
 command = "npx"
 args = ["-y", "@upstash/context7-mcp"]
 env_vars = ["CONTEXT7_API_KEY"]
+startup_timeout_sec = 30.0
+tool_timeout_sec = 300.0
+
+[mcp_servers.gemini-search]
+command = "gemini-search-mcp"
+startup_timeout_sec = 30.0
+tool_timeout_sec = 300.0
+
+[mcp_servers.chrome-devtools]
+command = "chrome-devtools-mcp"
+args = ["--browser-url=http://127.0.0.1:9222", "--screenshot-format=jpeg"]
+env = { CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS = "1", CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS = "1" }
+startup_timeout_sec = 30.0
+tool_timeout_sec = 300.0
+
+[mcp_servers.brave-devtools]
+command = "chrome-devtools-mcp"
+args = ["--browser-url=http://127.0.0.1:9223", "--screenshot-format=jpeg"]
+env = { CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS = "1", CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS = "1" }
 startup_timeout_sec = 30.0
 tool_timeout_sec = 300.0
 `

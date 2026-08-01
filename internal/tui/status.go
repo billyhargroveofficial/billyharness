@@ -63,6 +63,17 @@ func (m Model) runStatusView() string {
 	return styles.runStatus.Width(m.statusContentWidth(styles)).Render(text)
 }
 
+func (m Model) runStatusGapHeight() int {
+	if renderedHeight(m.runStatusView()) == 0 {
+		return 0
+	}
+	items, _ := m.reflowVisibleItems()
+	if len(items) == 0 {
+		return 0
+	}
+	return 1
+}
+
 func (m Model) runStateText() string {
 	if !m.followOutput {
 		return "scrolled"

@@ -1223,7 +1223,7 @@ func (r *Registry) addMCPGateway() {
 		Spec: protocol.ToolSpec{
 			Name:        "mcp_list_tools",
 			Description: "List the dynamic MCP catalog compactly. Returned MCP tools are not direct model-visible specs; use mcp_call with a listed full tool name. For Russian парилка/Parilka chat requests, use server telegram-parilka.",
-			Parameters:  raw(`{"type":"object","properties":{"server":{"type":"string","description":"Optional MCP server filter: telegram, telegram-parilka, github, or context7. telegram_parilka and парилка are also accepted."},"query":{"type":"string","description":"Optional case-insensitive name/description filter."},"namespace":{"type":"string","description":"Optional namespace filter such as mcp, mcp.github, github, or telegram-parilka."},"risk":{"type":"string","description":"Optional risk filter: read_only, network, write, execute, or external."},"limit":{"type":"integer","default":40},"include_schema":{"type":"boolean","default":false,"description":"Include matching tool input schemas only when needed to call them, capped by max_schema_tokens."},"max_schema_tokens":{"type":"integer","default":1200,"description":"Maximum estimated schema tokens to include across returned tools."}},"additionalProperties":false}`),
+			Parameters:  raw(`{"type":"object","properties":{"server":{"type":"string","description":"Optional MCP server filter: telegram-parilka, github, context7, gemini-search, chrome-devtools, or brave-devtools. telegram_parilka and парилка are also accepted."},"query":{"type":"string","description":"Optional case-insensitive name/description filter."},"namespace":{"type":"string","description":"Optional namespace filter such as mcp, mcp.github, github, or telegram-parilka."},"risk":{"type":"string","description":"Optional risk filter: read_only, network, write, execute, or external."},"limit":{"type":"integer","default":40},"include_schema":{"type":"boolean","default":false,"description":"Include matching tool input schemas only when needed to call them, capped by max_schema_tokens."},"max_schema_tokens":{"type":"integer","default":1200,"description":"Maximum estimated schema tokens to include across returned tools."}},"additionalProperties":false}`),
 			Risk:        protocol.RiskReadOnly,
 		},
 		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
@@ -1358,7 +1358,7 @@ func (r *Registry) addMCPGateway() {
 		Spec: protocol.ToolSpec{
 			Name:        "mcp_call",
 			Description: "Call a connected dynamic MCP catalog tool by full name after inspecting it with mcp_list_tools or tool_search. For Parilka chat requests, call a tool named like mcp__telegram_parilka__read_history or mcp__telegram_parilka__search_messages.",
-			Parameters:  raw(`{"type":"object","properties":{"name":{"type":"string","description":"Full MCP tool name, for example mcp__github__search_repositories."},"arguments":{"type":["object","null"],"description":"Arguments for the MCP tool.","additionalProperties":true}},"required":["name"],"additionalProperties":false}`),
+			Parameters:  raw(`{"type":"object","properties":{"name":{"type":"string","description":"Full MCP tool name, for example mcp__github__search_repositories."},"arguments":{"type":["object","null","string"],"description":"Arguments for the MCP tool.","additionalProperties":true}},"required":["name"],"additionalProperties":false}`),
 			Risk:        protocol.RiskExternal,
 		},
 		Handler: func(ctx context.Context, args json.RawMessage) (Result, error) {
@@ -1376,6 +1376,7 @@ func (r *Registry) addMCPGateway() {
 			if len(in.Arguments) == 0 || string(in.Arguments) == "null" {
 				in.Arguments = json.RawMessage(`{}`)
 			}
+			in.Arguments = unwrapStringEncodedJSON(in.Arguments)
 			r.refreshMCPTools(ctx)
 			tool, ok := r.mcpToolsSnapshot()[name]
 			if !ok {
@@ -1399,6 +1400,27 @@ func (r *Registry) addMCPGateway() {
 			return result, err
 		},
 	})
+}
+
+// unwrapStringEncodedJSON handles models that double-encode nested JSON
+// arguments as a string, e.g. "{\"limit\":20}" instead of {"limit":20}.
+func unwrapStringEncodedJSON(raw json.RawMessage) json.RawMessage {
+	trimmed := strings.TrimSpace(string(raw))
+	if len(trimmed) < 2 || trimmed[0] != '"' {
+		return raw
+	}
+	var inner string
+	if err := json.Unmarshal(raw, &inner); err != nil {
+		return raw
+	}
+	inner = strings.TrimSpace(inner)
+	if inner == "" || inner == "null" {
+		return json.RawMessage(`{}`)
+	}
+	if json.Valid([]byte(inner)) {
+		return json.RawMessage(inner)
+	}
+	return raw
 }
 
 func addExternalMCPSchemaMetadata(metadata map[string]any, report schemaValidationReport) map[string]any {

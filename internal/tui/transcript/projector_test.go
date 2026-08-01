@@ -402,6 +402,109 @@ func TestProjectorApplyUpsertsToolBatchSteps(t *testing.T) {
 	}
 }
 
+func TestProjectorTracksParallelChildStepsAndBatchProgress(t *testing.T) {
+	p := NewProjector()
+	for _, call := range []protocol.ToolCall{
+		{ID: "call-a", Name: "fs_read_file", Arguments: json.RawMessage(`{"path":"a.txt"}`)},
+		{ID: "call-b", Name: "fs_read_file", Arguments: json.RawMessage(`{"path":"b.txt"}`)},
+	} {
+		p.Apply(protocol.Event{Type: protocol.EventToolCallRequested, TurnID: "turn-1", Data: call})
+	}
+	p.Apply(protocol.Event{Type: protocol.EventStepStarted, Data: protocol.StepEvent{
+		TurnID:        "turn-1",
+		StepID:        "batch-1",
+		Kind:          protocol.StepKindToolBatch,
+		Status:        protocol.StepStatusStarted,
+		BatchID:       "batch-1",
+		BatchSize:     2,
+		Parallel:      true,
+		ParallelLimit: 2,
+	}})
+
+	for _, callID := range []string{"call-a", "call-b"} {
+		p.Apply(protocol.Event{Type: protocol.EventStepStarted, Data: protocol.StepEvent{
+			TurnID:     "turn-1",
+			StepID:     "step-" + callID,
+			Kind:       protocol.StepKindToolCall,
+			Status:     protocol.StepStatusStarted,
+			ToolCallID: callID,
+			BatchID:    "batch-1",
+			BatchSize:  2,
+		}})
+	}
+	cells := p.Cells()
+	batch, ok := findCellByStep(cells, "batch-1", CellTypeToolBatch)
+	if !ok || !strings.Contains(batch.Title, "done 0/2") || !strings.Contains(batch.Title, "pending 2") {
+		t.Fatalf("running batch progress = %#v, cells=%#v", batch, cells)
+	}
+	for _, callID := range []string{"call-a", "call-b"} {
+		child, ok := findCellByCall(cells, callID)
+		if !ok || child.ParentStepID != "batch-1" || child.StepID != "step-"+callID {
+			t.Fatalf("child %s identity = %#v, cells=%#v", callID, child, cells)
+		}
+	}
+
+	p.Apply(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
+		TurnID:     "turn-1",
+		StepID:     "step-call-a",
+		Kind:       protocol.StepKindToolCall,
+		Status:     protocol.StepStatusCompleted,
+		ToolCallID: "call-a",
+		BatchID:    "batch-1",
+		BatchSize:  2,
+	}})
+	p.Apply(protocol.Event{Type: protocol.EventStepCompleted, Data: protocol.StepEvent{
+		TurnID:     "turn-1",
+		StepID:     "step-call-b",
+		Kind:       protocol.StepKindToolCall,
+		Status:     protocol.StepStatusFailed,
+		ToolCallID: "call-b",
+		BatchID:    "batch-1",
+		BatchSize:  2,
+	}})
+	batch, ok = findCellByStep(p.Cells(), "batch-1", CellTypeToolBatch)
+	if !ok || !strings.Contains(batch.Title, "done 1/2") || !strings.Contains(batch.Title, "failed 1") || strings.Contains(batch.Title, "pending") {
+		t.Fatalf("completed child progress = %#v", batch)
+	}
+
+	cells = p.Apply(protocol.Event{Type: protocol.EventStepCompleted, Data: map[string]any{
+		"turn_id":        "turn-1",
+		"step_id":        "batch-1",
+		"kind":           protocol.StepKindToolBatch,
+		"status":         protocol.StepStatusCompletedWithErrors,
+		"batch_id":       "batch-1",
+		"batch_size":     2,
+		"parallel":       true,
+		"parallel_limit": 2,
+		"metadata": map[string]any{
+			"completed_children": 1,
+			"failed_children":    1,
+		},
+	}})
+	batch, ok = findCellByStep(cells, "batch-1", CellTypeToolBatch)
+	if !ok || !strings.Contains(batch.Content, "children: done 1/2") || !strings.Contains(batch.Title, "failed 1") {
+		t.Fatalf("final batch progress = %#v", batch)
+	}
+}
+
+func findCellByStep(cells []Cell, stepID string, cellType CellType) (Cell, bool) {
+	for _, cell := range cells {
+		if cell.StepID == stepID && cell.CellType == cellType {
+			return cell, true
+		}
+	}
+	return Cell{}, false
+}
+
+func findCellByCall(cells []Cell, callID string) (Cell, bool) {
+	for _, cell := range cells {
+		if cell.CallID == callID {
+			return cell, true
+		}
+	}
+	return Cell{}, false
+}
+
 func TestProjectorApplyContextDiagnosticCells(t *testing.T) {
 	p := NewProjector()
 	cells := p.Apply(protocol.Event{Type: protocol.EventContextCompacted, Data: map[string]any{

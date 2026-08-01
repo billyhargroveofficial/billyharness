@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	xansi "github.com/charmbracelet/x/ansi"
 
 	uxprojector "github.com/billyhargroveofficial/billyharness/internal/clientux/projector"
@@ -877,6 +878,90 @@ func TestViewInputBorderHasVisibleLeftEdge(t *testing.T) {
 	}
 	if strings.HasPrefix(lines[inputTop+3], " ") {
 		t.Fatalf("status line should align with input border, got %q", lines[inputTop+3])
+	}
+}
+
+func TestViewKeepsComposerAtBottomWhenTranscriptIsShort(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.height = 24
+	m.addBlock("assistant", "ASSISTANT", "short transcript")
+	m.resize(true)
+
+	lines := strings.Split(stripANSITest(m.View().Content), "\n")
+	if len(lines) != m.height {
+		t.Fatalf("view height = %d, want terminal height %d:\n%s", len(lines), m.height, strings.Join(lines, "\n"))
+	}
+	inputTop := -1
+	for i, line := range lines {
+		if strings.HasPrefix(line, "┌") && strings.Contains(line, "┐") {
+			inputTop = i
+			break
+		}
+	}
+	if inputTop < 0 {
+		t.Fatalf("input top border not found in view:\n%s", strings.Join(lines, "\n"))
+	}
+	if inputTop+4 != m.height {
+		t.Fatalf("composer/status should occupy the bottom five rows: input top=%d height=%d", inputTop, m.height)
+	}
+}
+
+func TestViewKeepsComposerAtBottomWhenSlashPopupIsOpen(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.height = 24
+	m.addBlock("assistant", "ASSISTANT", "short transcript")
+	m.textarea.SetValue("/mcp")
+	m.resize(true)
+
+	lines := strings.Split(stripANSITest(m.View().Content), "\n")
+	if len(lines) != m.height {
+		t.Fatalf("view height = %d, want terminal height %d:\n%s", len(lines), m.height, strings.Join(lines, "\n"))
+	}
+	inputTop := -1
+	for i, line := range lines {
+		if strings.HasPrefix(line, "┌") && strings.Contains(line, "┐") {
+			inputTop = i
+			break
+		}
+	}
+	if inputTop < 0 {
+		t.Fatalf("input top border not found in view:\n%s", strings.Join(lines, "\n"))
+	}
+	if inputTop+4 != m.height {
+		t.Fatalf("composer/status should stay at the bottom with popup: input top=%d height=%d", inputTop, m.height)
+	}
+	if m.inputPopupHeight() == 0 {
+		t.Fatal("slash popup should be rendered for /mcp")
+	}
+}
+
+func TestViewSeparatesBusyRunStatusFromTranscript(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.height = 24
+	m.addBlock("assistant", "ASSISTANT", "last line")
+	m.busy = true
+	m.runStartedAt = time.Now()
+	m.resize(true)
+
+	lines := strings.Split(stripANSITest(m.View().Content), "\n")
+	working := -1
+	for i, line := range lines {
+		if strings.Contains(line, "working") {
+			working = i
+			break
+		}
+	}
+	if working < 1 {
+		t.Fatalf("working strip not found after transcript:\n%s", strings.Join(lines, "\n"))
+	}
+	if strings.TrimSpace(lines[working-1]) != "" {
+		t.Fatalf("expected a blank row before working strip, got %q", lines[working-1])
+	}
+	if got, want := m.viewport.Height(), m.height-lipgloss.Height(m.inputView(m.styles()))-renderedHeight(m.runStatusView())-m.runStatusGapHeight()-renderedHeight(m.attachmentChipsView())-lipgloss.Height(m.styles().status.Width(m.statusContentWidth(m.styles())).Render(m.inlineStatusView())); got != want {
+		t.Fatalf("viewport height = %d, want layout budget %d", got, want)
 	}
 }
 

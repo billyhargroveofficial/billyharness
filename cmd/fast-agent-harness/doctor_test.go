@@ -245,6 +245,25 @@ func TestDoctorMCPAllowlistCheckPassesAvailableAllowedServers(t *testing.T) {
 	}
 }
 
+func TestDoctorMCPAllowlistCheckLoadsDefaultConfig(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BILLYHARNESS_HOME", root)
+	path := filepath.Join(root, "mcp.config.toml")
+	if err := os.WriteFile(path, []byte(`[mcp_servers.gemini-search]
+command = "gemini-search-mcp"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	check := doctorMCPAllowlistCheck(config.Config{
+		MCPEnabled:        true,
+		MCPAllowedServers: []string{"gemini-search"},
+	})
+	if check.Status != "ok" || !strings.Contains(check.Detail, "1 allowed") {
+		t.Fatalf("mcp allowlist check = %#v", check)
+	}
+}
+
 func TestDoctorDocsChecksIncludeEveryTarget(t *testing.T) {
 	repo := t.TempDir()
 	docsDir := filepath.Join(repo, "docs", "generated")

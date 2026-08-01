@@ -66,7 +66,7 @@ func TestDefaultRuntimeLimits(t *testing.T) {
 	if !cfg.AutoApproveDangerous {
 		t.Fatalf("AutoApproveDangerous should be enabled by default")
 	}
-	if got := strings.Join(cfg.MCPAllowedServers, ","); got != "telegram,telegram-parilka,github,context7" {
+	if got := strings.Join(cfg.MCPAllowedServers, ","); got != "telegram-parilka,github,context7,gemini-search,chrome-devtools,brave-devtools" {
 		t.Fatalf("MCPAllowedServers = %q", got)
 	}
 	if cfg.CodexAuthFile != filepath.Join(os.Getenv("BILLYHARNESS_HOME"), "auth", "codex.json") {

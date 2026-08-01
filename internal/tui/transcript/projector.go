@@ -11,12 +11,18 @@ import (
 )
 
 type Projector struct {
-	cells   []Cell
-	nextSeq int64
+	cells         []Cell
+	nextSeq       int64
+	batchProgress map[string]toolBatchProgressState
+}
+
+type toolBatchProgressState struct {
+	total    int
+	statuses map[string]string
 }
 
 func NewProjector(cells ...Cell) *Projector {
-	p := &Projector{}
+	p := &Projector{batchProgress: map[string]toolBatchProgressState{}}
 	p.cells = append(p.cells, cells...)
 	for _, cell := range p.cells {
 		if strings.HasPrefix(cell.ID, "cell-") {
@@ -186,8 +192,16 @@ func (p *Projector) appendTextAt(i int, text string) {
 }
 
 func (p *Projector) applyStepEvent(event protocol.Event) {
+	p.ensureBatchProgress()
 	step, ok := stepEventFromAny(event.Data)
-	if !ok || step.Kind != protocol.StepKindToolBatch {
+	if !ok {
+		return
+	}
+	if step.Kind == protocol.StepKindToolCall {
+		p.applyToolCallStep(step)
+		return
+	}
+	if step.Kind != protocol.StepKindToolBatch {
 		return
 	}
 	if step.StepID == "" {
@@ -195,6 +209,15 @@ func (p *Projector) applyStepEvent(event protocol.Event) {
 	}
 	if step.StepID == "" {
 		return
+	}
+	batchID := firstNonEmpty(step.BatchID, step.StepID)
+	if batchID != "" {
+		state := p.batchProgress[batchID]
+		if state.statuses == nil {
+			state.statuses = map[string]string{}
+		}
+		state.total = max(state.total, step.BatchSize)
+		p.batchProgress[batchID] = state
 	}
 	title := toolBatchTitle(step)
 	body := toolBatchBody(step)
@@ -205,12 +228,74 @@ func (p *Projector) applyStepEvent(event protocol.Event) {
 		cell.TurnID = firstNonEmpty(step.TurnID, event.TurnID)
 		cell.StepID = step.StepID
 		p.cells = append(p.cells, cell)
+		if !batchHasMetadataProgress(step) {
+			p.refreshToolBatchProgress(batchID)
+		}
 		return
 	}
 	p.cells[i].Title = title
 	p.cells[i].Content = body
 	p.cells[i].RawCopy = body
 	p.cells[i].EventType = event.Type
+	p.cells[i].Updated = time.Now().UTC()
+	if !batchHasMetadataProgress(step) {
+		p.refreshToolBatchProgress(batchID)
+	}
+}
+
+func (p *Projector) applyToolCallStep(step protocol.StepEvent) {
+	p.ensureBatchProgress()
+	batchID := strings.TrimSpace(step.BatchID)
+	callID := strings.TrimSpace(step.ToolCallID)
+	if batchID == "" || callID == "" {
+		return
+	}
+	state := p.batchProgress[batchID]
+	if state.statuses == nil {
+		state.statuses = map[string]string{}
+	}
+	state.total = max(state.total, step.BatchSize)
+	state.statuses[callID] = firstNonEmpty(step.Status, protocol.StepStatusStarted)
+	p.batchProgress[batchID] = state
+
+	// Tool lifecycle events use the call id, while the parallel step event is
+	// where the runtime carries the batch/parent identity. Copy that identity to
+	// every lifecycle cell for the call so the transcript retains a usable tree.
+	for i := range p.cells {
+		if strings.TrimSpace(p.cells[i].CallID) != callID {
+			continue
+		}
+		p.cells[i].StepID = step.StepID
+		p.cells[i].ParentStepID = batchID
+		p.cells[i].Updated = time.Now().UTC()
+	}
+	p.refreshToolBatchProgress(batchID)
+}
+
+func (p *Projector) ensureBatchProgress() {
+	if p.batchProgress == nil {
+		p.batchProgress = map[string]toolBatchProgressState{}
+	}
+}
+
+func (p *Projector) refreshToolBatchProgress(batchID string) {
+	batchID = strings.TrimSpace(batchID)
+	if batchID == "" {
+		return
+	}
+	state, ok := p.batchProgress[batchID]
+	if !ok || len(state.statuses) == 0 {
+		return
+	}
+	i, found := BuildIndex(p.cells).Step(batchID, CellTypeToolBatch)
+	if !found {
+		return
+	}
+	progress := formatToolBatchProgress(state)
+	if progress == "" {
+		return
+	}
+	p.cells[i].Title = replaceToolBatchProgress(p.cells[i].Title, progress)
 	p.cells[i].Updated = time.Now().UTC()
 }
 
@@ -317,7 +402,117 @@ func toolBatchTitle(step protocol.StepEvent) string {
 	if step.DurationMS > 0 {
 		parts = append(parts, compactDuration(time.Duration(step.DurationMS)*time.Millisecond))
 	}
+	if progress, ok := toolBatchMetadataProgress(step); ok {
+		parts = append(parts, progress)
+	}
 	return strings.Join(parts, " · ")
+}
+
+func toolBatchMetadataProgress(step protocol.StepEvent) (string, bool) {
+	completed, completedOK := metadataCount(step.Metadata, "completed_children")
+	failed, failedOK := metadataCount(step.Metadata, "failed_children")
+	if !completedOK && !failedOK {
+		return "", false
+	}
+	total := step.BatchSize
+	if total < completed+failed {
+		total = completed + failed
+	}
+	return formatToolBatchCounts(completed, failed, total), true
+}
+
+func formatToolBatchProgress(state toolBatchProgressState) string {
+	completed := 0
+	failed := 0
+	for _, status := range state.statuses {
+		switch status {
+		case protocol.StepStatusCompleted:
+			completed++
+		case protocol.StepStatusFailed, protocol.StepStatusCompletedWithErrors:
+			failed++
+		}
+	}
+	total := max(state.total, completed+failed)
+	if total == 0 {
+		return ""
+	}
+	return formatToolBatchCounts(completed, failed, total)
+}
+
+func formatToolBatchCounts(completed, failed, total int) string {
+	completed = max(0, completed)
+	failed = max(0, failed)
+	total = max(total, completed+failed)
+	pending := max(0, total-completed-failed)
+	parts := []string{fmt.Sprintf("done %d/%d", completed, total)}
+	if pending > 0 {
+		parts = append(parts, fmt.Sprintf("pending %d", pending))
+	}
+	if failed > 0 {
+		parts = append(parts, fmt.Sprintf("failed %d", failed))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func replaceToolBatchProgress(title, progress string) string {
+	var parts []string
+	for _, part := range strings.Split(title, " · ") {
+		trimmed := strings.TrimSpace(part)
+		if strings.HasPrefix(trimmed, "done ") || strings.HasPrefix(trimmed, "pending ") || strings.HasPrefix(trimmed, "failed ") {
+			continue
+		}
+		if trimmed != "" {
+			parts = append(parts, trimmed)
+		}
+	}
+	if progress != "" {
+		parts = append(parts, strings.Split(progress, " · ")...)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func batchHasMetadataProgress(step protocol.StepEvent) bool {
+	_, ok := toolBatchMetadataProgress(step)
+	return ok
+}
+
+func metadataCount(metadata map[string]any, key string) (int, bool) {
+	value, ok := metadata[key]
+	if !ok || value == nil {
+		return 0, false
+	}
+	switch typed := value.(type) {
+	case int:
+		return typed, true
+	case int8:
+		return int(typed), true
+	case int16:
+		return int(typed), true
+	case int32:
+		return int(typed), true
+	case int64:
+		return int(typed), true
+	case uint:
+		return int(typed), true
+	case uint8:
+		return int(typed), true
+	case uint16:
+		return int(typed), true
+	case uint32:
+		return int(typed), true
+	case uint64:
+		return int(typed), true
+	case float32:
+		return int(typed), true
+	case float64:
+		return int(typed), true
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err == nil {
+			return int(parsed), true
+		}
+	}
+	return 0, false
 }
 
 func toolBatchBody(step protocol.StepEvent) string {
@@ -336,6 +531,9 @@ func toolBatchBody(step protocol.StepEvent) string {
 	}
 	if step.Error != "" {
 		lines = append(lines, "error: "+step.Error)
+	}
+	if progress, ok := toolBatchMetadataProgress(step); ok {
+		lines = append(lines, "children: "+progress)
 	}
 	return strings.Join(lines, "\n")
 }

@@ -309,7 +309,7 @@ func builtInConfig() Config {
 		AccessMode:                AccessModeBuild,
 		GatewayAddr:               "127.0.0.1:8765",
 		MCPEnabled:                true,
-		MCPAllowedServers:         []string{"telegram", "telegram-parilka", "github", "context7"},
+		MCPAllowedServers:         []string{"telegram-parilka", "github", "context7", "gemini-search", "chrome-devtools", "brave-devtools"},
 		HooksEnabled:              true,
 	}
 }

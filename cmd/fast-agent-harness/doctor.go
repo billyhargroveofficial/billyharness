@@ -433,6 +433,12 @@ func doctorMCPAllowlistCheck(cfg config.Config) doctorCheck {
 	if !mcp.Enabled {
 		return doctorCheck{Name: "mcp allowlist", Status: "skip", Detail: "mcp disabled"}
 	}
+	if len(mcp.Servers) == 0 {
+		if err := cfg.LoadDefaultMCPServers(); err != nil {
+			return doctorCheck{Name: "mcp allowlist", Status: "fail", Detail: "load error=" + err.Error()}
+		}
+		mcp = cfg.MCPSettings()
+	}
 	allowed := doctorAllowedMCPNames(mcp.AllowedServers)
 	if len(allowed) == 0 {
 		if len(mcp.Servers) == 0 {

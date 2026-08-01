@@ -646,9 +646,5 @@ func renderPopupFrame(styles themeStyles, body string) string {
 }
 
 func (m Model) slashPopupHeight() int {
-	view := m.slashPopupView()
-	if view == "" {
-		return 0
-	}
-	return lipgloss.Height(view)
+	return renderedHeight(m.slashPopupView())
 }

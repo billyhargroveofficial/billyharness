@@ -319,6 +319,11 @@ func NewModel(cfg config.Config, opts Options) Model {
 
 	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 	vp.KeyMap = viewport.KeyMap{}
+	// Keep the transcript pane's allocated height even when its content is
+	// shorter than the pane. Without this, the composer is placed immediately
+	// after the last transcript line and appears to jump upward whenever a
+	// popup or a hidden/collapsed block changes the rendered content height.
+	vp.FillHeight = true
 	settings, settingsPath, sessionsDir, settingsErr := loadAppSettings()
 	if opts.Model == "" && settings.LastSelectedModel != "" {
 		cfg.Model = settings.LastSelectedModel
@@ -819,6 +824,9 @@ func (m Model) View() tea.View {
 		parts = append(parts, popup)
 	}
 	if runStatus != "" {
+		if m.runStatusGapHeight() > 0 {
+			parts = append(parts, "")
+		}
 		parts = append(parts, runStatus)
 	}
 	if attachments != "" {
@@ -853,11 +861,12 @@ func (m *Model) resize(gotoBottom bool) {
 	ta := m.textarea
 	ta.SetStyles(styles.textarea)
 	inputH := lipgloss.Height(m.inputView(styles))
-	runStatusH := lipgloss.Height(m.runStatusView())
-	attachmentsH := lipgloss.Height(m.attachmentChipsView())
+	runStatusH := renderedHeight(m.runStatusView())
+	runStatusGapH := m.runStatusGapHeight()
+	attachmentsH := renderedHeight(m.attachmentChipsView())
 	statusH := lipgloss.Height(styles.status.Width(m.statusContentWidth(styles)).Render(m.inlineStatusView()))
 	popupH := m.inputPopupHeight()
-	vh := max(4, m.height-inputH-runStatusH-attachmentsH-statusH-popupH)
+	vh := max(4, m.height-inputH-runStatusH-runStatusGapH-attachmentsH-statusH-popupH)
 	m.viewport.SetHeight(vh)
 	if needsTranscriptReflow {
 		m.reflow(gotoBottom)
@@ -880,6 +889,13 @@ func (m Model) inputHeight(contentWidth int) int {
 		height = 1
 	}
 	return min(height, 6)
+}
+
+func renderedHeight(view string) int {
+	if view == "" {
+		return 0
+	}
+	return lipgloss.Height(view)
 }
 
 func (m Model) inputContentWidth(styles themeStyles) int {

@@ -1397,7 +1397,7 @@ Schema:
     },
     "server": {
       "type": "string",
-      "description": "Optional MCP server filter: telegram, telegram-parilka, github, or context7."
+      "description": "Optional MCP server filter: telegram-parilka, github, context7, gemini-search, chrome-devtools, or brave-devtools."
     },
     "namespace": {
       "type": "string",
@@ -1756,4 +1756,4 @@ Static docsgen does not connect to MCP servers. It documents the local policy fi
 | ToolRisks                | Per-tool risk override map, parsed by protocol.ParseRisk        |
 | DefaultToolsApprovalMode | Compatibility approval mode metadata                            |
 
-<!-- source-hash: c41bb5da3e2e288e47ceb53e1e78012863c9e2fb3701a28772548038eab7a104 -->
+<!-- source-hash: 1b256e5570380a4d985781b4fb3036ff14bd716a40a7f53abe82bc2fa31c8a8e -->

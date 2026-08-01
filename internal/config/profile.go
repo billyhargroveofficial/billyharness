@@ -134,7 +134,7 @@ func builtInProfileMetadata(profile string) (ProfileMetadata, bool) {
 		DisableSpark:         &disableSpark,
 		WebSummaryMode:       "extractive",
 		ToolPolicy:           "solo-full-access",
-		MCPAllowlist:         []string{"telegram", "telegram-parilka", "github", "context7"},
+		MCPAllowlist:         []string{"telegram-parilka", "github", "context7", "gemini-search", "chrome-devtools", "brave-devtools"},
 		InstructionFragments: []string{"SOUL.md"},
 		CostBudgetHints:      []string{"Keep native extractive web summaries by default; use model web summaries only when explicitly enabled."},
 	}, true
@@ -183,7 +183,7 @@ reasoning_effort = "high"
 disable_spark = true
 web_summary_mode = "extractive"
 tool_policy = "solo-full-access"
-mcp_allowlist = ["telegram", "telegram-parilka", "github", "context7"]
+mcp_allowlist = ["telegram-parilka", "github", "context7", "gemini-search", "chrome-devtools", "brave-devtools"]
 instruction_fragments = ["SOUL.md"]
 cost_budget_hints = ["Keep native extractive web summaries by default; use model web summaries only when explicitly enabled."]
 `

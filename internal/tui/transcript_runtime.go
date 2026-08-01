@@ -1225,7 +1225,7 @@ func dialogueSeparatorAfter(items []reflowItem, i int) bool {
 }
 
 func dialogueKind(kind string) bool {
-	return kind == "user" || kind == "assistant"
+	return kind == "user" || kind == "reasoning" || kind == "assistant"
 }
 
 func appendSelectableLines(lines []bool, rendered string, selectable bool) []bool {

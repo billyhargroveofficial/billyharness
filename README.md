@@ -240,7 +240,11 @@ Production canaries are explicit operator actions.
 ## MCP
 
 Billyharness uses its own MCP config at `$BILLYHARNESS_HOME/mcp.config.toml`.
-Default allowed servers are `telegram`, `telegram-parilka`, `github`, and `context7`.
+Default allowed servers are `telegram-parilka`, `github`, `context7`,
+`gemini-search`, `chrome-devtools`, and `brave-devtools`. The template uses
+stdio transports so the Gemini Search wrapper and the Chrome/Brave DevTools
+servers from the other harnesses are available here as well. Billyharness does
+not copy HTTP-only MCP entries yet; its MCP client currently supports stdio.
 
 The model-visible tool specs, including `/v1/tools`, are the stable gateway
 tools: native tools plus `tool_search`, `mcp_list_tools`, and `mcp_call`.

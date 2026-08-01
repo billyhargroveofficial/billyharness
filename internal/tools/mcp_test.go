@@ -164,6 +164,18 @@ func TestLazyMCPGatewayHidesRawSpecsAndCanCallTool(t *testing.T) {
 	if nullArgs.Content != "history" {
 		t.Fatalf("null mcp_call arguments result = %q", nullArgs.Content)
 	}
+
+	// Models sometimes double-encode arguments as a JSON string.
+	stringArgs, err := registry.Call(context.Background(), protocol.ToolCall{
+		Name:      "mcp_call",
+		Arguments: json.RawMessage(`{"name":"mcp__fake__echo","arguments":"{\"text\":\"unwrapped\"}"}`),
+	})
+	if err != nil {
+		t.Fatalf("string-encoded mcp_call arguments should be unwrapped, got err=%v", err)
+	}
+	if stringArgs.Content != "unwrapped" {
+		t.Fatalf("string-encoded mcp_call arguments result = %q, want %q", stringArgs.Content, "unwrapped")
+	}
 }
 
 func TestMCPGatewayAcceptsExternalJSONSchemaKeywords(t *testing.T) {

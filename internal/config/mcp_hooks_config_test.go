@@ -328,13 +328,13 @@ command = "nope"
 		t.Fatal(err)
 	}
 	text := string(bytes)
-	for _, wantServer := range []string{"[mcp_servers.telegram]", "[mcp_servers.telegram-parilka]", "[mcp_servers.github]", "[mcp_servers.context7]"} {
+	for _, wantServer := range []string{"[mcp_servers.telegram-parilka]", "[mcp_servers.github]", "[mcp_servers.context7]", "[mcp_servers.gemini-search]", "[mcp_servers.chrome-devtools]", "[mcp_servers.brave-devtools]"} {
 		if !strings.Contains(text, wantServer) {
 			t.Fatalf("default MCP config missing %s: %s", wantServer, text)
 		}
 	}
-	if count := strings.Count(text, "[mcp_servers."); count != 4 {
-		t.Fatalf("default MCP config server count = %d, want 4: %s", count, text)
+	if count := strings.Count(text, "[mcp_servers."); count != 6 {
+		t.Fatalf("default MCP config server count = %d, want 6: %s", count, text)
 	}
 	if !strings.Contains(text, "web_extract") {
 		t.Fatalf("default MCP config should document native web_extract: %s", text)

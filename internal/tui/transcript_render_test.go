@@ -947,6 +947,28 @@ func TestDialogueReflowSeparatesUserAndAssistantBlocks(t *testing.T) {
 	}
 }
 
+func TestDialogueReflowSeparatesReasoningBetweenUserAndAssistant(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.height = 24
+	m.addBlock("user", "USER", "hello")
+	m.addBlock("reasoning", "THINKING", "private chain")
+	m.addBlock("assistant", "ASSISTANT", "world")
+	m.reflow(true)
+
+	lines := strings.Split(stripANSITest(m.viewportContent), "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " ")
+	}
+	rendered := strings.Join(lines, "\n")
+	if !strings.Contains(rendered, "❯ hello\n\n• Thinking") {
+		t.Fatalf("user and reasoning blocks should be separated by a blank line, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "private chain\n\n● world") {
+		t.Fatalf("reasoning and assistant blocks should be separated by a blank line, got %q", rendered)
+	}
+}
+
 func TestAssistantBlockRendersTerminalSafeMarkdown(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 100

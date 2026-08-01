@@ -106,8 +106,10 @@ Current behavior in `internal/mcpclient`:
 
 - `config.LoadDefaultMCPServers` reads `$BILLYHARNESS_HOME/mcp.config.toml`
   when MCP is enabled and no explicit server list is already present. The
-  default allowlist is `telegram`, `telegram-parilka`, `github`, and `context7`
-  in `internal/config/defaults.go`.
+  default allowlist is `telegram-parilka`, `github`, `context7`, `gemini-search`,
+  `chrome-devtools`, and `brave-devtools`. The client currently starts stdio
+  servers; HTTP-only MCP entries from other harnesses remain unsupported. The
+  source default lives in `internal/config/defaults.go`.
 - Stdio MCP is implemented. Streamable HTTP MCP config is parsed and reported
   as `unsupported`, but not connected or called.
 - Shell commands such as `sh`, `bash`, `zsh`, `cmd.exe`, and PowerShell are

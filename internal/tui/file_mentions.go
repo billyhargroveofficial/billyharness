@@ -8,8 +8,6 @@ import (
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
-
 	"github.com/billyhargroveofficial/billyharness/internal/filesearch"
 )
 
@@ -237,11 +235,7 @@ func (m Model) inputPopupView() string {
 }
 
 func (m Model) inputPopupHeight() int {
-	view := m.inputPopupView()
-	if view == "" {
-		return 0
-	}
-	return lipgloss.Height(view)
+	return renderedHeight(m.inputPopupView())
 }
 
 func (m Model) fileMentionPopupView() string {
